@@ -186,13 +186,18 @@ EOF
       echo "Kod güncelleniyor..."
       git -C "$DIR" pull --ff-only || warn "git pull başarısız — elle kontrol et"
     fi
-    do_migrate; $COMPOSE up -d --build; do_health; ok "Upgrade tamamlandı" ;;
+    do_migrate; $COMPOSE up -d --build; do_health
+    VERSION=$(cat "$DIR/VERSION" 2>/dev/null || echo "?")
+    ok "Upgrade tamamlandı — v$VERSION" ;;
 
   logs)
     load_env; $COMPOSE logs -f --tail 50 ${2:-} ;;
 
   status)
-    load_env; $COMPOSE ps ;;
+    load_env
+    VERSION=$(cat "$DIR/VERSION" 2>/dev/null || echo "?")
+    echo -e "${B}pgstat v$VERSION${N}"
+    $COMPOSE ps ;;
 
   backup)
     load_env
