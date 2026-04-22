@@ -1,0 +1,33 @@
+# =============================================================================
+# pgstat-collector yapılandırması
+# =============================================================================
+
+spring:
+  application:
+    name: pgstat-collector
+
+  # Central DB bağlantısı (HikariCP)
+  datasource:
+    url: jdbc:postgresql://${PGSTAT_DB_HOST:localhost}:${PGSTAT_DB_PORT:5417}/${PGSTAT_DB_NAME:pgstat}
+    username: ${PGSTAT_DB_USER:samet}
+    password: ${PGSTAT_DB_PASSWORD:samet}
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 5
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 600000
+
+  # Scheduling aktif
+  task:
+    scheduling:
+      pool:
+        size: 4
+
+# Collector özel ayarları
+pgstat:
+  worker:
+    # Bu collector instance'ının hostname'i (job_run tablosuna yazılır)
+    hostname: ${HOSTNAME:collector-01}
+    # Scheduler poll aralığı (ms) — her 5 saniyede DB'den due instance kontrol eder
+    poll-interval-ms: 5000

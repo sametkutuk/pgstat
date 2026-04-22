@@ -1,0 +1,17 @@
+# =============================================================================
+# Docker profili — container içinde çalışırken kullanılır
+# =============================================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://${PGSTAT_DB_HOST:db}:${PGSTAT_DB_PORT:5432}/${PGSTAT_DB_NAME:pgstat}
+    username: ${PGSTAT_DB_USER:samet}
+    password: ${PGSTAT_DB_PASSWORD:samet}
+
+pgstat:
+  worker:
+    hostname: docker-collector
+
+logging:
+  level:
+    com.pgstat: INFO

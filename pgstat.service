@@ -1,0 +1,16 @@
+[Unit]
+Description=pgstat — PostgreSQL İstatistik Toplama Sistemi
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/pgstat
+ExecStart=/usr/bin/docker compose -f /opt/pgstat/docker-compose.prod.yml --env-file /opt/pgstat/.env up -d
+ExecStop=/usr/bin/docker compose -f /opt/pgstat/docker-compose.prod.yml --env-file /opt/pgstat/.env down
+EnvironmentFile=/opt/pgstat/.env
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

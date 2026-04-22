@@ -1,0 +1,19 @@
+# =============================================================================
+# Development profili
+# Local Docker container'lara bağlanır
+# =============================================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5417/pgstat
+    username: samet
+    password: samet
+
+pgstat:
+  worker:
+    hostname: dev-collector
+
+logging:
+  level:
+    com.pgstat: DEBUG
+    org.springframework.jdbc: DEBUG

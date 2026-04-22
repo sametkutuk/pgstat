@@ -1,0 +1,89 @@
+# =============================================================================
+# pgstat Production Compose — External PostgreSQL kullanır
+# DB Docker'da değil, kendi kurduğunuz PG'ye bağlanır
+#
+# Kullanım:
+#   cp .env.example .env   # düzenle
+#   docker compose -f docker-compose.prod.yml up -d --build
+# =============================================================================
+
+services:
+  # =========================================================================
+  # Java Spring Boot Collector (daemon)
+  # =========================================================================
+  collector:
+    build: ./collector
+    container_name: pgstat-collector
+    environment:
+      PGSTAT_DB_HOST: ${PGSTAT_DB_HOST}
+      PGSTAT_DB_PORT: ${PGSTAT_DB_PORT}
+      PGSTAT_DB_NAME: ${PGSTAT_DB_NAME}
+      PGSTAT_DB_USER: ${PGSTAT_DB_USER}
+      PGSTAT_DB_PASSWORD: ${PGSTAT_DB_PASSWORD}
+      PGSTAT_SECRET_KEY: ${PGSTAT_SECRET_KEY}
+      SPRING_PROFILES_ACTIVE: docker
+      HOSTNAME: ${COLLECTOR_HOSTNAME:-collector-01}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - pgstat-secrets:/app/data/secrets
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # =========================================================================
+  # Node.js Express API — port 3001
+  # =========================================================================
+  api:
+    build: ./api
+    container_name: pgstat-api
+    ports:
+      - "${API_PORT:-3001}:3001"
+    environment:
+      PGSTAT_DB_HOST: ${PGSTAT_DB_HOST}
+      PGSTAT_DB_PORT: ${PGSTAT_DB_PORT}
+      PGSTAT_DB_NAME: ${PGSTAT_DB_NAME}
+      PGSTAT_DB_USER: ${PGSTAT_DB_USER}
+      PGSTAT_DB_PASSWORD: ${PGSTAT_DB_PASSWORD}
+      PGSTAT_SECRET_KEY: ${PGSTAT_SECRET_KEY}
+      PGSTAT_SECRETS_DIR: /app/data/secrets
+      PORT: 3001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - pgstat-secrets:/app/data/secrets
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # =========================================================================
+  # React UI (nginx) — port 3000
+  # =========================================================================
+  ui:
+    build: ./ui
+    container_name: pgstat-ui
+    ports:
+      - "${UI_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgstat-secrets:

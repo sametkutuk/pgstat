@@ -1,0 +1,80 @@
+# =============================================================================
+# pgstat Development Compose — DB dahil (local geliştirme için)
+# Production için docker-compose.prod.yml kullanın
+# =============================================================================
+
+services:
+  # =========================================================================
+  # Merkezi PostgreSQL 17 — port 5417
+  # =========================================================================
+  db:
+    build: ./db
+    ports:
+      - "5418:5432"
+    environment:
+      POSTGRES_USER: samet
+      POSTGRES_PASSWORD: samet
+      POSTGRES_DB: pgstat
+    volumes:
+      - pgstat-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U samet -d pgstat"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # =========================================================================
+  # Java Spring Boot Collector (daemon)
+  # =========================================================================
+  collector:
+    build: ./collector
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGSTAT_DB_HOST: db
+      PGSTAT_DB_PORT: 5432
+      PGSTAT_DB_NAME: pgstat
+      PGSTAT_DB_USER: samet
+      PGSTAT_DB_PASSWORD: samet
+      SPRING_PROFILES_ACTIVE: docker
+    volumes:
+      - pgstat-secrets:/app/data/secrets
+    restart: unless-stopped
+
+  # =========================================================================
+  # Node.js Express API — port 3001
+  # =========================================================================
+  api:
+    build: ./api
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      PGSTAT_DB_HOST: db
+      PGSTAT_DB_PORT: 5432
+      PGSTAT_DB_NAME: pgstat
+      PGSTAT_DB_USER: samet
+      PGSTAT_DB_PASSWORD: samet
+      PGSTAT_SECRETS_DIR: /app/data/secrets
+      PORT: 3001
+    volumes:
+      - pgstat-secrets:/app/data/secrets
+    restart: unless-stopped
+
+  # =========================================================================
+  # React UI (nginx) — port 3000
+  # =========================================================================
+  ui:
+    build: ./ui
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  pgstat-data:
+  pgstat-secrets:
