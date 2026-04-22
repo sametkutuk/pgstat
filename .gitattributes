@@ -1,0 +1,6 @@
+# Tüm dosyalar LF ile sakla
+* text=auto eol=lf
+
+# Shell scriptleri kesinlikle LF olsun
+pgstat text eol=lf
+*.sh text eol=lf
