@@ -1,0 +1,2 @@
+# pgstat
+collect postgresql stats
