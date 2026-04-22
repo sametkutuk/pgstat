@@ -181,11 +181,13 @@ public class DiscoveryCollector {
         } catch (SecretResolver.SecretResolveException e) {
             log.error("Secret cozumleme hatasi: {} — {}", instance.instanceId(), e.getMessage());
             capabilityRepo.markUnreachable(instance.instancePk(), e.getMessage());
+            stateRepo.updateLastError(instance.instancePk(), "Secret hatası: " + e.getMessage());
             return null;
 
         } catch (Exception e) {
             log.error("Discovery hatasi: {} — {}", instance.instanceId(), e.getMessage(), e);
             capabilityRepo.markUnreachable(instance.instancePk(), e.getMessage());
+            stateRepo.updateLastError(instance.instancePk(), e.getMessage());
             return null;
         }
     }

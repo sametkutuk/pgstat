@@ -112,16 +112,17 @@ public class StateRepository {
         updateAfterFailure(instancePk, null);
     }
 
-    /** Sadece last_error kaydeder — backoff uygulamaz (bootstrap hatalari icin). */
+    /** Sadece last_error kaydeder — satir yoksa olusturur (discovery oncesi hata icin). */
     public void updateLastError(long instancePk, String errorMessage) {
         jdbc.update("""
-            update control.instance_state
-            set last_error = ?,
-                last_error_at = now()
-            where instance_pk = ?
+            insert into control.instance_state (instance_pk, last_error, last_error_at)
+            values (?, ?, now())
+            on conflict (instance_pk) do update
+              set last_error = excluded.last_error,
+                  last_error_at = excluded.last_error_at
             """,
-            errorMessage,
-            instancePk
+            instancePk,
+            errorMessage
         );
     }
 
