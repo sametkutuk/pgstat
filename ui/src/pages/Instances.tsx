@@ -51,6 +51,11 @@ export default function Instances() {
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['instances'] }); toast.success('Durum değiştirildi.'); },
     });
 
+    const retryMutation = useMutation({
+        mutationFn: (id: number) => apiPatch(`/instances/${id}/retry`),
+        onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['instances'] }); toast.success('Yeniden bağlanılıyor...'); },
+    });
+
     const openEdit = (inst: Instance) => {
         setEditInstance(inst);
         setFormMode('edit');
@@ -89,6 +94,12 @@ export default function Instances() {
                         className={`px-2 py-1 text-xs rounded ${r.is_active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}>
                         {r.is_active ? 'Durdur' : 'Başlat'}
                     </button>
+                    {(r.bootstrap_state === 'degraded' || r.last_error) && (
+                        <button onClick={(e) => { e.stopPropagation(); retryMutation.mutate(r.instance_pk); }}
+                            className="px-2 py-1 text-xs rounded bg-yellow-50 text-yellow-700 hover:bg-yellow-100">
+                            Yeniden Dene
+                        </button>
+                    )}
                 </div>
             )
         },

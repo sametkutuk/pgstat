@@ -168,6 +168,28 @@ router.patch('/:id/toggle', async (req, res, next) => {
   }
 });
 
+// PATCH /api/instances/:id/retry — Bootstrap'ı pending'e döndür, yeniden dene
+router.patch('/:id/retry', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    // bootstrap_state'i pending'e al, last_error'ı temizle
+    await pool.query(`
+      update control.instance_inventory
+      set bootstrap_state = 'pending', updated_at = now()
+      where instance_pk = $1
+    `, [id]);
+    await pool.query(`
+      update control.instance_state
+      set last_error = null, last_error_at = null,
+          consecutive_failures = 0, backoff_until = null
+      where instance_pk = $1
+    `, [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/databases — Instance'a ait database listesi
 router.get('/:id/databases', async (req, res, next) => {
   try {

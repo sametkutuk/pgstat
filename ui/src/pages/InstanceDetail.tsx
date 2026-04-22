@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPatch } from '../api/client';
+import { useToast } from '../components/common/Toast';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import DataTable from '../components/common/DataTable';
@@ -11,6 +12,13 @@ type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jo
 export default function InstanceDetail() {
     const { id } = useParams();
     const [tab, setTab] = useState<Tab>('overview');
+    const queryClient = useQueryClient();
+    const toast = useToast();
+
+    const retryMutation = useMutation({
+        mutationFn: () => apiPatch(`/instances/${id}/retry`),
+        onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['instance', id] }); toast.success('Yeniden bağlanılıyor...'); },
+    });
 
     const instance = useQuery({ queryKey: ['instance', id], queryFn: () => apiGet<any>(`/instances/${id}`) });
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
@@ -42,6 +50,13 @@ export default function InstanceDetail() {
                 <h1 className="text-xl font-bold">{inst.display_name}</h1>
                 <Badge value={inst.bootstrap_state} />
                 {inst.is_active ? <Badge value="ready" /> : <Badge value="paused" />}
+                {(inst.bootstrap_state === 'degraded' || inst.last_error) && (
+                    <button onClick={() => retryMutation.mutate()}
+                        disabled={retryMutation.isPending}
+                        className="px-3 py-1 text-xs rounded bg-yellow-50 text-yellow-700 hover:bg-yellow-100 border border-yellow-200">
+                        {retryMutation.isPending ? 'Bekleniyor...' : '↺ Yeniden Dene'}
+                    </button>
+                )}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
