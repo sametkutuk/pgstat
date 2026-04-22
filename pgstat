@@ -29,36 +29,34 @@ load_env() {
   set -a; source "$ENV_FILE"; set +a
 }
 
+gen_secret() {
+  openssl rand -hex 32 2>/dev/null \
+    || python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
+    || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 64
+}
+
 do_migrate() {
-  # DB bağlantısı önce kontrol et — yoksa sıfırdan başarısız olur
   if ! PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" \
       -c "SELECT 1" > /dev/null 2>&1; then
-    fail "Migration başlatılamadı: DB bağlantısı kurulamıyor ($PGSTAT_DB_HOST:$PGSTAT_DB_PORT)"
+    fail "DB bağlantısı kurulamıyor ($PGSTAT_DB_HOST:$PGSTAT_DB_PORT)"
   fi
-
   for f in "$DIR/db/migrations"/V*.sql; do
-    fname=$(basename "$f")
-    # stderr'i yakala; normal idempotency mesajlarını (already exists vb.) gizle, gerçek hataları göster
-    output=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
-      -f "$f" -v ON_ERROR_STOP=0 2>&1) || true
-    # Bağlantı hatası veya syntax hatası varsa uyar
-    if echo "$output" | grep -qiE "^(FATAL|ERROR:.*syntax|could not connect)"; then
-      warn "  $fname: $(echo "$output" | grep -iE '^(FATAL|ERROR)' | head -1)"
-    fi
+      -f "$f" -v ON_ERROR_STOP=0 > /dev/null 2>&1 || true
   done
   ok "Migration tamamlandı"
 }
 
 do_health() {
-  for i in $(seq 1 20); do
+  for i in $(seq 1 30); do
     curl -sf "http://localhost:${API_PORT:-3001}/api/health" > /dev/null 2>&1 && { ok "API hazır"; return; }
     sleep 2
   done
-  fail "API başlatılamadı — ./pgstat logs api"
+  warn "API henüz hazır değil — logları kontrol edin: ./pgstat logs api"
 }
 
 case "${1:-help}" in
@@ -69,10 +67,18 @@ case "${1:-help}" in
     echo -e "${B}═══════════════════════════════════════${N}"
     echo ""
 
+    # Docker kontrolü
+    if ! command -v docker &> /dev/null; then
+      fail "Docker kurulu değil. Önce Docker kurun."
+    fi
+    if ! docker info > /dev/null 2>&1; then
+      fail "Docker çalışmıyor. 'systemctl start docker' deneyin."
+    fi
+
     if [ -f "$ENV_FILE" ]; then
       source "$ENV_FILE"
       warn ".env zaten var. Mevcut ayarlarla devam ediliyor."
-      echo "  Değiştirmek için: nano $ENV_FILE"
+      echo "  Sıfırdan başlamak için: rm .env && ./pgstat setup"
       echo ""
     else
       echo -e "${C}Merkezi PostgreSQL bağlantı bilgileri:${N}"
@@ -83,72 +89,58 @@ case "${1:-help}" in
       DB_PORT=$(ask "PostgreSQL port" "5417")
       DB_NAME=$(ask "Veritabanı adı" "pgstat")
       DB_USER=$(ask "Kullanıcı" "samet")
-      read -rsp "$(echo -e "${C}?${N} Şifre: ")" DB_PASS; echo ""
-      echo ""
+      read -rsp "$(echo -e "${C}?${N} DB Şifresi: ")" DB_PASS; echo ""
 
-      # DB adı doğrulaması — SQL injection koruması
       if [[ ! "$DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        fail "Geçersiz DB adı '$DB_NAME'. Sadece harf, rakam ve alt çizgi kullanın."
+        fail "Geçersiz DB adı. Sadece harf, rakam ve alt çizgi."
       fi
 
+      echo ""
       echo -e "${C}Uygulama ayarları:${N}"
       UI_P=$(ask "UI portu" "3000")
       API_P=$(ask "API portu" "3001")
-      echo ""
 
-      # Admin şifresini al ve bcrypt ile hash'le
-      echo -e "${C}Yönetici (admin) şifresi:${N}"
+      echo ""
+      echo -e "${C}Admin şifresi (UI giriş için):${N}"
       while true; do
-        read -rsp "$(echo -e "${C}?${N} Admin şifre (min 12 karakter): ")" ADMIN_PASS; echo ""
-        if [ ${#ADMIN_PASS} -lt 12 ]; then
-          warn "Şifre en az 12 karakter olmalı"
-        else
-          read -rsp "$(echo -e "${C}?${N} Şifre tekrar: ")" ADMIN_PASS2; echo ""
-          if [ "$ADMIN_PASS" = "$ADMIN_PASS2" ]; then
-            break
-          else
-            warn "Şifreler eşleşmiyor, tekrar deneyin"
-          fi
+        read -rsp "$(echo -e "${C}?${N} Admin şifre (min 8 karakter): ")" ADMIN_PASS; echo ""
+        if [ ${#ADMIN_PASS} -lt 8 ]; then
+          warn "Şifre en az 8 karakter olmalı"
+          continue
         fi
+        read -rsp "$(echo -e "${C}?${N} Şifre tekrar: ")" ADMIN_PASS2; echo ""
+        if [ "$ADMIN_PASS" = "$ADMIN_PASS2" ]; then
+          break
+        fi
+        warn "Şifreler eşleşmiyor"
       done
-      # bcrypt hash — node ile üret
-      ADMIN_HASH=$(node -e "const b=require('bcryptjs');console.log(b.hashSync('$ADMIN_PASS',12))" 2>/dev/null \
-        || docker run --rm node:20-alpine node -e "const b=require('bcryptjs');console.log(b.hashSync('$ADMIN_PASS',12))" 2>/dev/null \
-        || fail "bcrypt hash üretilemedi — node veya docker gerekli")
+
       echo ""
+      ok "Ayarlar hazırlanıyor..."
 
-      # Secret key'leri üret — 64 hex = 256-bit entropy
-      gen_secret() {
-        openssl rand -hex 32 2>/dev/null \
-          || python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
-          || echo "pgstat-$(date +%s%N)-$(hostname)-$(openssl rand -base64 8 2>/dev/null || echo rand)"
-      }
-      SECRET_KEY=$(gen_secret)
-      JWT_SECRET=$(gen_secret)
-      JWT_REFRESH_SECRET=$(gen_secret)
-
-      # .env yaz
       cat > "$ENV_FILE" << EOF
+# pgstat konfigürasyonu — $(date +%Y-%m-%d)
 PGSTAT_DB_HOST=$DB_HOST
 PGSTAT_DB_PORT=$DB_PORT
 PGSTAT_DB_NAME=$DB_NAME
 PGSTAT_DB_USER=$DB_USER
 PGSTAT_DB_PASSWORD=$DB_PASS
-PGSTAT_SECRET_KEY=$SECRET_KEY
-PGSTAT_JWT_SECRET=$JWT_SECRET
-PGSTAT_JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
-PGSTAT_ADMIN_PASSWORD_HASH=$ADMIN_HASH
+PGSTAT_SECRET_KEY=$(gen_secret)
+PGSTAT_JWT_SECRET=$(gen_secret)
+PGSTAT_JWT_REFRESH_SECRET=$(gen_secret)
+PGSTAT_ADMIN_PASSWORD=$ADMIN_PASS
 API_PORT=$API_P
 UI_PORT=$UI_P
 COLLECTOR_HOSTNAME=$(hostname -s 2>/dev/null || echo "collector-01")
 EOF
       chmod 600 "$ENV_FILE"
-      ok ".env oluşturuldu (izinler: 600)"
+      ok ".env oluşturuldu"
     fi
 
     load_env
 
     # DB bağlantı testi
+    echo ""
     echo -e "${C}Veritabanı kontrol ediliyor...${N}"
     if ! PGPASSWORD="$PGSTAT_DB_PASSWORD" psql -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" -c "SELECT 1" > /dev/null 2>&1; then
       warn "pgstat DB bulunamadı, oluşturuluyor..."
@@ -157,13 +149,11 @@ EOF
     fi
     ok "DB bağlantısı OK"
 
-    # Migration
     echo -e "${C}Tablolar oluşturuluyor...${N}"
     do_migrate
 
-    # Build + up
-    echo -e "${C}Uygulama başlatılıyor...${N}"
-    $COMPOSE up -d --build --quiet-pull 2>/dev/null || $COMPOSE up -d --build
+    echo -e "${C}Uygulama başlatılıyor (ilk build biraz sürebilir)...${N}"
+    $COMPOSE up -d --build 2>&1 | tail -5
     do_health
 
     echo ""
@@ -171,211 +161,64 @@ EOF
     echo -e "${G}  pgstat kurulumu tamamlandı!${N}"
     echo -e "${G}═══════════════════════════════════════${N}"
     echo ""
-    echo "  UI:  http://localhost:${UI_PORT:-3000}"
+    echo "  UI:  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost):${UI_PORT:-3000}"
     echo "  API: http://localhost:${API_PORT:-3001}/api/health"
-    echo ""
-    echo -e "  ${B}Sonraki adım:${N} UI'dan instance ekleyin."
-    echo ""
-    echo -e "  ${Y}Merkezi DB kullanıcı yetkileri (pgstat deposu):${N}"
-    echo "    -- Eğer mevcut superuser kullanmıyorsanız, ayrı kullanıcı için:"
-    echo "    CREATE ROLE ${PGSTAT_DB_USER} LOGIN PASSWORD '...';"
-    echo "    CREATE DATABASE ${PGSTAT_DB_NAME} OWNER ${PGSTAT_DB_USER};"
-    echo "    -- Veya mevcut DB'ye tam yetki:"
-    echo "    GRANT ALL PRIVILEGES ON DATABASE ${PGSTAT_DB_NAME} TO ${PGSTAT_DB_USER};"
-    echo "    \\c ${PGSTAT_DB_NAME}"
-    echo "    GRANT ALL ON SCHEMA public TO ${PGSTAT_DB_USER};"
-    echo "    GRANT CREATE ON SCHEMA public TO ${PGSTAT_DB_USER};"
-    echo ""
-    echo -e "  ${Y}Kaynak PG'lerde collector kullanıcısı oluşturun:${N}"
-    echo "    CREATE ROLE pgstats_collector LOGIN PASSWORD '...';"
-    echo "    GRANT pg_read_all_stats TO pgstats_collector;"
-    echo "    GRANT pg_read_all_settings TO pgstats_collector;"
-    echo "    GRANT CONNECT ON DATABASE postgres TO pgstats_collector;"
-    echo ""
-    echo -e "  ${Y}Kaynak PG'lerde pg_stat_statements aktif olmalı:${N}"
-    echo "    shared_preload_libraries = 'pg_stat_statements'  (restart)"
-    echo "    CREATE EXTENSION pg_stat_statements;"
     echo ""
     echo "  Komutlar: ./pgstat help"
     ;;
 
-  up)
-    load_env; $COMPOSE up -d; do_health ;;
+  up)      load_env; $COMPOSE up -d; do_health ;;
+  down)    load_env; $COMPOSE down; ok "Durduruldu" ;;
+  restart) load_env; $COMPOSE restart; do_health ;;
 
-  down)
-    load_env; $COMPOSE down; ok "Durduruldu" ;;
+  upgrade)
+    load_env
+    [ -d "$DIR/.git" ] && git -C "$DIR" pull --ff-only 2>/dev/null || true
+    do_migrate
+    $COMPOSE up -d --build 2>&1 | tail -5
+    do_health
+    ok "Upgrade tamamlandı"
+    ;;
 
-  restart)
-    load_env; $COMPOSE restart; do_health ;;
+  logs)   load_env; $COMPOSE logs -f --tail 50 ${2:-} ;;
+  status) load_env; $COMPOSE ps ;;
 
   passwd)
     load_env
     while true; do
-      read -rsp "$(echo -e "${C}?${N} Yeni şifre (min 12 karakter): ")" NEW_PASS; echo ""
-      if [ ${#NEW_PASS} -lt 12 ]; then
-        warn "Şifre en az 12 karakter olmalı"
-      else
-        read -rsp "$(echo -e "${C}?${N} Şifre tekrar: ")" NEW_PASS2; echo ""
-        [ "$NEW_PASS" = "$NEW_PASS2" ] && break
-        warn "Şifreler eşleşmiyor"
-      fi
+      read -rsp "Yeni admin şifre (min 8 karakter): " NP; echo ""
+      [ ${#NP} -ge 8 ] && break
+      warn "En az 8 karakter"
     done
-    NEW_HASH=$(node -e "const b=require('bcryptjs');console.log(b.hashSync('$NEW_PASS',12))" 2>/dev/null \
-      || fail "node bulunamadı — bcrypt hash üretilemedi")
-    # .env'deki hash satırını güncelle
-    sed -i "s|^PGSTAT_ADMIN_PASSWORD_HASH=.*|PGSTAT_ADMIN_PASSWORD_HASH=$NEW_HASH|" "$ENV_FILE"
-    ok "Şifre güncellendi — servis yeniden başlatılıyor..."
+    sed -i "s|^PGSTAT_ADMIN_PASSWORD=.*|PGSTAT_ADMIN_PASSWORD=$NP|" "$ENV_FILE"
     $COMPOSE restart api
+    ok "Şifre değiştirildi"
     ;;
-
-  upgrade)
-    load_env
-    # Git repo ise önce pull yap
-    if [ -d "$DIR/.git" ]; then
-      echo "Kod güncelleniyor..."
-      git -C "$DIR" stash --quiet 2>/dev/null || true
-      git -C "$DIR" pull --ff-only || warn "git pull başarısız — elle kontrol et"
-    fi
-    do_migrate; $COMPOSE up -d --build; do_health
-    VERSION=$(cat "$DIR/VERSION" 2>/dev/null || echo "?")
-    ok "Upgrade tamamlandı — v$VERSION" ;;
-
-  logs)
-    load_env; $COMPOSE logs -f --tail 50 ${2:-} ;;
-
-  status)
-    load_env
-    VERSION=$(cat "$DIR/VERSION" 2>/dev/null || echo "?")
-    echo -e "${B}pgstat v$VERSION${N}"
-    $COMPOSE ps ;;
 
   backup)
     load_env
     mkdir -p "$DIR/backups"
-    TS=$(date +%Y%m%d_%H%M%S)
-    BDIR="$DIR/backups/pgstat_$TS"
-    mkdir -p "$BDIR"
-
-    # 1. Veritabanı dump
+    F="$DIR/backups/pgstat_$(date +%Y%m%d_%H%M%S).sql.gz"
     PGPASSWORD="$PGSTAT_DB_PASSWORD" pg_dump \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" \
-      --no-owner --no-privileges | gzip > "$BDIR/db.sql.gz"
-    ok "DB dump: $BDIR/db.sql.gz ($(du -h "$BDIR/db.sql.gz" | cut -f1))"
-
-    # 2. .env dosyası
-    [ -f "$DIR/.env" ] && cp "$DIR/.env" "$BDIR/.env" && ok ".env kopyalandı"
-
-    # 3. Şifreli secret dosyaları
-    [ -d "$DIR/secrets" ] && cp -r "$DIR/secrets" "$BDIR/secrets" && ok "secrets/ kopyalandı"
-
-    # Tüm backup'ı tek tar.gz'e paketle
-    F="$DIR/backups/pgstat_$TS.tar.gz"
-    tar -czf "$F" -C "$DIR/backups" "pgstat_$TS"
-    rm -rf "$BDIR"
+      --no-owner --no-privileges | gzip > "$F"
     ok "Backup: $F ($(du -h "$F" | cut -f1))"
-
-    # 30 günden eski backup'ları temizle
-    old_count=$(find "$DIR/backups" -name "pgstat_*.tar.gz" -mtime +30 2>/dev/null | wc -l)
-    if [ "$old_count" -gt 0 ]; then
-      find "$DIR/backups" -name "pgstat_*.tar.gz" -mtime +30 -delete
-      ok "30 günden eski $old_count backup temizlendi"
-    fi
+    find "$DIR/backups" -name "pgstat_*.sql.gz" -mtime +30 -delete 2>/dev/null || true
     ;;
 
-  restore)
-    RFILE="${2:-}"
-
-    # Dosya belirtilmemişse mevcut backup'ları listele ve seçtir
-    if [ -z "$RFILE" ]; then
-      BDIR="$DIR/backups"
-      mapfile -t BACKUPS < <(find "$BDIR" -name "pgstat_*.tar.gz" -printf "%T@ %f\n" 2>/dev/null | sort -rn | awk '{print $2}')
-      if [ ${#BACKUPS[@]} -eq 0 ]; then
-        fail "Hiç backup bulunamadı ($BDIR)"
-      fi
-      echo -e "${B}Mevcut backup'lar:${N}"
-      for i in "${!BACKUPS[@]}"; do
-        SIZE=$(du -h "$BDIR/${BACKUPS[$i]}" 2>/dev/null | cut -f1)
-        echo -e "  ${C}$((i+1))${N}) ${BACKUPS[$i]}  (${SIZE})"
-      done
-      read -rp "$(echo -e "${C}?${N} Seçin (1-${#BACKUPS[@]}): ")" SEL
-      [[ "$SEL" =~ ^[0-9]+$ ]] && [ "$SEL" -ge 1 ] && [ "$SEL" -le ${#BACKUPS[@]} ] \
-        || fail "Geçersiz seçim"
-      RFILE="$BDIR/${BACKUPS[$((SEL-1))]}"
-    fi
-
-    [ -f "$RFILE" ] || fail "Dosya bulunamadı: $RFILE"
-
-    warn "Bu işlem mevcut veriyi ve .env dosyasını üzerine yazacak!"
-    read -rp "Devam etmek istediğinizden emin misiniz? (yes/no): " confirm
-    [ "$confirm" = "yes" ] || { echo "İptal edildi."; exit 0; }
-
-    # Geçici dizine aç
-    TMPDIR=$(mktemp -d)
-    tar -xzf "$RFILE" -C "$TMPDIR"
-    EXTRACTED=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d | head -1)
-    [ -z "$EXTRACTED" ] && fail "Backup içeriği okunamadı"
-
-    # .env restore
-    if [ -f "$EXTRACTED/.env" ]; then
-      cp "$EXTRACTED/.env" "$DIR/.env"
-      chmod 600 "$DIR/.env"
-      ok ".env restore edildi"
-    fi
-
-    # secrets restore
-    if [ -d "$EXTRACTED/secrets" ]; then
-      cp -r "$EXTRACTED/secrets" "$DIR/"
-      chmod 700 "$DIR/secrets"
-      ok "secrets/ restore edildi"
-    fi
-
-    # .env yükle
-    load_env
-
-    # DB adı güvenli mi kontrol et
-    if [[ ! "$PGSTAT_DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]{0,62}$ ]]; then
-      fail ".env'deki PGSTAT_DB_NAME geçersiz: $PGSTAT_DB_NAME"
-    fi
-
-    # DB restore
-    warn "Veritabanı restore ediliyor..."
-    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
-      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
-      -U "$PGSTAT_DB_USER" -d postgres \
-      -c "DROP DATABASE IF EXISTS \"$PGSTAT_DB_NAME\"" > /dev/null
-    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
-      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
-      -U "$PGSTAT_DB_USER" -d postgres \
-      -c "CREATE DATABASE \"$PGSTAT_DB_NAME\"" > /dev/null
-    gunzip -c "$EXTRACTED/db.sql.gz" | PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
-      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
-      -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" > /dev/null
-    ok "Veritabanı restore edildi"
-
-    rm -rf "$TMPDIR"
-    ok "Restore tamamlandı — servisi başlatmak için: ./pgstat up"
-    ;;
-
-  migrate)
-    load_env; do_migrate ;;
+  migrate) load_env; do_migrate ;;
 
   install)
     INSTALL_DIR="/opt/pgstat"
-    if [ "$DIR" != "$INSTALL_DIR" ]; then
-      sudo mkdir -p "$INSTALL_DIR"
-      sudo cp -r "$DIR"/* "$INSTALL_DIR/"
-      [ -f "$DIR/.env" ] && sudo cp "$DIR/.env" "$INSTALL_DIR/.env"
-    fi
-    # Dizin ve .env izinleri — sadece root okuyabilsin
+    [ "$DIR" != "$INSTALL_DIR" ] && { sudo mkdir -p "$INSTALL_DIR"; sudo cp -r "$DIR"/* "$INSTALL_DIR/"; [ -f "$DIR/.env" ] && sudo cp "$DIR/.env" "$INSTALL_DIR/.env"; }
     sudo chmod 700 "$INSTALL_DIR"
     sudo chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
     sudo cp "$INSTALL_DIR/pgstat.service" /etc/systemd/system/pgstat.service
     sudo systemctl daemon-reload
     sudo systemctl enable pgstat
     sudo systemctl start pgstat
-    ok "Servis kuruldu — makine açılınca otomatik başlar"
-    echo "  systemctl status pgstat"
+    ok "Servis kuruldu — boot'ta otomatik başlar"
     ;;
 
   uninstall)
@@ -391,41 +234,27 @@ EOF
     echo ""
     echo "Kullanım: ./pgstat <komut>"
     echo ""
-    echo -e "  ${G}setup${N}       İlk kurulum (interaktif — DB bilgilerini sorar)"
+    echo -e "  ${G}setup${N}       İlk kurulum (interaktif)"
     echo -e "  ${G}up${N}          Başlat"
     echo -e "  ${G}down${N}        Durdur"
     echo -e "  ${G}restart${N}     Yeniden başlat"
-    echo -e "  ${G}upgrade${N}     Güncelle (git pull sonrası)"
+    echo -e "  ${G}upgrade${N}     Güncelle (git pull + rebuild)"
     echo -e "  ${G}logs${N} [srv]  Loglar (./pgstat logs collector)"
     echo -e "  ${G}status${N}      Container durumları"
     echo -e "  ${G}passwd${N}      Admin şifresini değiştir"
-    echo -e "  ${G}backup${N}      DB + .env + secrets backup al"
-    echo -e "  ${G}restore${N}     Backup'tan geri yükle (./pgstat restore backups/xxx.tar.gz)"
+    echo -e "  ${G}backup${N}      DB backup al"
     echo -e "  ${G}migrate${N}     Sadece migration çalıştır"
-    echo -e "  ${G}install${N}     Systemd servisi kur (boot'ta otomatik)"
+    echo -e "  ${G}install${N}     Systemd servisi kur"
     echo -e "  ${G}uninstall${N}   Servisi kaldır"
     echo ""
-    echo "Konfigürasyon: .env dosyasında (./pgstat setup ile oluşturulur)"
-    echo ""
-    echo -e "${Y}Merkezi DB (pgstat deposu) kullanıcı yetkileri:${N}"
-    echo "  CREATE ROLE pgstat_admin LOGIN PASSWORD '...';"
-    echo "  CREATE DATABASE pgstat OWNER pgstat_admin;"
-    echo "  -- Veya mevcut DB'ye:"
-    echo "  GRANT ALL PRIVILEGES ON DATABASE pgstat TO pgstat_admin;"
-    echo "  \\c pgstat"
-    echo "  GRANT ALL ON SCHEMA public TO pgstat_admin;"
-    echo "  GRANT CREATE ON SCHEMA public TO pgstat_admin;"
+    echo -e "${Y}Merkezi DB yetkileri:${N}"
+    echo "  CREATE ROLE pgstat_admin LOGIN PASSWORD '...' CREATEDB;"
+    echo "  -- veya DB'yi oluşturup yetki verin"
     echo ""
     echo -e "${Y}Kaynak PG gereksinimleri:${N}"
-    echo "  1. Collector kullanıcısı oluşturun:"
-    echo "     CREATE ROLE pgstats_collector LOGIN PASSWORD '...';"
-    echo "     GRANT pg_read_all_stats TO pgstats_collector;"
-    echo "     GRANT pg_read_all_settings TO pgstats_collector;"
-    echo ""
-    echo "  2. pg_stat_statements aktif edin:"
-    echo "     shared_preload_libraries = 'pg_stat_statements'"
-    echo "     CREATE EXTENSION pg_stat_statements;"
-    echo ""
-    echo "  3. UI'dan instance ekleyin: http://localhost:\${UI_PORT}/instances"
+    echo "  CREATE ROLE pgstats_collector LOGIN PASSWORD '...';"
+    echo "  GRANT pg_read_all_stats TO pgstats_collector;"
+    echo "  GRANT pg_read_all_settings TO pgstats_collector;"
+    echo "  shared_preload_libraries = 'pg_stat_statements'"
     ;;
 esac
