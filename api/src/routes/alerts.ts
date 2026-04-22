@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
+import { parseLimit } from '../middleware/validation';
 
 const router = Router();
 
@@ -9,7 +10,7 @@ router.get('/', async (req, res, next) => {
     const status = req.query.status as string; // open, acknowledged, resolved veya bos (tumu)
     const severity = req.query.severity as string;
     const instancePk = req.query.instance_pk as string;
-    const limit = parseInt(req.query.limit as string) || 100;
+    const limit = parseLimit(req.query.limit, 100);
 
     let query = `
       select a.*, i.display_name, i.instance_id, i.host, i.port

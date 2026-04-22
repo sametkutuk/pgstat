@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from './components/common/Toast';
 import AppLayout from './components/layout/AppLayout';
@@ -11,6 +11,8 @@ import Alerts from './pages/Alerts';
 import JobRuns from './pages/JobRuns';
 import Settings from './pages/Settings';
 import ClusterDetail from './pages/ClusterDetail';
+import Login from './pages/Login';
+import { getToken } from './api/client';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,13 +23,22 @@ const queryClient = new QueryClient({
   },
 });
 
+// Token yoksa login'e yönlendir
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  if (!getToken()) {
+    return <Navigate to="/login" replace />;
+  }
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <BrowserRouter>
           <Routes>
-            <Route element={<AppLayout />}>
+            <Route path="/login" element={<Login />} />
+            <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/instances" element={<Instances />} />
               <Route path="/instances/:id" element={<InstanceDetail />} />

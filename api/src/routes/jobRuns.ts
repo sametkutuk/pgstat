@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
+import { parseLimit } from '../middleware/validation';
 
 const router = Router();
 
@@ -8,8 +9,8 @@ const router = Router();
 // job_type + limit: belirli tip için son N kayıt
 router.get('/', async (req, res, next) => {
   try {
-    const perType = parseInt(req.query.per_type as string) || 0;
-    const limit = parseInt(req.query.limit as string) || 50;
+    const perType = parseLimit(req.query.per_type, 0);
+    const limit = parseLimit(req.query.limit, 50);
     const jobType = req.query.job_type as string;
     const status = req.query.status as string;
 

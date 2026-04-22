@@ -1,6 +1,6 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '../../api/client';
+import { apiGet, apiLogout } from '../../api/client';
 
 const links = [
     { to: '/', label: 'Dashboard', icon: '📊' },
@@ -13,6 +13,13 @@ const links = [
 ];
 
 export default function Sidebar() {
+    const navigate = useNavigate();
+
+    const handleLogout = async () => {
+        await apiLogout();
+        navigate('/login');
+    };
+
     const { data } = useQuery<{ version: string }>({
         queryKey: ['version'],
         queryFn: () => apiGet('/version'),
@@ -42,11 +49,16 @@ export default function Sidebar() {
                     </NavLink>
                 ))}
             </nav>
-            {data?.version && (
-                <div className="px-5 py-3 text-xs text-[#475569]">
-                    v{data.version}
-                </div>
-            )}
+            <div className="px-3 py-3 border-t border-[#334155]">
+                <button onClick={handleLogout}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[#94A3B8] hover:text-white hover:bg-[#334155] rounded-md transition-colors">
+                    <span>⎋</span>
+                    <span>Çıkış</span>
+                </button>
+                {data?.version && (
+                    <div className="px-3 pt-2 text-xs text-[#475569]">v{data.version}</div>
+                )}
+            </div>
         </aside>
     );
 }

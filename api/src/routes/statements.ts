@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
+import { parseHours, parseDays, parseLimit, parseId, parseOrderBy } from '../middleware/validation';
 
 const router = Router();
 
@@ -7,10 +8,9 @@ const router = Router();
 // Filtreler: hours, limit, order_by, instance_pk, datname, rolname
 router.get('/top', async (req, res, next) => {
     try {
-        const hours = parseInt(req.query.hours as string) || 1;
-        const limit = parseInt(req.query.limit as string) || 100;
-        const orderBy = (req.query.order_by as string) || 'exec_time';
-        const instancePk = req.query.instance_pk ? parseInt(req.query.instance_pk as string) : null;
+        const hours = parseHours(req.query.hours, 1);
+        const limit = parseLimit(req.query.limit, 100);
+        const instancePk = parseId(req.query.instance_pk);
         const datname = (req.query.datname as string) || null;
         const rolname = (req.query.rolname as string) || null;
 
@@ -22,7 +22,7 @@ router.get('/top', async (req, res, next) => {
             blks_read: 'total_shared_blks_read',
             temp_blks: 'total_temp_blks_written',
         };
-        const orderCol = orderMap[orderBy] || 'total_exec_time_ms';
+        const orderCol = parseOrderBy(req.query.order_by, orderMap, 'total_exec_time_ms');
 
         const params: any[] = [hours, limit];
         let whereExtra = '';
@@ -81,7 +81,7 @@ router.get('/top', async (req, res, next) => {
 router.get('/:seriesId', async (req, res, next) => {
     try {
         const { seriesId } = req.params;
-        const hours = parseInt(req.query.hours as string) || 24;
+        const hours = parseHours(req.query.hours, 24);
 
         // Seri bilgisi
         const seriesResult = await pool.query(`
@@ -125,7 +125,7 @@ router.get('/:seriesId', async (req, res, next) => {
 router.get('/:seriesId/hourly', async (req, res, next) => {
     try {
         const { seriesId } = req.params;
-        const days = parseInt(req.query.days as string) || 7;
+        const days = parseDays(req.query.days, 7);
 
         const result = await pool.query(`
       select
@@ -147,7 +147,7 @@ router.get('/:seriesId/hourly', async (req, res, next) => {
 router.get('/:seriesId/daily', async (req, res, next) => {
     try {
         const { seriesId } = req.params;
-        const days = parseInt(req.query.days as string) || 30;
+        const days = parseDays(req.query.days, 30);
 
         const result = await pool.query(`
       select

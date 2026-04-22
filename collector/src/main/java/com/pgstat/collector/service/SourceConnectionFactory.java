@@ -108,9 +108,12 @@ public class SourceConnectionFactory {
      */
     private void configureSession(Connection conn, int statementTimeoutMs,
                                   int lockTimeoutMs) throws SQLException {
+        // Değerler integer olarak doğrulanır — SQL injection riski yok
+        int safeStatementTimeout = Math.max(0, Math.min(statementTimeoutMs, 3_600_000));
+        int safeLockTimeout = Math.max(0, Math.min(lockTimeoutMs, 3_600_000));
         try (Statement stmt = conn.createStatement()) {
-            stmt.execute("SET statement_timeout = " + statementTimeoutMs);
-            stmt.execute("SET lock_timeout = " + lockTimeoutMs);
+            stmt.execute(String.format("SET statement_timeout = %d", safeStatementTimeout));
+            stmt.execute(String.format("SET lock_timeout = %d", safeLockTimeout));
         }
     }
 }

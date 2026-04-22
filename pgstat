@@ -96,10 +96,36 @@ case "${1:-help}" in
       API_P=$(ask "API portu" "3001")
       echo ""
 
-      # Secret key üret — 32 byte = 256-bit entropy
-      SECRET_KEY=$(openssl rand -hex 32 2>/dev/null \
-        || python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
-        || echo "pgstat-$(date +%s%N)-$(hostname)-secret")
+      # Admin şifresini al ve bcrypt ile hash'le
+      echo -e "${C}Yönetici (admin) şifresi:${N}"
+      while true; do
+        read -rsp "$(echo -e "${C}?${N} Admin şifre (min 12 karakter): ")" ADMIN_PASS; echo ""
+        if [ ${#ADMIN_PASS} -lt 12 ]; then
+          warn "Şifre en az 12 karakter olmalı"
+        else
+          read -rsp "$(echo -e "${C}?${N} Şifre tekrar: ")" ADMIN_PASS2; echo ""
+          if [ "$ADMIN_PASS" = "$ADMIN_PASS2" ]; then
+            break
+          else
+            warn "Şifreler eşleşmiyor, tekrar deneyin"
+          fi
+        fi
+      done
+      # bcrypt hash — node ile üret
+      ADMIN_HASH=$(node -e "const b=require('bcryptjs');console.log(b.hashSync('$ADMIN_PASS',12))" 2>/dev/null \
+        || docker run --rm node:20-alpine node -e "const b=require('bcryptjs');console.log(b.hashSync('$ADMIN_PASS',12))" 2>/dev/null \
+        || fail "bcrypt hash üretilemedi — node veya docker gerekli")
+      echo ""
+
+      # Secret key'leri üret — 64 hex = 256-bit entropy
+      gen_secret() {
+        openssl rand -hex 32 2>/dev/null \
+          || python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
+          || echo "pgstat-$(date +%s%N)-$(hostname)-$(openssl rand -base64 8 2>/dev/null || echo rand)"
+      }
+      SECRET_KEY=$(gen_secret)
+      JWT_SECRET=$(gen_secret)
+      JWT_REFRESH_SECRET=$(gen_secret)
 
       # .env yaz
       cat > "$ENV_FILE" << EOF
@@ -109,6 +135,9 @@ PGSTAT_DB_NAME=$DB_NAME
 PGSTAT_DB_USER=$DB_USER
 PGSTAT_DB_PASSWORD=$DB_PASS
 PGSTAT_SECRET_KEY=$SECRET_KEY
+PGSTAT_JWT_SECRET=$JWT_SECRET
+PGSTAT_JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
+PGSTAT_ADMIN_PASSWORD_HASH=$ADMIN_HASH
 API_PORT=$API_P
 UI_PORT=$UI_P
 COLLECTOR_HOSTNAME=$(hostname -s 2>/dev/null || echo "collector-01")
@@ -178,6 +207,26 @@ EOF
 
   restart)
     load_env; $COMPOSE restart; do_health ;;
+
+  passwd)
+    load_env
+    while true; do
+      read -rsp "$(echo -e "${C}?${N} Yeni şifre (min 12 karakter): ")" NEW_PASS; echo ""
+      if [ ${#NEW_PASS} -lt 12 ]; then
+        warn "Şifre en az 12 karakter olmalı"
+      else
+        read -rsp "$(echo -e "${C}?${N} Şifre tekrar: ")" NEW_PASS2; echo ""
+        [ "$NEW_PASS" = "$NEW_PASS2" ] && break
+        warn "Şifreler eşleşmiyor"
+      fi
+    done
+    NEW_HASH=$(node -e "const b=require('bcryptjs');console.log(b.hashSync('$NEW_PASS',12))" 2>/dev/null \
+      || fail "node bulunamadı — bcrypt hash üretilemedi")
+    # .env'deki hash satırını güncelle
+    sed -i "s|^PGSTAT_ADMIN_PASSWORD_HASH=.*|PGSTAT_ADMIN_PASSWORD_HASH=$NEW_HASH|" "$ENV_FILE"
+    ok "Şifre güncellendi — servis yeniden başlatılıyor..."
+    $COMPOSE restart api
+    ;;
 
   upgrade)
     load_env
@@ -284,16 +333,21 @@ EOF
     # .env yükle
     load_env
 
+    # DB adı güvenli mi kontrol et
+    if [[ ! "$PGSTAT_DB_NAME" =~ ^[a-zA-Z_][a-zA-Z0-9_]{0,62}$ ]]; then
+      fail ".env'deki PGSTAT_DB_NAME geçersiz: $PGSTAT_DB_NAME"
+    fi
+
     # DB restore
     warn "Veritabanı restore ediliyor..."
     PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d postgres \
-      -c "DROP DATABASE IF EXISTS $PGSTAT_DB_NAME" > /dev/null
+      -c "DROP DATABASE IF EXISTS \"$PGSTAT_DB_NAME\"" > /dev/null
     PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d postgres \
-      -c "CREATE DATABASE $PGSTAT_DB_NAME" > /dev/null
+      -c "CREATE DATABASE \"$PGSTAT_DB_NAME\"" > /dev/null
     gunzip -c "$EXTRACTED/db.sql.gz" | PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" > /dev/null
@@ -344,6 +398,7 @@ EOF
     echo -e "  ${G}upgrade${N}     Güncelle (git pull sonrası)"
     echo -e "  ${G}logs${N} [srv]  Loglar (./pgstat logs collector)"
     echo -e "  ${G}status${N}      Container durumları"
+    echo -e "  ${G}passwd${N}      Admin şifresini değiştir"
     echo -e "  ${G}backup${N}      DB + .env + secrets backup al"
     echo -e "  ${G}restore${N}     Backup'tan geri yükle (./pgstat restore backups/xxx.tar.gz)"
     echo -e "  ${G}migrate${N}     Sadece migration çalıştır"

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
+import { parseHours, parseLimit, parseOrderBy } from '../middleware/validation';
 
 const router = Router();
 
@@ -237,8 +238,8 @@ router.get('/:id/capability', async (req, res, next) => {
 router.get('/:id/statements', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours   = parseInt(req.query.hours as string) || 1;
-    const limit   = parseInt(req.query.limit as string) || 100;
+    const hours   = parseHours(req.query.hours, 1);
+    const limit   = parseLimit(req.query.limit, 100);
     const datname = (req.query.datname as string) || null;
     const rolname = (req.query.rolname as string) || null;
 
@@ -296,7 +297,7 @@ router.get('/:id/statements', async (req, res, next) => {
 router.get('/:id/statements/hourly', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseInt(req.query.hours as string) || 24;
+    const hours = parseHours(req.query.hours, 24);
 
     const result = await pool.query(`
       select
@@ -322,7 +323,7 @@ router.get('/:id/statements/hourly', async (req, res, next) => {
 router.get('/:id/cluster-metrics', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseInt(req.query.hours as string) || 1;
+    const hours = parseHours(req.query.hours, 1);
     const family = req.query.family as string; // pg_stat_bgwriter, pg_stat_wal, vb.
 
     let query = `
@@ -391,7 +392,7 @@ router.get('/:id/replication', async (req, res, next) => {
 router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseInt(req.query.hours as string) || 1;
+    const hours = parseHours(req.query.hours, 1);
 
     const result = await pool.query(`
       select
@@ -423,7 +424,7 @@ router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
 router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseInt(req.query.hours as string) || 1;
+    const hours = parseHours(req.query.hours, 1);
 
     const result = await pool.query(`
       select
@@ -453,7 +454,7 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
 router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseInt(req.query.hours as string) || 24;
+    const hours = parseHours(req.query.hours, 24);
 
     const result = await pool.query(`
       select

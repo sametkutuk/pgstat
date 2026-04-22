@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
+import { parseLimit } from '../middleware/validation';
 
 const router = Router();
 
@@ -119,7 +120,7 @@ router.get('/instance-metrics', async (_req, res, next) => {
 // GET /api/dashboard/top-statements — En yoğun statement'lar (son 1 saat)
 router.get('/top-statements', async (req, res, next) => {
   try {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const limit = parseLimit(req.query.limit, 20);
     const result = await pool.query(`
       select
         d.instance_pk, d.statement_series_id,
