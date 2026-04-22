@@ -11,6 +11,9 @@ router.get('/', async (req, res, next) => {
       select
         i.instance_pk, i.instance_id, i.display_name, i.environment,
         i.service_group, i.host, i.port, i.is_active, i.bootstrap_state,
+        i.admin_dbname, i.collector_username, i.secret_ref, i.ssl_mode,
+        i.ssl_root_cert_path, i.collector_group, i.notes,
+        i.schedule_profile_id, i.retention_policy_id,
         c.pg_major, c.is_reachable, c.is_primary, c.collector_sql_family,
         s.last_cluster_collect_at, s.last_statements_collect_at,
         s.consecutive_failures, s.backoff_until,
