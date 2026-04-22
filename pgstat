@@ -184,6 +184,7 @@ EOF
     # Git repo ise önce pull yap
     if [ -d "$DIR/.git" ]; then
       echo "Kod güncelleniyor..."
+      git -C "$DIR" stash --quiet 2>/dev/null || true
       git -C "$DIR" pull --ff-only || warn "git pull başarısız — elle kontrol et"
     fi
     do_migrate; $COMPOSE up -d --build; do_health
