@@ -85,7 +85,7 @@ public class StateRepository {
     // -------------------------------------------------------------------------
 
     /** Hata durumunda exponential backoff uygular (30s - 900s arasi). */
-    public void updateAfterFailure(long instancePk) {
+    public void updateAfterFailure(long instancePk, String errorMessage) {
         jdbc.update("""
             update control.instance_state s
             set consecutive_failures = s.consecutive_failures + 1,
@@ -97,9 +97,30 @@ public class StateRepository {
                 ),
                 next_statements_collect_at = greatest(
                   coalesce(s.next_statements_collect_at, now()), now()
-                )
+                ),
+                last_error = ?,
+                last_error_at = now()
             where s.instance_pk = ?
             """,
+            errorMessage,
+            instancePk
+        );
+    }
+
+    /** Hata durumunda (mesajsiz) backoff uygular. */
+    public void updateAfterFailure(long instancePk) {
+        updateAfterFailure(instancePk, null);
+    }
+
+    /** Sadece last_error kaydeder — backoff uygulamaz (bootstrap hatalari icin). */
+    public void updateLastError(long instancePk, String errorMessage) {
+        jdbc.update("""
+            update control.instance_state
+            set last_error = ?,
+                last_error_at = now()
+            where instance_pk = ?
+            """,
+            errorMessage,
             instancePk
         );
     }

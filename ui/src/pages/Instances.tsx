@@ -19,6 +19,7 @@ interface Instance {
     ssl_root_cert_path: string | null; collector_group: string | null;
     collector_username: string;
     schedule_profile_id: number; retention_policy_id: number; notes: string | null;
+    last_error: string | null; last_error_at: string | null;
 }
 
 export default function Instances() {
@@ -58,7 +59,18 @@ export default function Instances() {
     const columns = [
         {
             key: 'display_name', header: 'Instance', render: (r: Instance) => (
-                <div><div className="font-medium">{r.display_name}</div><div className="text-xs text-[#94A3B8]">{r.host}:{r.port}</div></div>
+                <div>
+                    <div className="font-medium flex items-center gap-1">
+                        {r.display_name}
+                        {r.last_error && (
+                            <span title={r.last_error} className="text-red-500 cursor-help">⚠</span>
+                        )}
+                    </div>
+                    <div className="text-xs text-[#94A3B8]">{r.host}:{r.port}</div>
+                    {r.last_error && (
+                        <div className="text-xs text-red-500 mt-0.5 max-w-xs truncate" title={r.last_error}>{r.last_error}</div>
+                    )}
+                </div>
             )
         },
         { key: 'bootstrap_state', header: 'Durum', render: (r: Instance) => <Badge value={r.bootstrap_state} /> },

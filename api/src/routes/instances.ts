@@ -13,7 +13,8 @@ router.get('/', async (req, res, next) => {
         i.service_group, i.host, i.port, i.is_active, i.bootstrap_state,
         c.pg_major, c.is_reachable, c.is_primary, c.collector_sql_family,
         s.last_cluster_collect_at, s.last_statements_collect_at,
-        s.consecutive_failures, s.backoff_until
+        s.consecutive_failures, s.backoff_until,
+        s.last_error, s.last_error_at
       from control.instance_inventory i
       left join control.instance_capability c on c.instance_pk = i.instance_pk
       left join control.instance_state s on s.instance_pk = i.instance_pk

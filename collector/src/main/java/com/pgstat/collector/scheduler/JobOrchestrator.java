@@ -201,7 +201,7 @@ public class JobOrchestrator {
 
         } catch (Exception e) {
             log.error("Cluster toplama hatasi: {} — {}", instance.instanceId(), e.getMessage());
-            stateRepo.updateAfterFailure(instance.instancePk());
+            stateRepo.updateAfterFailure(instance.instancePk(), truncate(e.getMessage()));
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
             return new InstanceResult(instance.instancePk(), false, 0, e.getMessage());
         }
@@ -270,7 +270,7 @@ public class JobOrchestrator {
 
         } catch (Exception e) {
             log.error("Statements toplama hatasi: {} — {}", instance.instanceId(), e.getMessage());
-            stateRepo.updateAfterFailure(instance.instancePk());
+            stateRepo.updateAfterFailure(instance.instancePk(), truncate(e.getMessage()));
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
             return new InstanceResult(instance.instancePk(), false, 0, e.getMessage());
         }

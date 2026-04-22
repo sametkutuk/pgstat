@@ -103,6 +103,14 @@ function OverviewTab({ inst, cap }: { inst: any; cap: any }) {
                     <Row label="Son Rollup" value={inst.last_rollup_at ? <TimeAgo date={inst.last_rollup_at} /> : '—'} />
                     <Row label="Ardışık Hata" value={inst.consecutive_failures ?? 0} />
                     <Row label="Backoff Bitiş" value={inst.backoff_until ? <TimeAgo date={inst.backoff_until} /> : '—'} />
+                    {inst.last_error && (
+                        <Row label="Son Hata" value={
+                            <span className="text-red-500 text-xs break-all">{inst.last_error}</span>
+                        } />
+                    )}
+                    {inst.last_error_at && (
+                        <Row label="Hata Zamanı" value={<TimeAgo date={inst.last_error_at} />} />
+                    )}
                     <Row label="Epoch Key" value={inst.current_pgss_epoch_key || '—'} />
                     <Row label="Son Discovery" value={cap?.last_discovered_at ? <TimeAgo date={cap.last_discovered_at} /> : '—'} />
                 </dl>

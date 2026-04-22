@@ -5,6 +5,7 @@ import com.pgstat.collector.model.InstanceCapability;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.InventoryRepository;
+import com.pgstat.collector.repository.StateRepository;
 import com.pgstat.collector.service.SecretResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,13 +32,16 @@ public class BootstrapHandler {
     private final DiscoveryCollector discoveryCollector;
     private final InventoryRepository inventoryRepo;
     private final AlertRepository alertRepo;
+    private final StateRepository stateRepo;
 
     public BootstrapHandler(DiscoveryCollector discoveryCollector,
                             InventoryRepository inventoryRepo,
-                            AlertRepository alertRepo) {
+                            AlertRepository alertRepo,
+                            StateRepository stateRepo) {
         this.discoveryCollector = discoveryCollector;
         this.inventoryRepo = inventoryRepo;
         this.alertRepo = alertRepo;
+        this.stateRepo = stateRepo;
     }
 
     /**
@@ -60,21 +64,21 @@ public class BootstrapHandler {
                         state, instance.instanceId());
             }
         } catch (SecretResolver.SecretResolveException e) {
-            // Secret hatasi → ozel alert
             log.error("Bootstrap secret hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            String msg = "Secret cozumleme hatasi: " + e.getMessage();
             raiseAlert(instance, AlertCode.SECRET_REF_ERROR,
-                    "Secret cozumleme hatasi: " + instance.instanceId(),
-                    e.getMessage());
+                    "Secret cozumleme hatasi: " + instance.instanceId(), msg);
             inventoryRepo.updateBootstrapState(instance.instancePk(), "degraded");
+            stateRepo.updateLastError(instance.instancePk(), msg);
 
         } catch (Exception e) {
-            // Genel hata → bootstrap_failed alert
             log.error("Bootstrap hatasi: {} state={} — {}",
                     instance.instanceId(), state, e.getMessage(), e);
+            String msg = state + " adiminda hata: " + e.getMessage();
             raiseAlert(instance, AlertCode.BOOTSTRAP_FAILED,
-                    "Bootstrap basarisiz: " + instance.instanceId(),
-                    state + " adiminda hata: " + e.getMessage());
+                    "Bootstrap basarisiz: " + instance.instanceId(), msg);
             inventoryRepo.updateBootstrapState(instance.instancePk(), "degraded");
+            stateRepo.updateLastError(instance.instancePk(), msg);
         }
     }
 
