@@ -202,10 +202,12 @@ export default function InstanceForm({ initial, onSubmit, onCancel, isEdit }: Pr
 function CopyButton({ text }: { text: string }) {
     const [copied, setCopied] = useState(false);
     const copy = useCallback(() => {
-        navigator.clipboard.writeText(text).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        });
+        const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+        } else {
+            fallbackCopy(text, done);
+        }
     }, [text]);
     return (
         <button type="button" onClick={copy}
@@ -213,6 +215,17 @@ function CopyButton({ text }: { text: string }) {
             {copied ? '✓ Kopyalandı' : 'Kopyala'}
         </button>
     );
+}
+
+function fallbackCopy(text: string, done: () => void) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch {}
+    document.body.removeChild(ta);
 }
 
 function SqlBlock({ sql }: { sql: string }) {
