@@ -33,7 +33,7 @@ export function saveSecret(instanceId: string, password: string): string {
     }
 
     const filePath = join(SECRETS_DIR, `${instanceId}.pass`);
-    writeFileSync(filePath, payload, { mode: 0o600 });
+    writeFileSync(filePath, payload, { mode: 0o644 });
 
     return `file:${filePath}`;
 }

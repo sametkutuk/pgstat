@@ -11,5 +11,6 @@ RUN groupadd -g 10001 pgstat 2>/dev/null || true && \
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 RUN chown 10001:10001 /app/app.jar
+RUN mkdir -p /app/data/secrets && chown -R 10001:10001 /app/data
 USER 10001
 ENTRYPOINT ["java", "-jar", "app.jar"]
