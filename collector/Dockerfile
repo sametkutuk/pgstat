@@ -6,9 +6,10 @@ COPY src ./src
 RUN mvn package -DskipTests -q
 
 FROM eclipse-temurin:17-jre
-RUN groupadd -g 1000 pgstat && useradd -u 1000 -g pgstat -s /bin/sh pgstat
+RUN groupadd -g 10001 pgstat 2>/dev/null || true && \
+    useradd -u 10001 -g 10001 -s /bin/sh pgstat 2>/dev/null || true
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
-RUN chown pgstat:pgstat /app/app.jar
-USER pgstat
+RUN chown 10001:10001 /app/app.jar
+USER 10001
 ENTRYPOINT ["java", "-jar", "app.jar"]
