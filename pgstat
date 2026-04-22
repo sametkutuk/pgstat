@@ -197,18 +197,104 @@ EOF
   backup)
     load_env
     mkdir -p "$DIR/backups"
-    F="$DIR/backups/pgstat_$(date +%Y%m%d_%H%M%S).sql.gz"
+    TS=$(date +%Y%m%d_%H%M%S)
+    BDIR="$DIR/backups/pgstat_$TS"
+    mkdir -p "$BDIR"
+
+    # 1. Veritabanı dump
     PGPASSWORD="$PGSTAT_DB_PASSWORD" pg_dump \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" \
-      --no-owner --no-privileges | gzip > "$F"
+      --no-owner --no-privileges | gzip > "$BDIR/db.sql.gz"
+    ok "DB dump: $BDIR/db.sql.gz ($(du -h "$BDIR/db.sql.gz" | cut -f1))"
+
+    # 2. .env dosyası
+    [ -f "$DIR/.env" ] && cp "$DIR/.env" "$BDIR/.env" && ok ".env kopyalandı"
+
+    # 3. Şifreli secret dosyaları
+    [ -d "$DIR/secrets" ] && cp -r "$DIR/secrets" "$BDIR/secrets" && ok "secrets/ kopyalandı"
+
+    # Tüm backup'ı tek tar.gz'e paketle
+    F="$DIR/backups/pgstat_$TS.tar.gz"
+    tar -czf "$F" -C "$DIR/backups" "pgstat_$TS"
+    rm -rf "$BDIR"
     ok "Backup: $F ($(du -h "$F" | cut -f1))"
+
     # 30 günden eski backup'ları temizle
-    old_count=$(find "$DIR/backups" -name "pgstat_*.sql.gz" -mtime +30 2>/dev/null | wc -l)
+    old_count=$(find "$DIR/backups" -name "pgstat_*.tar.gz" -mtime +30 2>/dev/null | wc -l)
     if [ "$old_count" -gt 0 ]; then
-      find "$DIR/backups" -name "pgstat_*.sql.gz" -mtime +30 -delete
+      find "$DIR/backups" -name "pgstat_*.tar.gz" -mtime +30 -delete
       ok "30 günden eski $old_count backup temizlendi"
     fi
+    ;;
+
+  restore)
+    RFILE="${2:-}"
+
+    # Dosya belirtilmemişse mevcut backup'ları listele ve seçtir
+    if [ -z "$RFILE" ]; then
+      BDIR="$DIR/backups"
+      mapfile -t BACKUPS < <(find "$BDIR" -name "pgstat_*.tar.gz" -printf "%T@ %f\n" 2>/dev/null | sort -rn | awk '{print $2}')
+      if [ ${#BACKUPS[@]} -eq 0 ]; then
+        fail "Hiç backup bulunamadı ($BDIR)"
+      fi
+      echo -e "${B}Mevcut backup'lar:${N}"
+      for i in "${!BACKUPS[@]}"; do
+        SIZE=$(du -h "$BDIR/${BACKUPS[$i]}" 2>/dev/null | cut -f1)
+        echo -e "  ${C}$((i+1))${N}) ${BACKUPS[$i]}  (${SIZE})"
+      done
+      read -rp "$(echo -e "${C}?${N} Seçin (1-${#BACKUPS[@]}): ")" SEL
+      [[ "$SEL" =~ ^[0-9]+$ ]] && [ "$SEL" -ge 1 ] && [ "$SEL" -le ${#BACKUPS[@]} ] \
+        || fail "Geçersiz seçim"
+      RFILE="$BDIR/${BACKUPS[$((SEL-1))]}"
+    fi
+
+    [ -f "$RFILE" ] || fail "Dosya bulunamadı: $RFILE"
+
+    warn "Bu işlem mevcut veriyi ve .env dosyasını üzerine yazacak!"
+    read -rp "Devam etmek istediğinizden emin misiniz? (yes/no): " confirm
+    [ "$confirm" = "yes" ] || { echo "İptal edildi."; exit 0; }
+
+    # Geçici dizine aç
+    TMPDIR=$(mktemp -d)
+    tar -xzf "$RFILE" -C "$TMPDIR"
+    EXTRACTED=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 -type d | head -1)
+    [ -z "$EXTRACTED" ] && fail "Backup içeriği okunamadı"
+
+    # .env restore
+    if [ -f "$EXTRACTED/.env" ]; then
+      cp "$EXTRACTED/.env" "$DIR/.env"
+      chmod 600 "$DIR/.env"
+      ok ".env restore edildi"
+    fi
+
+    # secrets restore
+    if [ -d "$EXTRACTED/secrets" ]; then
+      cp -r "$EXTRACTED/secrets" "$DIR/"
+      chmod 700 "$DIR/secrets"
+      ok "secrets/ restore edildi"
+    fi
+
+    # .env yükle
+    load_env
+
+    # DB restore
+    warn "Veritabanı restore ediliyor..."
+    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+      -U "$PGSTAT_DB_USER" -d postgres \
+      -c "DROP DATABASE IF EXISTS $PGSTAT_DB_NAME" > /dev/null
+    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+      -U "$PGSTAT_DB_USER" -d postgres \
+      -c "CREATE DATABASE $PGSTAT_DB_NAME" > /dev/null
+    gunzip -c "$EXTRACTED/db.sql.gz" | PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+      -U "$PGSTAT_DB_USER" -d "$PGSTAT_DB_NAME" > /dev/null
+    ok "Veritabanı restore edildi"
+
+    rm -rf "$TMPDIR"
+    ok "Restore tamamlandı — servisi başlatmak için: ./pgstat up"
     ;;
 
   migrate)
@@ -252,7 +338,8 @@ EOF
     echo -e "  ${G}upgrade${N}     Güncelle (git pull sonrası)"
     echo -e "  ${G}logs${N} [srv]  Loglar (./pgstat logs collector)"
     echo -e "  ${G}status${N}      Container durumları"
-    echo -e "  ${G}backup${N}      DB backup al"
+    echo -e "  ${G}backup${N}      DB + .env + secrets backup al"
+    echo -e "  ${G}restore${N}     Backup'tan geri yükle (./pgstat restore backups/xxx.tar.gz)"
     echo -e "  ${G}migrate${N}     Sadece migration çalıştır"
     echo -e "  ${G}install${N}     Systemd servisi kur (boot'ta otomatik)"
     echo -e "  ${G}uninstall${N}   Servisi kaldır"
