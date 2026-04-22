@@ -185,11 +185,53 @@ public class DiscoveryCollector {
             return null;
 
         } catch (Exception e) {
-            log.error("Discovery hatasi: {} — {}", instance.instanceId(), e.getMessage(), e);
-            capabilityRepo.markUnreachable(instance.instancePk(), e.getMessage());
-            stateRepo.updateLastError(instance.instancePk(), e.getMessage());
+            String detail = buildErrorDetail(e);
+            log.error("Discovery hatasi: {} — {}", instance.instanceId(), detail);
+            capabilityRepo.markUnreachable(instance.instancePk(), detail);
+            stateRepo.updateLastError(instance.instancePk(), detail);
             return null;
         }
+    }
+
+    /** Exception'dan anlaşılır hata mesajı üretir. */
+    private String buildErrorDetail(Exception e) {
+        String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        Throwable cause = e.getCause();
+
+        // JDBC bağlantı hatalarının gerçek nedeni cause'da olur
+        if (cause != null && cause.getMessage() != null) {
+            String causeMsg = cause.getMessage();
+            // Bilinen hata kalıpları → Türkçe açıklama
+            if (causeMsg.contains("Connection refused") || causeMsg.contains("connect refused")) {
+                return "Bağlantı reddedildi — host/port yanlış veya PostgreSQL çalışmıyor (" + causeMsg + ")";
+            }
+            if (causeMsg.contains("timeout") || causeMsg.contains("timed out")) {
+                return "Bağlantı zaman aşımı — host erişilemiyor veya firewall engelliyor (" + causeMsg + ")";
+            }
+            if (causeMsg.contains("No route to host") || causeMsg.contains("Network is unreachable")) {
+                return "Host'a ulaşılamıyor — IP adresi yanlış veya ağ erişimi yok (" + causeMsg + ")";
+            }
+            return msg + " — " + causeMsg;
+        }
+
+        // JDBC SQLState bazlı hatalar (pg_hba, şifre vb.)
+        if (e instanceof java.sql.SQLException se) {
+            String state = se.getSQLState();
+            if ("28P01".equals(state) || "28000".equals(state)) {
+                return "Kimlik doğrulama hatası — kullanıcı adı veya şifre yanlış (SQLState: " + state + ")";
+            }
+            if ("3D000".equals(state)) {
+                return "Veritabanı bulunamadı — admin_dbname yanlış (SQLState: " + state + ")";
+            }
+            if ("42501".equals(state)) {
+                return "Yetki hatası — kullanıcının pg_monitor rolü yok (SQLState: " + state + ")";
+            }
+            if (state != null && state.startsWith("08")) {
+                return "Bağlantı hatası (SQLState: " + state + ") — pg_hba.conf izni eksik olabilir: " + msg;
+            }
+        }
+
+        return msg;
     }
 
     /**
