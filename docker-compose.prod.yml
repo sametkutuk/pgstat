@@ -55,6 +55,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - pgstat-secrets:/app/data/secrets
+      - ./VERSION:/app/VERSION:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

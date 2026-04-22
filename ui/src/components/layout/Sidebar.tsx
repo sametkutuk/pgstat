@@ -1,4 +1,6 @@
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { apiGet } from '../../api/client';
 
 const links = [
     { to: '/', label: 'Dashboard', icon: '📊' },
@@ -11,6 +13,12 @@ const links = [
 ];
 
 export default function Sidebar() {
+    const { data } = useQuery<{ version: string }>({
+        queryKey: ['version'],
+        queryFn: () => apiGet('/version'),
+        staleTime: Infinity,
+    });
+
     return (
         <aside className="w-56 min-h-screen bg-[#1E293B] text-[#94A3B8] flex flex-col">
             <div className="px-5 py-5 text-white text-lg font-bold tracking-wide">
@@ -34,6 +42,11 @@ export default function Sidebar() {
                     </NavLink>
                 ))}
             </nav>
+            {data?.version && (
+                <div className="px-5 py-3 text-xs text-[#475569]">
+                    v{data.version}
+                </div>
+            )}
         </aside>
     );
 }

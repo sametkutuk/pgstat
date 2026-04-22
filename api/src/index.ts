@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
 import { pool } from './config/database';
 import { errorHandler } from './middleware/errorHandler';
 import dashboardRoutes from './routes/dashboard';
@@ -26,6 +28,17 @@ app.use('/api/job-runs', jobRunRoutes);
 app.use('/api/retention-policies', retentionRoutes);
 app.use('/api/schedule-profiles', scheduleRoutes);
 app.use('/api/statements', statementRoutes);
+
+// Versiyon
+app.get('/api/version', (_req, res) => {
+  try {
+    const versionFile = path.join(__dirname, '../VERSION');
+    const version = fs.readFileSync(versionFile, 'utf8').trim();
+    res.json({ version });
+  } catch {
+    res.json({ version: 'unknown' });
+  }
+});
 
 // Sağlık kontrolü
 app.get('/api/health', async (_req, res) => {
