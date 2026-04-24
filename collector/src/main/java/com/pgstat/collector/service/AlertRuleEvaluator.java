@@ -175,9 +175,14 @@ public class AlertRuleEvaluator {
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "select * from control.get_baseline(?, ?, ?)",
                 instancePk, metricKey, hour);
-            return rows.isEmpty() ? null : rows.get(0);
+            if (rows.isEmpty()) {
+                log.warn("Baseline bos dondu instance={} metric={} hour={}", instancePk, metricKey, hour);
+                return null;
+            }
+            log.info("Baseline bulundu instance={} metric={} hour={} avg={}", instancePk, metricKey, hour, rows.get(0).get("avg_value"));
+            return rows.get(0);
         } catch (Exception e) {
-            log.debug("Baseline okuma hatasi instance={} metric={}: {}", instancePk, metricKey, e.getMessage());
+            log.warn("Baseline okuma hatasi instance={} metric={} hour={}: {}", instancePk, metricKey, hour, e.getMessage());
             return null;
         }
     }
