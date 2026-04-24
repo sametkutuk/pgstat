@@ -890,7 +890,7 @@ public class AlertRuleEvaluator {
                 """, interval);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "database_metric") + ") as value" +
             " from fact.pg_database_delta where sample_ts >= now() - ?::interval group by instance_pk",
             interval);
     }
@@ -921,7 +921,7 @@ public class AlertRuleEvaluator {
                 " where r.snapshot_ts >= now() - ?::interval group by r.instance_pk", interval);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "replication_metric") + ") as value" +
             " from fact.pg_replication_snapshot where snapshot_ts >= now() - ?::interval group by instance_pk",
             interval);
     }
@@ -935,7 +935,7 @@ public class AlertRuleEvaluator {
                 interval);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "statement_metric") + ") as value" +
             " from fact.pgss_delta where sample_ts >= now() - ?::interval group by instance_pk",
             interval);
     }
@@ -951,7 +951,7 @@ public class AlertRuleEvaluator {
                 interval);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "table_metric") + ") as value" +
             " from fact.pg_table_stat_delta where sample_ts >= now() - ?::interval group by instance_pk",
             interval);
     }
@@ -992,7 +992,7 @@ public class AlertRuleEvaluator {
                 """, intervalStart, intervalEnd);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "database_metric") + ") as value" +
             " from fact.pg_database_delta" +
             " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
             intervalStart, intervalEnd);
@@ -1027,7 +1027,7 @@ public class AlertRuleEvaluator {
                 intervalStart, intervalEnd);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "replication_metric") + ") as value" +
             " from fact.pg_replication_snapshot" +
             " where snapshot_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
             intervalStart, intervalEnd);
@@ -1044,7 +1044,7 @@ public class AlertRuleEvaluator {
                 intervalStart, intervalEnd);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "statement_metric") + ") as value" +
             " from fact.pgss_delta" +
             " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
             intervalStart, intervalEnd);
@@ -1062,7 +1062,7 @@ public class AlertRuleEvaluator {
                 intervalStart, intervalEnd);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(" + toFactColumn(metricName, "table_metric") + ") as value" +
             " from fact.pg_table_stat_delta" +
             " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
             intervalStart, intervalEnd);
@@ -1252,6 +1252,30 @@ public class AlertRuleEvaluator {
         if (name == null || !name.matches("[a-z_][a-z0-9_]*"))
             throw new IllegalArgumentException("Gecersiz kolon adi: " + name);
         return name;
+    }
+
+    /**
+     * UI'daki metric_name'i fact tablosundaki kolon adina cevirir.
+     * Ornek: "calls" → "calls_delta", "temp_blks_written" → "temp_blks_written_delta"
+     * Zaten _delta ile bitiyorsa dokunmaz.
+     */
+    private String toFactColumn(String metricName, String metricType) {
+        String safe = sanitizeCol(metricName);
+        // Snapshot tablolari delta suffix kullanmaz
+        if ("activity_metric".equals(metricType) || "replication_metric".equals(metricType)) {
+            return safe;
+        }
+        // Cluster metric: metric_value_num kullanir, kolon adi degil
+        if ("cluster_metric".equals(metricType)) {
+            return safe;
+        }
+        // Zaten _delta ile bitiyorsa dokunma
+        if (safe.endsWith("_delta")) return safe;
+        // Gauge metrikler (estimate, ratio vb.) delta suffix almaz
+        if (safe.endsWith("_estimate") || safe.endsWith("_ratio") || safe.equals("numbackends")) {
+            return safe;
+        }
+        return safe + "_delta";
     }
 
     private long toLong(Object v) { return ((Number) v).longValue(); }
