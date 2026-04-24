@@ -49,6 +49,7 @@ public class StatementsCollector {
     private final FactRepository factRepo;
     private final DeltaCalculator deltaCalc;
     private final EpochManager epochManager;
+    private final AlertRepository alertRepo;
 
     /**
      * In-memory delta cache.
@@ -65,7 +66,8 @@ public class StatementsCollector {
                                DimensionRepository dimensionRepo,
                                FactRepository factRepo,
                                DeltaCalculator deltaCalc,
-                               EpochManager epochManager) {
+                               EpochManager epochManager,
+                               AlertRepository alertRepo) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -74,6 +76,7 @@ public class StatementsCollector {
         this.factRepo = factRepo;
         this.deltaCalc = deltaCalc;
         this.epochManager = epochManager;
+        this.alertRepo = alertRepo;
     }
 
     /**
@@ -137,18 +140,39 @@ public class StatementsCollector {
                 // Epoch degisti → reset/restart tespit edildi
                 Map<String, StatementSample> oldCache = previousSamples.get(instancePk);
                 
-                // Reset oncesi son bilinen cumulative degerleri logla
                 if (oldCache != null && !oldCache.isEmpty()) {
                     long totalCalls = oldCache.values().stream().mapToLong(StatementSample::calls).sum();
                     double totalExecTime = oldCache.values().stream().mapToDouble(StatementSample::totalExecTime).sum();
                     int queryCount = oldCache.size();
                     
-                    log.warn("pg_stat_statements reset tespit edildi instance={}: " +
-                        "onceki epoch={}, yeni epoch={}, " +
-                        "son bilinen: {} sorgu, toplam {} calls, {}ms exec time. " +
-                        "Reset ile son cycle arasi veri kaybi olabilir.",
-                        instancePk, currentEpochKey, newEpochKey,
-                        queryCount, totalCalls, String.format("%.1f", totalExecTime));
+                    // Kayip suresi: son collect zamani ile simdi arasi
+                    String lossWindow = "bilinmiyor";
+                    try {
+                        var lastCollect = stateRepo.findLastStatementsCollectAt(instancePk);
+                        if (lastCollect != null) {
+                            long seconds = java.time.Duration.between(lastCollect, now).getSeconds();
+                            lossWindow = seconds + " saniye";
+                        }
+                    } catch (Exception ignored) {}
+                    
+                    String alertMessage = String.format(
+                        "pg_stat_statements reset tespit edildi. " +
+                        "Son bilinen: %d sorgu, %d calls, %.0fms exec time. " +
+                        "Olasi veri kaybi penceresi: %s. " +
+                        "Onceki epoch: %s",
+                        queryCount, totalCalls, totalExecTime, lossWindow,
+                        currentEpochKey != null ? currentEpochKey : "ilk");
+                    
+                    alertRepo.upsert(
+                        "pgss_reset:instance:" + instancePk,
+                        AlertCode.STATS_RESET_DETECTED,
+                        instancePk, null, systemIdentifier,
+                        "pg_stat_statements Reset",
+                        alertMessage, null
+                    );
+                    
+                    log.warn("pg_stat_statements reset: instance={}, {} sorgu, {} calls, kayip penceresi={}",
+                        instancePk, queryCount, totalCalls, lossWindow);
                 } else {
                     log.info("Epoch degisti (ilk baslatma veya cache bos): {} → {}", 
                         currentEpochKey, newEpochKey);

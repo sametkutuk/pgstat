@@ -196,4 +196,16 @@ public class StateRepository {
             instancePk
         );
     }
+
+    /** Son statements toplama zamanini okur (reset kayip penceresi hesabi icin). */
+    public OffsetDateTime findLastStatementsCollectAt(long instancePk) {
+        return jdbc.queryForObject("""
+            select last_statements_collect_at
+            from control.instance_state
+            where instance_pk = ?
+            """,
+            OffsetDateTime.class,
+            instancePk
+        );
+    }
 }
