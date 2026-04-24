@@ -45,6 +45,9 @@ router.get('/', async (req: Request, res: Response) => {
       r.evaluation_type,
       r.change_threshold_pct,
       r.min_data_days,
+      r.alert_category,
+      r.spike_fallback_pct,
+      r.flatline_minutes,
       r.is_enabled,
       r.cooldown_minutes,
       r.auto_resolve,
@@ -100,6 +103,12 @@ router.get('/templates', async (_req: Request, res: Response) => {
       critical_threshold,
       evaluation_window_minutes,
       aggregation,
+      evaluation_type,
+      change_threshold_pct,
+      min_data_days,
+      alert_category,
+      spike_fallback_pct,
+      flatline_minutes,
       cooldown_minutes,
       auto_resolve
     from control.alert_rule
@@ -135,6 +144,7 @@ router.post('/', async (req: Request, res: Response) => {
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
     aggregation, evaluation_type, change_threshold_pct, min_data_days,
+    alert_category, spike_fallback_pct, flatline_minutes,
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
@@ -144,8 +154,9 @@ router.post('/', async (req: Request, res: Response) => {
         service_group, condition_operator, warning_threshold, critical_threshold,
         evaluation_window_minutes, aggregation, evaluation_type,
         change_threshold_pct, min_data_days,
+        alert_category, spike_fallback_pct, flatline_minutes,
         is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
@@ -154,6 +165,7 @@ router.post('/', async (req: Request, res: Response) => {
       evaluation_window_minutes ?? 5, aggregation ?? 'avg',
       evaluation_type ?? 'threshold', change_threshold_pct ?? null,
       min_data_days ?? 7,
+      alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false
     ]
   );
@@ -173,6 +185,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
     aggregation, evaluation_type, change_threshold_pct, min_data_days,
+    alert_category, spike_fallback_pct, flatline_minutes,
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
@@ -183,8 +196,9 @@ router.put('/:id', async (req: Request, res: Response) => {
        warning_threshold=$9, critical_threshold=$10,
        evaluation_window_minutes=$11, aggregation=$12,
        evaluation_type=$13, change_threshold_pct=$14, min_data_days=$15,
-       is_enabled=$16, cooldown_minutes=$17, auto_resolve=$18
-     where rule_id=$19
+       alert_category=$16, spike_fallback_pct=$17, flatline_minutes=$18,
+       is_enabled=$19, cooldown_minutes=$20, auto_resolve=$21
+     where rule_id=$22
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
@@ -192,6 +206,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       condition_operator ?? '>', warning_threshold ?? null, critical_threshold ?? null,
       evaluation_window_minutes ?? 5, aggregation ?? 'avg',
       evaluation_type ?? 'threshold', change_threshold_pct ?? null, min_data_days ?? 7,
+      alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false, id
     ]
   );
@@ -275,7 +290,7 @@ router.post('/from-template', async (req: Request, res: Response) => {
 
 // ---
 
-const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week'];
+const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week','spike','flatline','hourly_pattern'];
 const VALID_METRIC_TYPES = [
   'cluster_metric','io_metric','database_metric','statement_metric',
   'table_metric','index_metric','activity_metric','replication_metric'
@@ -300,10 +315,12 @@ function validateRuleBody(b: any): string | null {
   if (b.evaluation_type && !VALID_EVAL_TYPES.includes(b.evaluation_type))
     return 'Geçersiz evaluation_type';
   const evalType = b.evaluation_type || 'threshold';
-  if (['day_over_day','week_over_week'].includes(evalType) && b.change_threshold_pct == null)
-    return 'day_over_day/week_over_week için change_threshold_pct zorunlu';
-  if (['threshold'].includes(evalType) && b.warning_threshold == null && b.critical_threshold == null)
+  if (['day_over_day','week_over_week','hourly_pattern'].includes(evalType) && b.change_threshold_pct == null)
+    return 'Bu evaluation_type için change_threshold_pct zorunlu';
+  if (evalType === 'threshold' && b.warning_threshold == null && b.critical_threshold == null)
     return 'threshold tipi için warning_threshold veya critical_threshold zorunlu';
+  if (b.alert_category && !['smart','threshold'].includes(b.alert_category))
+    return 'Geçersiz alert_category';
   if (b.evaluation_window_minutes !== undefined && (b.evaluation_window_minutes < 1))
     return 'evaluation_window_minutes en az 1 olmalı';
   if (b.cooldown_minutes !== undefined && b.cooldown_minutes < 0)

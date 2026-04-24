@@ -22,6 +22,12 @@ interface AlertRule {
   critical_threshold: number | null;
   evaluation_window_minutes: number;
   aggregation: string;
+  evaluation_type: string;
+  change_threshold_pct: number | null;
+  min_data_days: number;
+  alert_category: 'smart' | 'threshold';
+  spike_fallback_pct: number | null;
+  flatline_minutes: number;
   is_enabled: boolean;
   cooldown_minutes: number;
   auto_resolve: boolean;
@@ -144,12 +150,15 @@ const AGGREGATIONS: Record<string, string> = {
 const WINDOW_OPTIONS = [1, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
 const COOLDOWN_OPTIONS = [0, 5, 10, 15, 30, 60, 120, 360];
 
-const EVAL_TYPES: Record<string, { label: string; description: string }> = {
-  threshold:      { label: 'Sabit Eşik',         description: 'Değer belirlenen eşiği aştığında tetiklenir.' },
-  alltime_high:   { label: 'Tüm Zamanlar En Yüksek', description: 'Değer geçmişte hiç bu kadar yüksek olmamışsa tetiklenir.' },
-  alltime_low:    { label: 'Tüm Zamanlar En Düşük',  description: 'Değer geçmişte hiç bu kadar düşük olmamışsa tetiklenir.' },
-  day_over_day:   { label: 'Günlük Değişim (%)',  description: 'Dünün aynı saatine göre % değişim eşiği aşılırsa tetiklenir.' },
-  week_over_week: { label: 'Haftalık Değişim (%)', description: 'Geçen haftanın aynı gününe göre % değişim eşiği aşılırsa tetiklenir.' },
+const EVAL_TYPES: Record<string, { label: string; description: string; category: 'threshold' | 'smart' }> = {
+  threshold:      { label: 'Sabit Eşik',             category: 'threshold', description: 'Değer belirlenen eşiği aştığında tetiklenir.' },
+  alltime_high:   { label: 'Tüm Zamanlar En Yüksek', category: 'smart',     description: 'Değer geçmişte hiç bu kadar yüksek olmamışsa tetiklenir. Eşik gerekmez.' },
+  alltime_low:    { label: 'Tüm Zamanlar En Düşük',  category: 'smart',     description: 'Değer geçmişte hiç bu kadar düşük olmamışsa tetiklenir. Eşik gerekmez.' },
+  day_over_day:   { label: 'Günlük Değişim (%)',      category: 'smart',     description: 'Dünün aynı saatine göre % değişim eşiği aşılırsa tetiklenir.' },
+  week_over_week: { label: 'Haftalık Değişim (%)',    category: 'smart',     description: 'Geçen haftanın aynı gününe göre % değişim eşiği aşılırsa tetiklenir.' },
+  spike:          { label: 'Ani Sıçrama',             category: 'smart',     description: 'Son pencere ile önceki pencere karşılaştırılır. Ani artış tetiklenir.' },
+  flatline:       { label: 'Counter Durdu',           category: 'smart',     description: 'Normalde artan bir değer N dakika boyunca hiç değişmediyse tetiklenir.' },
+  hourly_pattern: { label: 'Saatlik Örüntü Sapması',  category: 'smart',     description: 'Bu saatin 4 haftalık ortalamasından sapma. Yeni instance\'ta anlık spike\'a geçer.' },
 };
 
 const emptyForm = {
@@ -168,6 +177,9 @@ const emptyForm = {
   evaluation_type: 'threshold',
   change_threshold_pct: '' as string | number,
   min_data_days: 7,
+  alert_category: 'threshold' as 'smart' | 'threshold',
+  spike_fallback_pct: '' as string | number,
+  flatline_minutes: 30,
   is_enabled: true,
   cooldown_minutes: 15,
   auto_resolve: true,
@@ -178,10 +190,16 @@ const emptyForm = {
 // =========================================================================
 
 export default function AlertRules() {
-  const [tab, setTab] = useState<'list' | 'templates'>('list');
+  const [tab, setTab] = useState<'smart' | 'custom' | 'templates'>('smart');
   const [showForm, setShowForm] = useState(false);
   const [editRule, setEditRule] = useState<AlertRule | null>(null);
   const [templateForm, setTemplateForm] = useState<AlertRule | null>(null);
+
+  const tabs = [
+    { k: 'smart',     l: '⚡ Hızlı İzleme',      hint: 'Eşik girmeden, tek tıkla aktifleştir' },
+    { k: 'custom',    l: '⚙ Özel Kurallar',       hint: 'Manuel eşik tanımlı kurallar' },
+    { k: 'templates', l: '📋 Template Galerisi',   hint: 'Hazır şablonlardan oluştur' },
+  ];
 
   return (
     <div>
@@ -196,17 +214,22 @@ export default function AlertRules() {
       </div>
 
       <div className="flex gap-1 mb-4 border-b border-[#E2E8F0]">
-        {[{ k: 'list', l: 'Kurallar' }, { k: 'templates', l: 'Hazır Template\'ler' }].map((t) => (
+        {tabs.map((t) => (
           <button key={t.k} onClick={() => setTab(t.k as any)}
+            title={t.hint}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === t.k ? 'border-[#3B82F6] text-[#3B82F6]' : 'border-transparent text-[#64748B] hover:text-[#1E293B]'}`}>
             {t.l}
           </button>
         ))}
       </div>
 
-      {tab === 'list' && (
+      {tab === 'smart' && (
+        <SmartRulePanel onEdit={(rule) => { setEditRule(rule); setShowForm(true); }} />
+      )}
+      {tab === 'custom' && (
         <RuleList
           onEdit={(rule) => { setEditRule(rule); setShowForm(true); }}
+          categoryFilter="threshold"
         />
       )}
       {tab === 'templates' && (
@@ -239,9 +262,134 @@ const EVAL_TYPE_BADGES: Record<string, { label: string; bg: string; text: string
   alltime_low:    { label: 'Tüm Zaman ↓',  bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
   day_over_day:   { label: 'Günlük %',      bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
   week_over_week: { label: 'Haftalık %',    bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
+  spike:          { label: 'Ani Sıçrama',   bg: 'bg-[#FFF7ED]', text: 'text-[#EA580C]' },
+  flatline:       { label: 'Counter Durdu', bg: 'bg-[#FEF2F2]', text: 'text-[#DC2626]' },
+  hourly_pattern: { label: 'Saatlik Örüntü', bg: 'bg-[#F0FDF4]', text: 'text-[#16A34A]' },
 };
 
-function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
+// =========================================================================
+// Smart Rule Panel — eşiksiz kuralları tek tıkla aç/kapat
+// =========================================================================
+
+function SmartRulePanel({ onEdit }: { onEdit: (r: AlertRule) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  const { data: rules = [], isLoading } = useQuery<AlertRule[]>({
+    queryKey: ['alert-rules'],
+    queryFn: () => apiGet('/alert-rules'),
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: (id: number) => apiPatch(`/alert-rules/${id}/toggle`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['alert-rules'] }),
+    onError: () => toast.error('Toggle başarısız'),
+  });
+
+  const smartRules = rules.filter(r => r.alert_category === 'smart');
+
+  if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
+
+  // Grupla
+  const grouped: Record<string, AlertRule[]> = {};
+  for (const r of smartRules) {
+    const g = METRIC_TYPES[r.metric_type]?.label || r.metric_type;
+    if (!grouped[g]) grouped[g] = [];
+    grouped[g].push(r);
+  }
+
+  const activeCount = smartRules.filter(r => r.is_enabled).length;
+
+  return (
+    <div>
+      {/* Başlık bilgi bandı */}
+      <div className="mb-5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg px-4 py-3 flex items-start gap-3">
+        <span className="text-2xl">⚡</span>
+        <div>
+          <div className="text-sm font-semibold text-[#1E40AF]">Hızlı İzleme — Eşik Gerekmez</div>
+          <div className="text-xs text-[#3B82F6] mt-0.5">
+            Bu kurallar otomatik baseline hesaplar. Eşik girmeden toggle ile aktifleştir.
+            {activeCount > 0 && <span className="ml-2 font-medium">{activeCount} kural aktif.</span>}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        {Object.entries(grouped).map(([group, items]) => (
+          <div key={group}>
+            <h2 className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-3">{group}</h2>
+            <div className="space-y-2">
+              {items.map((rule) => {
+                const badge = EVAL_TYPE_BADGES[rule.evaluation_type] || EVAL_TYPE_BADGES.threshold;
+                const evalDef = EVAL_TYPES[rule.evaluation_type];
+                return (
+                  <div key={rule.rule_id}
+                    className={`bg-white border rounded-lg px-4 py-3 flex items-center gap-3 transition-colors ${rule.is_enabled ? 'border-[#BFDBFE]' : 'border-[#E2E8F0]'}`}>
+                    {/* Toggle */}
+                    <button
+                      onClick={() => toggleMut.mutate(rule.rule_id)}
+                      className={`relative w-10 h-6 rounded-full transition-colors flex-shrink-0 ${rule.is_enabled ? 'bg-[#3B82F6]' : 'bg-[#CBD5E1]'}`}>
+                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${rule.is_enabled ? 'translate-x-5' : 'translate-x-1'}`} />
+                    </button>
+
+                    {/* İçerik */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-[#1E293B]">{rule.rule_name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.bg} ${badge.text}`}>
+                          {badge.label}
+                        </span>
+                        {rule.open_alert_count > 0 && (
+                          <span className="text-[10px] bg-[#FEE2E2] text-[#DC2626] px-1.5 py-0.5 rounded font-medium">
+                            {rule.open_alert_count} açık alert
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-[#64748B] mt-0.5">
+                        {evalDef?.description || rule.description || ''}
+                      </div>
+                      <div className="flex gap-3 mt-1 text-xs text-[#94A3B8]">
+                        <span>{getMetricLabel(rule.metric_type, rule.metric_name)}</span>
+                        {rule.change_threshold_pct != null && (
+                          <span className="text-[#0284C7]">Eşik: %{rule.change_threshold_pct}</span>
+                        )}
+                        {rule.last_value != null && (
+                          <span className={
+                            rule.current_severity === 'critical' ? 'text-[#DC2626]' :
+                            rule.current_severity === 'warning' ? 'text-[#D97706]' : 'text-[#16A34A]'
+                          }>
+                            şu an: {Number(rule.last_value).toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Düzenle */}
+                    <button onClick={() => onEdit(rule)}
+                      className="text-xs text-[#94A3B8] hover:text-[#475569] flex-shrink-0 px-2 py-1 hover:bg-[#F8FAFC] rounded">
+                      Düzenle
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {smartRules.length === 0 && (
+          <div className="text-center py-12 text-[#64748B] text-sm">
+            Smart kural bulunamadı. Migration V017 uygulandı mı?
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// Kural Listesi — Özel (threshold) kurallar
+// =========================================================================
+
+function RuleList({ onEdit, categoryFilter: propCategoryFilter }: { onEdit: (r: AlertRule) => void; categoryFilter?: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -265,17 +413,22 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
   });
 
   if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
-  if (rules.length === 0) return (
+
+  // propCategoryFilter='threshold' ise sadece threshold kategorisindeki kuralları göster
+  const baseRules = propCategoryFilter
+    ? rules.filter(r => r.alert_category === propCategoryFilter)
+    : rules;
+
+  if (baseRules.length === 0) return (
     <div className="text-center py-12 text-[#64748B] text-sm">
-      Henüz kural yok. "Hazır Template'ler" sekmesinden başlayabilirsiniz.
+      Henüz özel kural yok. "+ Kural Ekle" butonunu veya "Template Galerisi" sekmesini kullanabilirsiniz.
     </div>
   );
 
   // Filtreleme
-  const filtered = rules.filter(r => {
+  const filtered = baseRules.filter(r => {
     if (categoryFilter !== 'all' && r.metric_type !== categoryFilter) return false;
-    const et = (r as any).evaluation_type || 'threshold';
-    if (evalFilter !== 'all' && et !== evalFilter) return false;
+    if (evalFilter !== 'all' && r.evaluation_type !== evalFilter) return false;
     return true;
   });
 
@@ -289,16 +442,14 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
 
   // Her kategoride kaç kural var (filtre yokken)
   const countByCategory: Record<string, number> = {};
-  for (const r of rules) {
-    const et = (r as any).evaluation_type || 'threshold';
-    if (evalFilter !== 'all' && et !== evalFilter) continue;
+  for (const r of baseRules) {
+    if (evalFilter !== 'all' && r.evaluation_type !== evalFilter) continue;
     countByCategory[r.metric_type] = (countByCategory[r.metric_type] || 0) + 1;
   }
   const countByEval: Record<string, number> = {};
-  for (const r of rules) {
+  for (const r of baseRules) {
     if (categoryFilter !== 'all' && r.metric_type !== categoryFilter) continue;
-    const et = (r as any).evaluation_type || 'threshold';
-    countByEval[et] = (countByEval[et] || 0) + 1;
+    countByEval[r.evaluation_type] = (countByEval[r.evaluation_type] || 0) + 1;
   }
 
   return (
@@ -312,7 +463,7 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
             <button onClick={() => setCategoryFilter('all')}
               className={`w-full text-left px-3 py-1.5 rounded text-sm flex justify-between items-center ${categoryFilter === 'all' ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#475569] hover:bg-[#F8FAFC]'}`}>
               <span>Tümü</span>
-              <span className="text-xs text-[#94A3B8]">{rules.length}</span>
+              <span className="text-xs text-[#94A3B8]">{baseRules.length}</span>
             </button>
             {Object.entries(METRIC_TYPES).map(([key, val]) => {
               const cnt = countByCategory[key] || 0;
@@ -559,9 +710,12 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       critical_threshold: rule.critical_threshold ?? '' as string | number,
       evaluation_window_minutes: rule.evaluation_window_minutes,
       aggregation: rule.aggregation,
-      evaluation_type: (rule as any).evaluation_type || 'threshold',
-      change_threshold_pct: (rule as any).change_threshold_pct ?? '' as string | number,
-      min_data_days: (rule as any).min_data_days ?? 7,
+      evaluation_type: rule.evaluation_type || 'threshold',
+      change_threshold_pct: rule.change_threshold_pct ?? '' as string | number,
+      min_data_days: rule.min_data_days ?? 7,
+      alert_category: rule.alert_category ?? 'threshold',
+      spike_fallback_pct: rule.spike_fallback_pct ?? '' as string | number,
+      flatline_minutes: rule.flatline_minutes ?? 30,
       is_enabled: rule.is_enabled,
       cooldown_minutes: rule.cooldown_minutes,
       auto_resolve: rule.auto_resolve,
@@ -585,14 +739,16 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
   });
 
   const handleSave = () => {
-    const isTrend = ['day_over_day', 'week_over_week'].includes(form.evaluation_type);
+    const needsChangePct = ['day_over_day', 'week_over_week', 'spike', 'hourly_pattern'].includes(form.evaluation_type);
     const body = {
       ...form,
-      warning_threshold: !isTrend && form.warning_threshold !== '' ? Number(form.warning_threshold) : null,
-      critical_threshold: !isTrend && form.critical_threshold !== '' ? Number(form.critical_threshold) : null,
-      change_threshold_pct: isTrend && form.change_threshold_pct !== '' ? Number(form.change_threshold_pct) : null,
+      warning_threshold: form.evaluation_type === 'threshold' && form.warning_threshold !== '' ? Number(form.warning_threshold) : null,
+      critical_threshold: form.evaluation_type === 'threshold' && form.critical_threshold !== '' ? Number(form.critical_threshold) : null,
+      change_threshold_pct: needsChangePct && form.change_threshold_pct !== '' ? Number(form.change_threshold_pct) : null,
+      spike_fallback_pct: form.spike_fallback_pct !== '' ? Number(form.spike_fallback_pct) : null,
       instance_pk: form.scope === 'specific_instance' ? form.instance_pk : null,
       service_group: form.scope === 'service_group' ? form.service_group : null,
+      alert_category: EVAL_TYPES[form.evaluation_type]?.category ?? 'threshold',
     };
     saveMut.mutate(body);
   };
@@ -717,8 +873,8 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                 </div>
               </div>
 
-              {/* Trend: % değişim eşiği */}
-              {['day_over_day', 'week_over_week'].includes(form.evaluation_type) && (
+              {/* Trend / Spike / Hourly: % değişim eşiği */}
+              {['day_over_day', 'week_over_week', 'spike', 'hourly_pattern'].includes(form.evaluation_type) && (
                 <div>
                   <label className="block text-xs font-medium text-[#475569] mb-1">
                     Değişim Eşiği (%) *
@@ -727,17 +883,54 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                     value={form.change_threshold_pct}
                     onChange={e => set('change_threshold_pct', e.target.value)}
                     className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                    placeholder="Örn: 50 = %50 artış/azalış" />
+                    placeholder="Örn: 100 = %100 artış" />
                   <p className="text-xs text-[#64748B] mt-1">
-                    {form.evaluation_type === 'day_over_day'
-                      ? 'Dünün aynı saatine göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.'
-                      : 'Geçen haftanın aynı gününe göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.'}
+                    {{
+                      day_over_day: 'Dünün aynı saatine göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.',
+                      week_over_week: 'Geçen haftanın aynı gününe göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.',
+                      spike: 'Son pencere ile önceki pencere arasındaki artış bu yüzdeyi aşarsa tetiklenir.',
+                      hourly_pattern: 'Bu saatin 4 haftalık ortalamasından sapma bu yüzdeyi aşarsa tetiklenir.',
+                    }[form.evaluation_type] || ''}
                   </p>
                 </div>
               )}
 
-              {/* Alltime / Trend: min data günü */}
-              {['alltime_high', 'alltime_low', 'day_over_day', 'week_over_week'].includes(form.evaluation_type) && (
+              {/* Spike / Hourly: fallback eşiği (yeni instance için) */}
+              {['spike', 'hourly_pattern'].includes(form.evaluation_type) && (
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    Yeni Instance Fallback Eşiği (%) <span className="text-[#94A3B8] font-normal">— opsiyonel</span>
+                  </label>
+                  <input type="number" min="1" max="100000"
+                    value={form.spike_fallback_pct}
+                    onChange={e => set('spike_fallback_pct', e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                    placeholder="Örn: 300 — yeterli veri yoksa ani %300 artışı yine de yakala" />
+                  <p className="text-xs text-[#64748B] mt-1">
+                    Henüz yeterli geçmişi olmayan instance'larda bu eşik kullanılır. Boş bırakılırsa yeni instance'lar değerlendirilmez.
+                  </p>
+                </div>
+              )}
+
+              {/* Flatline: hareketsizlik süresi */}
+              {form.evaluation_type === 'flatline' && (
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    Hareketsizlik Süresi (dakika) *
+                  </label>
+                  <input type="number" min="5" max="1440"
+                    value={form.flatline_minutes}
+                    onChange={e => set('flatline_minutes', Number(e.target.value))}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                    placeholder="30" />
+                  <p className="text-xs text-[#64748B] mt-1">
+                    Metrik bu kadar dakika boyunca hiç değişmezse alert tetiklenir.
+                  </p>
+                </div>
+              )}
+
+              {/* Alltime / Trend / Smart: min data günü */}
+              {['alltime_high', 'alltime_low', 'day_over_day', 'week_over_week', 'spike', 'hourly_pattern'].includes(form.evaluation_type) && (
                 <div>
                   <label className="block text-xs font-medium text-[#475569] mb-1">
                     Minimum Geçmiş Veri (gün)

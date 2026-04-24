@@ -16,16 +16,22 @@ import java.util.Map;
  * Kullanici tanimli alert kurallarini degerlendiren servis.
  *
  * Desteklenen evaluation_type degerleri:
- *   threshold      — sabit eslik karsilastirmasi (klasik)
- *   alltime_high   — tum zamanlarin maksimumunu asti mi?
- *   alltime_low    — tum zamanlarin minimumunun altina dustu mu?
- *   day_over_day   — dunku ayni saate gore % kac degisti?
- *   week_over_week — gecen haftanin ayni gunune gore % kac degisti?
+ *   threshold       — sabit eslik karsilastirmasi (klasik)
+ *   alltime_high    — tum zamanlarin maksimumunu asti mi?
+ *   alltime_low     — tum zamanlarin minimumunun altina dustu mu?
+ *   day_over_day    — dunku ayni saate gore % kac degisti?
+ *   week_over_week  — gecen haftanin ayni gunune gore % kac degisti?
+ *   spike           — son N dk vs onceki N dk ani sicrama
+ *   flatline        — counter N dakika boyunca hic artmadi
+ *   hourly_pattern  — bu saatin 4 haftalik ortalamasindan sapma
  */
 @Service
 public class AlertRuleEvaluator {
 
     private static final Logger log = LoggerFactory.getLogger(AlertRuleEvaluator.class);
+
+    // Baseline haftalik guncelleme periyodu (7 gun)
+    private static final int BASELINE_UPDATE_DAYS = 7;
 
     private final JdbcTemplate jdbc;
     private final AlertRepository alertRepo;
@@ -62,6 +68,9 @@ public class AlertRuleEvaluator {
             case "alltime_low"    -> evaluateAlltimeExtreme(rule, false);
             case "day_over_day"   -> evaluateTrend(rule, 1);
             case "week_over_week" -> evaluateTrend(rule, 7);
+            case "spike"          -> evaluateSpike(rule);
+            case "flatline"       -> evaluateFlatline(rule);
+            case "hourly_pattern" -> evaluateHourlyPattern(rule);
             default -> log.warn("Bilinmeyen evaluation_type: {}", evalType);
         }
     }
@@ -141,7 +150,6 @@ public class AlertRuleEvaluator {
         List<Map<String, Object>> targets = loadTargetInstances(rule);
         if (targets.isEmpty()) return;
 
-        // Mevcut deger
         List<Map<String, Object>> currentRows = queryMetric(metricType, metricName,
             toSqlAgg(aggregation), windowMinutes + " minutes");
 
@@ -151,13 +159,11 @@ public class AlertRuleEvaluator {
             BigDecimal currentValue = findValueForInstance(currentRows, instancePk);
             if (currentValue == null) continue;
 
-            // Yeterli gecmis data var mi?
             if (!hasEnoughHistory(metricType, metricName, instancePk, minDataDays)) {
                 log.debug("Yetersiz gecmis data rule_id={} instance={}", ruleId, instancePk);
                 continue;
             }
 
-            // Tum zamanlarin max/min degerini bul (son windowMinutes haric — kendisi sayilmasin)
             BigDecimal historicalExtreme = queryHistoricalExtreme(
                 metricType, metricName, instancePk, toSqlAgg(aggregation), isHigh, windowMinutes);
             if (historicalExtreme == null) continue;
@@ -176,12 +182,12 @@ public class AlertRuleEvaluator {
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (isRecord) {
-                String direction = isHigh ? "yüksek" : "düşük";
+                String direction = isHigh ? "yuksek" : "dusuk";
                 String message = String.format(
-                    "%s = %.4g — tüm zamanların en %s değeri (önceki: %.4g)",
+                    "%s = %.4g — tum zamanlarin en %s degeri (onceki: %.4g)",
                     metricName, currentValue.doubleValue(), direction, historicalExtreme.doubleValue());
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    "warning", instancePk, serviceGroup, ruleName, message);
+                    "warning", instancePk, serviceGroup, ruleName, message, ruleId);
                 updateLastEval(ruleId, instancePk, currentValue, "warning");
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -218,11 +224,8 @@ public class AlertRuleEvaluator {
 
         String aggFn = toSqlAgg(aggregation);
 
-        // Mevcut penceredeki deger
         List<Map<String, Object>> currentRows = queryMetric(metricType, metricName,
             aggFn, windowMinutes + " minutes");
-
-        // Gecmis ayni penceredeki deger (N gun once)
         List<Map<String, Object>> pastRows = queryMetricAtOffset(metricType, metricName,
             aggFn, windowMinutes, daysBack);
 
@@ -236,19 +239,7 @@ public class AlertRuleEvaluator {
 
             if (!hasEnoughHistory(metricType, metricName, instancePk, minDataDays)) continue;
 
-            // % degisim hesapla: (current - past) / past * 100
-            // past = 0 ise ve current > 0 ise sonsuz artis — her zaman tetikle
-            BigDecimal changePct;
-            if (past.compareTo(BigDecimal.ZERO) == 0) {
-                changePct = current.compareTo(BigDecimal.ZERO) > 0
-                    ? new BigDecimal("999999") : BigDecimal.ZERO;
-            } else {
-                changePct = current.subtract(past)
-                    .divide(past.abs(), 4, RoundingMode.HALF_UP)
-                    .multiply(new BigDecimal("100"))
-                    .abs(); // mutlak degisim
-            }
-
+            BigDecimal changePct = computeChangePct(current, past);
             String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
 
             if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
@@ -260,28 +251,368 @@ public class AlertRuleEvaluator {
             boolean triggered = changePct.compareTo(changeThresholdPct) > 0;
 
             if (triggered) {
-                String period = daysBack == 1 ? "dün" : daysBack + " gün önce";
-                String direction = current.compareTo(past) > 0 ? "arttı" : "azaldı";
+                String period = daysBack == 1 ? "dun" : daysBack + " gun once";
+                String direction = current.compareTo(past) > 0 ? "artti" : "azaldi";
                 String message = String.format(
-                    "%s = %.4g — %s'e göre (%.4g) %%%s %s (eşik: %%%s)",
+                    "%s = %.4g — %s'e gore (%.4g) %%%s %s (esik: %%%s)",
                     metricName, current.doubleValue(), period, past.doubleValue(),
                     changePct.setScale(1, RoundingMode.HALF_UP), direction,
                     changeThresholdPct.setScale(0, RoundingMode.HALF_UP));
 
-                // % degisim buyukse critical, kucukse warning
                 String severity = changePct.compareTo(changeThresholdPct.multiply(new BigDecimal("2"))) > 0
                     ? "critical" : "warning";
 
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                     severity, instancePk, serviceGroup, ruleName, message, ruleId);
                 updateLastEval(ruleId, instancePk, changePct, severity);
-                log.debug("Trend alert rule_id={} instance={} change={}%", ruleId, instancePk, changePct);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
                 updateLastEval(ruleId, instancePk, changePct, null);
             } else {
                 updateLastEval(ruleId, instancePk, changePct, null);
             }
+        }
+    }
+
+    // =========================================================================
+    // spike: son N dk vs onceki N dk ani sicrama
+    // =========================================================================
+
+    private void evaluateSpike(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        String aggregation = (String) rule.get("aggregation");
+        int windowMinutes = toInt(rule.get("evaluation_window_minutes"));
+        BigDecimal changeThresholdPct = toBD(rule.get("change_threshold_pct"));
+        BigDecimal spikeFallbackPct = toBD(rule.get("spike_fallback_pct"));
+        int minDataDays = toInt(rule.get("min_data_days"));
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        String ruleName = (String) rule.get("rule_name");
+
+        List<Map<String, Object>> targets = loadTargetInstances(rule);
+        if (targets.isEmpty()) return;
+
+        String aggFn = toSqlAgg(aggregation);
+
+        // Mevcut pencere: son N dakika
+        List<Map<String, Object>> currentRows = queryMetric(metricType, metricName,
+            aggFn, windowMinutes + " minutes");
+
+        // Onceki pencere: N-2N dakika arasi (non-overlapping)
+        List<Map<String, Object>> prevRows = queryMetricAtOffset(metricType, metricName,
+            aggFn, windowMinutes, 0); // daysBack=0 ama intervalStart = 2*window, intervalEnd = window
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+
+            BigDecimal current = findValueForInstance(currentRows, instancePk);
+            BigDecimal prev = findValueForInstance(prevRows, instancePk);
+            if (current == null) continue;
+
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+            boolean hasHistory = hasEnoughHistory(metricType, metricName, instancePk, minDataDays);
+
+            // Yeterli veri yoksa ve fallback tanimlanmissa: mutlak spike kontrolu
+            if (!hasHistory) {
+                if (spikeFallbackPct == null || prev == null) {
+                    updateLastEval(ruleId, instancePk, current, null);
+                    continue;
+                }
+                BigDecimal fallbackChange = computeChangePct(current, prev);
+                if (fallbackChange.compareTo(spikeFallbackPct) > 0 && !isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                    String message = String.format(
+                        "%s = %.4g — anlık %.0f%% artis (yeni instance, fallback esik: %.0f%%)",
+                        metricName, current.doubleValue(), fallbackChange.doubleValue(), spikeFallbackPct.doubleValue());
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        "warning", instancePk, serviceGroup, ruleName, message, ruleId);
+                    updateLastEval(ruleId, instancePk, current, "warning");
+                } else {
+                    updateLastEval(ruleId, instancePk, current, null);
+                }
+                continue;
+            }
+
+            if (prev == null || changeThresholdPct == null) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+
+            BigDecimal changePct = computeChangePct(current, prev);
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                updateLastEval(ruleId, instancePk, changePct, null);
+                continue;
+            }
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+            boolean triggered = changePct.compareTo(changeThresholdPct) > 0;
+
+            if (triggered) {
+                String severity = changePct.compareTo(changeThresholdPct.multiply(new BigDecimal("3"))) > 0
+                    ? "critical" : "warning";
+                String message = String.format(
+                    "%s: son %d dk = %.4g, onceki %d dk = %.4g — %.0f%% ani artis (esik: %.0f%%)",
+                    metricName, windowMinutes, current.doubleValue(),
+                    windowMinutes, prev.doubleValue(),
+                    changePct.doubleValue(), changeThresholdPct.doubleValue());
+                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                updateLastEval(ruleId, instancePk, changePct, severity);
+            } else if (prevSeverity != null && autoResolve) {
+                alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, changePct, null);
+            } else {
+                updateLastEval(ruleId, instancePk, changePct, null);
+            }
+        }
+    }
+
+    // =========================================================================
+    // flatline: counter N dakika boyunca hic artmadi
+    // =========================================================================
+
+    private void evaluateFlatline(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        int flatlineMinutes = toInt(rule.get("flatline_minutes"));
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        String ruleName = (String) rule.get("rule_name");
+
+        if (flatlineMinutes <= 0) flatlineMinutes = 30;
+
+        String tableSql = getMetricTableAndColumn(metricType, metricName);
+        if (tableSql == null) {
+            log.debug("flatline desteklenmiyor metric={}.{}", metricType, metricName);
+            return;
+        }
+        String[] parts = tableSql.split("\\|");
+        String table = parts[0], col = parts[1], timeCol = parts[2];
+
+        List<Map<String, Object>> targets = loadTargetInstances(rule);
+        if (targets.isEmpty()) return;
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+
+            // Flatline: flatlineMinutes suresi icinde degerin hic artip artmadigini kontrol et.
+            // max - min == 0 ise counter durmus demektir.
+            try {
+                Map<String, Object> stats = jdbc.queryForMap(
+                    "select max(" + col + ")::numeric as mx, min(" + col + ")::numeric as mn, count(*) as cnt" +
+                    " from " + table +
+                    " where instance_pk = ? and " + timeCol + " >= now() - ?::interval",
+                    instancePk, flatlineMinutes + " minutes");
+
+                long cnt = stats.get("cnt") != null ? ((Number) stats.get("cnt")).longValue() : 0;
+                if (cnt < 2) continue; // yeterli olcum yok
+
+                BigDecimal mx = toBDSafe(stats.get("mx"));
+                BigDecimal mn = toBDSafe(stats.get("mn"));
+                if (mx == null || mn == null) continue;
+
+                String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+                boolean isFlatline = mx.compareTo(mn) == 0;
+                String prevSeverity = getPrevSeverity(ruleId, instancePk);
+
+                if (isFlatline && !isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                    String message = String.format(
+                        "%s son %d dakikada hic degismedi (deger: %.4g) — servis durmus olabilir",
+                        metricName, flatlineMinutes, mx.doubleValue());
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        "critical", instancePk, serviceGroup, ruleName, message, ruleId);
+                    updateLastEval(ruleId, instancePk, mx, "critical");
+                } else if (!isFlatline && prevSeverity != null && autoResolve) {
+                    alertRepo.resolve(alertKey);
+                    updateLastEval(ruleId, instancePk, mx, null);
+                } else {
+                    updateLastEval(ruleId, instancePk, mx != null ? mx : BigDecimal.ZERO, null);
+                }
+            } catch (Exception e) {
+                log.debug("Flatline sorgu hatasi rule_id={} instance={}: {}", ruleId, instancePk, e.getMessage());
+            }
+        }
+    }
+
+    // =========================================================================
+    // hourly_pattern: bu saatin 4 haftalik ortalamasindan sapma.
+    // Yeterli veri yoksa spike_fallback_pct ile anlık pencere karsilastirmasi yapar.
+    // =========================================================================
+
+    private void evaluateHourlyPattern(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        String aggregation = (String) rule.get("aggregation");
+        int windowMinutes = toInt(rule.get("evaluation_window_minutes"));
+        BigDecimal changeThresholdPct = toBD(rule.get("change_threshold_pct"));
+        BigDecimal spikeFallbackPct = toBD(rule.get("spike_fallback_pct"));
+        int minDataDays = toInt(rule.get("min_data_days"));
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        String ruleName = (String) rule.get("rule_name");
+
+        if (changeThresholdPct == null) return;
+
+        List<Map<String, Object>> targets = loadTargetInstances(rule);
+        if (targets.isEmpty()) return;
+
+        String aggFn = toSqlAgg(aggregation);
+
+        List<Map<String, Object>> currentRows = queryMetric(metricType, metricName,
+            aggFn, windowMinutes + " minutes");
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+
+            BigDecimal current = findValueForInstance(currentRows, instancePk);
+            if (current == null) continue;
+
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+            boolean hasHistory = hasEnoughHistory(metricType, metricName, instancePk, minDataDays);
+
+            if (!hasHistory) {
+                // Yeni instance: spike_fallback_pct ile anlık onceki pencereyle karsilastir
+                if (spikeFallbackPct == null) {
+                    updateLastEval(ruleId, instancePk, current, null);
+                    continue;
+                }
+                List<Map<String, Object>> prevRows = queryMetricAtOffset(metricType, metricName,
+                    aggFn, windowMinutes, 0);
+                BigDecimal prev = findValueForInstance(prevRows, instancePk);
+                if (prev == null || prev.compareTo(BigDecimal.ZERO) == 0) {
+                    updateLastEval(ruleId, instancePk, current, null);
+                    continue;
+                }
+                BigDecimal fallbackChange = computeChangePct(current, prev);
+                if (fallbackChange.compareTo(spikeFallbackPct) > 0 && !isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                    String message = String.format(
+                        "%s = %.4g — anlık %.0f%% degisim (yeni instance, henuz yeterli gecmis veri yok)",
+                        metricName, current.doubleValue(), fallbackChange.doubleValue());
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        "warning", instancePk, serviceGroup, ruleName, message, ruleId);
+                    updateLastEval(ruleId, instancePk, current, "warning");
+                } else {
+                    updateLastEval(ruleId, instancePk, current, null);
+                }
+                continue;
+            }
+
+            // Yeterli veri var: bu saatin (hour_of_week) 4 haftalik baseline ortalamasini kullan.
+            // Baseline'i once alert_rule_last_eval'dan oku, haftalik guncelle.
+            BigDecimal baseline = getOrRefreshBaseline(ruleId, instancePk, metricType, metricName, aggFn);
+            if (baseline == null || baseline.compareTo(BigDecimal.ZERO) == 0) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+
+            BigDecimal changePct = computeChangePct(current, baseline);
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                updateLastEval(ruleId, instancePk, changePct, null);
+                continue;
+            }
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+            boolean triggered = changePct.compareTo(changeThresholdPct) > 0;
+
+            if (triggered) {
+                String severity = changePct.compareTo(changeThresholdPct.multiply(new BigDecimal("2"))) > 0
+                    ? "critical" : "warning";
+                String message = String.format(
+                    "%s = %.4g — bu saatin 4 haftalik ortalamasindan (%.4g) %.0f%% sapma (esik: %.0f%%)",
+                    metricName, current.doubleValue(), baseline.doubleValue(),
+                    changePct.doubleValue(), changeThresholdPct.doubleValue());
+                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                updateLastEval(ruleId, instancePk, changePct, severity);
+            } else if (prevSeverity != null && autoResolve) {
+                alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, changePct, null);
+            } else {
+                updateLastEval(ruleId, instancePk, changePct, null);
+            }
+        }
+    }
+
+    // =========================================================================
+    // Baseline: haftalik ortalama hesaplama ve cache
+    // =========================================================================
+
+    /**
+     * Bu instance + kural icin baseline degerini doner.
+     * Baseline yoksa veya BASELINE_UPDATE_DAYS gun gectiyse yeniden hesaplar.
+     * Baseline: son 4 haftada ayni hour_of_week icin metrigin ortalamasi.
+     */
+    private BigDecimal getOrRefreshBaseline(long ruleId, long instancePk,
+                                             String metricType, String metricName, String aggFn) {
+        try {
+            Map<String, Object> evalRow = jdbc.queryForMap(
+                "select baseline_value, baseline_updated_at" +
+                " from control.alert_rule_last_eval" +
+                " where rule_id = ? and instance_pk = ?",
+                ruleId, instancePk);
+
+            BigDecimal cachedBaseline = toBDSafe(evalRow.get("baseline_value"));
+            Object updatedAt = evalRow.get("baseline_updated_at");
+
+            // Baseline guncel mi? (BASELINE_UPDATE_DAYS gunden eski degilse kullan)
+            if (cachedBaseline != null && updatedAt != null) {
+                boolean isStale = jdbc.queryForObject(
+                    "select ? < now() - interval '" + BASELINE_UPDATE_DAYS + " days'",
+                    Boolean.class, updatedAt);
+                if (!Boolean.TRUE.equals(isStale)) return cachedBaseline;
+            }
+
+            // Hesapla: son 4 hafta, ayni day_of_week + hour_of_day grubunda ortalama
+            BigDecimal freshBaseline = computeHourlyBaseline(metricType, metricName, aggFn, instancePk);
+            if (freshBaseline != null) {
+                jdbc.update(
+                    "update control.alert_rule_last_eval" +
+                    " set baseline_value = ?, baseline_updated_at = now()" +
+                    " where rule_id = ? and instance_pk = ?",
+                    freshBaseline, ruleId, instancePk);
+            }
+            return freshBaseline;
+
+        } catch (Exception e) {
+            // Satir henuz yok — hesapla, updateLastEval sonra kaydeder
+            return computeHourlyBaseline(metricType, metricName, aggFn, instancePk);
+        }
+    }
+
+    private BigDecimal computeHourlyBaseline(String metricType, String metricName,
+                                              String aggFn, long instancePk) {
+        String table = getMetricTable(metricType);
+        String timeCol = getTimeColumn(metricType);
+        if (table == null) return null;
+
+        // Ayni metrik mevcut degeri icin kolon adi
+        String col = getSimpleColumn(metricType, metricName);
+        if (col == null) return null; // derived metrikler icin simdilik desteklenmez
+
+        try {
+            // Son 4 hafta, simdiyle ayni hour_of_week (Mon=0..Sun=6, hour=0..23)
+            return jdbc.queryForObject(
+                "select avg(hourly_val) from (" +
+                "  select " + aggFn + "(" + col + ") as hourly_val" +
+                "  from " + table +
+                "  where instance_pk = ?" +
+                "    and " + timeCol + " >= now() - interval '4 weeks'" +
+                "    and extract(dow from " + timeCol + ") = extract(dow from now())" +
+                "    and extract(hour from " + timeCol + ") = extract(hour from now())" +
+                "  group by date_trunc('hour', " + timeCol + ")" +
+                ") sub",
+                BigDecimal.class, instancePk);
+        } catch (Exception e) {
+            log.debug("Baseline hesaplama hatasi metric={}.{}: {}", metricType, metricName, e.getMessage());
+            return null;
         }
     }
 
@@ -304,13 +635,19 @@ public class AlertRuleEvaluator {
 
     /**
      * N gun onceki ayni penceredeki degeri sorgular.
-     * Ornek: windowMinutes=60, daysBack=1 → 25-26 saat onceki saatlik deger.
+     * daysBack=0 ise spike icin onceki pencere: 2*window .. 1*window once.
      */
     private List<Map<String, Object>> queryMetricAtOffset(String metricType, String metricName,
                                                            String aggFn, int windowMinutes, int daysBack) {
-        // Pencere: now - daysBack*24h - windowMinutes .. now - daysBack*24h
-        String intervalStart = (daysBack * 24 * 60 + windowMinutes) + " minutes";
-        String intervalEnd   = (daysBack * 24 * 60) + " minutes";
+        String intervalStart, intervalEnd;
+        if (daysBack == 0) {
+            // Spike: onceki non-overlapping pencere
+            intervalStart = (windowMinutes * 2) + " minutes";
+            intervalEnd   = windowMinutes + " minutes";
+        } else {
+            intervalStart = (daysBack * 24 * 60 + windowMinutes) + " minutes";
+            intervalEnd   = (daysBack * 24 * 60) + " minutes";
+        }
 
         return switch (metricType) {
             case "cluster_metric"     -> queryClusterMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
@@ -331,18 +668,17 @@ public class AlertRuleEvaluator {
                                                long instancePk, String aggFn,
                                                boolean isHigh, int excludeLastMinutes) {
         String extremeFn = isHigh ? "max" : "min";
-        // Mevcut pencereyi disla — son N dakikadan oncesi
         String tableSql = getMetricTableAndColumn(metricType, metricName);
         if (tableSql == null) return null;
-
+        String[] parts = tableSql.split("\\|");
         try {
             return jdbc.queryForObject(
                 "select " + extremeFn + "(computed_value) from (" +
-                "  select " + aggFn + "(" + tableSql.split("\\|")[1] + ") as computed_value" +
-                "  from " + tableSql.split("\\|")[0] +
+                "  select " + aggFn + "(" + parts[1] + ") as computed_value" +
+                "  from " + parts[0] +
                 "  where instance_pk = ?" +
-                "    and " + tableSql.split("\\|")[2] + " < now() - ?::interval" +
-                "  group by date_trunc('hour', " + tableSql.split("\\|")[2] + ")" +
+                "    and " + parts[2] + " < now() - ?::interval" +
+                "  group by date_trunc('hour', " + parts[2] + ")" +
                 ") sub",
                 BigDecimal.class, instancePk, excludeLastMinutes + " minutes");
         } catch (Exception e) {
@@ -353,22 +689,31 @@ public class AlertRuleEvaluator {
 
     /**
      * Metrik tipi icin "tablo|kolon|zaman_kolonu" formatinda meta doner.
-     * Derived metrikler (cache_hit_ratio gibi) icin null doner — ayri handle edilmeli.
      */
     private String getMetricTableAndColumn(String metricType, String metricName) {
         return switch (metricType + "." + metricName) {
             case "cluster_metric.wal_bytes"              -> "fact.pg_cluster_delta|wal_bytes|sample_ts";
             case "cluster_metric.checkpoint_write_time"  -> "fact.pg_cluster_delta|checkpoint_write_time|sample_ts";
             case "cluster_metric.buffers_checkpoint"     -> "fact.pg_cluster_delta|buffers_checkpoint|sample_ts";
+            case "cluster_metric.checkpoints_timed"      -> "fact.pg_cluster_delta|checkpoints_timed|sample_ts";
             case "database_metric.deadlocks"             -> "fact.pg_database_delta|deadlocks_delta|sample_ts";
             case "database_metric.temp_files"            -> "fact.pg_database_delta|temp_files_delta|sample_ts";
             case "database_metric.blk_read_time"         -> "fact.pg_database_delta|blk_read_time_delta|sample_ts";
+            case "database_metric.autovacuum_count"      -> "fact.pg_database_delta|autovacuum_count_delta|sample_ts";
+            case "database_metric.db_size_bytes"         -> "fact.pg_database_delta|db_size_bytes|sample_ts";
             case "replication_metric.replay_lag_bytes"   -> "fact.pg_replication_snapshot|replay_lag_bytes|snapshot_ts";
             case "statement_metric.calls"                -> "fact.pgss_delta|calls_delta|sample_ts";
             case "statement_metric.temp_blks_written"    -> "fact.pgss_delta|temp_blks_written_delta|sample_ts";
             case "table_metric.seq_scan"                 -> "fact.pg_table_stat_delta|seq_scan_delta|sample_ts";
-            default -> null; // derived veya desteklenmeyen
+            default -> null;
         };
+    }
+
+    /** Baseline icin basit kolon adi (derived metrikler null doner). */
+    private String getSimpleColumn(String metricType, String metricName) {
+        String tableSql = getMetricTableAndColumn(metricType, metricName);
+        if (tableSql == null) return null;
+        return tableSql.split("\\|")[1];
     }
 
     // =========================================================================
@@ -409,7 +754,7 @@ public class AlertRuleEvaluator {
     }
 
     // =========================================================================
-    // Metrik sorgulama — mevcut pencere (tek zaman noktasi)
+    // Metrik sorgulama — mevcut pencere (tip bazinda)
     // =========================================================================
 
     private List<Map<String, Object>> queryClusterMetric(String metricName, String aggFn, String interval) {
@@ -508,7 +853,7 @@ public class AlertRuleEvaluator {
     }
 
     // =========================================================================
-    // Metrik sorgulama — gecmis pencere (trend icin: start..end arasi)
+    // Metrik sorgulama — gecmis pencere (trend / spike icin)
     // =========================================================================
 
     private List<Map<String, Object>> queryClusterMetricBetween(String metricName, String aggFn,
@@ -630,6 +975,7 @@ public class AlertRuleEvaluator {
                    warning_threshold, critical_threshold,
                    evaluation_window_minutes, aggregation,
                    evaluation_type, change_threshold_pct, min_data_days,
+                   alert_category, spike_fallback_pct, flatline_minutes,
                    cooldown_minutes, auto_resolve
             from control.alert_rule
             where is_enabled = true
@@ -683,6 +1029,18 @@ public class AlertRuleEvaluator {
         };
     }
 
+    /** current ve past arasindaki mutlak % degisim. past=0 ise 999999 doner. */
+    private BigDecimal computeChangePct(BigDecimal current, BigDecimal past) {
+        if (past.compareTo(BigDecimal.ZERO) == 0) {
+            return current.compareTo(BigDecimal.ZERO) > 0
+                ? new BigDecimal("999999") : BigDecimal.ZERO;
+        }
+        return current.subtract(past)
+            .divide(past.abs(), 4, RoundingMode.HALF_UP)
+            .multiply(new BigDecimal("100"))
+            .abs();
+    }
+
     private boolean isInCooldown(long ruleId, long instancePk, int cooldownMinutes) {
         if (cooldownMinutes == 0) return false;
         Integer count = jdbc.queryForObject("""
@@ -724,7 +1082,7 @@ public class AlertRuleEvaluator {
 
     private String buildThresholdMessage(String metricName, BigDecimal value, String operator,
                                           BigDecimal threshold, int windowMinutes, String aggregation) {
-        return String.format("%s = %.4g (eşik: %s %.4g, son %d dk %s)",
+        return String.format("%s = %.4g (esik: %s %.4g, son %d dk %s)",
             metricName, value.doubleValue(), operator,
             threshold != null ? threshold.doubleValue() : 0,
             windowMinutes, aggregation);
@@ -748,5 +1106,10 @@ public class AlertRuleEvaluator {
 
     private long toLong(Object v) { return ((Number) v).longValue(); }
     private int  toInt(Object v)  { return v != null ? ((Number) v).intValue() : 0; }
-    private BigDecimal toBD(Object v) { return v instanceof BigDecimal bd ? bd : null; }
+    private BigDecimal toBD(Object v)     { return v instanceof BigDecimal bd ? bd : null; }
+    private BigDecimal toBDSafe(Object v) {
+        if (v == null) return null;
+        if (v instanceof BigDecimal bd) return bd;
+        try { return new BigDecimal(v.toString()); } catch (Exception e) { return null; }
+    }
 }
