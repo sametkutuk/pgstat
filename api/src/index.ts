@@ -17,6 +17,16 @@ import retentionRoutes from './routes/retentionPolicies';
 import scheduleRoutes from './routes/scheduleProfiles';
 import statementRoutes from './routes/statements';
 import alertRuleRoutes from './routes/alertRules';
+import adaptiveAlertingRoutes from './routes/adaptiveAlerting';
+import adaptiveAlertingRoutes from './routes/adaptiveAlerting';port authRoutes from './routes/auth';
+import dashboardRoutes from './routes/dashboard';
+import instanceRoutes from './routes/instances';
+import alertRoutes from './routes/alerts';
+import jobRunRoutes from './routes/jobRuns';
+import retentionRoutes from './routes/retentionPolicies';
+import scheduleRoutes from './routes/scheduleProfiles';
+import statementRoutes from './routes/statements';
+import alertRuleRoutes from './routes/alertRules';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
@@ -104,6 +114,7 @@ app.use('/api/dashboard', requireAuth, dashboardRoutes);
 app.use('/api/instances', requireAuth, instanceRoutes);
 app.use('/api/alerts', requireAuth, alertRoutes);
 app.use('/api/alert-rules', requireAuth, alertRuleRoutes);
+app.use('/api/adaptive-alerting', requireAuth, adaptiveAlertingRoutes);
 app.use('/api/job-runs', requireAuth, jobRunRoutes);
 app.use('/api/retention-policies', requireAuth, retentionRoutes);
 app.use('/api/schedule-profiles', requireAuth, scheduleRoutes);
