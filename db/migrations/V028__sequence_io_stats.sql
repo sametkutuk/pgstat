@@ -25,10 +25,13 @@ begin
                                    current_date + interval '14 days',
                                    interval '1 day')::date
   loop
-    execute format(
-      'create table if not exists fact.%I partition of fact.pg_sequence_io_snapshot for values from (%L) to (%L)',
-      'pg_sequence_io_snapshot_' || to_char(d, 'YYYYMMDD'), d, d + 1
-    );
+    begin
+      execute format(
+        'create table if not exists fact.%I partition of fact.pg_sequence_io_snapshot for values from (%L) to (%L)',
+        'pg_sequence_io_snapshot_' || to_char(d, 'YYYYMMDD'), d, d + 1
+      );
+    exception when others then null; -- partition zaten varsa atla
+    end;
   end loop;
 end $$;
 
