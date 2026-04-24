@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { useToast } from '../components/common/Toast';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 
 // =========================================================================
 // Tipler
@@ -49,7 +50,7 @@ interface MaintenanceWindow {
 interface NotificationChannel {
     channel_id: number;
     channel_name: string;
-    channel_type: 'email' | 'slack' | 'pagerduty' | 'teams' | 'webhook';
+    channel_type: 'email' | 'slack' | 'pagerduty' | 'teams' | 'webhook' | 'telegram';
     config: any;
     min_severity: string | null;
     is_enabled: boolean;
@@ -68,11 +69,11 @@ export default function AdaptiveAlerting() {
     const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels'>('overview');
 
     const tabs = [
-        { k: 'overview',    l: '📊 Genel Bakış' },
-        { k: 'baselines',   l: '📈 Baseline Profiller' },
-        { k: 'snooze',      l: '🔕 Snooze Yönetimi' },
+        { k: 'overview', l: '📊 Genel Bakış' },
+        { k: 'baselines', l: '📈 Baseline Profiller' },
+        { k: 'snooze', l: '🔕 Snooze Yönetimi' },
         { k: 'maintenance', l: '🔧 Bakım Pencereleri' },
-        { k: 'channels',    l: '📢 Bildirim Kanalları' },
+        { k: 'channels', l: '📢 Bildirim Kanalları' },
     ];
 
     return (
@@ -95,11 +96,11 @@ export default function AdaptiveAlerting() {
                 ))}
             </div>
 
-            {tab === 'overview'    && <OverviewPanel />}
-            {tab === 'baselines'   && <BaselinesPanel />}
-            {tab === 'snooze'      && <SnoozePanel />}
+            {tab === 'overview' && <OverviewPanel />}
+            {tab === 'baselines' && <BaselinesPanel />}
+            {tab === 'snooze' && <SnoozePanel />}
             {tab === 'maintenance' && <MaintenancePanel />}
-            {tab === 'channels'    && <ChannelsPanel />}
+            {tab === 'channels' && <ChannelsPanel />}
         </div>
     );
 }
@@ -115,11 +116,11 @@ function OverviewPanel() {
     });
 
     const cards = [
-        { label: 'Baseline Olan Instance',   value: overview?.baselines?.instance_count ?? 0 },
-        { label: 'Toplam Baseline Satırı',   value: overview?.baselines?.total_baselines ?? 0 },
-        { label: 'Aktif Snooze',             value: overview?.active_snoozes ?? 0 },
-        { label: 'Aktif Bakım Penceresi',    value: overview?.enabled_maintenance ?? 0 },
-        { label: 'Aktif Bildirim Kanalı',    value: overview?.enabled_channels ?? 0 },
+        { label: 'Baseline Olan Instance', value: overview?.baselines?.instance_count ?? 0 },
+        { label: 'Toplam Baseline Satırı', value: overview?.baselines?.total_baselines ?? 0 },
+        { label: 'Aktif Snooze', value: overview?.active_snoozes ?? 0 },
+        { label: 'Aktif Bakım Penceresi', value: overview?.enabled_maintenance ?? 0 },
+        { label: 'Aktif Bildirim Kanalı', value: overview?.enabled_channels ?? 0 },
     ];
 
     return (
@@ -167,11 +168,18 @@ function BaselinesPanel() {
     });
 
     const [selectedInstance, setSelectedInstance] = useState<number | null>(null);
+    const [selectedMetric, setSelectedMetric] = useState<string | null>(null);
 
     const { data: baselines = [] } = useQuery<any[]>({
         queryKey: ['baselines-list', selectedInstance],
         queryFn: () => apiGet(`/adaptive-alerting/instances/${selectedInstance}/baseline`),
         enabled: !!selectedInstance,
+    });
+
+    const { data: baselineDetail } = useQuery<{ general: any; hourly: any[] }>({
+        queryKey: ['baseline-detail', selectedInstance, selectedMetric],
+        queryFn: () => apiGet(`/adaptive-alerting/instances/${selectedInstance}/baseline/${encodeURIComponent(selectedMetric!)}`),
+        enabled: !!selectedInstance && !!selectedMetric,
     });
 
     const invalidateMut = useMutation({
@@ -256,7 +264,12 @@ function BaselinesPanel() {
             {selectedInstance && baselines.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                     {baselines.map((b: any) => (
-                        <div key={b.metric_key} className="bg-white border border-[#E2E8F0] rounded-lg p-4">
+                        <div key={b.metric_key}
+                            onClick={() => setSelectedMetric(selectedMetric === b.metric_key ? null : b.metric_key)}
+                            className={`bg-white border rounded-lg p-4 cursor-pointer transition-colors ${selectedMetric === b.metric_key
+                                ? 'border-[#3B82F6] ring-1 ring-[#3B82F6]'
+                                : 'border-[#E2E8F0] hover:border-[#94A3B8]'
+                                }`}>
                             <div className="text-sm font-medium text-[#1E293B]">{b.metric_key}</div>
                             <div className="text-xs text-[#64748B] mt-1">
                                 {b.hourly_count > 0 ? `${b.hourly_count} saatlik profil` : 'Sadece genel profil'}
@@ -269,6 +282,10 @@ function BaselinesPanel() {
                         </div>
                     ))}
                 </div>
+            )}
+
+            {selectedMetric && baselineDetail && (
+                <BaselineChart detail={baselineDetail} metricKey={selectedMetric} />
             )}
         </div>
     );
@@ -488,7 +505,7 @@ function MaintenancePanel() {
                                     )}
                                 </div>
                                 <div className="text-xs text-[#64748B] mt-0.5">
-                                    {(w.day_of_week || [0,1,2,3,4,5,6]).map(d => DAYS[d]).join(', ')}
+                                    {(w.day_of_week || [0, 1, 2, 3, 4, 5, 6]).map(d => DAYS[d]).join(', ')}
                                     {' · '}{w.start_time}–{w.end_time} ({w.timezone})
                                 </div>
                                 {w.description && <div className="text-xs text-[#94A3B8] mt-0.5">{w.description}</div>}
@@ -647,7 +664,7 @@ function ChannelsPanel() {
     });
 
     const TYPE_ICONS: Record<string, string> = {
-        email: '📧', slack: '💬', pagerduty: '🚨', teams: '👥', webhook: '🔗',
+        email: '📧', slack: '💬', pagerduty: '🚨', teams: '👥', webhook: '🔗', telegram: '✈️',
     };
 
     return (
@@ -705,7 +722,7 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
 
     const [form, setForm] = useState({
         channel_name: '',
-        channel_type: 'slack' as NotificationChannel['channel_type'],
+        channel_type: 'telegram' as NotificationChannel['channel_type'],
         min_severity: '' as string,
         // config alanları
         webhook_url: '',
@@ -713,6 +730,8 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
         recipients: '',
         integration_key: '',
         url: '',
+        bot_token: '',
+        chat_id: '',
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
@@ -720,11 +739,12 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
         mutationFn: () => {
             let config: any = {};
             switch (form.channel_type) {
-                case 'slack':     config = { webhook_url: form.webhook_url, channel: form.channel || undefined }; break;
-                case 'teams':     config = { webhook_url: form.webhook_url }; break;
-                case 'email':     config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
+                case 'slack': config = { webhook_url: form.webhook_url, channel: form.channel || undefined }; break;
+                case 'teams': config = { webhook_url: form.webhook_url }; break;
+                case 'email': config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
                 case 'pagerduty': config = { integration_key: form.integration_key }; break;
-                case 'webhook':   config = { url: form.url, method: 'POST' }; break;
+                case 'webhook': config = { url: form.url, method: 'POST' }; break;
+                case 'telegram': config = { bot_token: form.bot_token, chat_id: form.chat_id }; break;
             }
             return apiPost('/adaptive-alerting/notification-channels', {
                 channel_name: form.channel_name,
@@ -761,6 +781,7 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                         <option value="email">Email</option>
                         <option value="pagerduty">PagerDuty</option>
                         <option value="webhook">Webhook (Generic)</option>
+                        <option value="telegram">Telegram</option>
                     </select>
                 </div>
 
@@ -805,6 +826,22 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                             className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
                     </div>
                 )}
+                {form.channel_type === 'telegram' && (
+                    <>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">Bot Token *</label>
+                            <input value={form.bot_token} onChange={e => set('bot_token', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">Chat ID *</label>
+                            <input value={form.chat_id} onChange={e => set('chat_id', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                placeholder="-1001234567890 veya @kanal_adi" />
+                        </div>
+                    </>
+                )}
 
                 <div>
                     <label className="block text-xs font-medium text-[#475569] mb-1">Minimum Severity</label>
@@ -819,6 +856,83 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
             </div>
             <ModalFooter onClose={onClose} onSave={() => createMut.mutate()} busy={createMut.isPending} />
         </Modal>
+    );
+}
+
+// =========================================================================
+// Baseline Chart
+// =========================================================================
+
+function BaselineChart({ detail, metricKey }: { detail: { general: any; hourly: any[] }; metricKey: string }) {
+    const hourly = detail.hourly || [];
+    const general = detail.general;
+
+    if (hourly.length === 0 && !general) {
+        return <div className="text-sm text-[#94A3B8] py-4 text-center">Bu metrik için saatlik profil yok.</div>;
+    }
+
+    // 0-23 saat için veri hazırla (eksik saatler 0)
+    const chartData = Array.from({ length: 24 }, (_, h) => {
+        const row = hourly.find((r: any) => Number(r.hour_of_day) === h);
+        return {
+            hour: `${String(h).padStart(2, '0')}:00`,
+            avg: row ? Number(row.avg_value) : 0,
+            p95: row ? Number(row.p95_value) : 0,
+            min: row ? Number(row.min_value) : 0,
+            max: row ? Number(row.max_value) : 0,
+            stddev: row ? Number(row.stddev_value) : 0,
+            samples: row ? Number(row.sample_count) : 0,
+        };
+    });
+
+    const generalAvg = general ? Number(general.avg_value) : null;
+    const currentHour = new Date().getUTCHours();
+
+    return (
+        <div className="bg-white border border-[#E2E8F0] rounded-lg p-5 space-y-3">
+            <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-[#1E293B]">
+                    📈 {metricKey} — Saatlik Baseline Profili
+                </h3>
+                {general && (
+                    <div className="text-xs text-[#64748B]">
+                        Genel: avg={Number(general.avg_value).toFixed(2)}, σ={Number(general.stddev_value).toFixed(2)}, örneklem={general.sample_count}
+                    </div>
+                )}
+            </div>
+
+            <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                    <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+                    <YAxis tick={{ fontSize: 10 }} width={60} />
+                    <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                        formatter={(value: number, name: string) => {
+                            const labels: Record<string, string> = { avg: 'Ortalama', p95: 'P95', min: 'Min', max: 'Max' };
+                            return [value.toFixed(2), labels[name] || name];
+                        }}
+                        labelFormatter={(label) => `Saat: ${label} (UTC)`}
+                    />
+                    <Bar dataKey="avg" name="avg" radius={[3, 3, 0, 0]}>
+                        {chartData.map((entry, idx) => (
+                            <Cell key={idx} fill={idx === currentHour ? '#2563EB' : '#93C5FD'} />
+                        ))}
+                    </Bar>
+                    <Bar dataKey="p95" name="p95" fill="#F59E0B" opacity={0.5} radius={[3, 3, 0, 0]} />
+                    {generalAvg !== null && (
+                        <ReferenceLine y={generalAvg} stroke="#DC2626" strokeDasharray="4 4"
+                            label={{ value: `Genel avg: ${generalAvg.toFixed(1)}`, position: 'right', fontSize: 10, fill: '#DC2626' }} />
+                    )}
+                </BarChart>
+            </ResponsiveContainer>
+
+            <div className="flex items-center gap-4 text-[10px] text-[#64748B]">
+                <span className="flex items-center gap-1"><span className="w-3 h-2 bg-[#93C5FD] rounded-sm inline-block" /> Saatlik Avg</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-2 bg-[#2563EB] rounded-sm inline-block" /> Şu anki saat (UTC)</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-2 bg-[#F59E0B] opacity-50 rounded-sm inline-block" /> P95</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-[#DC2626] inline-block" style={{ borderTop: '2px dashed #DC2626' }} /> Genel Ortalama</span>
+            </div>
+        </div>
     );
 }
 

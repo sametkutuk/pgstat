@@ -24,6 +24,19 @@ spring:
       pool:
         size: 4
 
+  # Email (SMTP) ayarları — bildirim kanalı olarak kullanılır
+  mail:
+    host: ${PGSTAT_SMTP_HOST:localhost}
+    port: ${PGSTAT_SMTP_PORT:587}
+    username: ${PGSTAT_SMTP_USER:}
+    password: ${PGSTAT_SMTP_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${PGSTAT_SMTP_AUTH:false}
+          starttls:
+            enable: ${PGSTAT_SMTP_STARTTLS:false}
+
 # Collector özel ayarları
 pgstat:
   worker:

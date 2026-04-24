@@ -1,6 +1,7 @@
 package com.pgstat.collector.repository;
 
 import com.pgstat.collector.model.AlertCode;
+import com.pgstat.collector.service.NotificationService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -12,9 +13,16 @@ import org.springframework.stereotype.Repository;
 public class AlertRepository {
 
     private final JdbcTemplate jdbc;
+    private NotificationService notificationService;
 
     public AlertRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /** Circular dependency'den kaçınmak için setter injection */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService;
     }
 
     /**
@@ -35,7 +43,7 @@ public class AlertRepository {
     public long upsert(String alertKey, AlertCode alertCode, Long instancePk,
                        String serviceGroup, Long systemIdentifier,
                        String title, String message, String detailsJson) {
-        return jdbc.queryForObject("""
+        long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key,
               alert_code,
@@ -82,6 +90,11 @@ public class AlertRepository {
             message,
             detailsJson
         );
+
+        // Bildirim gönder
+        fireNotification(alertId, alertKey, alertCode.getDefaultSeverity(), instancePk, title, message);
+
+        return alertId;
     }
 
     /**
@@ -96,7 +109,7 @@ public class AlertRepository {
     public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
                                    Long instancePk, String serviceGroup,
                                    String title, String message, Long ruleId) {
-        return jdbc.queryForObject("""
+        long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key, alert_code, severity, status, source_component,
               instance_pk, service_group, first_seen_at, last_seen_at,
@@ -123,6 +136,11 @@ public class AlertRepository {
             alertKey, alertCode.getCode(), severity, alertCode.getSourceComponent(),
             instancePk, serviceGroup, title, message, ruleId
         );
+
+        // Bildirim gönder
+        fireNotification(alertId, alertKey, severity, instancePk, title, message);
+
+        return alertId;
     }
 
     /** Alert'i resolved olarak isaretler. Zaten resolved ise degismez. */
@@ -137,5 +155,16 @@ public class AlertRepository {
             """,
             alertKey
         );
+    }
+
+    /** Bildirim servisine async olarak iletir. Hata olursa alert akışını bozmaz. */
+    private void fireNotification(long alertId, String alertKey, String severity,
+                                   Long instancePk, String title, String message) {
+        if (notificationService == null) return;
+        try {
+            notificationService.notifyIfNeeded(alertId, alertKey, severity, instancePk, title, message);
+        } catch (Exception e) {
+            // Bildirim hatası alert akışını kesmemeli
+        }
     }
 }

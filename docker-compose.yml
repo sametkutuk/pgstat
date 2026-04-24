@@ -38,6 +38,12 @@ services:
       PGSTAT_DB_USER: samet
       PGSTAT_DB_PASSWORD: samet
       SPRING_PROFILES_ACTIVE: docker
+      PGSTAT_SMTP_HOST: ${PGSTAT_SMTP_HOST:-localhost}
+      PGSTAT_SMTP_PORT: ${PGSTAT_SMTP_PORT:-587}
+      PGSTAT_SMTP_USER: ${PGSTAT_SMTP_USER:-}
+      PGSTAT_SMTP_PASSWORD: ${PGSTAT_SMTP_PASSWORD:-}
+      PGSTAT_SMTP_AUTH: ${PGSTAT_SMTP_AUTH:-false}
+      PGSTAT_SMTP_STARTTLS: ${PGSTAT_SMTP_STARTTLS:-false}
     volumes:
       - pgstat-secrets:/app/data/secrets
     restart: unless-stopped

@@ -185,8 +185,62 @@ router.post('/notification-channels/:channel_id/test', async (req, res, next) =>
             return res.status(404).json({ error: 'Channel not found' });
         }
 
-        // TODO: Implement actual notification sending
-        res.json({ message: 'Test notification sent (not implemented yet)' });
+        const channel = result.rows[0];
+        const config = typeof channel.config === 'string' ? JSON.parse(channel.config) : channel.config;
+        const testTitle = 'pgstat Test Bildirimi';
+        const testMessage = `Bu bir test bildirimidir. Kanal: ${channel.channel_name}`;
+
+        try {
+            switch (channel.channel_type) {
+                case 'teams': {
+                    const webhookUrl = config.webhook_url;
+                    if (!webhookUrl) return res.status(400).json({ error: 'webhook_url tanımlı değil' });
+                    const payload = {
+                        '@type': 'MessageCard',
+                        '@context': 'http://schema.org/extensions',
+                        themeColor: '0078D4',
+                        summary: testTitle,
+                        sections: [{
+                            activityTitle: '🔔 pgstat Test',
+                            activitySubtitle: testTitle,
+                            facts: [{ name: 'Durum', value: 'Test başarılı' }],
+                            markdown: true
+                        }]
+                    };
+                    const resp = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!resp.ok) return res.status(502).json({ error: `Teams webhook hatası: ${resp.status}` });
+                    break;
+                }
+                case 'telegram': {
+                    const botToken = config.bot_token;
+                    const chatId = config.chat_id;
+                    if (!botToken || !chatId) return res.status(400).json({ error: 'bot_token veya chat_id tanımlı değil' });
+                    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ chat_id: chatId, text: `🔔 ${testTitle}\n${testMessage}`, parse_mode: 'Markdown' })
+                    });
+                    if (!resp.ok) {
+                        const body = await resp.json().catch(() => ({}));
+                        return res.status(502).json({ error: `Telegram hatası: ${(body as any).description || resp.status}` });
+                    }
+                    break;
+                }
+                case 'email':
+                    // Email testi collector tarafında yapılır (SMTP ayarları collector'da)
+                    return res.json({ message: 'Email testi collector üzerinden yapılır. Collector loglarını kontrol edin.' });
+                default:
+                    return res.json({ message: `${channel.channel_type} test henüz desteklenmiyor` });
+            }
+            res.json({ message: 'Test bildirimi başarıyla gönderildi' });
+        } catch (sendErr: any) {
+            res.status(502).json({ error: `Gönderim hatası: ${sendErr.message}` });
+        }
     } catch (err) {
         next(err);
     }
@@ -284,9 +338,9 @@ router.get('/overview', async (_req, res, next) => {
                 total_baselines: parseInt(baselines.rows[0].total_baselines, 10),
                 latest_update: baselines.rows[0].latest_update,
             },
-            active_snoozes:       parseInt(snoozes.rows[0].active, 10),
-            enabled_maintenance:  parseInt(maintenance.rows[0].enabled, 10),
-            enabled_channels:     parseInt(channels.rows[0].enabled, 10),
+            active_snoozes: parseInt(snoozes.rows[0].active, 10),
+            enabled_maintenance: parseInt(maintenance.rows[0].enabled, 10),
+            enabled_channels: parseInt(channels.rows[0].enabled, 10),
         });
     } catch (err) {
         next(err);
