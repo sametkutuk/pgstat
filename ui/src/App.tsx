@@ -11,6 +11,7 @@ import Alerts from './pages/Alerts';
 import JobRuns from './pages/JobRuns';
 import Settings from './pages/Settings';
 import AlertRules from './pages/AlertRules';
+import AdaptiveAlerting from './pages/AdaptiveAlerting';
 import ClusterDetail from './pages/ClusterDetail';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -49,6 +50,7 @@ function App() {
               <Route path="/jobs" element={<JobRuns />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/settings/alert-rules" element={<AlertRules />} />
+              <Route path="/settings/adaptive-alerting" element={<AdaptiveAlerting />} />
               <Route path="/cluster-detail" element={<ClusterDetail />} />
               <Route path="/cluster/:id" element={<ClusterDetail />} />
             </Route>
