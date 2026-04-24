@@ -84,4 +84,5 @@ values
   ('Sequential Scan Yoğun',
    'Çok sık sequential scan index eksikliğini gösterir.',
    'table_metric', 'seq_scan', 'all_instances', '>',
-   10000, 100000, 60, 'sum', false, 60, true, 'system');
+   10000, 100000, 60, 'sum', false, 60, true, 'system')
+on conflict (rule_name, metric_type, metric_name) do nothing;

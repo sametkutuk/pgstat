@@ -62,4 +62,5 @@ values
    'Replikasyon gecikmesi rekor seviyeye ulaşırsa kritik.',
    'replication_metric', 'replay_lag_bytes', 'all_instances',
    '>', null, null, 5, 'max', 'alltime_high', null, 7,
-   false, 30, true, 'system');
+   false, 30, true, 'system')
+on conflict (rule_name, metric_type, metric_name) do nothing;
