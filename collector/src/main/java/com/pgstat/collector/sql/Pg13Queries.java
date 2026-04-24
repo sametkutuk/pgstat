@@ -103,6 +103,17 @@ public class Pg13Queries extends Pg11_12Queries {
 
     // databaseStatsQuery() → Pg11_12 kalitim ile ayni
 
+    /** PG13+: pg_stat_slru mevcut — Pg11_12'nin null override'ini geri al. */
+    @Override
+    public String slruQuery() {
+        return """
+            select
+              name, blks_zeroed, blks_hit, blks_read, blks_written,
+              blks_exists, flushes, truncates, stats_reset
+            from pg_stat_slru
+            """;
+    }
+
     /** PG13-14: pg_stat_subscription_stats yok (PG15+). */
     @Override
     public String subscriptionQuery() {
