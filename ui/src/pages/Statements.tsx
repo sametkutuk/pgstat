@@ -9,6 +9,7 @@ interface Statement {
   instance_name: string;
   datname: string | null;
   rolname: string | null;
+  queryid: string | null;
   query_text_short: string | null;
   total_calls: number;
   total_exec_time_ms: number;
@@ -16,6 +17,7 @@ interface Statement {
   total_rows: number;
   total_shared_blks_read: number;
   total_temp_blks_written: number;
+  no_delta_data?: boolean;
 }
 
 interface Instance {
@@ -49,21 +51,13 @@ function fmtNum(n: number): string {
 export default function Statements() {
   const navigate = useNavigate();
 
-  // Server-side filtreler
   const [hours, setHours] = useState(1);
   const [orderBy, setOrderBy] = useState('exec_time');
   const [instancePk, setInstancePk] = useState('');
   const [datname, setDatname] = useState('');
   const [rolname, setRolname] = useState('');
-
-  // Client-side filtreler
   const [sqlSearch, setSqlSearch] = useState('');
   const [minAvgMs, setMinAvgMs] = useState('');
-  // Server-side queryid filtresi
-  const [queryidSearch, setQueryidSearch] = useState('');
-  // Server-side deep search (dim.statement_series dahil)
-  const [deepSearch, setDeepSearch] = useState('');
-  const [deepSearchActive, setDeepSearchActive] = useState(false);
 
   const instances = useQuery({
     queryKey: ['instances-list'],
@@ -71,67 +65,85 @@ export default function Statements() {
     staleTime: 60_000,
   });
 
-  const params = new URLSearchParams({
+  // 1) Top statements (fact.pgss_delta)
+  const topParams = new URLSearchParams({
     hours: String(hours),
     limit: '100',
     order_by: orderBy,
     ...(instancePk ? { instance_pk: instancePk } : {}),
     ...(datname ? { datname } : {}),
     ...(rolname ? { rolname } : {}),
-    ...(queryidSearch.trim() ? { queryid: queryidSearch.trim() } : {}),
   });
 
-  const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname, queryidSearch],
-    queryFn: () => apiGet<Statement[]>(`/statements/top?${params}`),
+  const { data: topData, isLoading: topLoading, isFetching, refetch } = useQuery({
+    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname],
+    queryFn: () => apiGet<Statement[]>(`/statements/top?${topParams}`),
     refetchInterval: 30_000,
-    enabled: !deepSearchActive,
   });
 
-  // Deep search: dim.statement_series'ten arama (delta verisi olmayan sorgular dahil)
-  const deepSearchParams = new URLSearchParams({
-    q: deepSearch,
+  // 2) Deep search (dim.statement_series) — 3+ karakter yazıldığında otomatik
+  const searchTrimmed = sqlSearch.trim();
+  const deepSearchEnabled = searchTrimmed.length >= 3;
+
+  const deepParams = new URLSearchParams({
+    q: searchTrimmed,
     limit: '50',
     ...(instancePk ? { instance_pk: instancePk } : {}),
   });
 
   const { data: deepData, isLoading: deepLoading } = useQuery({
-    queryKey: ['deep-search', deepSearch, instancePk],
-    queryFn: () => apiGet<(Statement & { no_delta_data?: boolean })[]>(`/statements/search?${deepSearchParams}`),
-    enabled: deepSearchActive && deepSearch.length >= 3,
+    queryKey: ['deep-search', searchTrimmed, instancePk],
+    queryFn: () => apiGet<Statement[]>(`/statements/search?${deepParams}`),
+    enabled: deepSearchEnabled,
   });
 
-  // Aktif veri kaynağı
-  const activeData = deepSearchActive ? (deepData ?? []) : (data ?? []);
+  // Sonuçları birleştir: top statements + deep search (duplicate'leri çıkar)
+  const merged = useMemo(() => {
+    const topRows = topData ?? [];
+    if (!deepSearchEnabled || !deepData) return topRows;
 
-  // Benzersiz database ve rol listesi (mevcut sonuçlardan)
-  const datnames = useMemo(() => {
-    const s = new Set(activeData.map(r => r.datname).filter(Boolean) as string[]);
-    return Array.from(s).sort();
-  }, [activeData]);
+    // Client-side filtre: top results'ta arama
+    const q = searchTrimmed.toLowerCase();
+    const topFiltered = topRows.filter(r =>
+      (r.query_text_short ?? '').toLowerCase().includes(q)
+    );
 
-  const rolnames = useMemo(() => {
-    const s = new Set(activeData.map(r => r.rolname).filter(Boolean) as string[]);
-    return Array.from(s).sort();
-  }, [activeData]);
+    // Deep search'ten gelen ama top'ta olmayan satırları ekle
+    const topIds = new Set(topFiltered.map(r => r.statement_series_id));
+    const extras = deepData.filter(r => !topIds.has(r.statement_series_id));
 
-  // Client-side filtre uygula
+    return [...topFiltered, ...extras];
+  }, [topData, deepData, searchTrimmed, deepSearchEnabled]);
+
+  // Client-side filtreler (arama + min avg)
   const filtered = useMemo(() => {
     const minMs = parseFloat(minAvgMs) || 0;
-    const q = sqlSearch.trim().toLowerCase();
-    return activeData.filter(r => {
-      if (q && !(r.query_text_short ?? '').toLowerCase().includes(q)) return false;
+    const q = searchTrimmed.toLowerCase();
+
+    return merged.filter(r => {
+      // Deep search aktifse zaten filtrelenmiş, değilse client-side filtrele
+      if (q && !deepSearchEnabled && !(r.query_text_short ?? '').toLowerCase().includes(q)) return false;
       if (minMs > 0 && Number(r.avg_exec_time_ms) < minMs) return false;
       return true;
     });
-  }, [activeData, sqlSearch, minAvgMs]);
+  }, [merged, searchTrimmed, minAvgMs, deepSearchEnabled]);
 
-  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs || queryidSearch || deepSearchActive;
+  const datnames = useMemo(() => {
+    const s = new Set((topData ?? []).map(r => r.datname).filter(Boolean) as string[]);
+    return Array.from(s).sort();
+  }, [topData]);
+
+  const rolnames = useMemo(() => {
+    const s = new Set((topData ?? []).map(r => r.rolname).filter(Boolean) as string[]);
+    return Array.from(s).sort();
+  }, [topData]);
+
+  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs;
+  const isLoading = topLoading;
 
   function clearFilters() {
     setInstancePk(''); setDatname(''); setRolname('');
-    setSqlSearch(''); setMinAvgMs(''); setQueryidSearch('');
-    setDeepSearch(''); setDeepSearchActive(false);
+    setSqlSearch(''); setMinAvgMs('');
   }
 
   return (
@@ -148,156 +160,76 @@ export default function Statements() {
 
       {/* Filtre çubuğu */}
       <div className="bg-white rounded-lg shadow-sm p-4 mb-4 space-y-3">
-        {/* Satır 1: zaman + sıralama + instance */}
         <div className="flex flex-wrap gap-3 items-end">
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Zaman Aralığı</label>
-            <select
-              value={hours}
-              onChange={e => setHours(Number(e.target.value))}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white"
-            >
+            <select value={hours} onChange={e => setHours(Number(e.target.value))}
+              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
               <option value={1}>Son 1 saat</option>
               <option value={6}>Son 6 saat</option>
               <option value={24}>Son 24 saat</option>
               <option value={72}>Son 3 gün</option>
             </select>
           </div>
-
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
-            <select
-              value={orderBy}
-              onChange={e => setOrderBy(e.target.value)}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white"
-            >
-              {ORDER_OPTIONS.map(o => (
-                <option key={o.v} value={o.v}>{o.l}</option>
-              ))}
+            <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+              {ORDER_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
             </select>
           </div>
-
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Instance</label>
-            <select
-              value={instancePk}
-              onChange={e => { setInstancePk(e.target.value); setDatname(''); }}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[180px]"
-            >
+            <select value={instancePk} onChange={e => { setInstancePk(e.target.value); setDatname(''); }}
+              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[180px]">
               <option value="">Tüm Instance'lar</option>
               {(instances.data ?? []).map(i => (
-                <option key={i.instance_pk} value={i.instance_pk}>
-                  {i.display_name}
-                </option>
+                <option key={i.instance_pk} value={i.instance_pk}>{i.display_name}</option>
               ))}
             </select>
           </div>
-
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Database</label>
-            <select
-              value={datname}
-              onChange={e => setDatname(e.target.value)}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]"
-            >
+            <select value={datname} onChange={e => setDatname(e.target.value)}
+              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
               <option value="">Tüm DB'ler</option>
               {datnames.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
-
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Rol</label>
-            <select
-              value={rolname}
-              onChange={e => setRolname(e.target.value)}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[120px]"
-            >
+            <select value={rolname} onChange={e => setRolname(e.target.value)}
+              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[120px]">
               <option value="">Tüm Roller</option>
               {rolnames.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
         </div>
 
-        {/* Satır 2: SQL arama + queryid + min avg süre */}
         <div className="flex flex-wrap gap-3 items-end">
-          {!deepSearchActive ? (
-            <>
-              <div className="flex-1 min-w-[200px]">
-                <label className="block text-xs text-[#64748B] mb-1">SQL Metni Ara (sonuçlar içinde)</label>
-                <input
-                  type="text"
-                  placeholder="örn: SELECT, update users, pg_stat..."
-                  value={sqlSearch}
-                  onChange={e => setSqlSearch(e.target.value)}
-                  className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-[#64748B] mb-1">Query ID</label>
-                <input
-                  type="text"
-                  placeholder="örn: 2908051582623343671"
-                  value={queryidSearch}
-                  onChange={e => setQueryidSearch(e.target.value)}
-                  className="w-48 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-[#3B82F6]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-[#64748B] mb-1">Min Ort. Süre (ms)</label>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={minAvgMs}
-                  onChange={e => setMinAvgMs(e.target.value)}
-                  min={0}
-                  className="w-32 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
-                />
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 min-w-[300px]">
-              <label className="block text-xs text-[#64748B] mb-1">🔍 Derin Arama — tüm bilinen sorgularda ara (delta verisi olmayanlar dahil)</label>
-              <input
-                type="text"
-                placeholder="en az 3 karakter — örn: pg_stat_statements_hstr"
-                value={deepSearch}
-                onChange={e => setDeepSearch(e.target.value)}
-                autoFocus
-                className="w-full border border-[#7C3AED] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#6D28D9] bg-[#FAF5FF]"
-              />
-            </div>
-          )}
-
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-xs text-[#64748B] mb-1">
+              SQL Ara {deepSearchEnabled && deepLoading ? '(aranıyor...)' : deepSearchEnabled ? '(tüm sorgularda)' : ''}
+            </label>
+            <input type="text" placeholder="örn: pg_stat_statements_hstr, SELECT users..."
+              value={sqlSearch} onChange={e => setSqlSearch(e.target.value)}
+              className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+          </div>
+          <div>
+            <label className="block text-xs text-[#64748B] mb-1">Min Ort. Süre (ms)</label>
+            <input type="number" placeholder="0" value={minAvgMs}
+              onChange={e => setMinAvgMs(e.target.value)} min={0}
+              className="w-32 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+          </div>
           <div className="flex items-end gap-3">
-            <button
-              onClick={() => {
-                setDeepSearchActive(!deepSearchActive);
-                setDeepSearch('');
-                setSqlSearch('');
-              }}
-              className={`px-3 py-1.5 text-sm rounded transition-colors ${deepSearchActive
-                ? 'bg-[#7C3AED] text-white hover:bg-[#6D28D9]'
-                : 'border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
-                }`}
-            >
-              {deepSearchActive ? '🔍 Derin Arama Aktif' : '🔍 Derin Ara'}
-            </button>
             {hasFilter && (
-              <button
-                onClick={clearFilters}
-                className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC] transition-colors"
-              >
+              <button onClick={clearFilters}
+                className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC] transition-colors">
                 ✕ Temizle
               </button>
             )}
             <span className="text-xs text-[#94A3B8] pb-1">
-              {(deepSearchActive ? deepLoading : isLoading) ? '…' : (
-                hasFilter && filtered.length !== (data?.length ?? 0)
-                  ? `${filtered.length} / ${data?.length ?? 0} sorgu`
-                  : `${filtered.length} sorgu`
-              )}
+              {isLoading ? '…' : `${filtered.length} sorgu`}
             </span>
           </div>
         </div>
@@ -305,13 +237,13 @@ export default function Statements() {
 
       {/* Tablo */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-        {(deepSearchActive ? deepLoading : isLoading) ? (
+        {isLoading ? (
           <div className="text-[#94A3B8] py-10 text-center text-sm">Yükleniyor...</div>
-        ) : deepSearchActive && deepSearch.length < 3 ? (
-          <div className="text-[#94A3B8] py-10 text-center text-sm">En az 3 karakter girin.</div>
         ) : filtered.length === 0 ? (
           <div className="text-[#94A3B8] py-10 text-center text-sm">
-            {deepSearchActive ? 'Eşleşen sorgu bulunamadı.' : (data?.length === 0 ? 'Bu aralıkta statement verisi yok.' : 'Filtreyle eşleşen sorgu bulunamadı.')}
+            {sqlSearch.length >= 3 && !deepLoading
+              ? 'Eşleşen sorgu bulunamadı (delta verisi olanlar ve tüm bilinen sorgular arandı).'
+              : 'Bu aralıkta statement verisi yok.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -337,54 +269,39 @@ export default function Statements() {
                     : avgMs >= 100 ? 'text-amber-600 font-semibold'
                       : 'text-[#64748B]';
                   return (
-                    <tr
-                      key={r.statement_series_id}
+                    <tr key={r.statement_series_id}
                       onClick={() => navigate(`/statements/${r.statement_series_id}`)}
-                      className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors ${(r as any).no_delta_data ? 'opacity-60' : ''}`}
-                    >
+                      className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors ${r.no_delta_data ? 'opacity-60' : ''}`}>
                       <td className="py-2.5 px-3 text-xs text-[#64748B]">{r.instance_name}</td>
                       <td className="py-2.5 px-3 text-xs">
                         <div className="text-[#1E293B]">{r.datname ?? '—'}</div>
                         <div className="text-[#94A3B8]">{r.rolname ?? '—'}</div>
                       </td>
                       <td className="py-2.5 px-3 text-xs font-mono text-[#94A3B8]">
-                        {(r as any).queryid ? String((r as any).queryid) : '—'}
+                        {r.queryid ? String(r.queryid) : '—'}
                       </td>
                       <td className="py-2.5 px-3 max-w-sm">
                         <div className="flex items-center gap-1.5">
-                          <div
-                            className="truncate text-xs font-mono text-[#1E293B]"
-                            title={r.query_text_short ?? ''}
-                          >
+                          <div className="truncate text-xs font-mono text-[#1E293B]" title={r.query_text_short ?? ''}>
                             {r.query_text_short || <span className="text-[#94A3B8] italic">metin yok</span>}
                           </div>
-                          {(r as any).no_delta_data && (
-                            <span className="flex-shrink-0 text-[10px] bg-[#FEF3C7] text-[#D97706] px-1.5 py-0.5 rounded" title="Bu sorgu collector tarafından görüldü ama henüz delta verisi yok. Sorgu çok nadir çalışıyor veya pg_stat_statements reset sonrası henüz 2 cycle geçmemiş olabilir.">
+                          {r.no_delta_data && (
+                            <span className="flex-shrink-0 text-[10px] bg-[#FEF3C7] text-[#D97706] px-1.5 py-0.5 rounded"
+                              title="Collector bu sorguyu gördü ama delta verisi yok. Sorgu nadir çalışıyor veya pg_stat_statements reset sonrası henüz 2 cycle geçmemiş.">
                               delta yok
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">
-                        {fmtNum(Number(r.total_calls))}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">
-                        {fmtMs(Number(r.total_exec_time_ms))}
-                      </td>
-                      <td className={`py-2.5 px-3 text-right font-mono text-xs ${avgColor}`}>
-                        {fmtMs(avgMs)}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">
-                        {fmtNum(Number(r.total_rows))}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">
-                        {fmtNum(Number(r.total_shared_blks_read))}
-                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_calls))}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtMs(Number(r.total_exec_time_ms))}</td>
+                      <td className={`py-2.5 px-3 text-right font-mono text-xs ${avgColor}`}>{fmtMs(avgMs)}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_rows))}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_shared_blks_read))}</td>
                       <td className="py-2.5 px-3 text-right font-mono text-xs">
                         {Number(r.total_temp_blks_written) > 0
                           ? <span className="text-amber-600 font-semibold">{fmtNum(Number(r.total_temp_blks_written))}</span>
-                          : <span className="text-[#94A3B8]">0</span>
-                        }
+                          : <span className="text-[#94A3B8]">0</span>}
                       </td>
                     </tr>
                   );
