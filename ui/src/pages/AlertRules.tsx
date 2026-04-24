@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '../api/client';
 import { useToast } from '../components/common/Toast';
-import Badge from '../components/common/Badge';
 
 // =========================================================================
 // Tipler
@@ -77,7 +76,7 @@ const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, Metr
     metrics: {
       deadlocks:      { label: 'Deadlock Sayısı',   unit: 'adet', unitNote: 'Pencere içindeki toplam deadlock sayısı', placeholder: '1' },
       temp_files:     { label: 'Geçici Dosya',       unit: 'adet', unitNote: 'Oluşturulan geçici dosya sayısı (work_mem yetersizliği)', placeholder: '50' },
-      rollback_ratio: { label: 'Rollback Oranı',     unit: '%',    unitNote: '0–100 arası yüzde. Örn: 5 = commit'lerin %5\'i rollback', placeholder: '5' },
+      rollback_ratio: { label: 'Rollback Oranı',     unit: '%',    unitNote: "0–100 arası yüzde. Örn: 5 = commit'lerin %5'i rollback", placeholder: '5' },
       blk_read_time:  { label: 'Disk Okuma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk okuma süresi', placeholder: '1000' },
       blk_write_time: { label: 'Disk Yazma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk yazma süresi', placeholder: '1000' },
     },
@@ -93,7 +92,7 @@ const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, Metr
   table_metric: {
     label: 'Tablo',
     metrics: {
-      dead_tuple_ratio: { label: 'Dead Tuple Oranı',       unit: '%',    unitNote: '0–100 arası yüzde. Örn: 20 = satırların %20\'si ölü', placeholder: '20' },
+      dead_tuple_ratio: { label: 'Dead Tuple Oranı',       unit: '%',    unitNote: "0–100 arası yüzde. Örn: 20 = satırların %20'si ölü", placeholder: '20' },
       seq_scan:         { label: 'Sequential Scan Sayısı', unit: 'adet', unitNote: 'Pencere içindeki tam tablo tarama sayısı', placeholder: '10000' },
       n_tup_ins:        { label: 'INSERT Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki INSERT sayısı', placeholder: '100000' },
     },
@@ -234,9 +233,19 @@ export default function AlertRules() {
 // Kural Listesi
 // =========================================================================
 
+const EVAL_TYPE_BADGES: Record<string, { label: string; bg: string; text: string }> = {
+  threshold:      { label: 'Sabit Eşik',    bg: 'bg-[#F1F5F9]', text: 'text-[#475569]' },
+  alltime_high:   { label: 'Tüm Zaman ↑',  bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
+  alltime_low:    { label: 'Tüm Zaman ↓',  bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
+  day_over_day:   { label: 'Günlük %',      bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
+  week_over_week: { label: 'Haftalık %',    bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
+};
+
 function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
   const qc = useQueryClient();
-  const { addToast } = useToast();
+  const toast = useToast();
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [evalFilter, setEvalFilter] = useState<string>('all');
 
   const { data: rules = [], isLoading } = useQuery<AlertRule[]>({
     queryKey: ['alert-rules'],
@@ -246,13 +255,13 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
   const toggleMut = useMutation({
     mutationFn: (id: number) => apiPatch(`/alert-rules/${id}/toggle`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['alert-rules'] }),
-    onError: () => addToast('Toggle başarısız', 'error'),
+    onError: () => toast.error('Toggle başarısız'),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => apiDelete(`/alert-rules/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-rules'] }); addToast('Kural silindi', 'success'); },
-    onError: () => addToast('Silme başarısız', 'error'),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-rules'] }); toast.success('Kural silindi'); },
+    onError: () => toast.error('Silme başarısız'),
   });
 
   if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
@@ -262,90 +271,207 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
     </div>
   );
 
+  // Filtreleme
+  const filtered = rules.filter(r => {
+    if (categoryFilter !== 'all' && r.metric_type !== categoryFilter) return false;
+    const et = (r as any).evaluation_type || 'threshold';
+    if (evalFilter !== 'all' && et !== evalFilter) return false;
+    return true;
+  });
+
+  // Kategori bazında grupla
+  const grouped: Record<string, AlertRule[]> = {};
+  for (const r of filtered) {
+    const g = METRIC_TYPES[r.metric_type]?.label || r.metric_type;
+    if (!grouped[g]) grouped[g] = [];
+    grouped[g].push(r);
+  }
+
+  // Her kategoride kaç kural var (filtre yokken)
+  const countByCategory: Record<string, number> = {};
+  for (const r of rules) {
+    const et = (r as any).evaluation_type || 'threshold';
+    if (evalFilter !== 'all' && et !== evalFilter) continue;
+    countByCategory[r.metric_type] = (countByCategory[r.metric_type] || 0) + 1;
+  }
+  const countByEval: Record<string, number> = {};
+  for (const r of rules) {
+    if (categoryFilter !== 'all' && r.metric_type !== categoryFilter) continue;
+    const et = (r as any).evaluation_type || 'threshold';
+    countByEval[et] = (countByEval[et] || 0) + 1;
+  }
+
   return (
-    <div className="space-y-2">
-      {rules.map((rule) => (
-        <div key={rule.rule_id} className="bg-white border border-[#E2E8F0] rounded-lg p-4 flex items-center gap-4">
-          {/* Toggle */}
-          <button
-            onClick={() => toggleMut.mutate(rule.rule_id)}
-            className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${rule.is_enabled ? 'bg-[#22C55E]' : 'bg-[#CBD5E1]'}`}
-            title={rule.is_enabled ? 'Pasif yap' : 'Aktif yap'}
-          >
-            <span className={`block w-4 h-4 rounded-full bg-white mx-1 transition-transform ${rule.is_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
-          </button>
-
-          {/* Kural adı + metrik */}
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-sm text-[#1E293B] truncate">{rule.rule_name}</div>
-            <div className="text-xs text-[#64748B] mt-0.5">
-              {METRIC_TYPES[rule.metric_type]?.label || rule.metric_type} › {getMetricLabel(rule.metric_type, rule.metric_name)}
-              {' · '}
-              {rule.scope === 'all_instances' ? 'Tüm Instance\'lar' :
-               rule.scope === 'specific_instance' ? (rule.instance_name || `#${rule.instance_pk}`) :
-               `Grup: ${rule.service_group}`}
-            </div>
-          </div>
-
-          {/* Eşikler */}
-          <div className="text-xs text-right flex-shrink-0 hidden md:block space-y-0.5">
-            {rule.warning_threshold != null && (
-              <div>
-                <span className="inline-block bg-[#FEF3C7] text-[#D97706] px-2 py-0.5 rounded">
-                  ⚠ {rule.condition_operator} {formatValue(rule.warning_threshold, getUnit(rule.metric_type, rule.metric_name))}
-                </span>
-              </div>
-            )}
-            {rule.critical_threshold != null && (
-              <div>
-                <span className="inline-block bg-[#FEE2E2] text-[#DC2626] px-2 py-0.5 rounded">
-                  ✕ {rule.condition_operator} {formatValue(rule.critical_threshold, getUnit(rule.metric_type, rule.metric_name))}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Pencere + Aggregation */}
-          <div className="text-xs text-[#94A3B8] flex-shrink-0 hidden lg:block">
-            Son {rule.evaluation_window_minutes}dk {AGGREGATIONS[rule.aggregation]}
-          </div>
-
-          {/* Açık alert */}
-          {rule.open_alert_count > 0 && (
-            <span className="bg-[#FEE2E2] text-[#DC2626] text-xs px-2 py-0.5 rounded-full flex-shrink-0">
-              {rule.open_alert_count} alert
-            </span>
-          )}
-
-          {/* Son değer */}
-          {rule.last_value != null && (
-            <div className="text-xs flex-shrink-0 hidden xl:block">
-              <span className={`px-2 py-0.5 rounded ${
-                rule.current_severity === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
-                rule.current_severity === 'warning' ? 'bg-[#FEF3C7] text-[#D97706]' :
-                'bg-[#F0FDF4] text-[#16A34A]'
-              }`}>
-                {formatValue(Number(rule.last_value), getUnit(rule.metric_type, rule.metric_name))}
-              </span>
-            </div>
-          )}
-
-          {/* Aksiyon butonları */}
-          <div className="flex gap-1 flex-shrink-0">
-            <button onClick={() => onEdit(rule)}
-              className="px-3 py-1 text-xs bg-[#F1F5F9] text-[#475569] rounded hover:bg-[#E2E8F0] transition-colors">
-              Düzenle
+    <div className="flex gap-5">
+      {/* Sol filtre paneli */}
+      <div className="w-48 flex-shrink-0 space-y-5">
+        {/* Kategori filtresi */}
+        <div>
+          <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-2">Kategori</div>
+          <div className="space-y-0.5">
+            <button onClick={() => setCategoryFilter('all')}
+              className={`w-full text-left px-3 py-1.5 rounded text-sm flex justify-between items-center ${categoryFilter === 'all' ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#475569] hover:bg-[#F8FAFC]'}`}>
+              <span>Tümü</span>
+              <span className="text-xs text-[#94A3B8]">{rules.length}</span>
             </button>
-            <button onClick={() => {
-              if (confirm(`"${rule.rule_name}" kuralını silmek istiyor musunuz?`))
-                deleteMut.mutate(rule.rule_id);
-            }}
-              className="px-3 py-1 text-xs bg-[#FEE2E2] text-[#DC2626] rounded hover:bg-[#FECACA] transition-colors">
-              Sil
-            </button>
+            {Object.entries(METRIC_TYPES).map(([key, val]) => {
+              const cnt = countByCategory[key] || 0;
+              if (cnt === 0 && categoryFilter !== key) return null;
+              return (
+                <button key={key} onClick={() => setCategoryFilter(key)}
+                  className={`w-full text-left px-3 py-1.5 rounded text-sm flex justify-between items-center ${categoryFilter === key ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#475569] hover:bg-[#F8FAFC]'}`}>
+                  <span>{val.label}</span>
+                  <span className="text-xs text-[#94A3B8]">{cnt}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-      ))}
+
+        {/* Değerlendirme tipi filtresi */}
+        <div>
+          <div className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-2">Tip</div>
+          <div className="space-y-0.5">
+            <button onClick={() => setEvalFilter('all')}
+              className={`w-full text-left px-3 py-1.5 rounded text-sm flex justify-between items-center ${evalFilter === 'all' ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#475569] hover:bg-[#F8FAFC]'}`}>
+              <span>Tümü</span>
+            </button>
+            {Object.entries(EVAL_TYPES).map(([key, val]) => {
+              const cnt = countByEval[key] || 0;
+              if (cnt === 0) return null;
+              return (
+                <button key={key} onClick={() => setEvalFilter(key)}
+                  className={`w-full text-left px-3 py-1.5 rounded text-sm flex justify-between items-center ${evalFilter === key ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#475569] hover:bg-[#F8FAFC]'}`}>
+                  <span className="truncate">{val.label}</span>
+                  <span className="text-xs text-[#94A3B8] ml-1">{cnt}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Kural listesi — kategori gruplarına göre */}
+      <div className="flex-1 min-w-0">
+        {Object.keys(grouped).length === 0 && (
+          <div className="text-center py-12 text-[#64748B] text-sm">Seçili filtreye uyan kural yok.</div>
+        )}
+        {Object.entries(grouped).map(([groupLabel, groupRules]) => (
+          <div key={groupLabel} className="mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="text-xs font-semibold text-[#64748B] uppercase tracking-wide">{groupLabel}</h3>
+              <span className="text-xs text-[#94A3B8]">{groupRules.length} kural</span>
+            </div>
+            <div className="space-y-2">
+              {groupRules.map((rule) => (
+                <RuleCard key={rule.rule_id} rule={rule}
+                  onToggle={() => toggleMut.mutate(rule.rule_id)}
+                  onEdit={() => onEdit(rule)}
+                  onDelete={() => { if (confirm(`"${rule.rule_name}" kuralını silmek istiyor musunuz?`)) deleteMut.mutate(rule.rule_id); }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuleCard({ rule, onToggle, onEdit, onDelete }: {
+  rule: AlertRule; onToggle: () => void; onEdit: () => void; onDelete: () => void;
+}) {
+  const evalType = (rule as any).evaluation_type || 'threshold';
+  const evalBadge = EVAL_TYPE_BADGES[evalType] || EVAL_TYPE_BADGES.threshold;
+  const unit = getUnit(rule.metric_type, rule.metric_name);
+  const isTrend = ['day_over_day', 'week_over_week'].includes(evalType);
+  const changePct = (rule as any).change_threshold_pct;
+
+  return (
+    <div className={`bg-white border rounded-lg p-3.5 flex items-start gap-3 transition-colors ${rule.is_enabled ? 'border-[#E2E8F0]' : 'border-[#E2E8F0] opacity-60'}`}>
+      {/* Toggle */}
+      <button onClick={onToggle}
+        className={`mt-0.5 w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${rule.is_enabled ? 'bg-[#22C55E]' : 'bg-[#CBD5E1]'}`}
+        title={rule.is_enabled ? 'Pasif yap' : 'Aktif yap'}>
+        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${rule.is_enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+      </button>
+
+      {/* Ana içerik */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-sm text-[#1E293B]">{rule.rule_name}</span>
+          {/* Evaluation type badge */}
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${evalBadge.bg} ${evalBadge.text}`}>
+            {evalBadge.label}
+          </span>
+          {/* Açık alert */}
+          {rule.open_alert_count > 0 && (
+            <span className="bg-[#FEE2E2] text-[#DC2626] text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+              {rule.open_alert_count} açık alert
+            </span>
+          )}
+        </div>
+
+        {/* Metrik + kapsam */}
+        <div className="text-xs text-[#64748B] mt-0.5">
+          {getMetricLabel(rule.metric_type, rule.metric_name)}
+          {' · '}
+          {rule.scope === 'all_instances' ? 'Tüm instance\'lar' :
+           rule.scope === 'specific_instance' ? (rule.instance_name || `#${rule.instance_pk}`) :
+           `Grup: ${rule.service_group}`}
+        </div>
+
+        {/* Koşul satırı */}
+        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+          {isTrend ? (
+            <span className="text-xs bg-[#F0F9FF] text-[#0369A1] px-2 py-0.5 rounded">
+              %{changePct} değişim eşiği
+            </span>
+          ) : (
+            <>
+              {rule.warning_threshold != null && (
+                <span className="text-xs bg-[#FEF3C7] text-[#D97706] px-2 py-0.5 rounded">
+                  ⚠ {rule.condition_operator} {formatValue(rule.warning_threshold, unit)}
+                </span>
+              )}
+              {rule.critical_threshold != null && (
+                <span className="text-xs bg-[#FEE2E2] text-[#DC2626] px-2 py-0.5 rounded">
+                  ✕ {rule.condition_operator} {formatValue(rule.critical_threshold, unit)}
+                </span>
+              )}
+            </>
+          )}
+          <span className="text-xs text-[#94A3B8]">
+            {rule.evaluation_window_minutes >= 1440
+              ? `${rule.evaluation_window_minutes / 1440}g`
+              : rule.evaluation_window_minutes >= 60
+              ? `${rule.evaluation_window_minutes / 60}sa`
+              : `${rule.evaluation_window_minutes}dk`} {AGGREGATIONS[rule.aggregation]}
+          </span>
+          {/* Son değer */}
+          {rule.last_value != null && (
+            <span className={`text-xs px-2 py-0.5 rounded ${
+              rule.current_severity === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
+              rule.current_severity === 'warning'  ? 'bg-[#FEF3C7] text-[#D97706]' :
+              'bg-[#F0FDF4] text-[#16A34A]'
+            }`}>
+              şu an: {isTrend ? `%${Number(rule.last_value).toFixed(1)}` : formatValue(Number(rule.last_value), unit)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Aksiyon butonları */}
+      <div className="flex gap-1 flex-shrink-0">
+        <button onClick={onEdit}
+          className="px-2.5 py-1 text-xs bg-[#F1F5F9] text-[#475569] rounded hover:bg-[#E2E8F0] transition-colors">
+          Düzenle
+        </button>
+        <button onClick={onDelete}
+          className="px-2.5 py-1 text-xs bg-[#FEE2E2] text-[#DC2626] rounded hover:bg-[#FECACA] transition-colors">
+          Sil
+        </button>
+      </div>
     </div>
   );
 }
@@ -417,7 +543,7 @@ function TemplateGallery({ onActivate }: { onActivate: (t: AlertRule) => void })
 
 function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () => void }) {
   const qc = useQueryClient();
-  const { addToast } = useToast();
+  const toast = useToast();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState(() =>
     rule ? {
@@ -452,10 +578,10 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       rule ? apiPut(`/alert-rules/${rule.rule_id}`, body) : apiPost('/alert-rules', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['alert-rules'] });
-      addToast(rule ? 'Kural güncellendi' : 'Kural oluşturuldu', 'success');
+      toast.success(rule ? 'Kural güncellendi' : 'Kural oluşturuldu');
       onClose();
     },
-    onError: (e: any) => addToast(e.message || 'Hata oluştu', 'error'),
+    onError: (e: any) => toast.error(e.message || 'Hata oluştu'),
   });
 
   const handleSave = () => {
@@ -523,8 +649,8 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                 <label className="block text-xs font-medium text-[#475569] mb-1">Metrik *</label>
                 <select value={form.metric_name} onChange={e => set('metric_name', e.target.value)}
                   className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                  {Object.entries(metricsForType).map(([k, label]) => (
-                    <option key={k} value={k}>{label}</option>
+                  {Object.entries(metricsForType).map(([k, def]) => (
+                    <option key={k} value={k}>{(def as any).label ?? k}</option>
                   ))}
                 </select>
               </div>
@@ -745,7 +871,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
 
 function FromTemplateModal({ template, onClose }: { template: AlertRule; onClose: () => void }) {
   const qc = useQueryClient();
-  const { addToast } = useToast();
+  const toast = useToast();
   const [form, setForm] = useState({
     rule_name: template.rule_name,
     warning_threshold: template.warning_threshold ?? '' as string | number,
@@ -764,10 +890,10 @@ function FromTemplateModal({ template, onClose }: { template: AlertRule; onClose
     mutationFn: (body: any) => apiPost('/alert-rules/from-template', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['alert-rules'] });
-      addToast('Kural oluşturuldu ve aktifleştirildi', 'success');
+      toast.success('Kural oluşturuldu ve aktifleştirildi');
       onClose();
     },
-    onError: (e: any) => addToast(e.message || 'Hata oluştu', 'error'),
+    onError: (e: any) => toast.error(e.message || 'Hata oluştu'),
   });
 
   const set = (key: string, val: any) => setForm(f => ({ ...f, [key]: val }));
