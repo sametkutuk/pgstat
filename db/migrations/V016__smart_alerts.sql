@@ -11,8 +11,20 @@ alter table control.alert_rule_last_eval
 
 -- Kural kategorisi: 'smart' = esik gerektirmez, 'threshold' = manuel esik
 alter table control.alert_rule
-  add column if not exists alert_category text not null default 'threshold'
-    check (alert_category in ('smart', 'threshold'));
+  add column if not exists alert_category text not null default 'threshold';
+
+-- alert_category check constraint'i (idempotent)
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'ck_alert_rule_category'
+      and conrelid = 'control.alert_rule'::regclass
+  ) then
+    alter table control.alert_rule
+      add constraint ck_alert_rule_category
+      check (alert_category in ('smart', 'threshold'));
+  end if;
+end $$;
 
 -- Smart kural icin: yeterli veri yoksa mutlak spike'a gecis esigi (opsiyonel)
 -- Orn: %300 artis her zaman spike sayilir, veri az da olsa
@@ -21,10 +33,12 @@ alter table control.alert_rule
 
 -- Mevcut evaluation_type constraint'ini genislet
 alter table control.alert_rule
+  drop constraint if exists ck_alert_rule_eval_type;
+alter table control.alert_rule
   drop constraint if exists alert_rule_evaluation_type_check;
 
 alter table control.alert_rule
-  add constraint alert_rule_evaluation_type_check
+  add constraint ck_alert_rule_eval_type
     check (evaluation_type in (
       'threshold',
       'alltime_high', 'alltime_low',
@@ -39,6 +53,18 @@ alter table control.alert_rule
   add column if not exists flatline_minutes integer not null default 30;
 
 comment on column control.alert_rule.alert_category    is 'smart: esik girmeden izleme, threshold: manuel esik';
+
+-- Smart kurallar icin threshold zorunlulugunu kaldir
+-- (V011'deki ck_alert_rule_threshold: warning OR critical NOT NULL)
+alter table control.alert_rule
+  drop constraint if exists ck_alert_rule_threshold;
+
+alter table control.alert_rule
+  add constraint ck_alert_rule_threshold check (
+    alert_category = 'smart'
+    or (warning_threshold is not null or critical_threshold is not null)
+  );
+
 comment on column control.alert_rule.spike_fallback_pct is 'Yeterli veri yokken mutlak spike esigi (%). Null = smart mod kapatilir';
 comment on column control.alert_rule.flatline_minutes   is 'flatline: kac dakika hareketsizlik alert tetikler';
 comment on column control.alert_rule_last_eval.baseline_value       is 'Son hesaplanan baseline referans degeri';

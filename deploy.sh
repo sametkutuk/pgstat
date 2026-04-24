@@ -69,16 +69,90 @@ fi
 # --- 2. Migration ---
 if [ "$SKIP_MIGRATE" = false ]; then
   info "Migration'lar uygulanıyor..."
-  for f in "$SCRIPT_DIR/db/migrations"/V*.sql; do
-    fname=$(basename "$f")
-    # Basit idempotency: schema var mı kontrol et (V001 control schema oluşturur)
-    info "  Applying $fname ..."
-    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+
+  # Migration tracking tablosu oluştur (ilk çalışmada)
+  table_existed=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+    -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+    -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+    -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name='schema_migrations'" 2>/dev/null || echo "0")
+
+  PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+    -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+    -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+    -c "create table if not exists public.schema_migrations (
+          version text primary key,
+          applied_at timestamptz not null default now()
+        )" > /dev/null 2>&1
+
+  # Tablo yeni oluşturulduysa: control şeması var mı kontrol et.
+  # Varsa daha önce migration'lar elle uygulanmış demektir — mevcut dosyaları applied say.
+  # Bu sayede ilk upgrade'de eski migration'lar tekrar çalışmaz.
+  if [ "$table_existed" = "0" ]; then
+    schema_exists=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
       -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
-      -f "$f" -v ON_ERROR_STOP=0 > /dev/null 2>&1 || warn "  $fname zaten uygulanmış olabilir (devam ediliyor)"
+      -tAc "select count(*) from information_schema.schemata where schema_name='control'" 2>/dev/null || echo "0")
+
+    if [ "$schema_exists" = "1" ]; then
+      warn "Mevcut DB tespit edildi, migration geçmişi tohumlanıyor..."
+      # Her migration dosyası için: tablo/kolon/constraint varlığına gore applied mi değil mi?
+      # Basit yaklaşım: dosyayı çalıştır (idempotent yazılmış), başarılıysa kaydet.
+      # Bu sefer ON_ERROR_STOP=1 yerine hatayı tolere edip kaydetmiyoruz.
+      for f in "$SCRIPT_DIR/db/migrations"/V*.sql; do
+        fname_seed=$(basename "$f")
+        version="${fname_seed%.sql}"
+        if PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+          -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+          -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+          -f "$f" -v ON_ERROR_STOP=1 > /dev/null 2>&1; then
+          PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+            -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+            -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+            -c "insert into public.schema_migrations (version) values ('$version') on conflict do nothing" > /dev/null 2>&1
+          info "  Seeded: $fname_seed"
+        else
+          warn "  Atlandı (hata): $fname_seed"
+        fi
+      done
+      warn "Geçmiş tohumlandı. Bir sonraki upgrade'de sadece yeni migration'lar çalışacak."
+    fi
+  fi
+
+  applied=0
+  skipped=0
+  for f in "$SCRIPT_DIR/db/migrations"/V*.sql; do
+    fname=$(basename "$f")
+    version="${fname%.sql}"
+
+    # Zaten uygulandıysa atla
+    already=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+      -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+      -tAc "select count(*) from public.schema_migrations where version = '$version'" 2>/dev/null || echo "0")
+
+    if [ "$already" = "1" ]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    info "  Applying $fname ..."
+    if PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+      -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+      -f "$f" -v ON_ERROR_STOP=1 > /dev/null 2>&1; then
+      # Başarılıysa kayıt et
+      PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+        -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+        -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+        -c "insert into public.schema_migrations (version) values ('$version')" > /dev/null 2>&1
+      applied=$((applied + 1))
+    else
+      error "  $fname uygulanırken hata oluştu!"
+      exit 1
+    fi
   done
-  info "Migration'lar tamamlandı ✓"
+
+  info "Migration tamamlandı ✓ ($applied yeni, $skipped atlandı)"
 else
   warn "Migration atlandı (--skip-migrate)"
 fi

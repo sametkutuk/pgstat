@@ -8,6 +8,14 @@ where rule_id not in (
 );
 
 -- İleride tekrar oluşmaması için unique constraint ekle (template'ler için)
-alter table control.alert_rule
-  add constraint uq_alert_rule_name_metric
-  unique (rule_name, metric_type, metric_name);
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'uq_alert_rule_name_metric'
+      and conrelid = 'control.alert_rule'::regclass
+  ) then
+    alter table control.alert_rule
+      add constraint uq_alert_rule_name_metric
+      unique (rule_name, metric_type, metric_name);
+  end if;
+end $$;
