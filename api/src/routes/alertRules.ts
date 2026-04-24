@@ -48,6 +48,8 @@ router.get('/', async (req: Request, res: Response) => {
       r.alert_category,
       r.spike_fallback_pct,
       r.flatline_minutes,
+      r.sensitivity,
+      r.instance_group_id,
       r.is_enabled,
       r.cooldown_minutes,
       r.auto_resolve,
@@ -144,7 +146,7 @@ router.post('/', async (req: Request, res: Response) => {
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
     aggregation, evaluation_type, change_threshold_pct, min_data_days,
-    alert_category, spike_fallback_pct, flatline_minutes,
+    alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
@@ -154,9 +156,9 @@ router.post('/', async (req: Request, res: Response) => {
         service_group, condition_operator, warning_threshold, critical_threshold,
         evaluation_window_minutes, aggregation, evaluation_type,
         change_threshold_pct, min_data_days,
-        alert_category, spike_fallback_pct, flatline_minutes,
+        alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
         is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
@@ -166,6 +168,7 @@ router.post('/', async (req: Request, res: Response) => {
       evaluation_type ?? 'threshold', change_threshold_pct ?? null,
       min_data_days ?? 7,
       alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
+      sensitivity ?? 'medium', instance_group_id ?? null,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false
     ]
   );
@@ -185,7 +188,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
     aggregation, evaluation_type, change_threshold_pct, min_data_days,
-    alert_category, spike_fallback_pct, flatline_minutes,
+    alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
@@ -197,8 +200,9 @@ router.put('/:id', async (req: Request, res: Response) => {
        evaluation_window_minutes=$11, aggregation=$12,
        evaluation_type=$13, change_threshold_pct=$14, min_data_days=$15,
        alert_category=$16, spike_fallback_pct=$17, flatline_minutes=$18,
-       is_enabled=$19, cooldown_minutes=$20, auto_resolve=$21
-     where rule_id=$22
+       sensitivity=$19, instance_group_id=$20,
+       is_enabled=$21, cooldown_minutes=$22, auto_resolve=$23
+     where rule_id=$24
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
@@ -207,6 +211,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       evaluation_window_minutes ?? 5, aggregation ?? 'avg',
       evaluation_type ?? 'threshold', change_threshold_pct ?? null, min_data_days ?? 7,
       alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
+      sensitivity ?? 'medium', instance_group_id ?? null,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false, id
     ]
   );
@@ -290,12 +295,12 @@ router.post('/from-template', async (req: Request, res: Response) => {
 
 // ---
 
-const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week','spike','flatline','hourly_pattern'];
+const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week','spike','flatline','hourly_pattern','adaptive'];
 const VALID_METRIC_TYPES = [
   'cluster_metric','io_metric','database_metric','statement_metric',
   'table_metric','index_metric','activity_metric','replication_metric'
 ];
-const VALID_SCOPES = ['all_instances','specific_instance','service_group'];
+const VALID_SCOPES = ['all_instances','specific_instance','service_group','instance_group'];
 const VALID_OPS = ['>','<','>=','<=','='];
 const VALID_AGGS = ['avg','sum','max','min','last','count'];
 

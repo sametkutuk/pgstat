@@ -71,7 +71,111 @@ public class AlertRuleEvaluator {
             case "spike"          -> evaluateSpike(rule);
             case "flatline"       -> evaluateFlatline(rule);
             case "hourly_pattern" -> evaluateHourlyPattern(rule);
+            case "adaptive"       -> evaluateAdaptive(rule);
             default -> log.warn("Bilinmeyen evaluation_type: {}", evalType);
+        }
+    }
+
+    // =========================================================================
+    // adaptive: control.metric_baseline tablosundan esik cekerek karsilastirir.
+    // Sensitivity'ye gore avg + k*stddev (low=3, medium=2, high=1.5).
+    // =========================================================================
+
+    private void evaluateAdaptive(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        String aggregation = (String) rule.get("aggregation");
+        int windowMinutes = toInt(rule.get("evaluation_window_minutes"));
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        String ruleName = (String) rule.get("rule_name");
+        String sensitivity = rule.get("sensitivity") != null ? (String) rule.get("sensitivity") : "medium";
+
+        List<Map<String, Object>> targets = loadTargetInstances(rule);
+        if (targets.isEmpty()) return;
+
+        String aggFn = toSqlAgg(aggregation);
+        String metricKey = metricType.replace("_metric", "") + "." + metricName;
+
+        // Mevcut pencere degeri
+        List<Map<String, Object>> currentRows = queryMetric(metricType, metricName, aggFn, windowMinutes + " minutes");
+
+        BigDecimal kMultiplier = switch (sensitivity) {
+            case "low"    -> new BigDecimal("3.0");
+            case "high"   -> new BigDecimal("1.5");
+            default       -> new BigDecimal("2.0"); // medium
+        };
+
+        int currentHour = java.time.LocalDateTime.now().getHour();
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+
+            BigDecimal current = findValueForInstance(currentRows, instancePk);
+            if (current == null) continue;
+
+            // Baseline'i DB fonksiyonundan cek (saatlik, yoksa genel)
+            Map<String, Object> baseline = loadBaseline(instancePk, metricKey, currentHour);
+            if (baseline == null) {
+                // Henuz baseline yok, adaptive kural pas gecilir
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+
+            BigDecimal avg = toBDSafe(baseline.get("avg_value"));
+            BigDecimal stddev = toBDSafe(baseline.get("stddev_value"));
+            if (avg == null) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+            if (stddev == null) stddev = BigDecimal.ZERO;
+
+            // Esik: avg + k*stddev (upper), avg - k*stddev (lower, min 0)
+            BigDecimal delta = stddev.multiply(kMultiplier);
+            BigDecimal upperCritical = avg.add(delta.multiply(new BigDecimal("1.5")));
+            BigDecimal upperWarning  = avg.add(delta);
+
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+
+            String severity = null;
+            if (current.compareTo(upperCritical) > 0) severity = "critical";
+            else if (current.compareTo(upperWarning) > 0) severity = "warning";
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+
+            if (severity != null) {
+                String message = String.format(
+                    "%s = %.4g — baseline(%d:00) avg=%.4g ±%.4g*k=%s sapma, sensitivity=%s",
+                    metricName, current.doubleValue(), currentHour,
+                    avg.doubleValue(), stddev.doubleValue(), kMultiplier, sensitivity);
+                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                updateLastEval(ruleId, instancePk, current, severity);
+            } else if (prevSeverity != null && autoResolve) {
+                alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, current, null);
+            } else {
+                updateLastEval(ruleId, instancePk, current, null);
+            }
+        }
+    }
+
+    private Map<String, Object> loadBaseline(long instancePk, String metricKey, int hour) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "select * from control.get_baseline(?, ?, ?)",
+                instancePk, metricKey, hour);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.debug("Baseline okuma hatasi instance={} metric={}: {}", instancePk, metricKey, e.getMessage());
+            return null;
         }
     }
 
@@ -971,12 +1075,12 @@ public class AlertRuleEvaluator {
     private List<Map<String, Object>> loadActiveRules() {
         return jdbc.queryForList("""
             select rule_id, rule_name, metric_type, metric_name, scope,
-                   instance_pk, service_group, condition_operator,
-                   warning_threshold, critical_threshold,
+                   instance_pk, service_group, instance_group_id,
+                   condition_operator, warning_threshold, critical_threshold,
                    evaluation_window_minutes, aggregation,
                    evaluation_type, change_threshold_pct, min_data_days,
                    alert_category, spike_fallback_pct, flatline_minutes,
-                   cooldown_minutes, auto_resolve
+                   sensitivity, cooldown_minutes, auto_resolve
             from control.alert_rule
             where is_enabled = true
             order by rule_id
@@ -987,17 +1091,63 @@ public class AlertRuleEvaluator {
         String scope = (String) rule.get("scope");
         Long instancePk = rule.get("instance_pk") != null ? toLong(rule.get("instance_pk")) : null;
         String serviceGroup = (String) rule.get("service_group");
+        Long instanceGroupId = rule.get("instance_group_id") != null ? toLong(rule.get("instance_group_id")) : null;
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricKey = ((String) rule.get("metric_type")).replace("_metric", "") + "." + rule.get("metric_name");
 
-        return switch (scope != null ? scope : "all_instances") {
+        List<Map<String, Object>> targets = switch (scope != null ? scope : "all_instances") {
             case "specific_instance" -> jdbc.queryForList(
                 "select instance_pk, service_group from control.instance_inventory" +
                 " where instance_pk = ? and is_active = true", instancePk);
             case "service_group" -> jdbc.queryForList(
                 "select instance_pk, service_group from control.instance_inventory" +
                 " where service_group = ? and is_active = true", serviceGroup);
+            case "instance_group" -> instanceGroupId == null ? List.<Map<String, Object>>of()
+                : jdbc.queryForList(
+                    "select i.instance_pk, i.service_group from control.instance_inventory i" +
+                    " join control.instance_group_member m on m.instance_pk = i.instance_pk" +
+                    " where m.group_id = ? and i.is_active = true", instanceGroupId);
             default -> jdbc.queryForList(
                 "select instance_pk, service_group from control.instance_inventory where is_active = true");
         };
+
+        // Snooze / maintenance filtresi
+        if (targets.isEmpty()) return targets;
+        List<Map<String, Object>> filtered = new java.util.ArrayList<>(targets.size());
+        for (Map<String, Object> t : targets) {
+            long pk = toLong(t.get("instance_pk"));
+            if (isSnoozed(ruleId, pk, metricKey)) {
+                log.debug("Alert snoozed rule={} instance={} metric={}", ruleId, pk, metricKey);
+                continue;
+            }
+            if (isInMaintenance(pk)) {
+                log.debug("Instance in maintenance rule={} instance={}", ruleId, pk);
+                continue;
+            }
+            filtered.add(t);
+        }
+        return filtered;
+    }
+
+    private boolean isSnoozed(long ruleId, long instancePk, String metricKey) {
+        try {
+            Boolean r = jdbc.queryForObject(
+                "select control.is_alert_snoozed(?::int, ?::bigint, ?, null::bigint)",
+                Boolean.class, (int) ruleId, instancePk, metricKey);
+            return Boolean.TRUE.equals(r);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isInMaintenance(long instancePk) {
+        try {
+            Boolean r = jdbc.queryForObject(
+                "select control.is_in_maintenance(?)", Boolean.class, instancePk);
+            return Boolean.TRUE.equals(r);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private BigDecimal findValueForInstance(List<Map<String, Object>> rows, long instancePk) {

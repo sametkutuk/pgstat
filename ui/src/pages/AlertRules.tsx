@@ -28,6 +28,7 @@ interface AlertRule {
   alert_category: 'smart' | 'threshold';
   spike_fallback_pct: number | null;
   flatline_minutes: number;
+  sensitivity: 'low' | 'medium' | 'high' | null;
   is_enabled: boolean;
   cooldown_minutes: number;
   auto_resolve: boolean;
@@ -159,6 +160,7 @@ const EVAL_TYPES: Record<string, { label: string; description: string; category:
   spike:          { label: 'Ani Sıçrama',             category: 'smart',     description: 'Son pencere ile önceki pencere karşılaştırılır. Ani artış tetiklenir.' },
   flatline:       { label: 'Counter Durdu',           category: 'smart',     description: 'Normalde artan bir değer N dakika boyunca hiç değişmediyse tetiklenir.' },
   hourly_pattern: { label: 'Saatlik Örüntü Sapması',  category: 'smart',     description: 'Bu saatin 4 haftalık ortalamasından sapma. Yeni instance\'ta anlık spike\'a geçer.' },
+  adaptive:       { label: 'Adaptive (otomatik baseline)', category: 'smart', description: 'Gece hesaplanan 28 günlük baseline üzerinden otomatik eşik. Sensitivity ile hassasiyet ayarlanır.' },
 };
 
 const emptyForm = {
@@ -180,6 +182,7 @@ const emptyForm = {
   alert_category: 'threshold' as 'smart' | 'threshold',
   spike_fallback_pct: '' as string | number,
   flatline_minutes: 30,
+  sensitivity: 'medium' as 'low' | 'medium' | 'high',
   is_enabled: true,
   cooldown_minutes: 15,
   auto_resolve: true,
@@ -265,6 +268,7 @@ const EVAL_TYPE_BADGES: Record<string, { label: string; bg: string; text: string
   spike:          { label: 'Ani Sıçrama',   bg: 'bg-[#FFF7ED]', text: 'text-[#EA580C]' },
   flatline:       { label: 'Counter Durdu', bg: 'bg-[#FEF2F2]', text: 'text-[#DC2626]' },
   hourly_pattern: { label: 'Saatlik Örüntü', bg: 'bg-[#F0FDF4]', text: 'text-[#16A34A]' },
+  adaptive:       { label: 'Adaptive', bg: 'bg-[#ECFEFF]', text: 'text-[#0891B2]' },
 };
 
 // =========================================================================
@@ -716,6 +720,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       alert_category: rule.alert_category ?? 'threshold',
       spike_fallback_pct: rule.spike_fallback_pct ?? '' as string | number,
       flatline_minutes: rule.flatline_minutes ?? 30,
+      sensitivity: rule.sensitivity ?? 'medium',
       is_enabled: rule.is_enabled,
       cooldown_minutes: rule.cooldown_minutes,
       auto_resolve: rule.auto_resolve,
@@ -908,6 +913,24 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                     placeholder="Örn: 300 — yeterli veri yoksa ani %300 artışı yine de yakala" />
                   <p className="text-xs text-[#64748B] mt-1">
                     Henüz yeterli geçmişi olmayan instance'larda bu eşik kullanılır. Boş bırakılırsa yeni instance'lar değerlendirilmez.
+                  </p>
+                </div>
+              )}
+
+              {/* Adaptive: sensitivity */}
+              {form.evaluation_type === 'adaptive' && (
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    Hassasiyet (Sensitivity) *
+                  </label>
+                  <select value={form.sensitivity} onChange={e => set('sensitivity', e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                    <option value="low">Düşük — avg + 3σ (az alarm)</option>
+                    <option value="medium">Orta — avg + 2σ (dengeli)</option>
+                    <option value="high">Yüksek — avg + 1.5σ (çok alarm)</option>
+                  </select>
+                  <p className="text-xs text-[#64748B] mt-1">
+                    Baseline gece hesaplanır. Bu instance için en az 7 gün veri yoksa kural atlanır.
                   </p>
                 </div>
               )}

@@ -213,28 +213,81 @@ router.delete('/notification-channels/:channel_id', async (req, res, next) => {
 router.get('/instances/:instance_pk/baseline/:metric_key', async (req, res, next) => {
     try {
         const { instance_pk, metric_key } = req.params;
-        const hour_of_day = req.query.hour_of_day as string;
+        const hour_of_day = req.query.hour_of_day as string | undefined;
 
+        // Tek bir saat istendiyse sadece o saati, yoksa hem genel (-1) hem tüm saatler dön
         let query = `
-      select * from control.metric_baseline
-      where instance_pk = $1 and metric_key = $2
-    `;
+            select hour_of_day, avg_value, stddev_value, min_value, max_value,
+                   p50_value, p95_value, p99_value, sample_count,
+                   baseline_start, baseline_end, updated_at
+            from control.metric_baseline
+            where instance_pk = $1 and metric_key = $2
+        `;
         const params: any[] = [instance_pk, metric_key];
-
-        if (hour_of_day) {
+        if (hour_of_day !== undefined) {
             query += ' and hour_of_day = $3';
-            params.push(hour_of_day);
-        } else {
-            query += ' and hour_of_day is null';
+            params.push(parseInt(hour_of_day, 10));
         }
+        query += ' order by hour_of_day';
 
         const result = await pool.query(query, params);
+        res.json({
+            instance_pk: Number(instance_pk),
+            metric_key,
+            general: result.rows.find(r => r.hour_of_day === -1) || null,
+            hourly: result.rows.filter(r => r.hour_of_day !== -1),
+        });
+    } catch (err) {
+        next(err);
+    }
+});
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Baseline not found' });
-        }
+// GET /api/adaptive-alerting/instances/:instance_pk/baseline — tüm metric_key'ler özet
+router.get('/instances/:instance_pk/baseline', async (req, res, next) => {
+    try {
+        const { instance_pk } = req.params;
+        const result = await pool.query(`
+            select metric_key,
+                   max(updated_at) as updated_at,
+                   count(*) filter (where hour_of_day = -1) as has_general,
+                   count(*) filter (where hour_of_day >= 0) as hourly_count,
+                   avg(sample_count) as avg_sample_count
+            from control.metric_baseline
+            where instance_pk = $1
+            group by metric_key
+            order by metric_key
+        `, [instance_pk]);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
 
-        res.json(result.rows[0]);
+// GET /api/adaptive-alerting/overview — dashboard kartı için özet
+router.get('/overview', async (_req, res, next) => {
+    try {
+        const [baselines, snoozes, maintenance, channels] = await Promise.all([
+            pool.query(`select count(distinct instance_pk) as instances,
+                               count(*) as total_baselines,
+                               max(updated_at) as latest_update
+                        from control.metric_baseline`),
+            pool.query(`select count(*) as active
+                        from control.alert_snooze where snooze_until > now()`),
+            pool.query(`select count(*) as enabled
+                        from control.maintenance_window where is_enabled = true`),
+            pool.query(`select count(*) as enabled
+                        from control.notification_channel where is_enabled = true`),
+        ]);
+        res.json({
+            baselines: {
+                instance_count: parseInt(baselines.rows[0].instances, 10),
+                total_baselines: parseInt(baselines.rows[0].total_baselines, 10),
+                latest_update: baselines.rows[0].latest_update,
+            },
+            active_snoozes:       parseInt(snoozes.rows[0].active, 10),
+            enabled_maintenance:  parseInt(maintenance.rows[0].enabled, 10),
+            enabled_channels:     parseInt(channels.rows[0].enabled, 10),
+        });
     } catch (err) {
         next(err);
     }

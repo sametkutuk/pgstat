@@ -57,6 +57,7 @@ public class JobOrchestrator {
     // Alert servisi
     private final AlertService alertService;
     private final com.pgstat.collector.service.AlertRuleEvaluator alertRuleEvaluator;
+    private final com.pgstat.collector.service.BaselineCalculator baselineCalculator;
 
     // Partition ve purge (Phase 1J'de eklenecek)
     private final com.pgstat.collector.service.PartitionManager partitionManager;
@@ -76,6 +77,7 @@ public class JobOrchestrator {
                            AggRepository aggRepo,
                            AlertService alertService,
                            com.pgstat.collector.service.AlertRuleEvaluator alertRuleEvaluator,
+                           com.pgstat.collector.service.BaselineCalculator baselineCalculator,
                            com.pgstat.collector.service.PartitionManager partitionManager,
                            com.pgstat.collector.service.PurgeEvaluator purgeEvaluator) {
         this.lockManager = lockManager;
@@ -92,6 +94,7 @@ public class JobOrchestrator {
         this.aggRepo = aggRepo;
         this.alertService = alertService;
         this.alertRuleEvaluator = alertRuleEvaluator;
+        this.baselineCalculator = baselineCalculator;
         this.partitionManager = partitionManager;
         this.purgeEvaluator = purgeEvaluator;
     }
@@ -356,6 +359,13 @@ public class JobOrchestrator {
                 int dailyRows = aggRepo.rollupDaily();
                 totalRows += dailyRows;
                 log.info("Gunluk rollup tamamlandi: {} satir", dailyRows);
+
+                // 3b. Adaptive baseline — gunde 1 kez, daily rollup ile ayni pencerede
+                try {
+                    baselineCalculator.calculateAll();
+                } catch (Exception e) {
+                    log.warn("Baseline hesaplamasi hatasi: {}", e.getMessage());
+                }
             }
 
             // 4. Alert kurallarini degerlendir
