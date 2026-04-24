@@ -78,6 +78,45 @@ public class InventoryRepository {
     // Steady-state scheduler — ready/degraded instance'lar
     // -------------------------------------------------------------------------
 
+    /** Tek instance'i PK ile getirir (pre-reset snapshot icin). */
+    public InstanceInfo findByPk(long instancePk) {
+        List<InstanceInfo> list = jdbc.query("""
+            select
+              i.instance_pk, i.instance_id, i.host, i.port, i.admin_dbname,
+              i.secret_ref, i.ssl_mode, i.bootstrap_state, i.collector_username,
+              p.cluster_interval_seconds, p.statements_interval_seconds,
+              p.bootstrap_sql_text_batch, p.statement_timeout_ms,
+              p.lock_timeout_ms, p.connect_timeout_seconds,
+              s.next_cluster_collect_at, s.next_statements_collect_at
+            from control.instance_inventory i
+            join control.instance_state s on s.instance_pk = i.instance_pk
+            join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
+            where i.instance_pk = ? and i.is_active
+            """,
+            (rs, rowNum) -> new InstanceInfo(
+                rs.getLong("instance_pk"),
+                rs.getString("instance_id"),
+                rs.getString("host"),
+                rs.getInt("port"),
+                rs.getString("admin_dbname"),
+                rs.getString("secret_ref"),
+                rs.getString("ssl_mode"),
+                rs.getString("bootstrap_state"),
+                rs.getString("collector_username"),
+                rs.getInt("connect_timeout_seconds"),
+                rs.getInt("statement_timeout_ms"),
+                rs.getInt("lock_timeout_ms"),
+                rs.getInt("bootstrap_sql_text_batch"),
+                rs.getInt("cluster_interval_seconds"),
+                rs.getInt("statements_interval_seconds"),
+                rs.getObject("next_cluster_collect_at", OffsetDateTime.class),
+                rs.getObject("next_statements_collect_at", OffsetDateTime.class)
+            ),
+            instancePk
+        );
+        return list.isEmpty() ? null : list.get(0);
+    }
+
     /** Toplama zamani gelmis instance'lari getirir (cluster veya statements due). */
     public List<InstanceInfo> findDueInstances(int limit) {
         return jdbc.query("""

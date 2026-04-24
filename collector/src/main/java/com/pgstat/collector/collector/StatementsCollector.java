@@ -8,6 +8,7 @@ import com.pgstat.collector.repository.FactRepository;
 import com.pgstat.collector.repository.StateRepository;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.EpochManager;
+import com.pgstat.collector.service.PgssResetTracker;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
 import com.pgstat.collector.sql.SourceQueries;
@@ -50,6 +51,7 @@ public class StatementsCollector {
     private final DeltaCalculator deltaCalc;
     private final EpochManager epochManager;
     private final AlertRepository alertRepo;
+    private final PgssResetTracker resetTracker;
 
     /**
      * In-memory delta cache.
@@ -67,7 +69,8 @@ public class StatementsCollector {
                                FactRepository factRepo,
                                DeltaCalculator deltaCalc,
                                EpochManager epochManager,
-                               AlertRepository alertRepo) {
+                               AlertRepository alertRepo,
+                               PgssResetTracker resetTracker) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -77,6 +80,7 @@ public class StatementsCollector {
         this.deltaCalc = deltaCalc;
         this.epochManager = epochManager;
         this.alertRepo = alertRepo;
+        this.resetTracker = resetTracker;
     }
 
     /**
@@ -147,13 +151,22 @@ public class StatementsCollector {
                     
                     // Kayip suresi: son collect zamani ile simdi arasi
                     String lossWindow = "bilinmiyor";
+                    OffsetDateTime lastCollect = null;
                     try {
-                        var lastCollect = stateRepo.findLastStatementsCollectAt(instancePk);
+                        lastCollect = stateRepo.findLastStatementsCollectAt(instancePk);
                         if (lastCollect != null) {
                             long seconds = java.time.Duration.between(lastCollect, now).getSeconds();
                             lossWindow = seconds + " saniye";
                         }
                     } catch (Exception ignored) {}
+                    
+                    // Reset history'ye kaydet ve pattern analizi yap
+                    try {
+                        resetTracker.recordReset(instancePk, newEpochKey, currentEpochKey,
+                            queryCount, totalCalls, totalExecTime, lastCollect);
+                    } catch (Exception e) {
+                        log.warn("Reset tracker hatasi: {}", e.getMessage());
+                    }
                     
                     String alertMessage = String.format(
                         "pg_stat_statements reset tespit edildi. " +

@@ -62,6 +62,7 @@ public class JobOrchestrator {
     // Partition ve purge (Phase 1J'de eklenecek)
     private final com.pgstat.collector.service.PartitionManager partitionManager;
     private final com.pgstat.collector.service.PurgeEvaluator purgeEvaluator;
+    private final com.pgstat.collector.service.PgssResetTracker resetTracker;
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -79,7 +80,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.AlertRuleEvaluator alertRuleEvaluator,
                            com.pgstat.collector.service.BaselineCalculator baselineCalculator,
                            com.pgstat.collector.service.PartitionManager partitionManager,
-                           com.pgstat.collector.service.PurgeEvaluator purgeEvaluator) {
+                           com.pgstat.collector.service.PurgeEvaluator purgeEvaluator,
+                           com.pgstat.collector.service.PgssResetTracker resetTracker) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -97,6 +99,7 @@ public class JobOrchestrator {
         this.baselineCalculator = baselineCalculator;
         this.partitionManager = partitionManager;
         this.purgeEvaluator = purgeEvaluator;
+        this.resetTracker = resetTracker;
     }
 
     /**
@@ -105,6 +108,28 @@ public class JobOrchestrator {
      */
     @Scheduled(fixedDelayString = "${pgstat.worker.poll-interval-ms:5000}")
     public void poll() {
+        // Pre-reset snapshot: pattern tespit edilen instance'lar icin
+        // reset'ten 30sn once ekstra statements snapshot al
+        try {
+            List<Long> preResetInstances = resetTracker.findInstancesNeedingPreResetSnapshot();
+            if (!preResetInstances.isEmpty()) {
+                log.info("Pre-reset snapshot tetikleniyor: {} instance", preResetInstances.size());
+                for (Long pk : preResetInstances) {
+                    try {
+                        InstanceInfo inst = inventoryRepo.findByPk(pk);
+                        if (inst != null) {
+                            statementsCollector.collect(inst);
+                            log.info("Pre-reset snapshot tamamlandi instance={}", pk);
+                        }
+                    } catch (Exception e) {
+                        log.warn("Pre-reset snapshot hatasi instance={}: {}", pk, e.getMessage());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Pre-reset schedule kontrolu hatasi: {}", e.getMessage());
+        }
+
         processBootstrapQueue();
         runJob("cluster", this::executeClusterJob);
         runJob("statements", this::executeStatementsJob);
