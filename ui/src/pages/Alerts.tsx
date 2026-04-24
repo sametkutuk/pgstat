@@ -19,11 +19,11 @@ interface Alert {
 }
 
 const EVAL_TYPE_LABELS: Record<string, string> = {
-  threshold:      'Sabit Eşik',
-  alltime_high:   'Tüm Zamanlar En Yüksek',
-  alltime_low:    'Tüm Zamanlar En Düşük',
-  day_over_day:   'Günlük Değişim',
-  week_over_week: 'Haftalık Değişim',
+    threshold: 'Sabit Eşik',
+    alltime_high: 'Tüm Zamanlar En Yüksek',
+    alltime_low: 'Tüm Zamanlar En Düşük',
+    day_over_day: 'Günlük Değişim',
+    week_over_week: 'Haftalık Değişim',
 };
 
 export default function Alerts() {
@@ -176,9 +176,7 @@ export default function Alerts() {
                             </div>
                         )}
                         {alert.details_json && (
-                            <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
-                                {typeof alert.details_json === 'string' ? alert.details_json : JSON.stringify(alert.details_json, null, 2)}
-                            </pre>
+                            <AlertDetails details={typeof alert.details_json === 'string' ? JSON.parse(alert.details_json) : alert.details_json} />
                         )}
                     </div>
                 );
@@ -218,6 +216,106 @@ export default function Alerts() {
                         </div>
                     </div>
                 </div>
+            )}
+        </div>
+    );
+}
+
+
+function AlertDetails({ details }: { details: any }) {
+    if (!details) return null;
+
+    const hasTopQueries = details.top_queries && details.top_queries.length > 0;
+
+    return (
+        <div className="space-y-3 mt-2">
+            {/* Baseline bilgisi */}
+            {details.baseline_avg != null && (
+                <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#0369A1] mb-2">Baseline Bilgisi</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <div>
+                            <span className="text-[#64748B]">Saat: </span>
+                            <span className="font-mono text-[#1E293B]">{String(details.baseline_hour).padStart(2, '0')}:00 UTC</span>
+                        </div>
+                        <div>
+                            <span className="text-[#64748B]">Ortalama: </span>
+                            <span className="font-mono text-[#1E293B]">{Number(details.baseline_avg).toLocaleString()}</span>
+                        </div>
+                        <div>
+                            <span className="text-[#64748B]">Warning Eşik: </span>
+                            <span className="font-mono text-[#D97706]">{Number(details.warning_threshold).toLocaleString()}</span>
+                        </div>
+                        <div>
+                            <span className="text-[#64748B]">Critical Eşik: </span>
+                            <span className="font-mono text-[#DC2626]">{Number(details.critical_threshold).toLocaleString()}</span>
+                        </div>
+                        <div>
+                            <span className="text-[#64748B]">Sensitivity: </span>
+                            <span className="font-mono text-[#1E293B]">{details.sensitivity}</span>
+                        </div>
+                        <div>
+                            <span className="text-[#64748B]">Pencere: </span>
+                            <span className="font-mono text-[#1E293B]">{details.window_minutes} dk</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Top queries */}
+            {hasTopQueries && (
+                <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                        <span className="text-xs font-semibold text-[#475569]">En Çok Katkı Yapan Sorgular</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                            <thead>
+                                <tr className="border-b border-[#F1F5F9]">
+                                    <th className="text-left py-2 px-3 text-[#64748B] font-medium">Query</th>
+                                    <th className="text-left py-2 px-3 text-[#64748B] font-medium">DB / Rol</th>
+                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Değer</th>
+                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Calls</th>
+                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Exec Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {details.top_queries.map((q: any, i: number) => (
+                                    <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                        <td className="py-2 px-3 max-w-xs">
+                                            <div className="truncate font-mono text-[#1E293B]" title={q.query_text}>
+                                                {q.query_text || '—'}
+                                            </div>
+                                            <div className="text-[#94A3B8] mt-0.5">qid: {q.queryid}</div>
+                                        </td>
+                                        <td className="py-2 px-3 text-[#64748B]">
+                                            <div>{q.datname || '—'}</div>
+                                            <div className="text-[#94A3B8]">{q.rolname || '—'}</div>
+                                        </td>
+                                        <td className="py-2 px-3 text-right font-mono text-[#1E293B]">
+                                            {Number(q.metric_value).toLocaleString()}
+                                        </td>
+                                        <td className="py-2 px-3 text-right font-mono text-[#64748B]">
+                                            {Number(q.total_calls).toLocaleString()}
+                                        </td>
+                                        <td className="py-2 px-3 text-right font-mono text-[#64748B]">
+                                            {Number(q.total_exec_time_ms) >= 1000
+                                                ? (Number(q.total_exec_time_ms) / 1000).toFixed(1) + 's'
+                                                : Number(q.total_exec_time_ms).toFixed(0) + 'ms'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Fallback: top_queries yoksa ham JSON göster */}
+            {!hasTopQueries && !details.baseline_avg && (
+                <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
+                    {JSON.stringify(details, null, 2)}
+                </pre>
             )}
         </div>
     );

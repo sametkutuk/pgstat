@@ -154,12 +154,32 @@ public class AlertRuleEvaluator {
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (severity != null) {
+                // Detaylı mesaj oluştur
                 String message = String.format(
-                    "%s = %.4g — baseline(%d:00) avg=%.4g ±%.4g*k=%s sapma, sensitivity=%s",
-                    metricName, current.doubleValue(), currentHour,
-                    avg.doubleValue(), stddev.doubleValue(), kMultiplier, sensitivity);
-                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                    "%s = %s (baseline %02d:00 avg=%s, warning eşik=%s, critical eşik=%s, sensitivity=%s, pencere=%d dk)",
+                    metricName, current.setScale(1, java.math.RoundingMode.HALF_UP),
+                    currentHour,
+                    avg.setScale(1, java.math.RoundingMode.HALF_UP),
+                    upperWarning.setScale(1, java.math.RoundingMode.HALF_UP),
+                    upperCritical.setScale(1, java.math.RoundingMode.HALF_UP),
+                    sensitivity, windowMinutes);
+
+                // Statement metrikleri için top query bilgisi ekle
+                String detailsJson = null;
+                if ("statement_metric".equals(metricType)) {
+                    detailsJson = buildTopQueryDetails(instancePk, metricName, windowMinutes,
+                        avg, upperWarning, upperCritical, currentHour, sensitivity);
+                }
+
+                if (detailsJson != null) {
+                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                        instancePk, serviceGroup, null, ruleName, message, detailsJson);
+                    // severity'yi ayrıca güncelle
+                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                } else {
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                }
                 updateLastEval(ruleId, instancePk, current, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -168,6 +188,68 @@ public class AlertRuleEvaluator {
                 updateLastEval(ruleId, instancePk, current, null);
             }
         }
+    }
+
+    /**
+     * Statement metrikleri icin top 5 query detayini JSON olarak olusturur.
+     * Alert mesajina ek bilgi olarak eklenir.
+     */
+    private String buildTopQueryDetails(long instancePk, String metricName, int windowMinutes,
+                                         BigDecimal baselineAvg, BigDecimal warningThreshold,
+                                         BigDecimal criticalThreshold, int hour, String sensitivity) {
+        try {
+            String deltaCol = toFactColumn(metricName, "statement_metric");
+            List<Map<String, Object>> topQueries = jdbc.queryForList(
+                "select ss.queryid, left(qt.query_text, 200) as query_text, " +
+                "       dbr.datname, rr.rolname, " +
+                "       sum(d." + deltaCol + ") as metric_value, " +
+                "       sum(d.calls_delta) as total_calls, " +
+                "       sum(d.total_exec_time_ms_delta) as total_exec_time_ms " +
+                "from fact.pgss_delta d " +
+                "join dim.statement_series ss on ss.statement_series_id = d.statement_series_id " +
+                "left join dim.query_text qt on qt.query_text_id = ss.query_text_id " +
+                "left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid " +
+                "left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid " +
+                "where d.instance_pk = ? and d.sample_ts >= now() - ?::interval " +
+                "group by ss.queryid, qt.query_text, dbr.datname, rr.rolname " +
+                "order by sum(d." + deltaCol + ") desc nulls last " +
+                "limit 5",
+                instancePk, windowMinutes + " minutes");
+
+            if (topQueries.isEmpty()) return null;
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"baseline_hour\":").append(hour);
+            sb.append(",\"baseline_avg\":").append(baselineAvg);
+            sb.append(",\"warning_threshold\":").append(warningThreshold);
+            sb.append(",\"critical_threshold\":").append(criticalThreshold);
+            sb.append(",\"sensitivity\":\"").append(sensitivity).append("\"");
+            sb.append(",\"window_minutes\":").append(windowMinutes);
+            sb.append(",\"top_queries\":[");
+
+            for (int i = 0; i < topQueries.size(); i++) {
+                Map<String, Object> q = topQueries.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{\"queryid\":").append(q.get("queryid"));
+                sb.append(",\"query_text\":\"").append(escapeJson(q.get("query_text")));
+                sb.append("\",\"datname\":\"").append(q.get("datname") != null ? q.get("datname") : "");
+                sb.append("\",\"rolname\":\"").append(q.get("rolname") != null ? q.get("rolname") : "");
+                sb.append("\",\"metric_value\":").append(q.get("metric_value"));
+                sb.append(",\"total_calls\":").append(q.get("total_calls"));
+                sb.append(",\"total_exec_time_ms\":").append(q.get("total_exec_time_ms"));
+                sb.append("}");
+            }
+            sb.append("]}");
+            return sb.toString();
+        } catch (Exception e) {
+            log.debug("Top query detay hatasi: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private String escapeJson(Object val) {
+        if (val == null) return "";
+        return val.toString().replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", "");
     }
 
     private Map<String, Object> loadBaseline(long instancePk, String metricKey, int hour) {
