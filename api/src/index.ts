@@ -18,15 +18,6 @@ import scheduleRoutes from './routes/scheduleProfiles';
 import statementRoutes from './routes/statements';
 import alertRuleRoutes from './routes/alertRules';
 import adaptiveAlertingRoutes from './routes/adaptiveAlerting';
-import adaptiveAlertingRoutes from './routes/adaptiveAlerting';port authRoutes from './routes/auth';
-import dashboardRoutes from './routes/dashboard';
-import instanceRoutes from './routes/instances';
-import alertRoutes from './routes/alerts';
-import jobRunRoutes from './routes/jobRuns';
-import retentionRoutes from './routes/retentionPolicies';
-import scheduleRoutes from './routes/scheduleProfiles';
-import statementRoutes from './routes/statements';
-import alertRuleRoutes from './routes/alertRules';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
