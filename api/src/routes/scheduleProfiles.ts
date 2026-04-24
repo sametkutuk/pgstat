@@ -79,6 +79,30 @@ router.put('/:id', async (req, res, next) => {
       res.status(404).json({ error: 'Schedule profile not found' });
       return;
     }
+
+    // Yeni interval'ın hemen etkili olması için: bu profile bağlı instance'ların
+    // bir sonraki toplama zamanını now()'a çek. Bir sonraki collector poll'unda
+    // (5 sn içinde) yeni interval'la toplama yapılır.
+    await pool.query(`
+      update control.instance_state s
+      set next_cluster_collect_at = now(),
+          next_statements_collect_at = now()
+      from control.instance_inventory i
+      where s.instance_pk = i.instance_pk
+        and i.schedule_profile_id = $1
+        and i.is_active = true
+    `, [id]);
+
+    // db_objects zamanlaması database_state'te — onu da resetle
+    await pool.query(`
+      update control.database_state d
+      set next_db_objects_collect_at = now()
+      from control.instance_inventory i
+      where d.instance_pk = i.instance_pk
+        and i.schedule_profile_id = $1
+        and i.is_active = true
+    `, [id]);
+
     res.json(result.rows[0]);
   } catch (err) {
     next(err);
