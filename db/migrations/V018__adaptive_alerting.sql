@@ -33,8 +33,8 @@ create table if not exists control.metric_baseline (
 
 -- Unique constraint (coalesce kullanılamaz, -1 default ile çözeriz)
 alter table control.metric_baseline alter column hour_of_day set default -1;
-create unique index idx_metric_baseline_pk on control.metric_baseline (instance_pk, metric_key, hour_of_day);
-create index idx_metric_baseline_updated on control.metric_baseline (updated_at);
+create unique index if not exists idx_metric_baseline_pk on control.metric_baseline (instance_pk, metric_key, hour_of_day);
+create index if not exists idx_metric_baseline_updated on control.metric_baseline (updated_at);
 
 -- Query bazlı baseline
 create table if not exists control.metric_baseline_query (
@@ -71,7 +71,7 @@ create table if not exists control.metric_baseline_query (
   primary key (instance_pk, queryid)
 );
 
-create index idx_baseline_query_lookup on control.metric_baseline_query (instance_pk, queryid);
+create index if not exists idx_baseline_query_lookup on control.metric_baseline_query (instance_pk, queryid);
 
 -- Instance settings (kapasite bilgileri)
 create table if not exists control.instance_settings (
@@ -107,7 +107,7 @@ create table if not exists control.baseline_version (
   unique (instance_pk, version_number)
 );
 
-create index idx_baseline_version_active on control.baseline_version (instance_pk, is_active) where is_active = true;
+create index if not exists idx_baseline_version_active on control.baseline_version (instance_pk, is_active) where is_active = true;
 
 -- ============================================================================
 -- 2. ALERT RULE ENHANCEMENTS
@@ -177,9 +177,9 @@ create table if not exists control.alert_snooze (
   )
 );
 
-create index idx_alert_snooze_active on control.alert_snooze (snooze_until) where snooze_until > now();
-create index idx_alert_snooze_rule on control.alert_snooze (rule_id);
-create index idx_alert_snooze_instance on control.alert_snooze (instance_pk);
+create index if not exists idx_alert_snooze_active on control.alert_snooze (snooze_until);
+create index if not exists idx_alert_snooze_rule on control.alert_snooze (rule_id);
+create index if not exists idx_alert_snooze_instance on control.alert_snooze (instance_pk);
 
 -- Maintenance windows
 create table if not exists control.maintenance_window (
