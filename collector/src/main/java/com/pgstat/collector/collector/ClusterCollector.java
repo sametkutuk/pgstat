@@ -707,13 +707,13 @@ public class ClusterCollector {
                 factRepo.insertSlruSnapshot(
                     now, instancePk,
                     rs.getString("name"),
-                    (Long) rs.getObject("blks_zeroed"),
-                    (Long) rs.getObject("blks_hit"),
-                    (Long) rs.getObject("blks_read"),
-                    (Long) rs.getObject("blks_written"),
-                    (Long) rs.getObject("blks_exists"),
-                    (Long) rs.getObject("flushes"),
-                    (Long) rs.getObject("truncates"),
+                    toLongSafe(rs.getObject("blks_zeroed")),
+                    toLongSafe(rs.getObject("blks_hit")),
+                    toLongSafe(rs.getObject("blks_read")),
+                    toLongSafe(rs.getObject("blks_written")),
+                    toLongSafe(rs.getObject("blks_exists")),
+                    toLongSafe(rs.getObject("flushes")),
+                    toLongSafe(rs.getObject("truncates")),
                     rs.getObject("stats_reset", OffsetDateTime.class)
                 );
                 rows++;
@@ -739,15 +739,15 @@ public class ClusterCollector {
                     rs.getLong("subid"),
                     rs.getString("subname"),
                     (Integer) rs.getObject("pid"),
-                    (Long) rs.getObject("relid"),
+                    toLongSafe(rs.getObject("relid")),
                     rs.getString("received_lsn"),
                     rs.getObject("last_msg_send_time", OffsetDateTime.class),
                     rs.getObject("last_msg_receipt_time", OffsetDateTime.class),
                     rs.getString("latest_end_lsn"),
                     rs.getObject("latest_end_time", OffsetDateTime.class),
-                    (Long) rs.getObject("lag_bytes"),
-                    (Long) rs.getObject("apply_error_count"),
-                    (Long) rs.getObject("sync_error_count"),
+                    toLongSafe(rs.getObject("lag_bytes")),
+                    toLongSafe(rs.getObject("apply_error_count")),
+                    toLongSafe(rs.getObject("sync_error_count")),
                     rs.getObject("stats_reset", OffsetDateTime.class)
                 );
                 rows++;
@@ -769,19 +769,26 @@ public class ClusterCollector {
             if (!rs.next()) return 0;
             factRepo.insertRecoveryPrefetchSnapshot(
                 now, instancePk,
-                (Long) rs.getObject("prefetch"),
-                (Long) rs.getObject("hit"),
-                (Long) rs.getObject("skip_init"),
-                (Long) rs.getObject("skip_new"),
-                (Long) rs.getObject("skip_fpw"),
-                (Long) rs.getObject("skip_rep"),
+                toLongSafe(rs.getObject("prefetch")),
+                toLongSafe(rs.getObject("hit")),
+                toLongSafe(rs.getObject("skip_init")),
+                toLongSafe(rs.getObject("skip_new")),
+                toLongSafe(rs.getObject("skip_fpw")),
+                toLongSafe(rs.getObject("skip_rep")),
                 rs.getObject("stats_reset", OffsetDateTime.class),
-                (Long) rs.getObject("wal_distance"),
-                (Long) rs.getObject("block_distance"),
-                (Long) rs.getObject("io_depth")
+                toLongSafe(rs.getObject("wal_distance")),
+                toLongSafe(rs.getObject("block_distance")),
+                toLongSafe(rs.getObject("io_depth"))
             );
             return 1;
         }
+    }
+
+    /** Number (Integer/Long/BigDecimal) → Long safe cast. */
+    private Long toLongSafe(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number n) return n.longValue();
+        return null;
     }
 
     // =========================================================================
@@ -802,7 +809,7 @@ public class ClusterCollector {
                     rs.getLong("funcid"),
                     rs.getString("schemaname"),
                     rs.getString("funcname"),
-                    (Long) rs.getObject("calls"),
+                    toLongSafe(rs.getObject("calls")),
                     rs.getBigDecimal("total_time"),
                     rs.getBigDecimal("self_time")
                 );
@@ -830,8 +837,8 @@ public class ClusterCollector {
                     rs.getLong("relid"),
                     rs.getString("schemaname"),
                     rs.getString("relname"),
-                    (Long) rs.getObject("blks_read"),
-                    (Long) rs.getObject("blks_hit")
+                    toLongSafe(rs.getObject("blks_read")),
+                    toLongSafe(rs.getObject("blks_hit"))
                 );
                 rows++;
             }
