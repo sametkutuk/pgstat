@@ -2,6 +2,7 @@ package com.pgstat.collector.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -12,8 +13,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Alert oluştuğunda bildirim gönderen servis.
@@ -29,12 +31,14 @@ public class NotificationService {
     private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     private final JdbcTemplate jdbc;
-    private final JavaMailSender mailSender;
     private final HttpClient httpClient;
 
-    public NotificationService(JdbcTemplate jdbc, JavaMailSender mailSender) {
+    /** JavaMailSender opsiyonel — SMTP ayarları yoksa null kalır */
+    @Autowired(required = false)
+    private JavaMailSender mailSender;
+
+    public NotificationService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-        this.mailSender = mailSender;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -130,6 +134,10 @@ public class NotificationService {
     // =========================================================================
 
     private void sendEmail(String configJson, String title, String message, String severity) {
+        if (mailSender == null) {
+            log.warn("Email gönderilemedi: SMTP ayarları yapılandırılmamış (PGSTAT_SMTP_HOST)");
+            return;
+        }
         // config: {"recipients": ["a@b.com", "c@d.com"], "from": "pgstat@example.com"}
         Map<String, Object> config = parseJson(configJson);
         @SuppressWarnings("unchecked")
@@ -296,14 +304,38 @@ public class NotificationService {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseJson(String json) {
+        // Basit JSON parse — Jackson olmadan çalışır
+        // Sadece flat key-value ve string array destekler (notification config için yeterli)
+        Map<String, Object> result = new HashMap<>();
+        if (json == null || json.isBlank()) return result;
         try {
-            // Spring Boot'un Jackson'ı classpath'te — basit JSON parse
-            com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
-            return om.readValue(json, Map.class);
+            String trimmed = json.trim();
+            if (trimmed.startsWith("{")) trimmed = trimmed.substring(1);
+            if (trimmed.endsWith("}")) trimmed = trimmed.substring(0, trimmed.length() - 1);
+
+            // Key-value çiftlerini bul
+            Pattern kvPattern = Pattern.compile("\"([^\"]+)\"\\s*:\\s*(\"[^\"]*\"|\\[[^]]*]|[^,}]+)");
+            Matcher m = kvPattern.matcher(trimmed);
+            while (m.find()) {
+                String key = m.group(1);
+                String val = m.group(2).trim();
+                if (val.startsWith("[")) {
+                    // Array parse
+                    List<String> list = new ArrayList<>();
+                    Pattern arrItem = Pattern.compile("\"([^\"]+)\"");
+                    Matcher am = arrItem.matcher(val);
+                    while (am.find()) list.add(am.group(1));
+                    result.put(key, list);
+                } else if (val.startsWith("\"") && val.endsWith("\"")) {
+                    result.put(key, val.substring(1, val.length() - 1));
+                } else {
+                    result.put(key, val);
+                }
+            }
         } catch (Exception e) {
             log.warn("JSON parse hatası: {}", e.getMessage());
-            return Map.of();
         }
+        return result;
     }
 
     private String escapeJson(String s) {

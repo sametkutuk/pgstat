@@ -56,10 +56,11 @@
       <scope>test</scope>
     </dependency>
 
-    <!-- Email gönderimi -->
+    <!-- Email gönderimi (opsiyonel — SMTP ayarları varsa aktif) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-mail</artifactId>
+      <optional>true</optional>
     </dependency>
   </dependencies>
 

@@ -25,8 +25,9 @@ spring:
         size: 4
 
   # Email (SMTP) ayarları — bildirim kanalı olarak kullanılır
+  # SMTP host boşsa email bildirimi devre dışı kalır
   mail:
-    host: ${PGSTAT_SMTP_HOST:localhost}
+    host: ${PGSTAT_SMTP_HOST:}
     port: ${PGSTAT_SMTP_PORT:587}
     username: ${PGSTAT_SMTP_USER:}
     password: ${PGSTAT_SMTP_PASSWORD:}
