@@ -205,7 +205,7 @@ public class JobOrchestrator {
             // State guncelle — cluster toplandi, statements toplanmadi
             stateRepo.updateAfterSuccess(
                 java.time.OffsetDateTime.now(), true, false,
-                instance.connectTimeoutSeconds() > 0 ? 60 : 60, // cluster interval default
+                instance.clusterIntervalSeconds(),
                 0, false, null, instance.instancePk()
             );
 
@@ -273,7 +273,7 @@ public class JobOrchestrator {
             // State guncelle — statements toplandi
             stateRepo.updateAfterSuccess(
                 java.time.OffsetDateTime.now(), false, true,
-                0, 300, // statements interval default
+                0, instance.statementsIntervalSeconds(),
                 false, result.epochKey(), instance.instancePk()
             );
 

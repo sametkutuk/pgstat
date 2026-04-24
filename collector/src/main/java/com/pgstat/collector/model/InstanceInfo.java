@@ -21,6 +21,8 @@ public record InstanceInfo(
     int statementTimeoutMs,
     int lockTimeoutMs,
     int bootstrapSqlTextBatch,
+    int clusterIntervalSeconds,
+    int statementsIntervalSeconds,
     // instance_state degerleri (null olabilir — bootstrap oncesi)
     OffsetDateTime nextClusterCollectAt,
     OffsetDateTime nextStatementsCollectAt
