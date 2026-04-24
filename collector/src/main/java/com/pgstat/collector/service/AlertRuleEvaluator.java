@@ -148,6 +148,9 @@ public class AlertRuleEvaluator {
             if (current.compareTo(upperCritical) > 0) severity = "critical";
             else if (current.compareTo(upperWarning) > 0) severity = "warning";
 
+            log.info("Adaptive eval rule={} inst={}: val={} avg={} std={} k={} warn={} crit={} sev={}",
+                ruleId, instancePk, current, avg, stddev, kMultiplier, upperWarning, upperCritical, severity);
+
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (severity != null) {
