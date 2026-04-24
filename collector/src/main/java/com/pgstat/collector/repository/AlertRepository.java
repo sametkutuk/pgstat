@@ -84,6 +84,40 @@ public class AlertRepository {
         );
     }
 
+    /**
+     * Kullanici tanimli kural alert'i — severity dinamik olarak gecilir.
+     */
+    public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
+                                   Long instancePk, String serviceGroup,
+                                   String title, String message) {
+        return jdbc.queryForObject("""
+            insert into ops.alert (
+              alert_key, alert_code, severity, status, source_component,
+              instance_pk, service_group, first_seen_at, last_seen_at,
+              occurrence_count, title, message
+            )
+            values (?, ?, ?, 'open', ?, ?, ?, now(), now(), 1, ?, ?)
+            on conflict (alert_key) do update
+            set severity = excluded.severity,
+                status = case
+                  when ops.alert.status = 'resolved' then 'open'
+                  else ops.alert.status
+                end,
+                instance_pk = coalesce(excluded.instance_pk, ops.alert.instance_pk),
+                service_group = coalesce(excluded.service_group, ops.alert.service_group),
+                last_seen_at = now(),
+                title = excluded.title,
+                message = excluded.message,
+                occurrence_count = ops.alert.occurrence_count + 1,
+                resolved_at = null
+            returning alert_id
+            """,
+            Long.class,
+            alertKey, alertCode.getCode(), severity, alertCode.getSourceComponent(),
+            instancePk, serviceGroup, title, message
+        );
+    }
+
     /** Alert'i resolved olarak isaretler. Zaten resolved ise degismez. */
     public void resolve(String alertKey) {
         jdbc.update("""

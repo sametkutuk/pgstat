@@ -21,6 +21,9 @@ public enum AlertCode {
     SECRET_REF_ERROR("secret_ref_error", "critical", "instance"),
     LOCK_CONTENTION("lock_contention", "warning", "instance"),
 
+    // Kullanici tanimli kurallar
+    USER_DEFINED_RULE("user_defined_rule", "warning", "rule"),
+
     // Job seviyesi
     JOB_PARTIAL_FAILURE("job_partial_failure", "warning", "job"),
     JOB_FAILED("job_failed", "error", "job"),

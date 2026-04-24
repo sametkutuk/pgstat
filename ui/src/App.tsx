@@ -10,6 +10,7 @@ import StatementDetail from './pages/StatementDetail';
 import Alerts from './pages/Alerts';
 import JobRuns from './pages/JobRuns';
 import Settings from './pages/Settings';
+import AlertRules from './pages/AlertRules';
 import ClusterDetail from './pages/ClusterDetail';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -47,6 +48,7 @@ function App() {
               <Route path="/alerts" element={<Alerts />} />
               <Route path="/jobs" element={<JobRuns />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/settings/alert-rules" element={<AlertRules />} />
               <Route path="/cluster-detail" element={<ClusterDetail />} />
               <Route path="/cluster/:id" element={<ClusterDetail />} />
             </Route>

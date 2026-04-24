@@ -10,6 +10,7 @@ const links = [
     { to: '/alerts', label: 'Alerts', icon: '🔔' },
     { to: '/jobs', label: 'Job Runs', icon: '⚙️' },
     { to: '/settings', label: 'Ayarlar', icon: '🛠️' },
+    { to: '/settings/alert-rules', label: 'Alert Kuralları', icon: '📋' },
 ];
 
 export default function Sidebar() {

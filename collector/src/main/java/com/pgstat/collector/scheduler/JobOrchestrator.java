@@ -56,6 +56,7 @@ public class JobOrchestrator {
 
     // Alert servisi
     private final AlertService alertService;
+    private final com.pgstat.collector.service.AlertRuleEvaluator alertRuleEvaluator;
 
     // Partition ve purge (Phase 1J'de eklenecek)
     private final com.pgstat.collector.service.PartitionManager partitionManager;
@@ -74,6 +75,7 @@ public class JobOrchestrator {
                            OpsRepository opsRepo,
                            AggRepository aggRepo,
                            AlertService alertService,
+                           com.pgstat.collector.service.AlertRuleEvaluator alertRuleEvaluator,
                            com.pgstat.collector.service.PartitionManager partitionManager,
                            com.pgstat.collector.service.PurgeEvaluator purgeEvaluator) {
         this.lockManager = lockManager;
@@ -89,6 +91,7 @@ public class JobOrchestrator {
         this.opsRepo = opsRepo;
         this.aggRepo = aggRepo;
         this.alertService = alertService;
+        this.alertRuleEvaluator = alertRuleEvaluator;
         this.partitionManager = partitionManager;
         this.purgeEvaluator = purgeEvaluator;
     }
@@ -355,10 +358,13 @@ public class JobOrchestrator {
                 log.info("Gunluk rollup tamamlandi: {} satir", dailyRows);
             }
 
-            // 4. Purge evaluator — retention temizligi
+            // 4. Alert kurallarini degerlendir
+            alertRuleEvaluator.evaluate();
+
+            // 5. Purge evaluator — retention temizligi
             purgeEvaluator.evaluate();
 
-            // 5. State guncelle
+            // 6. State guncelle
             stateRepo.updateRollupTimestamp();
 
         } catch (Exception e) {
