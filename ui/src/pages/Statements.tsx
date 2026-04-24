@@ -27,22 +27,22 @@ interface Instance {
 
 const ORDER_OPTIONS = [
   { v: 'exec_time', l: 'Toplam Süre' },
-  { v: 'avg_time',  l: 'Ort. Süre' },
-  { v: 'calls',     l: 'Çağrı Sayısı' },
-  { v: 'rows',      l: 'Satır Sayısı' },
+  { v: 'avg_time', l: 'Ort. Süre' },
+  { v: 'calls', l: 'Çağrı Sayısı' },
+  { v: 'rows', l: 'Satır Sayısı' },
   { v: 'blks_read', l: 'Blok Okuma' },
   { v: 'temp_blks', l: 'Temp Blok' },
 ];
 
 function fmtMs(ms: number): string {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}dk`;
-  if (ms >= 1_000)  return `${(ms / 1_000).toFixed(2)}s`;
+  if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)}s`;
   return `${ms.toFixed(1)}ms`;
 }
 
 function fmtNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(Math.round(n));
 }
 
@@ -50,15 +50,17 @@ export default function Statements() {
   const navigate = useNavigate();
 
   // Server-side filtreler
-  const [hours, setHours]           = useState(1);
-  const [orderBy, setOrderBy]       = useState('exec_time');
+  const [hours, setHours] = useState(1);
+  const [orderBy, setOrderBy] = useState('exec_time');
   const [instancePk, setInstancePk] = useState('');
-  const [datname, setDatname]       = useState('');
-  const [rolname, setRolname]       = useState('');
+  const [datname, setDatname] = useState('');
+  const [rolname, setRolname] = useState('');
 
   // Client-side filtreler
-  const [sqlSearch, setSqlSearch]   = useState('');
-  const [minAvgMs, setMinAvgMs]     = useState('');
+  const [sqlSearch, setSqlSearch] = useState('');
+  const [minAvgMs, setMinAvgMs] = useState('');
+  // Server-side queryid filtresi
+  const [queryidSearch, setQueryidSearch] = useState('');
 
   const instances = useQuery({
     queryKey: ['instances-list'],
@@ -71,12 +73,13 @@ export default function Statements() {
     limit: '100',
     order_by: orderBy,
     ...(instancePk ? { instance_pk: instancePk } : {}),
-    ...(datname    ? { datname }                  : {}),
-    ...(rolname    ? { rolname }                  : {}),
+    ...(datname ? { datname } : {}),
+    ...(rolname ? { rolname } : {}),
+    ...(queryidSearch.trim() ? { queryid: queryidSearch.trim() } : {}),
   });
 
   const { data, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname],
+    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname, queryidSearch],
     queryFn: () => apiGet<Statement[]>(`/statements/top?${params}`),
     refetchInterval: 30_000,
   });
@@ -103,11 +106,11 @@ export default function Statements() {
     });
   }, [data, sqlSearch, minAvgMs]);
 
-  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs;
+  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs || queryidSearch;
 
   function clearFilters() {
     setInstancePk(''); setDatname(''); setRolname('');
-    setSqlSearch(''); setMinAvgMs('');
+    setSqlSearch(''); setMinAvgMs(''); setQueryidSearch('');
   }
 
   return (
@@ -194,7 +197,7 @@ export default function Statements() {
           </div>
         </div>
 
-        {/* Satır 2: SQL arama + min avg süre */}
+        {/* Satır 2: SQL arama + queryid + min avg süre */}
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[200px]">
             <label className="block text-xs text-[#64748B] mb-1">SQL Metni Ara</label>
@@ -204,6 +207,17 @@ export default function Statements() {
               value={sqlSearch}
               onChange={e => setSqlSearch(e.target.value)}
               className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-[#64748B] mb-1">Query ID</label>
+            <input
+              type="text"
+              placeholder="örn: 2908051582623343671"
+              value={queryidSearch}
+              onChange={e => setQueryidSearch(e.target.value)}
+              className="w-48 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-[#3B82F6]"
             />
           </div>
 
@@ -254,6 +268,7 @@ export default function Statements() {
                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Instance</th>
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
+                  <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                   <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Calls</th>
                   <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam Süre</th>
@@ -268,7 +283,7 @@ export default function Statements() {
                   const avgMs = Number(r.avg_exec_time_ms);
                   const avgColor = avgMs >= 1000 ? 'text-red-600 font-semibold'
                     : avgMs >= 100 ? 'text-amber-600 font-semibold'
-                    : 'text-[#64748B]';
+                      : 'text-[#64748B]';
                   return (
                     <tr
                       key={r.statement_series_id}
@@ -279,6 +294,9 @@ export default function Statements() {
                       <td className="py-2.5 px-3 text-xs">
                         <div className="text-[#1E293B]">{r.datname ?? '—'}</div>
                         <div className="text-[#94A3B8]">{r.rolname ?? '—'}</div>
+                      </td>
+                      <td className="py-2.5 px-3 text-xs font-mono text-[#94A3B8]">
+                        {(r as any).queryid ? String((r as any).queryid) : '—'}
                       </td>
                       <td className="py-2.5 px-3 max-w-sm">
                         <div
