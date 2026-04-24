@@ -157,7 +157,7 @@ public class StatementsCollector {
                 StatementSample prev = prevMap != null ? prevMap.get(seriesKey) : null;
 
                 if (prev != null && !epochChanged) {
-                    // Delta yazilabilir
+                    // Normal delta: current - previous
                     Long callsDelta = deltaCalc.deltaLong(sample.calls(), prev.calls());
                     if (callsDelta != null && callsDelta > 0) {
                         factRepo.insertPgssDelta(now, instancePk, seriesId,
@@ -188,7 +188,40 @@ public class StatementsCollector {
                         );
                         rowsWritten++;
                     }
+                } else if (epochChanged && sample.calls() > 0) {
+                    // Epoch degisti (reset/restart): cumulative degerler sifirdan basliyor,
+                    // current degerin kendisi delta'dir. Ilk cycle'da bile yazilir.
+                    factRepo.insertPgssDelta(now, instancePk, seriesId,
+                        sample.calls(),
+                        sample.plans(),
+                        sample.totalPlanTime(),
+                        sample.totalExecTime(),
+                        sample.rows(),
+                        sample.sharedBlksHit(),
+                        sample.sharedBlksRead(),
+                        sample.sharedBlksDirtied(),
+                        sample.sharedBlksWritten(),
+                        sample.localBlksHit(),
+                        sample.localBlksRead(),
+                        sample.localBlksDirtied(),
+                        sample.localBlksWritten(),
+                        sample.tempBlksRead(),
+                        sample.tempBlksWritten(),
+                        sample.blkReadTime(),
+                        sample.blkWriteTime(),
+                        sample.walRecords(),
+                        sample.walFpi(),
+                        sample.walBytes(),
+                        sample.jitGenerationTime(),
+                        sample.jitInliningTime(),
+                        sample.jitOptimizationTime(),
+                        sample.jitEmissionTime()
+                    );
+                    rowsWritten++;
                 } else {
+                    // prev == null && !epochChanged: collector restart sonrasi ilk cycle.
+                    // Cache'te onceki deger yok, epoch ayni → baseline al, delta yazma.
+                    // Bir sonraki cycle'da delta yazilacak.
                     newSeriesCount++;
                 }
             }
