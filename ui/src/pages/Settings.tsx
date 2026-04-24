@@ -34,7 +34,15 @@ export default function Settings() {
 // Retention Politikaları
 // =========================================================================
 
-const emptyRetention = { policy_code: '', raw_retention_months: 6, hourly_retention_months: 3, daily_retention_months: 24, purge_enabled: true, is_active: true };
+const emptyRetention = {
+    policy_code: '',
+    raw_retention_days: 14,
+    hourly_retention_days: 60,
+    daily_retention_days: 730,
+    snapshot_retention_hours: 48,
+    purge_enabled: true,
+    is_active: true,
+};
 
 function RetentionTab() {
     const qc = useQueryClient();
@@ -65,16 +73,29 @@ function RetentionTab() {
     });
 
     const openEdit = (r: any) => {
-        setForm({ policy_code: r.policy_code, raw_retention_months: r.raw_retention_months, hourly_retention_months: r.hourly_retention_months, daily_retention_months: r.daily_retention_months, purge_enabled: r.purge_enabled, is_active: r.is_active });
+        setForm({
+            policy_code: r.policy_code,
+            raw_retention_days:    r.raw_retention_days    ?? (r.raw_retention_months    ?? 14) * 30 / 30 * 1, // fallback
+            hourly_retention_days: r.hourly_retention_days ?? (r.hourly_retention_months ?? 6) * 30,
+            daily_retention_days:  r.daily_retention_days  ?? (r.daily_retention_months  ?? 24) * 30,
+            snapshot_retention_hours: r.snapshot_retention_hours ?? 48,
+            purge_enabled: r.purge_enabled,
+            is_active: r.is_active,
+        });
         setEditId(r.retention_policy_id);
         setFormMode('edit');
     };
 
     const columns = [
         { key: 'policy_code', header: 'Kod' },
-        { key: 'raw_retention_months', header: 'Raw (ay)', className: 'text-right' },
-        { key: 'hourly_retention_months', header: 'Hourly (ay)', className: 'text-right' },
-        { key: 'daily_retention_months', header: 'Daily (ay)', className: 'text-right' },
+        { key: 'raw_retention_days', header: 'Raw (gün)', className: 'text-right',
+            render: (r: any) => r.raw_retention_days ?? (r.raw_retention_months ? r.raw_retention_months * 30 : '-') },
+        { key: 'hourly_retention_days', header: 'Hourly (gün)', className: 'text-right',
+            render: (r: any) => r.hourly_retention_days ?? (r.hourly_retention_months ? r.hourly_retention_months * 30 : '-') },
+        { key: 'daily_retention_days', header: 'Daily (gün)', className: 'text-right',
+            render: (r: any) => r.daily_retention_days ?? (r.daily_retention_months ? r.daily_retention_months * 30 : '-') },
+        { key: 'snapshot_retention_hours', header: 'Snapshot (saat)', className: 'text-right',
+            render: (r: any) => r.snapshot_retention_hours ?? '-' },
         { key: 'purge_enabled', header: 'Purge', render: (r: any) => r.purge_enabled ? '✅' : '❌' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
         { key: 'is_active', header: 'Durum', render: (r: any) => <Badge value={r.is_active ? 'ready' : 'paused'} /> },
@@ -112,6 +133,12 @@ function RetentionTab() {
             {formMode !== 'closed' && (
                 <div className="bg-white rounded-lg shadow-sm p-5 mb-4">
                     <h3 className="text-sm font-semibold text-[#64748B] mb-3">{formMode === 'edit' ? 'Politika Düzenle' : 'Yeni Retention Politikası'}</h3>
+                    <div className="mb-3 text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] rounded-md px-3 py-2 space-y-1">
+                        <div><b>Raw (gün):</b> fact.* delta tabloları — saniye hassasiyetinde inceleme</div>
+                        <div><b>Hourly (gün):</b> agg.pgss_hourly — orta vade trend (saat hassasiyeti)</div>
+                        <div><b>Daily (gün):</b> agg.pgss_daily — uzun vade karşılaştırma (gün hassasiyeti)</div>
+                        <div><b>Snapshot (saat):</b> pg_activity_snapshot, pg_lock_snapshot gibi çok yoğun büyüyen snapshot tabloları — genelde sadece incident forensic için kullanılır</div>
+                    </div>
                     <form onSubmit={(e) => { e.preventDefault(); formMode === 'edit' && editId ? editMut.mutate({ id: editId, data: form }) : addMut.mutate(form); }} className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div>
                             <label className="block text-xs text-[#64748B] mb-1">Kod *</label>
@@ -119,9 +146,10 @@ function RetentionTab() {
                                 disabled={formMode === 'edit'} placeholder="standard"
                                 className="w-full border border-[#E2E8F0] rounded px-3 py-2 text-sm disabled:bg-[#F1F5F9]" />
                         </div>
-                        {numField('Raw (ay)', 'raw_retention_months')}
-                        {numField('Hourly (ay)', 'hourly_retention_months')}
-                        {numField('Daily (ay)', 'daily_retention_months')}
+                        {numField('Raw (gün)',       'raw_retention_days')}
+                        {numField('Hourly (gün)',    'hourly_retention_days')}
+                        {numField('Daily (gün)',     'daily_retention_days')}
+                        {numField('Snapshot (saat)', 'snapshot_retention_hours')}
                         <div className="flex items-center gap-2">
                             <label className="text-xs text-[#64748B]">Purge Aktif</label>
                             <input type="checkbox" checked={form.purge_enabled as boolean} onChange={(e) => setForm({ ...form, purge_enabled: e.target.checked })} />

@@ -6,35 +6,32 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Retention enforcement — partition drop ve instance bazli batched delete.
+ * Retention enforcement — partition drop + instance bazli batched delete.
  *
- * Calisma mantigi (mimari dok'tan):
- *  1. Her instance'in raw_retention_months'una gore cutoff hesapla
- *  2. En uzun retention'a sahip instance'in cutoff'unu bul (global hard drop siniri)
- *  3. Hard drop sinirinin gerisindeki fact partisyonlarini drop et
- *  4. Hard drop ile instance bazli cutoff arasinda kalan partisyonlarda
- *     sadece ilgili instance_pk satirlarini batched delete ile sil
- *  5. Ayni mantik agg tablolari icin (hourly/daily retention)
- *  6. ops tablolari icin 90 gunluk sabit retention
+ * Calisma mantigi:
+ *  1. RAW fact tablolari icin:
+ *     - Her instance'in raw_retention_days cutoff'unu bul
+ *     - Global hard drop (en uzun retention) sinirinin gerisindeki partisyonlari DROP
+ *     - Arada kalan aralikta instance bazli batched DELETE
+ *  2. SNAPSHOT tablolari icin saat bazli retention (cok daha kisa)
+ *  3. agg.pgss_hourly / agg.pgss_daily icin ay bazli partition drop
+ *  4. ops tablolari icin sabit 90 gun
  */
 @Component
 public class PurgeEvaluator {
 
     private static final Logger log = LoggerFactory.getLogger(PurgeEvaluator.class);
 
-    /** Batched delete limiti — tek seferde silinecek maksimum satir */
     private static final int DELETE_BATCH_SIZE = 10_000;
-
-    /** ops tablolari icin sabit retention (gun) */
     private static final int OPS_RETENTION_DAYS = 90;
 
-    /** Gunluk partition gerektiren fact tablolari */
-    private static final String[] DAILY_FACT_TABLES = {
+    /** Ham delta tablolari — sample_ts kullanir, day-bazli partition */
+    private static final String[] DELTA_FACT_TABLES = {
         "fact.pgss_delta",
         "fact.pg_database_delta",
         "fact.pg_table_stat_delta",
@@ -43,7 +40,7 @@ public class PurgeEvaluator {
         "fact.pg_io_stat_delta"
     };
 
-    /** snapshot_ts kullanan tablolar (sample_ts degil) */
+    /** Snapshot tablolari — snapshot_ts kullanir, hacmi cok buyuk oldugu icin ayri retention */
     private static final String[] SNAPSHOT_FACT_TABLES = {
         "fact.pg_activity_snapshot",
         "fact.pg_replication_snapshot",
@@ -57,27 +54,24 @@ public class PurgeEvaluator {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Retention kurallarini degerlendirir ve eski veriyi temizler.
-     * Rollup job tarafindan gunluk olarak cagirilir.
-     */
     public void evaluate() {
-        purgeRawFacts();
+        purgeRawDeltaFacts();
+        purgeSnapshotFacts();
         purgeHourlyAgg();
         purgeDailyAgg();
         purgeOps();
     }
 
     // =========================================================================
-    // Raw fact tablolari purge
+    // RAW DELTA fact tablolari (day-bazli retention)
     // =========================================================================
 
-    private void purgeRawFacts() {
-        // 1. Instance bazli retention cutoff'lari
+    private void purgeRawDeltaFacts() {
+        // Instance bazli cutoff (yeni gun-bazli kolon)
         List<Map<String, Object>> instanceCutoffs = jdbc.queryForList("""
             select
               i.instance_pk,
-              date_trunc('month', now()) - make_interval(months => p.raw_retention_months) as raw_keep_from
+              (current_date - coalesce(p.raw_retention_days, p.raw_retention_months * 30))::date as keep_from
             from control.instance_inventory i
             join control.retention_policy p on p.retention_policy_id = i.retention_policy_id
             where i.is_active and p.is_active and p.purge_enabled
@@ -85,40 +79,32 @@ public class PurgeEvaluator {
 
         if (instanceCutoffs.isEmpty()) return;
 
-        // 2. Global hard drop siniri (en uzun retention)
+        // Hard drop siniri = en uzun retention
         LocalDate hardDropBefore = jdbc.queryForObject("""
-            select (date_trunc('month', now()) - make_interval(months => max(p.raw_retention_months)))::date
+            select (current_date - max(coalesce(p.raw_retention_days, p.raw_retention_months * 30)))::date
             from control.retention_policy p
             where p.is_active and p.purge_enabled
             """,
             LocalDate.class
         );
-
         if (hardDropBefore == null) return;
 
-        log.info("Raw fact purge: hard drop siniri = {}", hardDropBefore);
+        log.info("Raw delta fact purge: hard drop siniri = {}", hardDropBefore);
 
-        // 3. Hard drop sinirinin gerisindeki partisyonlari drop et
-        for (String parentTable : DAILY_FACT_TABLES) {
-            dropPartitionsBefore(parentTable, hardDropBefore);
-        }
-        for (String parentTable : SNAPSHOT_FACT_TABLES) {
-            dropPartitionsBefore(parentTable, hardDropBefore);
+        // Partition drop
+        for (String table : DELTA_FACT_TABLES) {
+            dropPartitionsBefore(table, hardDropBefore);
         }
 
-        // 4. Instance bazli batched delete (tier farki olan instance'lar icin)
+        // Instance bazli batched delete (arada kalan aralikta)
         for (Map<String, Object> row : instanceCutoffs) {
             long instancePk = ((Number) row.get("instance_pk")).longValue();
-            java.sql.Timestamp keepFrom = (java.sql.Timestamp) row.get("raw_keep_from");
-            LocalDate instanceKeepFrom = keepFrom.toLocalDateTime().toLocalDate();
+            java.sql.Date keepFromSql = (java.sql.Date) row.get("keep_from");
+            LocalDate instanceKeepFrom = keepFromSql.toLocalDate();
 
             if (instanceKeepFrom.isAfter(hardDropBefore)) {
-                for (String parentTable : DAILY_FACT_TABLES) {
-                    batchedDeleteForInstance(parentTable, "sample_ts", instancePk,
-                        hardDropBefore, instanceKeepFrom);
-                }
-                for (String parentTable : SNAPSHOT_FACT_TABLES) {
-                    batchedDeleteForInstance(parentTable, "snapshot_ts", instancePk,
+                for (String table : DELTA_FACT_TABLES) {
+                    batchedDeleteForInstance(table, "sample_ts", instancePk,
                         hardDropBefore, instanceKeepFrom);
                 }
             }
@@ -126,60 +112,99 @@ public class PurgeEvaluator {
     }
 
     // =========================================================================
-    // agg.pgss_hourly purge (monthly partition drop)
+    // SNAPSHOT fact tablolari (saat-bazli retention — cok kisa)
+    // =========================================================================
+
+    private void purgeSnapshotFacts() {
+        // Snapshot retention saat cinsinden — day partition drop yetmez,
+        // timestamp-bazli DELETE yapmamiz lazim.
+        // Once her instance icin cutoff bul.
+        List<Map<String, Object>> instanceCutoffs = jdbc.queryForList("""
+            select
+              i.instance_pk,
+              now() - make_interval(hours => coalesce(p.snapshot_retention_hours, 48)) as keep_from
+            from control.instance_inventory i
+            join control.retention_policy p on p.retention_policy_id = i.retention_policy_id
+            where i.is_active and p.is_active and p.purge_enabled
+            """);
+
+        if (instanceCutoffs.isEmpty()) return;
+
+        // Hard drop siniri (en uzun snapshot retention): partition drop icin
+        LocalDate hardDropBefore = jdbc.queryForObject("""
+            select (current_date - ceil(max(coalesce(p.snapshot_retention_hours, 48)) / 24.0)::int - 1)::date
+            from control.retention_policy p
+            where p.is_active and p.purge_enabled
+            """,
+            LocalDate.class
+        );
+
+        if (hardDropBefore != null) {
+            log.info("Snapshot fact purge: partition drop siniri = {}", hardDropBefore);
+            for (String table : SNAPSHOT_FACT_TABLES) {
+                dropPartitionsBefore(table, hardDropBefore);
+            }
+        }
+
+        // Saat hassasiyetinde batched delete
+        for (Map<String, Object> row : instanceCutoffs) {
+            long instancePk = ((Number) row.get("instance_pk")).longValue();
+            java.sql.Timestamp ts = (java.sql.Timestamp) row.get("keep_from");
+            OffsetDateTime keepFrom = ts.toInstant().atOffset(java.time.ZoneOffset.UTC);
+
+            for (String table : SNAPSHOT_FACT_TABLES) {
+                batchedDeleteByTimestamp(table, "snapshot_ts", instancePk, keepFrom);
+            }
+        }
+    }
+
+    // =========================================================================
+    // agg.pgss_hourly / pgss_daily purge
     // =========================================================================
 
     private void purgeHourlyAgg() {
-        LocalDate hourlyDropBefore = jdbc.queryForObject("""
-            select (date_trunc('month', now()) - make_interval(months => max(p.hourly_retention_months)))::date
+        LocalDate dropBefore = jdbc.queryForObject("""
+            select (current_date - max(coalesce(p.hourly_retention_days, p.hourly_retention_months * 30)))::date
             from control.retention_policy p
             where p.is_active and p.purge_enabled
             """,
             LocalDate.class
         );
+        if (dropBefore == null) return;
 
-        if (hourlyDropBefore == null) return;
-
-        log.info("Hourly agg purge: drop siniri = {}", hourlyDropBefore);
-        dropPartitionsBefore("agg.pgss_hourly", hourlyDropBefore);
+        log.info("Hourly agg purge: drop siniri = {}", dropBefore);
+        dropPartitionsBefore("agg.pgss_hourly", dropBefore);
     }
-
-    // =========================================================================
-    // agg.pgss_daily purge (yearly partition drop)
-    // =========================================================================
 
     private void purgeDailyAgg() {
-        LocalDate dailyDropBefore = jdbc.queryForObject("""
-            select (date_trunc('month', now()) - make_interval(months => max(p.daily_retention_months)))::date
+        LocalDate dropBefore = jdbc.queryForObject("""
+            select (current_date - max(coalesce(p.daily_retention_days, p.daily_retention_months * 30)))::date
             from control.retention_policy p
             where p.is_active and p.purge_enabled
             """,
             LocalDate.class
         );
+        if (dropBefore == null) return;
 
-        if (dailyDropBefore == null) return;
-
-        log.info("Daily agg purge: drop siniri = {}", dailyDropBefore);
-        dropPartitionsBefore("agg.pgss_daily", dailyDropBefore);
+        log.info("Daily agg purge: drop siniri = {}", dropBefore);
+        dropPartitionsBefore("agg.pgss_daily", dropBefore);
     }
 
     // =========================================================================
-    // ops tablolari purge (90 gun sabit)
+    // ops tablolari (90 gun sabit)
     // =========================================================================
 
     private void purgeOps() {
-        // ops.job_run — cascade ile job_run_instance de silinir
         int deletedRuns = jdbc.update("""
             delete from ops.job_run
-            where started_at < now() - interval '90 days'
-            """);
+            where started_at < now() - make_interval(days => ?)
+            """, OPS_RETENTION_DAYS);
 
-        // ops.alert — resolved ve 90 gunden eski
         int deletedAlerts = jdbc.update("""
             delete from ops.alert
             where resolved_at is not null
-              and resolved_at < now() - interval '90 days'
-            """);
+              and resolved_at < now() - make_interval(days => ?)
+            """, OPS_RETENTION_DAYS);
 
         if (deletedRuns > 0 || deletedAlerts > 0) {
             log.info("Ops purge: {} job_run, {} alert silindi", deletedRuns, deletedAlerts);
@@ -190,10 +215,7 @@ public class PurgeEvaluator {
     // Yardimci metotlar
     // =========================================================================
 
-    /**
-     * Belirtilen tarihten onceki partisyonlari DETACH + DROP eder.
-     * Partition isimlerinden tarih bilgisini cikarir ve karsilastirir.
-     */
+    /** Belirtilen tarihten onceki partisyonlari DETACH + DROP eder. */
     private void dropPartitionsBefore(String parentTable, LocalDate beforeDate) {
         String[] parts = parentTable.split("\\.", 2);
         String schema = parts[0];
@@ -202,7 +224,6 @@ public class PurgeEvaluator {
         List<Map<String, Object>> partitions = jdbc.queryForList("""
             select
               nmsp.nspname || '.' || child.relname as full_name,
-              child.relname as part_name,
               pg_get_expr(child.relpartbound, child.oid) as bounds
             from pg_inherits
             join pg_class parent on parent.oid = pg_inherits.inhparent
@@ -217,9 +238,6 @@ public class PurgeEvaluator {
         for (Map<String, Object> partition : partitions) {
             String fullName = (String) partition.get("full_name");
             String bounds = (String) partition.get("bounds");
-
-            // Bounds'tan baslangic tarihini cikar
-            // Ornek: "FOR VALUES FROM ('2026-01-01') TO ('2026-01-02')"
             LocalDate partStart = extractStartDate(bounds);
             if (partStart == null) continue;
 
@@ -235,16 +253,13 @@ public class PurgeEvaluator {
         }
     }
 
-    /** Partition bounds string'inden baslangic tarihini cikarir. */
     private LocalDate extractStartDate(String bounds) {
         if (bounds == null) return null;
         try {
-            // "FOR VALUES FROM ('2026-01-01') TO ('2026-01-02')" formatindan parse
             int fromIdx = bounds.indexOf("'");
             int toIdx = bounds.indexOf("'", fromIdx + 1);
             if (fromIdx < 0 || toIdx < 0) return null;
             String dateStr = bounds.substring(fromIdx + 1, toIdx);
-            // Sadece tarih kismini al (timestamp olabilir)
             if (dateStr.length() > 10) dateStr = dateStr.substring(0, 10);
             return LocalDate.parse(dateStr);
         } catch (Exception e) {
@@ -252,11 +267,7 @@ public class PurgeEvaluator {
         }
     }
 
-    /**
-     * Instance bazli batched delete — tier farki olan instance'lar icin.
-     * Hard drop siniri ile instance cutoff arasindaki partisyonlarda
-     * sadece ilgili instance_pk satirlarini siler.
-     */
+    /** Instance bazli batched delete (day-araligi). */
     private void batchedDeleteForInstance(String parentTable, String tsColumn,
                                           long instancePk,
                                           LocalDate fromDate, LocalDate toDate) {
@@ -279,6 +290,31 @@ public class PurgeEvaluator {
 
         if (totalDeleted > 0) {
             log.info("Batched delete: {} — instance_pk={}, {} satir silindi",
+                parentTable, instancePk, totalDeleted);
+        }
+    }
+
+    /** Saat-hassasiyetli batched delete (snapshot tablolari icin). */
+    private void batchedDeleteByTimestamp(String parentTable, String tsColumn,
+                                          long instancePk, OffsetDateTime keepFrom) {
+        int totalDeleted = 0;
+        int deleted;
+        do {
+            deleted = jdbc.update(
+                "delete from " + parentTable +
+                " where ctid in (" +
+                "  select ctid from " + parentTable +
+                "  where " + tsColumn + " < ?" +
+                "    and instance_pk = ?" +
+                "  limit ?" +
+                ")",
+                keepFrom, instancePk, DELETE_BATCH_SIZE
+            );
+            totalDeleted += deleted;
+        } while (deleted >= DELETE_BATCH_SIZE);
+
+        if (totalDeleted > 0) {
+            log.info("Snapshot batched delete: {} — instance_pk={}, {} satir silindi",
                 parentTable, instancePk, totalDeleted);
         }
     }
