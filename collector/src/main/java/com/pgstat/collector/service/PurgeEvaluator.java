@@ -40,12 +40,14 @@ public class PurgeEvaluator {
         "fact.pg_io_stat_delta"
     };
 
-    /** Snapshot tablolari — snapshot_ts kullanir, hacmi cok buyuk oldugu icin ayri retention */
+    /** Snapshot tablolari — snapshot_ts/sample_ts kullanir, hacmi cok buyuk oldugu icin ayri retention */
     private static final String[] SNAPSHOT_FACT_TABLES = {
         "fact.pg_activity_snapshot",
         "fact.pg_replication_snapshot",
         "fact.pg_lock_snapshot",
-        "fact.pg_progress_snapshot"
+        "fact.pg_progress_snapshot",
+        "fact.pg_wal_snapshot",
+        "fact.pg_archiver_snapshot"
     };
 
     private final JdbcTemplate jdbc;
@@ -153,7 +155,10 @@ public class PurgeEvaluator {
             OffsetDateTime keepFrom = ts.toInstant().atOffset(java.time.ZoneOffset.UTC);
 
             for (String table : SNAPSHOT_FACT_TABLES) {
-                batchedDeleteByTimestamp(table, "snapshot_ts", instancePk, keepFrom);
+                // pg_wal_snapshot ve pg_archiver_snapshot sample_ts kullaniyor, digerleri snapshot_ts
+                String tsCol = (table.endsWith("_wal_snapshot") || table.endsWith("_archiver_snapshot"))
+                    ? "sample_ts" : "snapshot_ts";
+                batchedDeleteByTimestamp(table, tsCol, instancePk, keepFrom);
             }
         }
     }

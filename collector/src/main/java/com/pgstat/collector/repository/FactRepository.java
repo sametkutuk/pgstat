@@ -376,4 +376,48 @@ public class FactRepository {
             idxBlksReadDelta, idxBlksHitDelta
         );
     }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_wal_snapshot — WAL LSN ve waldir boyutu
+    // -------------------------------------------------------------------------
+
+    public void insertWalSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                  String currentLsn, String currentFile,
+                                  Long walDirSizeByte, Integer walFileCount,
+                                  Long periodSizeByte) {
+        jdbc.update("""
+            insert into fact.pg_wal_snapshot (
+              sample_ts, instance_pk, current_wal_lsn, current_wal_file,
+              wal_directory_size_byte, wal_file_count, period_wal_size_byte
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, currentLsn, currentFile,
+            walDirSizeByte, walFileCount, periodSizeByte
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_archiver_snapshot — pg_stat_archiver
+    // -------------------------------------------------------------------------
+
+    public void insertArchiverSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                       Long archivedCount, String lastArchivedWal,
+                                       OffsetDateTime lastArchivedTime,
+                                       Long failedCount, String lastFailedWal,
+                                       OffsetDateTime lastFailedTime,
+                                       OffsetDateTime statsReset) {
+        jdbc.update("""
+            insert into fact.pg_archiver_snapshot (
+              sample_ts, instance_pk, archived_count, last_archived_wal, last_archived_time,
+              failed_count, last_failed_wal, last_failed_time, stats_reset
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, archivedCount, lastArchivedWal, lastArchivedTime,
+            failedCount, lastFailedWal, lastFailedTime, statsReset
+        );
+    }
 }

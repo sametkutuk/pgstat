@@ -55,6 +55,42 @@ public interface SourceQueries {
     /** pg_stat_io — PG16+; eski surumlerde null. */
     default String ioStatQuery() { return null; }
 
+    /**
+     * WAL pozisyonu ve waldir disk kullanimi (PG10+).
+     * Doner: current_wal_lsn::text, current_wal_file, wal_directory_size_byte, wal_file_count
+     * Primary'de pg_current_wal_lsn(), standby'da pg_last_wal_replay_lsn() kullanilir.
+     */
+    default String walLsnQuery() {
+        return """
+            select
+              case when pg_is_in_recovery()
+                then pg_last_wal_replay_lsn()::text
+                else pg_current_wal_lsn()::text
+              end as current_wal_lsn,
+              case when pg_is_in_recovery()
+                then pg_walfile_name(pg_last_wal_replay_lsn())
+                else pg_walfile_name(pg_current_wal_lsn())
+              end as current_wal_file,
+              (select coalesce(sum(size), 0)::bigint from pg_ls_waldir()) as wal_directory_size_byte,
+              (select count(*)::int from pg_ls_waldir()) as wal_file_count
+            """;
+    }
+
+    /** pg_stat_archiver (PG9.4+). */
+    default String archiverQuery() {
+        return """
+            select
+              archived_count,
+              last_archived_wal,
+              last_archived_time,
+              failed_count,
+              last_failed_wal,
+              last_failed_time,
+              stats_reset
+            from pg_stat_archiver
+            """;
+    }
+
     // =========================================================================
     // Activity / Replication / Lock / Progress
     // =========================================================================

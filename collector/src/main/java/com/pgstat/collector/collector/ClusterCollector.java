@@ -63,6 +63,9 @@ public class ClusterCollector {
     /** In-memory delta cache: instancePk → onceki io_stat sample */
     private final ConcurrentHashMap<Long, Map<String, Map<String, Double>>> previousIoSamples = new ConcurrentHashMap<>();
 
+    /** In-memory cache: instancePk → onceki WAL LSN (period_wal_size_byte icin) */
+    private final ConcurrentHashMap<Long, String> previousWalLsn = new ConcurrentHashMap<>();
+
     public ClusterCollector(SourceConnectionFactory connectionFactory,
                             SqlFamilyResolver familyResolver,
                             FactRepository factRepo,
@@ -149,6 +152,20 @@ public class ClusterCollector {
                 rowsWritten += collectProgress(conn, queries, instancePk, now);
             } catch (Exception e) {
                 log.warn("Progress snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 9: WAL snapshot (LSN, walfile, waldir boyutu, period delta)
+            try {
+                rowsWritten += collectWalSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("WAL snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 10: Archiver snapshot
+            try {
+                rowsWritten += collectArchiverSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Archiver snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
         }
 
@@ -485,5 +502,75 @@ public class ClusterCollector {
     public void clearCache(long instancePk) {
         previousSamples.remove(instancePk);
         previousIoSamples.remove(instancePk);
+        previousWalLsn.remove(instancePk);
+    }
+
+    // =========================================================================
+    // Adim 9: WAL snapshot (LSN + waldir + period delta)
+    // =========================================================================
+
+    private long collectWalSnapshot(Connection conn, SourceQueries queries,
+                                     long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.walLsnQuery();
+        if (sql == null) return 0;
+
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (!rs.next()) return 0;
+
+            String currentLsn = rs.getString("current_wal_lsn");
+            String currentFile = rs.getString("current_wal_file");
+            Long walDirSize = (Long) rs.getObject("wal_directory_size_byte");
+            Integer fileCount = (Integer) rs.getObject("wal_file_count");
+
+            // period_wal_size_byte: onceki LSN ile farki
+            Long periodSize = null;
+            String prevLsn = previousWalLsn.get(instancePk);
+            if (prevLsn != null && currentLsn != null) {
+                try (Statement s2 = conn.createStatement();
+                     ResultSet r2 = s2.executeQuery(
+                         "select pg_wal_lsn_diff('" + currentLsn + "'::pg_lsn, '" + prevLsn + "'::pg_lsn) as diff")) {
+                    if (r2.next()) {
+                        long diff = r2.getLong("diff");
+                        if (diff >= 0) periodSize = diff;
+                    }
+                } catch (Exception e) {
+                    log.debug("period_wal_size hesaplama hatasi instance={}: {}", instancePk, e.getMessage());
+                }
+            }
+
+            if (currentLsn != null) previousWalLsn.put(instancePk, currentLsn);
+
+            factRepo.insertWalSnapshot(now, instancePk, currentLsn, currentFile,
+                walDirSize, fileCount, periodSize);
+            return 1;
+        }
+    }
+
+    // =========================================================================
+    // Adim 10: Archiver snapshot
+    // =========================================================================
+
+    private long collectArchiverSnapshot(Connection conn, SourceQueries queries,
+                                          long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.archiverQuery();
+        if (sql == null) return 0;
+
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (!rs.next()) return 0;
+
+            factRepo.insertArchiverSnapshot(
+                now, instancePk,
+                (Long) rs.getObject("archived_count"),
+                rs.getString("last_archived_wal"),
+                rs.getObject("last_archived_time", OffsetDateTime.class),
+                (Long) rs.getObject("failed_count"),
+                rs.getString("last_failed_wal"),
+                rs.getObject("last_failed_time", OffsetDateTime.class),
+                rs.getObject("stats_reset", OffsetDateTime.class)
+            );
+            return 1;
+        }
     }
 }
