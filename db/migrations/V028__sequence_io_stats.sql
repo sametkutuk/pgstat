@@ -17,7 +17,7 @@ create index if not exists ix_pg_sequence_io_snapshot_instance_ts
   on fact.pg_sequence_io_snapshot (instance_pk, sample_ts desc);
 
 -- Ilk partition'lar
-do $
+do $$
 declare
   d date;
 begin
@@ -30,7 +30,7 @@ begin
       'pg_sequence_io_snapshot_' || to_char(d, 'YYYYMMDD'), d, d + 1
     );
   end loop;
-end $;
+end $$;
 
 -- metric_type constraint guncelle
 alter table control.alert_rule drop constraint if exists ck_alert_rule_metric_type;
