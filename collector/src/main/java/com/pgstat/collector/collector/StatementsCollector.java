@@ -1,7 +1,9 @@
 package com.pgstat.collector.collector;
 
+import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.model.StatementSample;
+import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
 import com.pgstat.collector.repository.FactRepository;
