@@ -61,6 +61,9 @@ export default function Statements() {
   const [minAvgMs, setMinAvgMs] = useState('');
   // Server-side queryid filtresi
   const [queryidSearch, setQueryidSearch] = useState('');
+  // Server-side deep search (dim.statement_series dahil)
+  const [deepSearch, setDeepSearch] = useState('');
+  const [deepSearchActive, setDeepSearchActive] = useState(false);
 
   const instances = useQuery({
     queryKey: ['instances-list'],
@@ -82,35 +85,53 @@ export default function Statements() {
     queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname, queryidSearch],
     queryFn: () => apiGet<Statement[]>(`/statements/top?${params}`),
     refetchInterval: 30_000,
+    enabled: !deepSearchActive,
   });
+
+  // Deep search: dim.statement_series'ten arama (delta verisi olmayan sorgular dahil)
+  const deepSearchParams = new URLSearchParams({
+    q: deepSearch,
+    limit: '50',
+    ...(instancePk ? { instance_pk: instancePk } : {}),
+  });
+
+  const { data: deepData, isLoading: deepLoading } = useQuery({
+    queryKey: ['deep-search', deepSearch, instancePk],
+    queryFn: () => apiGet<(Statement & { no_delta_data?: boolean })[]>(`/statements/search?${deepSearchParams}`),
+    enabled: deepSearchActive && deepSearch.length >= 3,
+  });
+
+  // Aktif veri kaynağı
+  const activeData = deepSearchActive ? (deepData ?? []) : (data ?? []);
 
   // Benzersiz database ve rol listesi (mevcut sonuçlardan)
   const datnames = useMemo(() => {
-    const s = new Set((data ?? []).map(r => r.datname).filter(Boolean) as string[]);
+    const s = new Set(activeData.map(r => r.datname).filter(Boolean) as string[]);
     return Array.from(s).sort();
-  }, [data]);
+  }, [activeData]);
 
   const rolnames = useMemo(() => {
-    const s = new Set((data ?? []).map(r => r.rolname).filter(Boolean) as string[]);
+    const s = new Set(activeData.map(r => r.rolname).filter(Boolean) as string[]);
     return Array.from(s).sort();
-  }, [data]);
+  }, [activeData]);
 
   // Client-side filtre uygula
   const filtered = useMemo(() => {
     const minMs = parseFloat(minAvgMs) || 0;
     const q = sqlSearch.trim().toLowerCase();
-    return (data ?? []).filter(r => {
+    return activeData.filter(r => {
       if (q && !(r.query_text_short ?? '').toLowerCase().includes(q)) return false;
       if (minMs > 0 && Number(r.avg_exec_time_ms) < minMs) return false;
       return true;
     });
-  }, [data, sqlSearch, minAvgMs]);
+  }, [activeData, sqlSearch, minAvgMs]);
 
-  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs || queryidSearch;
+  const hasFilter = instancePk || datname || rolname || sqlSearch || minAvgMs || queryidSearch || deepSearchActive;
 
   function clearFilters() {
     setInstancePk(''); setDatname(''); setRolname('');
     setSqlSearch(''); setMinAvgMs(''); setQueryidSearch('');
+    setDeepSearch(''); setDeepSearchActive(false);
   }
 
   return (
@@ -199,41 +220,70 @@ export default function Statements() {
 
         {/* Satır 2: SQL arama + queryid + min avg süre */}
         <div className="flex flex-wrap gap-3 items-end">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs text-[#64748B] mb-1">SQL Metni Ara</label>
-            <input
-              type="text"
-              placeholder="örn: SELECT, update users, pg_stat..."
-              value={sqlSearch}
-              onChange={e => setSqlSearch(e.target.value)}
-              className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
-            />
-          </div>
+          {!deepSearchActive ? (
+            <>
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-xs text-[#64748B] mb-1">SQL Metni Ara (sonuçlar içinde)</label>
+                <input
+                  type="text"
+                  placeholder="örn: SELECT, update users, pg_stat..."
+                  value={sqlSearch}
+                  onChange={e => setSqlSearch(e.target.value)}
+                  className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
+                />
+              </div>
 
-          <div>
-            <label className="block text-xs text-[#64748B] mb-1">Query ID</label>
-            <input
-              type="text"
-              placeholder="örn: 2908051582623343671"
-              value={queryidSearch}
-              onChange={e => setQueryidSearch(e.target.value)}
-              className="w-48 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-[#3B82F6]"
-            />
-          </div>
+              <div>
+                <label className="block text-xs text-[#64748B] mb-1">Query ID</label>
+                <input
+                  type="text"
+                  placeholder="örn: 2908051582623343671"
+                  value={queryidSearch}
+                  onChange={e => setQueryidSearch(e.target.value)}
+                  className="w-48 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-[#3B82F6]"
+                />
+              </div>
 
-          <div>
-            <label className="block text-xs text-[#64748B] mb-1">Min Ort. Süre (ms)</label>
-            <input
-              type="number"
-              placeholder="0"
-              value={minAvgMs}
-              onChange={e => setMinAvgMs(e.target.value)}
-              min={0}
-              className="w-32 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
-            />
-          </div>
+              <div>
+                <label className="block text-xs text-[#64748B] mb-1">Min Ort. Süre (ms)</label>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={minAvgMs}
+                  onChange={e => setMinAvgMs(e.target.value)}
+                  min={0}
+                  className="w-32 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 min-w-[300px]">
+              <label className="block text-xs text-[#64748B] mb-1">🔍 Derin Arama — tüm bilinen sorgularda ara (delta verisi olmayanlar dahil)</label>
+              <input
+                type="text"
+                placeholder="en az 3 karakter — örn: pg_stat_statements_hstr"
+                value={deepSearch}
+                onChange={e => setDeepSearch(e.target.value)}
+                autoFocus
+                className="w-full border border-[#7C3AED] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#6D28D9] bg-[#FAF5FF]"
+              />
+            </div>
+          )}
 
           <div className="flex items-end gap-3">
+            <button
+              onClick={() => {
+                setDeepSearchActive(!deepSearchActive);
+                setDeepSearch('');
+                setSqlSearch('');
+              }}
+              className={`px-3 py-1.5 text-sm rounded transition-colors ${deepSearchActive
+                ? 'bg-[#7C3AED] text-white hover:bg-[#6D28D9]'
+                : 'border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
+                }`}
+            >
+              {deepSearchActive ? '🔍 Derin Arama Aktif' : '🔍 Derin Ara'}
+            </button>
             {hasFilter && (
               <button
                 onClick={clearFilters}
@@ -243,7 +293,7 @@ export default function Statements() {
               </button>
             )}
             <span className="text-xs text-[#94A3B8] pb-1">
-              {isLoading ? '…' : (
+              {(deepSearchActive ? deepLoading : isLoading) ? '…' : (
                 hasFilter && filtered.length !== (data?.length ?? 0)
                   ? `${filtered.length} / ${data?.length ?? 0} sorgu`
                   : `${filtered.length} sorgu`
@@ -255,11 +305,13 @@ export default function Statements() {
 
       {/* Tablo */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-        {isLoading ? (
+        {(deepSearchActive ? deepLoading : isLoading) ? (
           <div className="text-[#94A3B8] py-10 text-center text-sm">Yükleniyor...</div>
+        ) : deepSearchActive && deepSearch.length < 3 ? (
+          <div className="text-[#94A3B8] py-10 text-center text-sm">En az 3 karakter girin.</div>
         ) : filtered.length === 0 ? (
           <div className="text-[#94A3B8] py-10 text-center text-sm">
-            {data?.length === 0 ? 'Bu aralıkta statement verisi yok.' : 'Filtreyle eşleşen sorgu bulunamadı.'}
+            {deepSearchActive ? 'Eşleşen sorgu bulunamadı.' : (data?.length === 0 ? 'Bu aralıkta statement verisi yok.' : 'Filtreyle eşleşen sorgu bulunamadı.')}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -288,7 +340,7 @@ export default function Statements() {
                     <tr
                       key={r.statement_series_id}
                       onClick={() => navigate(`/statements/${r.statement_series_id}`)}
-                      className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors"
+                      className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors ${(r as any).no_delta_data ? 'opacity-60' : ''}`}
                     >
                       <td className="py-2.5 px-3 text-xs text-[#64748B]">{r.instance_name}</td>
                       <td className="py-2.5 px-3 text-xs">
@@ -299,11 +351,18 @@ export default function Statements() {
                         {(r as any).queryid ? String((r as any).queryid) : '—'}
                       </td>
                       <td className="py-2.5 px-3 max-w-sm">
-                        <div
-                          className="truncate text-xs font-mono text-[#1E293B]"
-                          title={r.query_text_short ?? ''}
-                        >
-                          {r.query_text_short || <span className="text-[#94A3B8] italic">metin yok</span>}
+                        <div className="flex items-center gap-1.5">
+                          <div
+                            className="truncate text-xs font-mono text-[#1E293B]"
+                            title={r.query_text_short ?? ''}
+                          >
+                            {r.query_text_short || <span className="text-[#94A3B8] italic">metin yok</span>}
+                          </div>
+                          {(r as any).no_delta_data && (
+                            <span className="flex-shrink-0 text-[10px] bg-[#FEF3C7] text-[#D97706] px-1.5 py-0.5 rounded" title="Bu sorgu collector tarafından görüldü ama henüz delta verisi yok. Sorgu çok nadir çalışıyor veya pg_stat_statements reset sonrası henüz 2 cycle geçmemiş olabilir.">
+                              delta yok
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">

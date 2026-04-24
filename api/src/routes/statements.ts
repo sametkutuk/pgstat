@@ -82,6 +82,75 @@ router.get('/top', async (req, res, next) => {
   }
 });
 
+// GET /api/statements/search — dim.statement_series'ten SQL text araması
+// Delta verisi olmayan sorgular dahil tüm bilinen sorguları döner
+router.get('/search', async (req, res, next) => {
+  try {
+    const q = (req.query.q as string || '').trim();
+    const instancePk = parseId(req.query.instance_pk);
+    const limit = parseLimit(req.query.limit, 50);
+
+    if (!q || q.length < 3) {
+      res.json([]);
+      return;
+    }
+
+    const params: any[] = [`%${q}%`, limit];
+    let whereExtra = '';
+
+    if (instancePk) {
+      params.push(instancePk);
+      whereExtra += ` and ss.instance_pk = $${params.length}`;
+    }
+
+    const result = await pool.query(`
+      select
+        ss.statement_series_id,
+        ss.instance_pk,
+        inv.display_name as instance_name,
+        ss.queryid,
+        ss.dbid,
+        dbr.datname,
+        rr.rolname,
+        left(qt.query_text, 500) as query_text_short,
+        ss.last_seen_at,
+        coalesce(delta.total_calls, 0) as total_calls,
+        coalesce(delta.total_exec_time_ms, 0) as total_exec_time_ms,
+        coalesce(delta.avg_exec_time_ms, 0) as avg_exec_time_ms,
+        coalesce(delta.total_rows, 0) as total_rows,
+        coalesce(delta.total_shared_blks_read, 0) as total_shared_blks_read,
+        coalesce(delta.total_temp_blks_written, 0) as total_temp_blks_written,
+        case when delta.total_calls is null then true else false end as no_delta_data
+      from dim.statement_series ss
+      join control.instance_inventory inv on inv.instance_pk = ss.instance_pk
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      left join lateral (
+        select
+          sum(d.calls_delta) as total_calls,
+          sum(d.total_exec_time_ms_delta) as total_exec_time_ms,
+          sum(d.rows_delta) as total_rows,
+          sum(d.shared_blks_read_delta) as total_shared_blks_read,
+          sum(d.temp_blks_written_delta) as total_temp_blks_written,
+          case when sum(d.calls_delta) > 0
+            then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta)
+            else 0 end as avg_exec_time_ms
+        from fact.pgss_delta d
+        where d.statement_series_id = ss.statement_series_id
+          and d.sample_ts >= now() - interval '7 days'
+      ) delta on true
+      where qt.query_text ilike $1
+      ${whereExtra}
+      order by ss.last_seen_at desc
+      limit $2
+    `, params);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/statements/:seriesId — Tek statement serisi detayı (zaman serisi)
 router.get('/:seriesId', async (req, res, next) => {
   try {
