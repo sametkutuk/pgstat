@@ -110,6 +110,13 @@ public class JobOrchestrator {
         runJob("statements", this::executeStatementsJob);
         runJob("db_objects", this::executeDbObjectsJob);
         runJob("rollup", this::executeRollupJob);
+
+        // Manuel baseline tetikleri (UI'dan "Hemen Hesapla" butonu)
+        try {
+            baselineCalculator.processPendingTriggers();
+        } catch (Exception e) {
+            log.warn("Baseline trigger islemi hatasi: {}", e.getMessage());
+        }
     }
 
     // =========================================================================

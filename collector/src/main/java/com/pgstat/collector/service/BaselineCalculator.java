@@ -34,6 +34,37 @@ public class BaselineCalculator {
     }
 
     /**
+     * control.baseline_trigger tablosundaki pending istekleri isler.
+     * JobOrchestrator her poll'da cagirir (5sn).
+     * instance_pk null ise tum instance'lar icin hesaplanir.
+     */
+    public void processPendingTriggers() {
+        List<Map<String, Object>> triggers = jdbc.queryForList(
+            "select trigger_id, instance_pk from control.baseline_trigger " +
+            "where status = 'pending' order by requested_at limit 5");
+
+        for (Map<String, Object> t : triggers) {
+            long triggerId = ((Number) t.get("trigger_id")).longValue();
+            Object instancePkObj = t.get("instance_pk");
+
+            jdbc.update("update control.baseline_trigger set status='running', started_at=now() where trigger_id=?", triggerId);
+
+            try {
+                if (instancePkObj == null) {
+                    calculateAll();
+                } else {
+                    calculateForInstance(((Number) instancePkObj).longValue());
+                }
+                jdbc.update("update control.baseline_trigger set status='done', completed_at=now() where trigger_id=?", triggerId);
+            } catch (Exception e) {
+                log.error("Trigger hatasi trigger_id={}: {}", triggerId, e.getMessage());
+                jdbc.update("update control.baseline_trigger set status='failed', completed_at=now(), error_message=? where trigger_id=?",
+                    e.getMessage() != null ? e.getMessage().substring(0, Math.min(500, e.getMessage().length())) : "unknown", triggerId);
+            }
+        }
+    }
+
+    /**
      * Tum aktif instance'lar icin baseline'lari hesaplar.
      * JobOrchestrator advisory lock altinda cagirir (gunde bir kez).
      */

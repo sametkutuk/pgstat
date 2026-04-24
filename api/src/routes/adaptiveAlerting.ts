@@ -293,6 +293,42 @@ router.get('/overview', async (_req, res, next) => {
     }
 });
 
+// POST /api/adaptive-alerting/baselines/trigger
+// Manuel baseline hesaplama istegi. instance_pk null = tum instance'lar.
+router.post('/baselines/trigger', async (req, res, next) => {
+    try {
+        const { instance_pk } = req.body;
+        const result = await pool.query(
+            `insert into control.baseline_trigger (instance_pk, requested_by)
+             values ($1, $2)
+             returning trigger_id, status, requested_at`,
+            [instance_pk || null, 'admin']
+        );
+        res.json({
+            ...result.rows[0],
+            message: 'Baseline hesaplamasi istegi kuyruga alindi. Collector 5 saniye icinde isleme baslayacak.',
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/adaptive-alerting/baselines/triggers — son 20 trigger
+router.get('/baselines/triggers', async (_req, res, next) => {
+    try {
+        const result = await pool.query(
+            `select t.*, i.display_name as instance_name
+             from control.baseline_trigger t
+             left join control.instance_inventory i on i.instance_pk = t.instance_pk
+             order by t.requested_at desc
+             limit 20`
+        );
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
 // POST /api/instances/:instance_pk/baseline/invalidate
 router.post('/instances/:instance_pk/baseline/invalidate', async (req, res, next) => {
     try {

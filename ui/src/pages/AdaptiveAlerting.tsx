@@ -185,6 +185,20 @@ function BaselinesPanel() {
         onError: () => toast.error('Sıfırlama başarısız'),
     });
 
+    const triggerMut = useMutation({
+        mutationFn: (pk: number | null) =>
+            apiPost('/adaptive-alerting/baselines/trigger', { instance_pk: pk }),
+        onSuccess: () => {
+            toast.success('Baseline hesaplaması kuyruğa alındı. 5-30 saniye içinde tamamlanacak.');
+            // Biraz bekleyip query'i refresh et
+            setTimeout(() => {
+                qc.invalidateQueries({ queryKey: ['baselines-list'] });
+                qc.invalidateQueries({ queryKey: ['adaptive-overview'] });
+            }, 10000);
+        },
+        onError: (e: any) => toast.error(e?.message || 'Tetikleme başarısız'),
+    });
+
     const handleInvalidate = () => {
         if (!selectedInstance) return;
         const reason = prompt('Baseline sıfırlama sebebi:');
@@ -194,6 +208,17 @@ function BaselinesPanel() {
 
     return (
         <div className="space-y-4">
+            <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-3 flex items-center gap-3">
+                <span className="text-xl">💡</span>
+                <div className="flex-1 text-xs text-[#0369A1]">
+                    Baseline normalde gece 02:00 UTC'de otomatik hesaplanır. Mevcut veriyle (2-3 gün bile) hemen hesaplamak için aşağıdaki butona bas.
+                </div>
+                <button onClick={() => triggerMut.mutate(null)} disabled={triggerMut.isPending}
+                    className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded hover:bg-[#0369A1] disabled:opacity-50 whitespace-nowrap">
+                    {triggerMut.isPending ? 'Tetikleniyor...' : 'Tüm Instance\'lar İçin Hesapla'}
+                </button>
+            </div>
+
             <div className="flex items-end gap-3">
                 <div className="flex-1">
                     <label className="block text-xs font-medium text-[#475569] mb-1">Instance</label>
@@ -207,10 +232,16 @@ function BaselinesPanel() {
                     </select>
                 </div>
                 {selectedInstance && (
-                    <button onClick={handleInvalidate}
-                        className="px-4 py-2 bg-[#FEE2E2] text-[#DC2626] text-sm rounded hover:bg-[#FECACA]">
-                        Baseline'ı Sıfırla
-                    </button>
+                    <>
+                        <button onClick={() => triggerMut.mutate(selectedInstance)} disabled={triggerMut.isPending}
+                            className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded hover:bg-[#0369A1] disabled:opacity-50 whitespace-nowrap">
+                            Hemen Hesapla
+                        </button>
+                        <button onClick={handleInvalidate}
+                            className="px-4 py-2 bg-[#FEE2E2] text-[#DC2626] text-sm rounded hover:bg-[#FECACA] whitespace-nowrap">
+                            Sıfırla
+                        </button>
+                    </>
                 )}
             </div>
 
