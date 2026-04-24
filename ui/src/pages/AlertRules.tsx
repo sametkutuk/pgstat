@@ -38,59 +38,100 @@ interface Instance {
   display_name: string;
 }
 
-const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, string> }> = {
+// Her metrik için label, birim ve placeholder bilgisi
+interface MetricDef {
+  label: string;
+  unit: string;        // gösterim birimi: "%", "MB", "saniye", "adet" vb.
+  unitNote: string;    // eşik girerken gösterilecek açıklama
+  placeholder?: string; // input placeholder
+}
+
+const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, MetricDef> }> = {
   cluster_metric: {
     label: 'Cluster Sağlığı',
     metrics: {
-      cache_hit_ratio: 'Cache Hit Ratio (%)',
-      wal_bytes: 'WAL Üretimi (byte)',
-      checkpoint_write_time: 'Checkpoint Yazma Süresi (ms)',
-      buffers_checkpoint: 'Checkpoint Buffer Yazımı',
-      buffers_clean: 'Bgwriter Buffer Temizleme',
+      cache_hit_ratio:       { label: 'Cache Hit Ratio',        unit: '%',    unitNote: '0–100 arası yüzde. Örn: 95 = %95', placeholder: '95' },
+      wal_bytes:             { label: 'WAL Üretimi',            unit: 'byte', unitNote: 'Byte cinsinden. Örn: 500000000 = ~476 MB', placeholder: '500000000' },
+      checkpoint_write_time: { label: 'Checkpoint Yazma Süresi', unit: 'ms',  unitNote: 'Milisaniye. Örn: 30000 = 30 saniye', placeholder: '30000' },
+      buffers_checkpoint:    { label: 'Checkpoint Buffer Yazımı', unit: 'adet', unitNote: 'Checkpoint sırasında yazılan buffer sayısı', placeholder: '1000' },
+      buffers_clean:         { label: 'Bgwriter Buffer Temizleme', unit: 'adet', unitNote: 'Bgwriter tarafından temizlenen buffer sayısı', placeholder: '500' },
     },
   },
   activity_metric: {
     label: 'Bağlantı / Aktivite',
     metrics: {
-      active_count: 'Aktif Bağlantı Sayısı',
-      idle_in_transaction_count: 'Idle in Transaction Sayısı',
-      waiting_count: 'Kilit Bekleyen Sayısı',
+      active_count:              { label: 'Aktif Bağlantı',          unit: 'adet', unitNote: 'Anlık aktif sorgu çalıştıran bağlantı sayısı', placeholder: '50' },
+      idle_in_transaction_count: { label: 'Idle in Transaction',      unit: 'adet', unitNote: 'Transaction açık bekleyen bağlantı sayısı', placeholder: '5' },
+      waiting_count:             { label: 'Kilit Bekleyen Bağlantı',  unit: 'adet', unitNote: 'Kilit için bekleyen sorgu sayısı', placeholder: '3' },
     },
   },
   replication_metric: {
     label: 'Replikasyon',
     metrics: {
-      replay_lag_bytes: 'Replay Gecikme (byte)',
-      replay_lag_seconds: 'Replay Gecikme (saniye)',
+      replay_lag_bytes:   { label: 'Replay Gecikme (veri)',  unit: 'byte', unitNote: 'Byte cinsinden. Örn: 52428800 = 50 MB, 524288000 = 500 MB', placeholder: '52428800' },
+      replay_lag_seconds: { label: 'Replay Gecikme (süre)',  unit: 'sn',   unitNote: 'Saniye cinsinden. Örn: 60 = 1 dakika, 300 = 5 dakika', placeholder: '60' },
     },
   },
   database_metric: {
     label: 'Veritabanı',
     metrics: {
-      deadlocks: 'Deadlock Sayısı',
-      temp_files: 'Geçici Dosya Sayısı',
-      rollback_ratio: 'Rollback Oranı (%)',
-      blk_read_time: 'Disk Okuma Süresi (ms)',
-      blk_write_time: 'Disk Yazma Süresi (ms)',
+      deadlocks:      { label: 'Deadlock Sayısı',   unit: 'adet', unitNote: 'Pencere içindeki toplam deadlock sayısı', placeholder: '1' },
+      temp_files:     { label: 'Geçici Dosya',       unit: 'adet', unitNote: 'Oluşturulan geçici dosya sayısı (work_mem yetersizliği)', placeholder: '50' },
+      rollback_ratio: { label: 'Rollback Oranı',     unit: '%',    unitNote: '0–100 arası yüzde. Örn: 5 = commit'lerin %5\'i rollback', placeholder: '5' },
+      blk_read_time:  { label: 'Disk Okuma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk okuma süresi', placeholder: '1000' },
+      blk_write_time: { label: 'Disk Yazma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk yazma süresi', placeholder: '1000' },
     },
   },
   statement_metric: {
     label: 'Sorgu (pg_stat_statements)',
     metrics: {
-      avg_exec_time_ms: 'Ortalama Çalışma Süresi (ms)',
-      temp_blks_written: 'Geçici Blok Yazımı',
-      calls: 'Çağrı Sayısı',
+      avg_exec_time_ms:  { label: 'Ort. Çalışma Süresi',  unit: 'ms',   unitNote: 'Milisaniye. Örn: 1000 = 1 saniye, 5000 = 5 saniye', placeholder: '1000' },
+      temp_blks_written: { label: 'Geçici Blok Yazımı',   unit: 'blok', unitNote: 'Pencere içindeki geçici blok yazım sayısı', placeholder: '10000' },
+      calls:             { label: 'Çağrı Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki toplam sorgu çağrı sayısı', placeholder: '10000' },
     },
   },
   table_metric: {
     label: 'Tablo',
     metrics: {
-      dead_tuple_ratio: 'Dead Tuple Oranı (%)',
-      seq_scan: 'Sequential Scan Sayısı',
-      n_tup_ins: 'INSERT Sayısı',
+      dead_tuple_ratio: { label: 'Dead Tuple Oranı',       unit: '%',    unitNote: '0–100 arası yüzde. Örn: 20 = satırların %20\'si ölü', placeholder: '20' },
+      seq_scan:         { label: 'Sequential Scan Sayısı', unit: 'adet', unitNote: 'Pencere içindeki tam tablo tarama sayısı', placeholder: '10000' },
+      n_tup_ins:        { label: 'INSERT Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki INSERT sayısı', placeholder: '100000' },
     },
   },
 };
+
+// Metrik için birim döndürür
+function getUnit(metricType: string, metricName: string): string {
+  return METRIC_TYPES[metricType]?.metrics[metricName]?.unit || '';
+}
+
+// Metrik için okunabilir label döndürür
+function getMetricLabel(metricType: string, metricName: string): string {
+  return METRIC_TYPES[metricType]?.metrics[metricName]?.label || metricName;
+}
+
+// Byte değerini okunabilir formata çevirir
+function formatValue(value: number, unit: string): string {
+  if (unit === 'byte') {
+    if (value >= 1073741824) return (value / 1073741824).toFixed(1) + ' GB';
+    if (value >= 1048576)    return (value / 1048576).toFixed(1) + ' MB';
+    if (value >= 1024)       return (value / 1024).toFixed(1) + ' KB';
+    return value + ' B';
+  }
+  if (unit === 'ms') {
+    if (value >= 3600000) return (value / 3600000).toFixed(1) + ' sa';
+    if (value >= 60000)   return (value / 60000).toFixed(1) + ' dk';
+    if (value >= 1000)    return (value / 1000).toFixed(1) + ' sn';
+    return value + ' ms';
+  }
+  if (unit === '%') return value + '%';
+  if (unit === 'sn') {
+    if (value >= 3600) return (value / 3600).toFixed(1) + ' sa';
+    if (value >= 60)   return (value / 60).toFixed(1) + ' dk';
+    return value + ' sn';
+  }
+  return String(value);
+}
 
 const OPERATORS = ['>', '<', '>=', '<=', '='];
 const AGGREGATIONS: Record<string, string> = {
@@ -227,7 +268,7 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm text-[#1E293B] truncate">{rule.rule_name}</div>
             <div className="text-xs text-[#64748B] mt-0.5">
-              {METRIC_TYPES[rule.metric_type]?.label || rule.metric_type} › {rule.metric_name}
+              {METRIC_TYPES[rule.metric_type]?.label || rule.metric_type} › {getMetricLabel(rule.metric_type, rule.metric_name)}
               {' · '}
               {rule.scope === 'all_instances' ? 'Tüm Instance\'lar' :
                rule.scope === 'specific_instance' ? (rule.instance_name || `#${rule.instance_pk}`) :
@@ -236,16 +277,20 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
           </div>
 
           {/* Eşikler */}
-          <div className="text-xs text-[#64748B] text-right flex-shrink-0 hidden md:block">
+          <div className="text-xs text-right flex-shrink-0 hidden md:block space-y-0.5">
             {rule.warning_threshold != null && (
-              <span className="inline-block bg-[#FEF3C7] text-[#D97706] px-2 py-0.5 rounded mr-1">
-                ⚠ {rule.condition_operator} {rule.warning_threshold}
-              </span>
+              <div>
+                <span className="inline-block bg-[#FEF3C7] text-[#D97706] px-2 py-0.5 rounded">
+                  ⚠ {rule.condition_operator} {formatValue(rule.warning_threshold, getUnit(rule.metric_type, rule.metric_name))}
+                </span>
+              </div>
             )}
             {rule.critical_threshold != null && (
-              <span className="inline-block bg-[#FEE2E2] text-[#DC2626] px-2 py-0.5 rounded">
-                ✕ {rule.condition_operator} {rule.critical_threshold}
-              </span>
+              <div>
+                <span className="inline-block bg-[#FEE2E2] text-[#DC2626] px-2 py-0.5 rounded">
+                  ✕ {rule.condition_operator} {formatValue(rule.critical_threshold, getUnit(rule.metric_type, rule.metric_name))}
+                </span>
+              </div>
             )}
           </div>
 
@@ -269,7 +314,7 @@ function RuleList({ onEdit }: { onEdit: (r: AlertRule) => void }) {
                 rule.current_severity === 'warning' ? 'bg-[#FEF3C7] text-[#D97706]' :
                 'bg-[#F0FDF4] text-[#16A34A]'
               }`}>
-                {Number(rule.last_value).toFixed(2)}
+                {formatValue(Number(rule.last_value), getUnit(rule.metric_type, rule.metric_name))}
               </span>
             </div>
           )}
@@ -328,12 +373,12 @@ function TemplateGallery({ onActivate }: { onActivate: (t: AlertRule) => void })
                 <div className="flex flex-wrap gap-1 mt-1">
                   {tpl.warning_threshold != null && (
                     <span className="text-xs bg-[#FEF3C7] text-[#D97706] px-2 py-0.5 rounded">
-                      Uyarı: {tpl.condition_operator} {tpl.warning_threshold}
+                      ⚠ {tpl.condition_operator} {formatValue(tpl.warning_threshold!, getUnit(tpl.metric_type, tpl.metric_name))}
                     </span>
                   )}
                   {tpl.critical_threshold != null && (
                     <span className="text-xs bg-[#FEE2E2] text-[#DC2626] px-2 py-0.5 rounded">
-                      Kritik: {tpl.condition_operator} {tpl.critical_threshold}
+                      ✕ {tpl.condition_operator} {formatValue(tpl.critical_threshold!, getUnit(tpl.metric_type, tpl.metric_name))}
                     </span>
                   )}
                   <span className="text-xs bg-[#F1F5F9] text-[#475569] px-2 py-0.5 rounded">
@@ -531,24 +576,33 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                   </select>
                 </div>
               </div>
+              {/* Birim notu */}
+              {(() => {
+                const metricDef = METRIC_TYPES[form.metric_type]?.metrics[form.metric_name];
+                return metricDef ? (
+                  <div className="text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] px-3 py-2 rounded-md">
+                    <strong>Birim:</strong> {metricDef.unitNote}
+                  </div>
+                ) : null;
+              })()}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-[#475569] mb-1">
                     <span className="inline-block w-2 h-2 bg-[#FBBF24] rounded-full mr-1"></span>
-                    Uyarı Eşiği
+                    Uyarı Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
                   </label>
                   <input type="number" value={form.warning_threshold} onChange={e => set('warning_threshold', e.target.value)}
                     className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                    placeholder="Opsiyonel" />
+                    placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-[#475569] mb-1">
                     <span className="inline-block w-2 h-2 bg-[#EF4444] rounded-full mr-1"></span>
-                    Kritik Eşiği
+                    Kritik Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
                   </label>
                   <input type="number" value={form.critical_threshold} onChange={e => set('critical_threshold', e.target.value)}
                     className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                    placeholder="Opsiyonel" />
+                    placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
                 </div>
               </div>
               <div>
@@ -661,16 +715,31 @@ function FromTemplateModal({ template, onClose }: { template: AlertRule; onClose
             <input value={form.rule_name} onChange={e => set('rule_name', e.target.value)}
               className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]" />
           </div>
+          {/* Birim notu */}
+          {(() => {
+            const metricDef = METRIC_TYPES[template.metric_type]?.metrics[template.metric_name];
+            return metricDef ? (
+              <div className="text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] px-3 py-2 rounded-md">
+                <strong>Birim:</strong> {metricDef.unitNote}
+              </div>
+            ) : null;
+          })()}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-[#475569] mb-1">⚠ Uyarı Eşiği</label>
+              <label className="block text-xs font-medium text-[#475569] mb-1">
+                ⚠ Uyarı Eşiği {getUnit(template.metric_type, template.metric_name) ? `(${getUnit(template.metric_type, template.metric_name)})` : ''}
+              </label>
               <input type="number" value={form.warning_threshold} onChange={e => set('warning_threshold', e.target.value)}
-                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]" />
+                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                placeholder={METRIC_TYPES[template.metric_type]?.metrics[template.metric_name]?.placeholder} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[#475569] mb-1">✕ Kritik Eşiği</label>
+              <label className="block text-xs font-medium text-[#475569] mb-1">
+                ✕ Kritik Eşiği {getUnit(template.metric_type, template.metric_name) ? `(${getUnit(template.metric_type, template.metric_name)})` : ''}
+              </label>
               <input type="number" value={form.critical_threshold} onChange={e => set('critical_threshold', e.target.value)}
-                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]" />
+                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                placeholder={METRIC_TYPES[template.metric_type]?.metrics[template.metric_name]?.placeholder} />
             </div>
           </div>
           <div>
