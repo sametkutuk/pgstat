@@ -134,9 +134,27 @@ public class StatementsCollector {
             boolean epochChanged = epochManager.hasEpochChanged(currentEpochKey, newEpochKey);
 
             if (epochChanged) {
-                // Epoch degisti → cache temizle, baseline al
+                // Epoch degisti → reset/restart tespit edildi
+                Map<String, StatementSample> oldCache = previousSamples.get(instancePk);
+                
+                // Reset oncesi son bilinen cumulative degerleri logla
+                if (oldCache != null && !oldCache.isEmpty()) {
+                    long totalCalls = oldCache.values().stream().mapToLong(StatementSample::calls).sum();
+                    double totalExecTime = oldCache.values().stream().mapToDouble(StatementSample::totalExecTime).sum();
+                    int queryCount = oldCache.size();
+                    
+                    log.warn("pg_stat_statements reset tespit edildi instance={}: " +
+                        "onceki epoch={}, yeni epoch={}, " +
+                        "son bilinen: {} sorgu, toplam {} calls, {}ms exec time. " +
+                        "Reset ile son cycle arasi veri kaybi olabilir.",
+                        instancePk, currentEpochKey, newEpochKey,
+                        queryCount, totalCalls, String.format("%.1f", totalExecTime));
+                } else {
+                    log.info("Epoch degisti (ilk baslatma veya cache bos): {} → {}", 
+                        currentEpochKey, newEpochKey);
+                }
+                
                 previousSamples.remove(instancePk);
-                log.info("Epoch degisti, baseline alinacak: {} → {}", currentEpochKey, newEpochKey);
             }
 
             // Statement satirlarini oku
