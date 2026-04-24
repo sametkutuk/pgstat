@@ -91,6 +91,51 @@ public interface SourceQueries {
             """;
     }
 
+    /**
+     * pg_replication_slots + pg_stat_replication_slots (PG14+ icin).
+     * PG13 altinda wal_status, safe_wal_size, ve tum pg_stat_replication_slots
+     * alanlari null doner (SourceQueries implementasyonlarinda override edilir).
+     * Burada PG14+ versiyonu — override edenler farkli yazabilir.
+     */
+    default String replicationSlotsQuery() {
+        return """
+            select
+              s.slot_name,
+              s.plugin,
+              s.slot_type,
+              s.database,
+              s.active,
+              s.active_pid,
+              s.xmin::text::bigint          as xmin_int,
+              s.catalog_xmin::text::bigint  as catalog_xmin_int,
+              s.restart_lsn::text           as restart_lsn,
+              s.confirmed_flush_lsn::text   as confirmed_flush_lsn,
+              s.wal_status,
+              s.safe_wal_size,
+              (pg_current_wal_lsn() - s.restart_lsn)::bigint as slot_lag_bytes,
+              sr.spill_txns, sr.spill_count, sr.spill_bytes,
+              sr.stream_txns, sr.stream_count, sr.stream_bytes,
+              sr.total_txns, sr.total_bytes
+            from pg_replication_slots s
+            left join pg_stat_replication_slots sr on sr.slot_name = s.slot_name
+            """;
+    }
+
+    /** pg_stat_database_conflicts (PG9.1+). */
+    default String databaseConflictsQuery() {
+        return """
+            select
+              datname,
+              confl_tablespace,
+              confl_lock,
+              confl_snapshot,
+              confl_bufferpin,
+              confl_deadlock
+            from pg_stat_database_conflicts
+            where datname is not null
+            """;
+    }
+
     // =========================================================================
     // Activity / Replication / Lock / Progress
     // =========================================================================

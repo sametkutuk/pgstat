@@ -104,6 +104,38 @@ const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, Metr
       n_tup_ins:        { label: 'INSERT Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki INSERT sayısı', placeholder: '100000' },
     },
   },
+  wal_metric: {
+    label: 'WAL',
+    metrics: {
+      period_wal_size_byte:    { label: 'Dönem WAL Üretimi',     unit: 'byte', unitNote: 'İki ölçüm arasında üretilen WAL. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
+      wal_directory_size_byte: { label: 'WAL Dizin Boyutu',      unit: 'byte', unitNote: 'pg_wal dizininin toplam boyutu. Örn: 5368709120 = 5 GB', placeholder: '5368709120' },
+      wal_file_count:          { label: 'WAL Dosya Sayısı',      unit: 'adet', unitNote: 'pg_wal dizinindeki WAL dosyası sayısı', placeholder: '1000' },
+    },
+  },
+  archiver_metric: {
+    label: 'WAL Archiver',
+    metrics: {
+      archived_count: { label: 'Archive Edilen Sayısı',  unit: 'adet', unitNote: 'Kümülatif sayaç — başarıyla archive edilen WAL dosyası', placeholder: '1000' },
+      failed_count:   { label: 'Archive Hata Sayısı',    unit: 'adet', unitNote: 'Kümülatif sayaç — archive_command hatası', placeholder: '10' },
+    },
+  },
+  slot_metric: {
+    label: 'Replication Slot',
+    metrics: {
+      slot_lag_bytes: { label: 'Slot Gecikme (byte)',  unit: 'byte', unitNote: 'current_wal_lsn - restart_lsn farkı. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
+      spill_bytes:    { label: 'Decoder Spill (byte)', unit: 'byte', unitNote: 'PG14+ — logical decoding spill to disk', placeholder: '104857600' },
+    },
+  },
+  conflict_metric: {
+    label: 'Standby Conflict',
+    metrics: {
+      confl_tablespace: { label: 'Tablespace Conflict', unit: 'adet', unitNote: 'Standby recovery conflict sayısı', placeholder: '10' },
+      confl_lock:       { label: 'Lock Conflict',       unit: 'adet', unitNote: 'Standby lock conflict sayısı', placeholder: '10' },
+      confl_snapshot:   { label: 'Snapshot Conflict',   unit: 'adet', unitNote: 'Standby snapshot conflict sayısı', placeholder: '10' },
+      confl_bufferpin:  { label: 'Buffer Pin Conflict', unit: 'adet', unitNote: 'Standby buffer pin conflict sayısı', placeholder: '10' },
+      confl_deadlock:   { label: 'Deadlock Conflict',   unit: 'adet', unitNote: 'Standby deadlock sayısı', placeholder: '5' },
+    },
+  },
 };
 
 // Metrik için birim döndürür

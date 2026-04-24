@@ -344,7 +344,8 @@ router.post('/from-template', async (req: Request, res: Response) => {
 const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week','spike','flatline','hourly_pattern','adaptive'];
 const VALID_METRIC_TYPES = [
   'cluster_metric','io_metric','database_metric','statement_metric',
-  'table_metric','index_metric','activity_metric','replication_metric'
+  'table_metric','index_metric','activity_metric','replication_metric',
+  'wal_metric','archiver_metric','slot_metric','conflict_metric'
 ];
 const VALID_SCOPES = ['all_instances','specific_instance','service_group','instance_group'];
 const VALID_OPS = ['>','<','>=','<=','='];

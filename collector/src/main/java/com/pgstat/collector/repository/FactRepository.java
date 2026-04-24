@@ -420,4 +420,59 @@ public class FactRepository {
             failedCount, lastFailedWal, lastFailedTime, statsReset
         );
     }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_replication_slot_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertSlotSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                   String slotName, String plugin, String slotType,
+                                   String database, Boolean active, Integer activePid,
+                                   Long xmin, Long catalogXmin, String restartLsn,
+                                   String confirmedFlushLsn, String walStatus,
+                                   Long safeWalSize, Long slotLagBytes,
+                                   Long spillTxns, Long spillCount, Long spillBytes,
+                                   Long streamTxns, Long streamCount, Long streamBytes,
+                                   Long totalTxns, Long totalBytes) {
+        jdbc.update("""
+            insert into fact.pg_replication_slot_snapshot (
+              sample_ts, instance_pk, slot_name, plugin, slot_type, database,
+              active, active_pid, xmin_int, catalog_xmin_int, restart_lsn,
+              confirmed_flush_lsn, wal_status, safe_wal_size, slot_lag_bytes,
+              spill_txns, spill_count, spill_bytes,
+              stream_txns, stream_count, stream_bytes,
+              total_txns, total_bytes
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, slotName, plugin, slotType, database,
+            active, activePid, xmin, catalogXmin, restartLsn,
+            confirmedFlushLsn, walStatus, safeWalSize, slotLagBytes,
+            spillTxns, spillCount, spillBytes,
+            streamTxns, streamCount, streamBytes,
+            totalTxns, totalBytes
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_database_conflict_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertConflictSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                       String datname, Long conflTablespace,
+                                       Long conflLock, Long conflSnapshot,
+                                       Long conflBufferpin, Long conflDeadlock) {
+        jdbc.update("""
+            insert into fact.pg_database_conflict_snapshot (
+              sample_ts, instance_pk, datname,
+              confl_tablespace, confl_lock, confl_snapshot, confl_bufferpin, confl_deadlock
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, datname, conflTablespace,
+            conflLock, conflSnapshot, conflBufferpin, conflDeadlock
+        );
+    }
 }

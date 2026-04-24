@@ -301,4 +301,30 @@ public class Pg11_12Queries implements SourceQueries {
             left join pg_statio_user_indexes io on io.indexrelid = s.indexrelid
             """;
     }
+
+    /** PG11-12: pg_stat_replication_slots yok, wal_status/safe_wal_size yok. */
+    @Override
+    public String replicationSlotsQuery() {
+        return """
+            select
+              s.slot_name,
+              s.plugin,
+              s.slot_type,
+              s.database,
+              s.active,
+              s.active_pid,
+              case when s.xmin is null then null else s.xmin::text::bigint end as xmin_int,
+              case when s.catalog_xmin is null then null else s.catalog_xmin::text::bigint end as catalog_xmin_int,
+              s.restart_lsn::text         as restart_lsn,
+              s.confirmed_flush_lsn::text as confirmed_flush_lsn,
+              null::text   as wal_status,
+              null::bigint as safe_wal_size,
+              case when s.restart_lsn is null then null
+                else (pg_current_wal_lsn() - s.restart_lsn)::bigint end as slot_lag_bytes,
+              null::bigint as spill_txns,  null::bigint as spill_count,  null::bigint as spill_bytes,
+              null::bigint as stream_txns, null::bigint as stream_count, null::bigint as stream_bytes,
+              null::bigint as total_txns,  null::bigint as total_bytes
+            from pg_replication_slots s
+            """;
+    }
 }

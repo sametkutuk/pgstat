@@ -818,6 +818,10 @@ public class AlertRuleEvaluator {
             case "replication_metric" -> queryReplicationMetric(metricName, aggFn, interval);
             case "statement_metric"   -> queryStatementMetric(metricName, aggFn, interval);
             case "table_metric"       -> queryTableMetric(metricName, aggFn, interval);
+            case "wal_metric"         -> queryWalMetric(metricName, aggFn, interval);
+            case "archiver_metric"    -> queryArchiverMetric(metricName, aggFn, interval);
+            case "slot_metric"        -> querySlotMetric(metricName, aggFn, interval);
+            case "conflict_metric"    -> queryConflictMetric(metricName, aggFn, interval);
             default -> { log.warn("Desteklenmeyen metric_type: {}", metricType); yield List.of(); }
         };
     }
@@ -845,6 +849,10 @@ public class AlertRuleEvaluator {
             case "replication_metric" -> queryReplicationMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
             case "statement_metric"   -> queryStatementMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
             case "table_metric"       -> queryTableMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
+            case "wal_metric"         -> queryWalMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
+            case "archiver_metric"    -> queryArchiverMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
+            case "slot_metric"        -> querySlotMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
+            case "conflict_metric"    -> queryConflictMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
             default -> List.of();
         };
     }
@@ -894,6 +902,22 @@ public class AlertRuleEvaluator {
             case "statement_metric.calls"                -> "fact.pgss_delta|calls_delta|sample_ts";
             case "statement_metric.temp_blks_written"    -> "fact.pgss_delta|temp_blks_written_delta|sample_ts";
             case "table_metric.seq_scan"                 -> "fact.pg_table_stat_delta|seq_scan_delta|sample_ts";
+            // WAL metrikleri (V023)
+            case "wal_metric.period_wal_size_byte"       -> "fact.pg_wal_snapshot|period_wal_size_byte|sample_ts";
+            case "wal_metric.wal_directory_size_byte"    -> "fact.pg_wal_snapshot|wal_directory_size_byte|sample_ts";
+            case "wal_metric.wal_file_count"             -> "fact.pg_wal_snapshot|wal_file_count|sample_ts";
+            // Archiver metrikleri (V023)
+            case "archiver_metric.archived_count"        -> "fact.pg_archiver_snapshot|archived_count|sample_ts";
+            case "archiver_metric.failed_count"          -> "fact.pg_archiver_snapshot|failed_count|sample_ts";
+            // Replication slot (V024)
+            case "slot_metric.slot_lag_bytes"            -> "fact.pg_replication_slot_snapshot|slot_lag_bytes|sample_ts";
+            case "slot_metric.spill_bytes"               -> "fact.pg_replication_slot_snapshot|spill_bytes|sample_ts";
+            // Standby conflicts (V024)
+            case "conflict_metric.confl_tablespace"      -> "fact.pg_database_conflict_snapshot|confl_tablespace|sample_ts";
+            case "conflict_metric.confl_lock"            -> "fact.pg_database_conflict_snapshot|confl_lock|sample_ts";
+            case "conflict_metric.confl_snapshot"        -> "fact.pg_database_conflict_snapshot|confl_snapshot|sample_ts";
+            case "conflict_metric.confl_bufferpin"       -> "fact.pg_database_conflict_snapshot|confl_bufferpin|sample_ts";
+            case "conflict_metric.confl_deadlock"        -> "fact.pg_database_conflict_snapshot|confl_deadlock|sample_ts";
             default -> null;
         };
     }
@@ -933,6 +957,10 @@ public class AlertRuleEvaluator {
             case "replication_metric" -> "fact.pg_replication_snapshot";
             case "statement_metric"   -> "fact.pgss_delta";
             case "table_metric"       -> "fact.pg_table_stat_delta";
+            case "wal_metric"         -> "fact.pg_wal_snapshot";
+            case "archiver_metric"    -> "fact.pg_archiver_snapshot";
+            case "slot_metric"        -> "fact.pg_replication_slot_snapshot";
+            case "conflict_metric"    -> "fact.pg_database_conflict_snapshot";
             default -> null;
         };
     }
@@ -1380,5 +1408,83 @@ public class AlertRuleEvaluator {
         if (v == null) return null;
         if (v instanceof BigDecimal bd) return bd;
         try { return new BigDecimal(v.toString()); } catch (Exception e) { return null; }
+    }
+
+    // =========================================================================
+    // WAL / Archiver / Slot / Conflict metrik sorgulari
+    // =========================================================================
+
+    private List<Map<String, Object>> queryWalMetric(String metricName, String aggFn, String interval) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_wal_snapshot where sample_ts >= now() - ?::interval group by instance_pk",
+            interval);
+    }
+
+    private List<Map<String, Object>> queryWalMetricBetween(String metricName, String aggFn,
+                                                              String intervalStart, String intervalEnd) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_wal_snapshot" +
+            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
+            intervalStart, intervalEnd);
+    }
+
+    private List<Map<String, Object>> queryArchiverMetric(String metricName, String aggFn, String interval) {
+        // Archiver cumulative — max alir son deger. Ancak "artis var mi" icin
+        // once - sonra delta hesaplamak lazim. Burada max kullaniyoruz.
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_archiver_snapshot where sample_ts >= now() - ?::interval group by instance_pk",
+            interval);
+    }
+
+    private List<Map<String, Object>> queryArchiverMetricBetween(String metricName, String aggFn,
+                                                                    String intervalStart, String intervalEnd) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_archiver_snapshot" +
+            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
+            intervalStart, intervalEnd);
+    }
+
+    private List<Map<String, Object>> querySlotMetric(String metricName, String aggFn, String interval) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_replication_slot_snapshot where sample_ts >= now() - ?::interval group by instance_pk",
+            interval);
+    }
+
+    private List<Map<String, Object>> querySlotMetricBetween(String metricName, String aggFn,
+                                                                String intervalStart, String intervalEnd) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_replication_slot_snapshot" +
+            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
+            intervalStart, intervalEnd);
+    }
+
+    private List<Map<String, Object>> queryConflictMetric(String metricName, String aggFn, String interval) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_database_conflict_snapshot where sample_ts >= now() - ?::interval group by instance_pk",
+            interval);
+    }
+
+    private List<Map<String, Object>> queryConflictMetricBetween(String metricName, String aggFn,
+                                                                    String intervalStart, String intervalEnd) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from fact.pg_database_conflict_snapshot" +
+            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
+            intervalStart, intervalEnd);
     }
 }

@@ -41,7 +41,9 @@ public class PartitionManager {
         "fact.pg_lock_snapshot",
         "fact.pg_progress_snapshot",
         "fact.pg_wal_snapshot",
-        "fact.pg_archiver_snapshot"
+        "fact.pg_archiver_snapshot",
+        "fact.pg_replication_slot_snapshot",
+        "fact.pg_database_conflict_snapshot"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");

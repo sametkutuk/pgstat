@@ -167,6 +167,20 @@ public class ClusterCollector {
             } catch (Exception e) {
                 log.warn("Archiver snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
+
+            // Adim 11: Replication slot snapshot
+            try {
+                rowsWritten += collectSlotSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Slot snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 12: Database conflicts snapshot
+            try {
+                rowsWritten += collectConflictSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Conflict snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
         }
 
         log.debug("Cluster toplama tamamlandi: {} — {} satir", instance.instanceId(), rowsWritten);
@@ -572,5 +586,74 @@ public class ClusterCollector {
             );
             return 1;
         }
+    }
+
+    // =========================================================================
+    // Adim 11: Replication slot snapshot
+    // =========================================================================
+
+    private long collectSlotSnapshot(Connection conn, SourceQueries queries,
+                                      long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.replicationSlotsQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertSlotSnapshot(
+                    now, instancePk,
+                    rs.getString("slot_name"),
+                    rs.getString("plugin"),
+                    rs.getString("slot_type"),
+                    rs.getString("database"),
+                    (Boolean) rs.getObject("active"),
+                    (Integer) rs.getObject("active_pid"),
+                    (Long) rs.getObject("xmin_int"),
+                    (Long) rs.getObject("catalog_xmin_int"),
+                    rs.getString("restart_lsn"),
+                    rs.getString("confirmed_flush_lsn"),
+                    rs.getString("wal_status"),
+                    (Long) rs.getObject("safe_wal_size"),
+                    (Long) rs.getObject("slot_lag_bytes"),
+                    (Long) rs.getObject("spill_txns"),
+                    (Long) rs.getObject("spill_count"),
+                    (Long) rs.getObject("spill_bytes"),
+                    (Long) rs.getObject("stream_txns"),
+                    (Long) rs.getObject("stream_count"),
+                    (Long) rs.getObject("stream_bytes"),
+                    (Long) rs.getObject("total_txns"),
+                    (Long) rs.getObject("total_bytes")
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 12: Database conflicts snapshot
+    // =========================================================================
+
+    private long collectConflictSnapshot(Connection conn, SourceQueries queries,
+                                          long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.databaseConflictsQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertConflictSnapshot(
+                    now, instancePk,
+                    rs.getString("datname"),
+                    (Long) rs.getObject("confl_tablespace"),
+                    (Long) rs.getObject("confl_lock"),
+                    (Long) rs.getObject("confl_snapshot"),
+                    (Long) rs.getObject("confl_bufferpin"),
+                    (Long) rs.getObject("confl_deadlock")
+                );
+                rows++;
+            }
+        }
+        return rows;
     }
 }
