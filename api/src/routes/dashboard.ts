@@ -143,4 +143,104 @@ router.get('/top-statements', async (req, res, next) => {
   }
 });
 
+// GET /api/dashboard/wal-production — Top 5 WAL üretimi (byte/saat)
+router.get('/wal-production', async (_req, res, next) => {
+  try {
+    const result = await pool.query(`
+      select
+        w.instance_pk,
+        i.display_name,
+        round(avg(w.wal_bytes_delta)::numeric * 3600 / nullif(extract(epoch from (max(w.snapshot_ts) - min(w.snapshot_ts))), 0)) as wal_bytes_per_hour
+      from fact.pg_wal_snapshot w
+      join control.instance_inventory i on i.instance_pk = w.instance_pk
+      where w.snapshot_ts >= now() - interval '1 hour'
+        and w.wal_bytes_delta is not null
+        and i.is_active
+      group by w.instance_pk, i.display_name
+      having count(*) > 1
+      order by wal_bytes_per_hour desc nulls last
+      limit 5
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/dashboard/archiver-failures — Failed archive count > 0
+router.get('/archiver-failures', async (_req, res, next) => {
+  try {
+    const result = await pool.query(`
+      select
+        a.instance_pk,
+        i.display_name,
+        a.failed_count,
+        a.last_failed_wal,
+        a.last_failed_time,
+        a.snapshot_ts
+      from fact.pg_archiver_snapshot a
+      join control.instance_inventory i on i.instance_pk = a.instance_pk and i.is_active
+      where a.snapshot_ts = (
+        select max(snapshot_ts) from fact.pg_archiver_snapshot where instance_pk = a.instance_pk
+      )
+        and a.failed_count > 0
+      order by a.failed_count desc
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/dashboard/slru-cache-miss — Top 5 SLRU blks_read
+router.get('/slru-cache-miss', async (_req, res, next) => {
+  try {
+    const result = await pool.query(`
+      select
+        s.instance_pk,
+        i.display_name,
+        sum(s.blks_read_delta) as total_blks_read,
+        sum(s.blks_hit_delta) as total_blks_hit,
+        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
+          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+          else 100 end as hit_ratio
+      from fact.pg_slru_snapshot s
+      join control.instance_inventory i on i.instance_pk = s.instance_pk and i.is_active
+      where s.snapshot_ts >= now() - interval '1 hour'
+      group by s.instance_pk, i.display_name
+      having sum(s.blks_read_delta) > 0
+      order by total_blks_read desc
+      limit 5
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/dashboard/alert-summary — Severity bazında açık alert dağılımı
+router.get('/alert-summary', async (_req, res, next) => {
+  try {
+    const result = await pool.query(`
+      select
+        coalesce(severity, 'info') as severity,
+        count(*) as count
+      from ops.alert
+      where status = 'open'
+      group by severity
+      order by
+        case severity
+          when 'emergency' then 1
+          when 'critical' then 2
+          when 'warning' then 3
+          when 'info' then 4
+          else 5
+        end
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

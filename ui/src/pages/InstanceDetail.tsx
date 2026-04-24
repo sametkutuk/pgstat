@@ -7,7 +7,7 @@ import TimeAgo from '../components/common/TimeAgo';
 import DataTable from '../components/common/DataTable';
 import { useState } from 'react';
 
-type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns';
+type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -27,6 +27,10 @@ export default function InstanceDetail() {
     const activity = useQuery({ queryKey: ['activity', id], queryFn: () => apiGet<any[]>(`/instances/${id}/activity`), enabled: tab === 'activity' });
     const alerts = useQuery({ queryKey: ['inst-alerts', id], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}`), enabled: tab === 'alerts' });
     const jobruns = useQuery({ queryKey: ['inst-jobruns', id], queryFn: () => apiGet<any[]>(`/job-runs?limit=20`), enabled: tab === 'jobruns' });
+    const functions = useQuery({ queryKey: ['inst-functions', id], queryFn: () => apiGet<any[]>(`/instances/${id}/functions?hours=1`), enabled: tab === 'functions' });
+    const sequences = useQuery({ queryKey: ['inst-sequences', id], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?hours=1`), enabled: tab === 'sequences' });
+    const walData = useQuery({ queryKey: ['inst-wal', id], queryFn: () => apiGet<any>(`/instances/${id}/wal?hours=1`), enabled: tab === 'wal' });
+    const slruData = useQuery({ queryKey: ['inst-slru', id], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?hours=1`), enabled: tab === 'slru' });
 
     const inst = instance.data;
     const cap = capability.data;
@@ -39,6 +43,10 @@ export default function InstanceDetail() {
         { key: 'statements', label: 'Statements' },
         { key: 'databases', label: 'Databases' },
         { key: 'activity', label: 'Activity' },
+        { key: 'functions', label: 'Functions' },
+        { key: 'sequences', label: 'Sequences' },
+        { key: 'wal', label: 'WAL/Archive' },
+        { key: 'slru', label: 'SLRU' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
     ];
@@ -78,6 +86,10 @@ export default function InstanceDetail() {
             {tab === 'statements' && <StatementsTab data={statements.data} loading={statements.isLoading} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} />}
             {tab === 'activity' && <ActivityTab data={activity.data} loading={activity.isLoading} />}
+            {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
+            {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
+            {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
+            {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
         </div>
@@ -233,4 +245,108 @@ function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boole
         { key: 'instances_failed', header: 'Başarısız', render: (r: any) => r.instances_failed > 0 ? <span className="text-red-600">{r.instances_failed}</span> : <span className="text-[#94A3B8]">0</span>, className: 'text-right' },
     ];
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Job run kaydı yok" /></div>;
+}
+
+function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const columns = [
+        { key: 'schemaname', header: 'Schema' },
+        { key: 'funcname', header: 'Fonksiyon' },
+        { key: 'total_calls', header: 'Calls', render: (r: any) => Number(r.total_calls).toLocaleString(), className: 'text-right' },
+        { key: 'total_time_ms', header: 'Toplam (ms)', render: (r: any) => Number(r.total_time_ms).toFixed(2), className: 'text-right' },
+        { key: 'self_time_ms', header: 'Self (ms)', render: (r: any) => Number(r.self_time_ms).toFixed(2), className: 'text-right' },
+        { key: 'avg_time_ms', header: 'Avg (ms)', render: (r: any) => Number(r.avg_time_ms).toFixed(3), className: 'text-right' },
+    ];
+    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Fonksiyon verisi yok (pg_stat_user_functions)" /></div>;
+}
+
+function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const columns = [
+        { key: 'schemaname', header: 'Schema' },
+        { key: 'relname', header: 'Sequence' },
+        { key: 'total_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_blks_read).toLocaleString(), className: 'text-right' },
+        { key: 'total_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_blks_hit).toLocaleString(), className: 'text-right' },
+        {
+            key: 'hit_ratio', header: 'Hit Ratio', render: (r: any) => (
+                <span className={Number(r.hit_ratio) < 90 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                    {Number(r.hit_ratio).toFixed(1)}%
+                </span>
+            ), className: 'text-right'
+        },
+    ];
+    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Sequence I/O verisi yok" /></div>;
+}
+
+function WalArchiveTab({ data, loading }: { data: any | undefined; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const wal = data?.wal || [];
+    const archiver = data?.archiver || [];
+
+    return (
+        <div className="space-y-5">
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">WAL Üretimi</h3>
+                {wal.length === 0 ? (
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">WAL verisi yok</div>
+                ) : (
+                    <DataTable columns={[
+                        { key: 'snapshot_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.snapshot_ts} /> },
+                        { key: 'wal_records_delta', header: 'Records', render: (r: any) => Number(r.wal_records_delta || 0).toLocaleString(), className: 'text-right' },
+                        { key: 'wal_bytes_delta', header: 'Bytes', render: (r: any) => formatBytesCompact(Number(r.wal_bytes_delta || 0)), className: 'text-right' },
+                        { key: 'wal_fpi_delta', header: 'FPI', render: (r: any) => Number(r.wal_fpi_delta || 0).toLocaleString(), className: 'text-right' },
+                        { key: 'wal_buffers_full_delta', header: 'Buf Full', render: (r: any) => Number(r.wal_buffers_full_delta || 0).toLocaleString(), className: 'text-right' },
+                        { key: 'wal_write_time_delta', header: 'Write (ms)', render: (r: any) => Number(r.wal_write_time_delta || 0).toFixed(1), className: 'text-right' },
+                        { key: 'wal_sync_time_delta', header: 'Sync (ms)', render: (r: any) => Number(r.wal_sync_time_delta || 0).toFixed(1), className: 'text-right' },
+                    ]} data={wal} />
+                )}
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Archiver Durumu</h3>
+                {archiver.length === 0 ? (
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">Archiver verisi yok</div>
+                ) : (
+                    <DataTable columns={[
+                        { key: 'snapshot_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.snapshot_ts} /> },
+                        { key: 'archived_count', header: 'Arşivlenen', render: (r: any) => Number(r.archived_count || 0).toLocaleString(), className: 'text-right' },
+                        { key: 'last_archived_wal', header: 'Son Arşiv WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_archived_wal || '—'}</span> },
+                        {
+                            key: 'failed_count', header: 'Başarısız', render: (r: any) => {
+                                const n = Number(r.failed_count || 0);
+                                return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : <span className="text-green-600">0</span>;
+                            }, className: 'text-right'
+                        },
+                        { key: 'last_failed_wal', header: 'Son Hata WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_failed_wal || '—'}</span> },
+                    ]} data={archiver} />
+                )}
+            </div>
+        </div>
+    );
+}
+
+function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const columns = [
+        { key: 'name', header: 'SLRU' },
+        { key: 'total_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_blks_hit).toLocaleString(), className: 'text-right' },
+        { key: 'total_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_blks_read).toLocaleString(), className: 'text-right' },
+        {
+            key: 'hit_ratio', header: 'Hit Ratio', render: (r: any) => (
+                <span className={Number(r.hit_ratio) < 90 ? 'text-red-600 font-medium' : 'text-green-600'}>
+                    {Number(r.hit_ratio).toFixed(1)}%
+                </span>
+            ), className: 'text-right'
+        },
+        { key: 'total_blks_written', header: 'Written', render: (r: any) => Number(r.total_blks_written).toLocaleString(), className: 'text-right' },
+        { key: 'total_flushes', header: 'Flushes', render: (r: any) => Number(r.total_flushes).toLocaleString(), className: 'text-right' },
+        { key: 'total_truncates', header: 'Truncates', render: (r: any) => Number(r.total_truncates).toLocaleString(), className: 'text-right' },
+    ];
+    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="SLRU verisi yok (PG13+)" /></div>;
+}
+
+function formatBytesCompact(bytes: number): string {
+    if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+    if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+    if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
+    return `${bytes} B`;
 }

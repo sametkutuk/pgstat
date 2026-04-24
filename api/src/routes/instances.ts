@@ -238,16 +238,16 @@ router.get('/:id/capability', async (req, res, next) => {
 router.get('/:id/statements', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours   = parseHours(req.query.hours, 1);
-    const limit   = parseLimit(req.query.limit, 100);
+    const hours = parseHours(req.query.hours, 1);
+    const limit = parseLimit(req.query.limit, 100);
     const datname = (req.query.datname as string) || null;
     const rolname = (req.query.rolname as string) || null;
 
     const orderMap: Record<string, string> = {
       exec_time: 'total_exec_time_ms',
-      avg_time:  'avg_exec_time_ms',
-      calls:     'total_calls',
-      rows:      'total_rows',
+      avg_time: 'avg_exec_time_ms',
+      calls: 'total_calls',
+      rows: 'total_rows',
       blks_read: 'total_shared_blks_read',
       temp_blks: 'total_temp_blks_written',
     };
@@ -470,6 +470,119 @@ router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
         and sample_ts >= now() - make_interval(hours => $3)
       order by sample_ts
     `, [id, dbid, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/functions — User function istatistikleri
+router.get('/:id/functions', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+    const result = await pool.query(`
+      select
+        f.funcid, f.schemaname, f.funcname,
+        sum(f.calls_delta) as total_calls,
+        sum(f.total_time_delta) as total_time_ms,
+        sum(f.self_time_delta) as self_time_ms,
+        case when sum(f.calls_delta) > 0
+          then sum(f.total_time_delta) / sum(f.calls_delta)
+          else 0 end as avg_time_ms
+      from fact.pg_user_function_snapshot f
+      where f.instance_pk = $1
+        and f.snapshot_ts >= now() - make_interval(hours => $2)
+      group by f.funcid, f.schemaname, f.funcname
+      order by total_time_ms desc nulls last
+      limit 100
+    `, [id, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/sequences — Sequence I/O istatistikleri
+router.get('/:id/sequences', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+    const result = await pool.query(`
+      select
+        s.relid, s.schemaname, s.relname,
+        sum(s.blks_read_delta) as total_blks_read,
+        sum(s.blks_hit_delta) as total_blks_hit,
+        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
+          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+          else 100 end as hit_ratio
+      from fact.pg_sequence_io_snapshot s
+      where s.instance_pk = $1
+        and s.snapshot_ts >= now() - make_interval(hours => $2)
+      group by s.relid, s.schemaname, s.relname
+      order by total_blks_read desc nulls last
+      limit 100
+    `, [id, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/wal — WAL + Archiver istatistikleri
+router.get('/:id/wal', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+    const [walResult, archiverResult] = await Promise.all([
+      pool.query(`
+        select snapshot_ts, wal_records_delta, wal_fpi_delta, wal_bytes_delta,
+               wal_buffers_full_delta, wal_write_delta, wal_sync_delta,
+               wal_write_time_delta, wal_sync_time_delta
+        from fact.pg_wal_snapshot
+        where instance_pk = $1
+          and snapshot_ts >= now() - make_interval(hours => $2)
+        order by snapshot_ts
+      `, [id, hours]),
+      pool.query(`
+        select snapshot_ts, archived_count, last_archived_wal, last_archived_time,
+               failed_count, last_failed_wal, last_failed_time
+        from fact.pg_archiver_snapshot
+        where instance_pk = $1
+          and snapshot_ts >= now() - make_interval(hours => $2)
+        order by snapshot_ts
+      `, [id, hours]),
+    ]);
+    res.json({ wal: walResult.rows, archiver: archiverResult.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/slru — SLRU cache istatistikleri
+router.get('/:id/slru', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+    const result = await pool.query(`
+      select
+        s.name,
+        sum(s.blks_zeroed_delta) as total_blks_zeroed,
+        sum(s.blks_hit_delta) as total_blks_hit,
+        sum(s.blks_read_delta) as total_blks_read,
+        sum(s.blks_written_delta) as total_blks_written,
+        sum(s.blks_exists_delta) as total_blks_exists,
+        sum(s.flushes_delta) as total_flushes,
+        sum(s.truncates_delta) as total_truncates,
+        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
+          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+          else 100 end as hit_ratio
+      from fact.pg_slru_snapshot s
+      where s.instance_pk = $1
+        and s.snapshot_ts >= now() - make_interval(hours => $2)
+      group by s.name
+      order by total_blks_read desc nulls last
+    `, [id, hours]);
     res.json(result.rows);
   } catch (err) {
     next(err);

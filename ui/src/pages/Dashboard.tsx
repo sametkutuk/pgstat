@@ -39,6 +39,33 @@ interface InstanceMetrics {
   total_dead_tuples: number;
 }
 
+interface WalProduction {
+  instance_pk: number;
+  display_name: string;
+  wal_bytes_per_hour: number | null;
+}
+
+interface ArchiverFailure {
+  instance_pk: number;
+  display_name: string;
+  failed_count: number;
+  last_failed_wal: string | null;
+  last_failed_time: string | null;
+}
+
+interface SlruCacheMiss {
+  instance_pk: number;
+  display_name: string;
+  total_blks_read: number;
+  total_blks_hit: number;
+  hit_ratio: number;
+}
+
+interface AlertSeverityCount {
+  severity: string;
+  count: number;
+}
+
 type HealthColor = 'green' | 'yellow' | 'red' | 'blue' | 'gray';
 
 function getHealthColor(inst: InstanceHealth): HealthColor {
@@ -87,6 +114,13 @@ function formatNum(n: number): string {
   return String(n);
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
@@ -109,6 +143,30 @@ export default function Dashboard() {
   const metricsQuery = useQuery({
     queryKey: ['dash-metrics'],
     queryFn: () => apiGet<InstanceMetrics[]>('/dashboard/instance-metrics'),
+    refetchInterval: 30_000,
+  });
+
+  const walQuery = useQuery({
+    queryKey: ['dash-wal'],
+    queryFn: () => apiGet<WalProduction[]>('/dashboard/wal-production'),
+    refetchInterval: 30_000,
+  });
+
+  const archiverQuery = useQuery({
+    queryKey: ['dash-archiver'],
+    queryFn: () => apiGet<ArchiverFailure[]>('/dashboard/archiver-failures'),
+    refetchInterval: 30_000,
+  });
+
+  const slruQuery = useQuery({
+    queryKey: ['dash-slru'],
+    queryFn: () => apiGet<SlruCacheMiss[]>('/dashboard/slru-cache-miss'),
+    refetchInterval: 30_000,
+  });
+
+  const alertSummaryQuery = useQuery({
+    queryKey: ['dash-alert-summary'],
+    queryFn: () => apiGet<AlertSeverityCount[]>('/dashboard/alert-summary'),
     refetchInterval: 30_000,
   });
 
@@ -189,6 +247,12 @@ export default function Dashboard() {
 
   const hasTopData = topQps.length > 0 || topConnections.length > 0 || topLag.length > 0 || topDeadTuples.length > 0;
 
+  const walData = walQuery.data ?? [];
+  const archiverData = archiverQuery.data ?? [];
+  const slruData = slruQuery.data ?? [];
+  const alertSummary = alertSummaryQuery.data ?? [];
+  const hasNewMetrics = walData.length > 0 || archiverData.length > 0 || slruData.length > 0 || alertSummary.length > 0;
+
   // Group filtered instances
   const groups = useMemo(() => {
     if (groupBy === 'none') {
@@ -205,7 +269,7 @@ export default function Dashboard() {
       .map(([key, items]) => ({ key, label: key, items }));
   }, [filtered, groupBy]);
 
-  const isFetching = summary.isFetching || health.isFetching || metricsQuery.isFetching;
+  const isFetching = summary.isFetching || health.isFetching || metricsQuery.isFetching || walQuery.isFetching || archiverQuery.isFetching || slruQuery.isFetching || alertSummaryQuery.isFetching;
 
   function renderTile(inst: InstanceHealth) {
     const color = getHealthColor(inst);
@@ -269,7 +333,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl font-bold">Dashboard</h1>
         <button
-          onClick={() => { summary.refetch(); health.refetch(); metricsQuery.refetch(); }}
+          onClick={() => { summary.refetch(); health.refetch(); metricsQuery.refetch(); walQuery.refetch(); archiverQuery.refetch(); slruQuery.refetch(); alertSummaryQuery.refetch(); }}
           className="text-xs text-[#64748B] hover:text-[#1E293B] transition-colors px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1]"
         >
           {isFetching ? 'Yenileniyor...' : 'Yenile'}
@@ -418,6 +482,93 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Yeni Metrik Widget'ları: WAL, Archiver, SLRU, Alert Özeti */}
+      {hasNewMetrics && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+          {walData.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
+                WAL Üretimi (byte/saat)
+              </div>
+              <div className="space-y-2">
+                {walData.map(w => (
+                  <div key={w.instance_pk} className="flex items-center justify-between text-sm">
+                    <span className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
+                      onClick={() => navigate(`/cluster/${w.instance_pk}`)}>
+                      {w.display_name}
+                    </span>
+                    <span className="font-mono font-semibold text-purple-600 ml-2 flex-shrink-0">
+                      {formatBytes(Number(w.wal_bytes_per_hour || 0))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {archiverData.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
+                Archiver Hataları
+              </div>
+              <div className="space-y-2">
+                {archiverData.map(a => (
+                  <div key={a.instance_pk} className="flex items-center justify-between text-sm">
+                    <span className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
+                      onClick={() => navigate(`/cluster/${a.instance_pk}`)}>
+                      {a.display_name}
+                    </span>
+                    <span className="font-mono font-semibold text-red-600 ml-2 flex-shrink-0">
+                      {Number(a.failed_count)} başarısız
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {slruData.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
+                SLRU Cache Miss
+              </div>
+              <div className="space-y-2">
+                {slruData.map(s => (
+                  <div key={s.instance_pk} className="flex items-center justify-between text-sm">
+                    <span className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
+                      onClick={() => navigate(`/cluster/${s.instance_pk}`)}>
+                      {s.display_name}
+                    </span>
+                    <span className={`font-mono font-semibold ml-2 flex-shrink-0 ${Number(s.hit_ratio) < 90 ? 'text-red-600' : 'text-amber-600'}`}>
+                      {Number(s.hit_ratio)}% hit
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {alertSummary.length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm p-4">
+              <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
+                Açık Alert Özeti
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {alertSummary.map(a => (
+                  <div key={a.severity} className="text-center p-2 rounded-lg bg-[#F8FAFC]">
+                    <div className={`text-lg font-bold ${a.severity === 'emergency' ? 'text-red-700' :
+                      a.severity === 'critical' ? 'text-red-600' :
+                        a.severity === 'warning' ? 'text-amber-600' : 'text-blue-600'
+                      }`}>{Number(a.count)}</div>
+                    <div className="text-[10px] text-[#64748B] uppercase">{a.severity}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <input
@@ -464,11 +615,10 @@ export default function Dashboard() {
           <span className="text-xs text-[#64748B]">Grupla:</span>
           <button
             onClick={() => setGroupBy(g => g === 'environment' ? 'none' : 'environment')}
-            className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${
-              groupBy === 'environment'
-                ? 'bg-[#3B82F6] text-white border-[#3B82F6]'
-                : 'bg-white text-[#64748B] border-[#E2E8F0] hover:border-[#CBD5E1]'
-            }`}
+            className={`text-xs px-2.5 py-1.5 rounded-md border transition-colors ${groupBy === 'environment'
+              ? 'bg-[#3B82F6] text-white border-[#3B82F6]'
+              : 'bg-white text-[#64748B] border-[#E2E8F0] hover:border-[#CBD5E1]'
+              }`}
           >
             Ortama Göre
           </button>
