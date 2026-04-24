@@ -1,556 +1,380 @@
-# Cursor Handoff - Adaptive Alerting Projesi
+# Cursor Handoff — Adaptive Alerting
 
-## 🎯 Proje Özeti
-PostgreSQL monitoring sistemi (pgstat) için adaptive alerting özelliği ekliyoruz. Sistem, 28 günlük geçmiş veriden otomatik baseline profilleri oluşturup anomali tespiti yapacak.
-
----
-
-## ✅ TAMAMLANAN İŞLER (Phase 1)
-
-### 1. Tasarım Dokümantasyonu ✅
-- **Dosya**: `docs/adaptive-alerting-design.md` (150+ sayfa, Türkçe)
-- **İçerik**:
-  - 31 alert metriği tanımlandı (cluster, activity, replication, database, statement, table, query-based)
-  - Baseline profilleme sistemi (28 günlük geçmiş, saatlik örüntüler)
-  - Scope yönetimi (single_instance, all_instances, instance_group)
-  - Alert snooze/mute sistemi
-  - Maintenance window sistemi
-  - Notification channels (Email, Slack, PagerDuty, Teams, Webhook)
-  - Baseline versiyonlama ve invalidation
-  - Query-based monitoring (10 metrik, queryid/statement_series üzerinden)
-
-### 2. Database Migration ✅
-- **Dosya**: `db/migrations/V018__adaptive_alerting.sql`
-- **Tablolar**:
-  - `control.metric_baseline` - Genel metrik baseline'ları
-  - `control.metric_baseline_query` - Query bazlı baseline'lar
-  - `control.instance_settings` - Instance kapasite bilgileri
-  - `control.baseline_version` - Baseline versiyonlama
-  - `control.instance_group` - Instance grupları
-  - `control.instance_group_member` - Grup üyelikleri
-  - `control.alert_snooze` - Geçici alert susturma
-  - `control.maintenance_window` - Bakım pencereleri
-  - `control.notification_channel` - Bildirim kanalları
-- **Fonksiyonlar**:
-  - `invalidate_baseline()` - Baseline'ı sıfırla (major upgrade sonrası)
-  - `is_alert_snoozed()` - Alert snooze kontrolü
-  - `is_in_maintenance()` - Bakım penceresi kontrolü
-- **Alert Rule Güncellemeleri**:
-  - `sensitivity` kolonu (low/medium/high)
-  - `use_adaptive` kolonu (baseline kullan/kullanma)
-  - `scope` kolonu (single_instance/all_instances/instance_group)
-  - `instance_group_id` kolonu
-  - `instance_pk` artık nullable (all_instances için)
-
-### 3. API Endpoints ✅
-- **Dosya**: `api/src/routes/adaptiveAlerting.ts`
-- **17 Endpoint**:
-  - **Alert Snooze**: POST/GET/DELETE `/api/adaptive-alerting/snooze`
-  - **Maintenance Windows**: POST/GET/DELETE `/api/adaptive-alerting/maintenance`
-  - **Notification Channels**: POST/GET/DELETE/test `/api/adaptive-alerting/channels`
-  - **Baseline Management**: GET/POST/invalidate `/api/adaptive-alerting/baselines`
-  - **Instance Groups**: POST/GET/add-member/remove-member `/api/adaptive-alerting/groups`
-- **Auth**: Tüm endpoint'ler JWT korumalı
-- **Route**: `api/src/index.ts` içinde `/api/adaptive-alerting` altında kayıtlı
-
-### 4. UI Sayfası ✅
-- **Dosya**: `ui/src/pages/AdaptiveAlerting.tsx`
-- **5 Tab**:
-  1. **📊 Genel Bakış** - Sistem özeti, aktif baseline/snooze sayıları
-  2. **📈 Baseline Profiller** - Instance bazlı baseline görüntüleme (henüz veri yok)
-  3. **🔕 Snooze Yönetimi** - Alert'leri geçici susturma
-  4. **🔧 Bakım Pencereleri** - Planlı bakım için otomatik susturma
-  5. **📢 Bildirim Kanalları** - Email, Slack, PagerDuty entegrasyonları
-- **Menü**: Sol sidebar'da "⚡ Adaptive Alerting" linki eklendi
-- **Route**: `/settings/adaptive-alerting`
-
-### 5. Dokümantasyon ✅
-- `docs/adaptive-alerting-implementation-status.md` - Roadmap ve durum
-- `docs/adaptive-alerting-quickstart.md` - Curl örnekleri ile hızlı başlangıç
-- `ADAPTIVE_ALERTING_SUMMARY.md` - Proje özeti
+**Son güncelleme:** 2026-04-24 (audit sonrası yeniden yazıldı)
+**Durum:** Phase 1 çıktıları var ama eksik/tutarsız. Phase 2'ye başlamadan önce A-D aksiyonları yapılmalı.
 
 ---
 
-## 🚧 YAPILMASI GEREKENLER
+## 1. Gerçek Durum (kod üzerinden doğrulandı)
 
-### Phase 2: Collector Entegrasyonu (ÖNCELİKLİ)
-**Durum**: Başlanmadı  
-**Tahmini Süre**: 4-6 saat
+### Mevcut olanlar
 
-#### 2.1 Baseline Hesaplama Job'ı
-**Dosya**: `collector/src/main/java/com/pgstat/collector/jobs/BaselineCalculationJob.java` (yeni)
+| Katman   | Dosya                                                                        | Ne var?                                                                                          |
+| -------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| DB       | `db/migrations/V018__adaptive_alerting.sql`                                  | 9 yeni tablo + 3 fonksiyon (`invalidate_baseline`, `is_alert_snoozed`, `is_in_maintenance`) + `alert_rule`'a 7 yeni kolon. |
+| API      | `api/src/routes/adaptiveAlerting.ts`                                         | 18 endpoint. JWT korumalı, `/api/adaptive-alerting` altında mount edilmiş.                       |
+| UI       | `ui/src/pages/AdaptiveAlerting.tsx`                                          | 5 tab iskeleti. **Sadece `OverviewPanel` yarım çalışıyor. Diğer 4 panel boş placeholder.**         |
+| Router   | `ui/src/App.tsx`, `ui/src/components/layout/Sidebar.tsx`                     | `/settings/adaptive-alerting` route'u + menü linki kayıtlı.                                      |
+| Collector| —                                                                            | **Henüz hiçbir şey yok.** `BaselineCalculator` ve adaptive evaluation kodu yazılmadı.            |
 
-**Görevler**:
-1. Her gece 02:00'da çalışacak scheduled job
-2. Her instance için son 28 günlük veriyi çek:
-   - `agg.cluster_metric_hourly` - Cluster metrikleri
-   - `agg.activity_metric_hourly` - Bağlantı/aktivite
-   - `agg.replication_metric_hourly` - Replikasyon
-   - `agg.database_metric_hourly` - Database metrikleri
-   - `agg.statement_metric_hourly` - Statement metrikleri
-   - `agg.table_metric_hourly` - Tablo metrikleri
-3. Her metrik için hesapla:
-   - Genel baseline (hour_of_day = -1): avg, stddev, min, max, p50, p95, p99
-   - Saatlik baseline (hour_of_day = 0-23): Her saat için ayrı profil
-4. `control.metric_baseline` tablosuna yaz
-5. `control.instance_settings` tablosunu güncelle (max_connections, shared_buffers vb.)
+### Yok olanlar
 
-**SQL Örneği**:
+- Baseline hesaplayan servis (Java).
+- `AlertRuleEvaluator`'a adaptive branch.
+- Notification gönderici (Java).
+- UI'da: snooze formu, maintenance formu, channel formu, baseline görüntüleme. (Tümü placeholder.)
+- `V019__alert_notifications.sql` (Phase 4 için, henüz gerekli değil).
+
+---
+
+## 2. Tespit Edilen Tutarsızlıklar ve Kararlar
+
+Phase 1 kodu tasarım dokümanına tam uymuyor. Phase 2'ye geçmeden önce aşağıdaki **A-D aksiyonları** tamamlanmalı.
+
+### A) `scope` kolonu iki kez, farklı değer kümesiyle tanımlanmış
+
+- **V011 + V016** (mevcut, kullanımda): `alert_rule.scope ∈ {'all_instances', 'specific_instance', 'service_group'}`. UI ve API bu değerleri kullanıyor (`api/src/routes/alertRules.ts`'de `VALID_SCOPES`).
+- **V018** (yeni): `scope ∈ {'single_instance', 'all_instances', 'instance_group'}` + `check_scope_consistency` constraint.
+
+**Çakışma:** V018'in `add column if not exists` satırı eski kolon üstüne check constraint eklemeye çalışır ve mevcut `'specific_instance'` ve `'service_group'` değerleri constraint'i fail eder.
+
+**Karar (değiştirilmesi yasak ana kural: mevcut davranışı koru):**
+- Kod bazda `specific_instance` ismi kalacak (`single_instance` yerine).
+- `service_group` korunacak.
+- `instance_group` yeni değer olarak eklenecek (instance_group_id FK ile).
+
+**Aksiyon A1 — V018'i patchle:** `scope` için constraint ve default kısmı değiştirilmeli. Aşağıda düzeltilmiş SQL bloğu — V018'i açıp bulup değiştir:
+
 ```sql
--- Genel baseline (tüm saatler)
-insert into control.metric_baseline (instance_pk, metric_key, hour_of_day, avg_value, stddev_value, ...)
-select 
-  instance_pk,
-  'cache_hit_ratio' as metric_key,
-  -1 as hour_of_day,
-  avg(cache_hit_ratio) as avg_value,
-  stddev(cache_hit_ratio) as stddev_value,
-  percentile_cont(0.50) within group (order by cache_hit_ratio) as p50_value,
-  percentile_cont(0.95) within group (order by cache_hit_ratio) as p95_value,
-  percentile_cont(0.99) within group (order by cache_hit_ratio) as p99_value,
-  count(*) as sample_count
-from agg.cluster_metric_hourly
-where instance_pk = ? 
-  and snapshot_time >= now() - interval '28 days'
-group by instance_pk;
+-- YANLIŞ (mevcut V018):
+alter table control.alert_rule
+  add column if not exists scope text default 'single_instance'
+    check (scope in ('single_instance', 'all_instances', 'instance_group')),
 
--- Saatlik baseline (0-23 arası her saat için)
-insert into control.metric_baseline (instance_pk, metric_key, hour_of_day, avg_value, ...)
-select 
-  instance_pk,
-  'cache_hit_ratio' as metric_key,
-  extract(hour from snapshot_time) as hour_of_day,
-  avg(cache_hit_ratio) as avg_value,
-  ...
-from agg.cluster_metric_hourly
-where instance_pk = ? 
-  and snapshot_time >= now() - interval '28 days'
-group by instance_pk, extract(hour from snapshot_time);
+-- DOĞRU:
+alter table control.alert_rule
+  add column if not exists instance_group_id integer references control.instance_group(group_id);
+-- scope zaten V011'de eklenmiş; sadece 'instance_group' değerini genişletmek gerekiyor
+
+-- scope constraint'ini yeniden kur (eski değerleri koru + yeni ekle):
+alter table control.alert_rule drop constraint if exists alert_rule_scope_check;
+alter table control.alert_rule drop constraint if exists ck_alert_rule_scope;
+alter table control.alert_rule
+  add constraint ck_alert_rule_scope
+  check (scope in ('all_instances', 'specific_instance', 'service_group', 'instance_group'));
+
+-- check_scope_consistency constraint'ini specific_instance adıyla düzelt:
+alter table control.alert_rule drop constraint if exists check_scope_consistency;
+alter table control.alert_rule
+  add constraint check_scope_consistency check (
+    (scope = 'specific_instance' and instance_pk is not null and instance_group_id is null) or
+    (scope = 'all_instances'     and instance_pk is null     and instance_group_id is null) or
+    (scope = 'service_group'     and service_group is not null) or
+    (scope = 'instance_group'    and instance_pk is null     and instance_group_id is not null)
+  );
 ```
 
-#### 2.2 Query Baseline Hesaplama
-**Dosya**: Aynı job içinde
+### B) `use_adaptive` ile `alert_category` aynı şeyi anlatıyor
 
-**Görevler**:
-1. `dim.statement_series` tablosundan top 100 query'yi al (en çok çalışan)
-2. Her query için son 28 günlük metrikleri hesapla:
-   - avg_exec_time_ms, stddev_exec_time_ms, p95_exec_time_ms
-   - avg_calls_per_hour, max_calls
-   - avg_temp_blks_per_call, max_temp_blks_per_call
-3. `control.metric_baseline_query` tablosuna yaz
+- **V016** (mevcut): `alert_rule.alert_category ∈ {'smart', 'threshold'}`. UI'da "Hızlı İzleme" (smart) vs "Özel Kurallar" (threshold) tab ayrımı bunun üstüne kurulu.
+- **V018** (yeni): `use_adaptive boolean default true`. Adaptive evaluator bunu okuyacak.
 
-#### 2.3 Alert Evaluation Engine Güncellemesi
-**Dosya**: `collector/src/main/java/com/pgstat/collector/jobs/AlertEvaluationJob.java` (mevcut)
+**Karar:** `alert_category` tek kaynak olacak. `use_adaptive`, `alert_category = 'smart'`'in alias'ı olarak türetilecek — ayrı kolon tutmuyoruz.
 
-**Görevler**:
-1. `use_adaptive = true` olan kurallar için baseline'dan eşik çek
-2. Sensitivity'ye göre eşik hesapla:
-   - `low`: avg + 3*stddev
-   - `medium`: avg + 2*stddev
-   - `high`: avg + 1.5*stddev
-3. Saatlik baseline varsa, o saatin profilini kullan
-4. Snooze kontrolü: `is_alert_snoozed()` fonksiyonunu çağır
-5. Maintenance kontrolü: `is_in_maintenance()` fonksiyonunu çağır
-6. Eğer snooze/maintenance aktifse alert oluşturma
+**Aksiyon B1 — V018'den `use_adaptive` kolonunu sil:**
 
-**Pseudo-kod**:
+```sql
+-- V018 içinden ŞUNU ÇIKAR:
+-- add column if not exists use_adaptive boolean default true,
+
+-- Yerine: collector kodunda "rule.alert_category == 'smart'" olarak kontrol edilecek.
+```
+
+`absolute_warning`/`absolute_critical` kolonları da gereksiz — zaten `warning_threshold` ve `critical_threshold` kolonları V011'den beri var, aynı amaca hizmet ediyor.
+
+**Aksiyon B2 — `absolute_warning` ve `absolute_critical` kolonlarını V018'den çıkar.** Mevcut `warning_threshold`/`critical_threshold` kullanılmaya devam edecek.
+
+### C) API route path'leri doküman ile uyuşmuyor
+
+Eski handoff hatalıydı. **Gerçek path'ler:**
+
+```
+POST   /api/adaptive-alerting/snooze
+GET    /api/adaptive-alerting/snooze
+DELETE /api/adaptive-alerting/snooze/:snooze_id
+
+POST   /api/adaptive-alerting/maintenance-windows
+GET    /api/adaptive-alerting/maintenance-windows
+DELETE /api/adaptive-alerting/maintenance-windows/:window_id
+
+POST   /api/adaptive-alerting/notification-channels
+GET    /api/adaptive-alerting/notification-channels
+POST   /api/adaptive-alerting/notification-channels/:channel_id/test
+DELETE /api/adaptive-alerting/notification-channels/:channel_id
+
+GET    /api/adaptive-alerting/instances/:instance_pk/baseline/:metric_key
+POST   /api/adaptive-alerting/instances/:instance_pk/baseline/invalidate
+GET    /api/adaptive-alerting/instances/:instance_pk/baseline/versions
+
+POST   /api/adaptive-alerting/instance-groups
+GET    /api/adaptive-alerting/instance-groups
+POST   /api/adaptive-alerting/instance-groups/:group_id/members
+DELETE /api/adaptive-alerting/instance-groups/:group_id/members/:instance_pk
+```
+
+**Aksiyon C1 — UI panellerini yazarken sadece bu path'leri kullan.** Modal POST'ları için de aynı path'ler.
+
+### D) Collector'da `jobs/` paketi yok
+
+Eski handoff `collector/.../jobs/BaselineCalculationJob.java` yazıyor. **Paket yok.** Pgstat pattern'i: tüm servisler `com.pgstat.collector.service` altında `@Service`, orchestration `scheduler/JobOrchestrator` üzerinden.
+
+**Aksiyon D1 — Yeni dosya yolu:** `collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java`. `@Scheduled` değil, `JobOrchestrator` çağıracak (gece 02:00 advisory lock'lı).
+
+**Aksiyon D2 — Evaluation güncellemesi:** Yeni sınıf değil, **mevcut `service/AlertRuleEvaluator.java`'ya** yeni branch. `evaluate()` içinde `evalType` switch'ine `"adaptive"` case'i eklenecek. Baseline'dan (`control.metric_baseline`) eşik çekip sensitivity'ye göre karar verecek.
+
+---
+
+## 3. Phase 2 — Collector Entegrasyonu (öncelikli)
+
+**Ön koşul:** A1, B1, B2 tamamlanmış olmalı (V018 patch'lenmiş).
+
+### 2.1 BaselineCalculator servisi
+
+**Dosya (yeni):** `collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java`
+**Tetikleme:** `JobOrchestrator` içinde yeni bir metot — gece 02:00-02:10 arası advisory lock alıp `calculate()` çağırsın. (`@Scheduled(cron="0 0 2 * * *")` değil — orchestrator pattern'i.)
+
+**Kapsam:**
+1. Her aktif instance için son 28 gün verisini `agg.*_hourly` tablolarından çek.
+2. Genel baseline (`hour_of_day = -1`) ve saatlik baseline (`hour_of_day = 0..23`).
+3. İstatistikler: `avg`, `stddev`, `min`, `max`, `p50`, `p95`, `p99`, `sample_count`.
+4. `control.metric_baseline` tablosuna UPSERT (`on conflict (instance_pk, metric_key, hour_of_day) do update`).
+5. `control.instance_settings` tablosunu da güncelle (source'tan `max_connections`, `shared_buffers` vb. çek — mevcut `DiscoveryCollector.java` pattern'ine bak).
+
+**İzlenecek metrikler (V018 aligned):**
+- Cluster: `cache_hit_ratio`, `wal_bytes`, `buffers_checkpoint`, `checkpoint_write_time`.
+- Activity: `active_count`, `idle_in_transaction_count`, `waiting_count`.
+- Replication: `replay_lag_bytes`, `replay_lag_seconds`.
+- Database: `deadlocks`, `temp_files`, `rollback_ratio`, `db_size_bytes`, `autovacuum_count`.
+- Statement: `calls`, `avg_exec_time_ms`, `temp_blks_written`.
+- Table: `dead_tuple_ratio`, `seq_scan`.
+
+**SQL iskeleti (örnek, cluster için):**
+
+```sql
+insert into control.metric_baseline
+  (instance_pk, metric_key, hour_of_day,
+   avg_value, stddev_value, min_value, max_value,
+   p50_value, p95_value, p99_value, sample_count,
+   baseline_start, baseline_end, updated_at)
+select
+  ?  as instance_pk,
+  'cache_hit_ratio' as metric_key,
+  -1 as hour_of_day,  -- genel
+  avg(cache_hit_ratio),
+  stddev_samp(cache_hit_ratio),
+  min(cache_hit_ratio),
+  max(cache_hit_ratio),
+  percentile_cont(0.50) within group (order by cache_hit_ratio),
+  percentile_cont(0.95) within group (order by cache_hit_ratio),
+  percentile_cont(0.99) within group (order by cache_hit_ratio),
+  count(*),
+  now() - interval '28 days',
+  now(),
+  now()
+from agg.cluster_metric_hourly
+where instance_pk = ?
+  and snapshot_time >= now() - interval '28 days'
+on conflict (instance_pk, metric_key, hour_of_day) do update set
+  avg_value = excluded.avg_value,
+  stddev_value = excluded.stddev_value,
+  min_value = excluded.min_value,
+  max_value = excluded.max_value,
+  p50_value = excluded.p50_value,
+  p95_value = excluded.p95_value,
+  p99_value = excluded.p99_value,
+  sample_count = excluded.sample_count,
+  baseline_start = excluded.baseline_start,
+  baseline_end = excluded.baseline_end,
+  updated_at = now();
+
+-- Saatlik versiyon:
+-- group by extract(hour from snapshot_time), hour_of_day = extract(hour from snapshot_time)
+```
+
+### 2.2 Query baseline (opsiyonel, aynı job içinde)
+
+Top 100 `queryid` için `control.metric_baseline_query`'ye yaz. Kaynak: `fact.pgss_delta` + `dim.statement_series`. Erken sürüm için atlanabilir — cluster/activity/db baseline'ı ilk olarak bitsin.
+
+### 2.3 AlertRuleEvaluator'a adaptive branch
+
+**Dosya (düzenleme):** `collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java`
+
+**Eklenecek:** `evaluateAdaptive(rule)` metodu. `evaluateRule` switch'ine `case "adaptive" -> evaluateAdaptive(rule);` eklenmeli. Ayrıca `alert_category='smart'` VE `evaluation_type='threshold'` kombinasyonu da adaptive'e yönlendirilmeli (kullanıcı eşik girmediyse).
+
+**Akış:**
 ```java
-for (AlertRule rule : adaptiveRules) {
-    if (isAlertSnoozed(rule.getRuleId(), instancePk, metricKey)) {
-        continue; // Skip
+private void evaluateAdaptive(Map<String,Object> rule) {
+    long ruleId = toLong(rule.get("rule_id"));
+    String metricKey = (String) rule.get("metric_name");
+    String sensitivity = (String) rule.get("sensitivity"); // low/medium/high
+    int hour = LocalDateTime.now().getHour();
+
+    for (target : loadTargetInstances(rule)) {
+        // 1) Snooze / maintenance kontrolü
+        if (isSnoozed(ruleId, instancePk, metricKey)) continue;
+        if (isInMaintenance(instancePk)) continue;
+
+        // 2) Saatlik baseline'ı çek, yoksa genel baseline
+        BigDecimal avg, stddev;
+        var hourly = jdbc.query("... where hour_of_day = ?", hour);
+        var row = hourly.orElseGet(() -> jdbc.query("... where hour_of_day = -1"));
+        if (row == null) continue; // baseline yok, atla
+
+        // 3) Eşik hesapla
+        BigDecimal multiplier = switch (sensitivity) {
+            case "low"    -> new BigDecimal("3.0");
+            case "medium" -> new BigDecimal("2.0");
+            case "high"   -> new BigDecimal("1.5");
+            default       -> new BigDecimal("2.0");
+        };
+        BigDecimal threshold = avg.add(stddev.multiply(multiplier));
+
+        // 4) Mevcut değeri çek, karşılaştır
+        BigDecimal current = queryCurrentValue(metricKey, instancePk);
+        if (current.compareTo(threshold) > 0) {
+            alertRepo.upsertWithSeverity(..., "warning", ..., ruleId);
+        }
     }
-    if (isInMaintenance(instancePk)) {
-        continue; // Skip
-    }
-    
-    Baseline baseline = getBaseline(instancePk, metricKey, currentHour);
-    double threshold = calculateThreshold(baseline, rule.getSensitivity());
-    
-    if (currentValue > threshold) {
-        createAlert(rule, currentValue, threshold);
-    }
+}
+
+private boolean isSnoozed(long ruleId, long pk, String metric) {
+    return jdbc.queryForObject(
+        "select control.is_alert_snoozed(?, ?, ?, null)",
+        Boolean.class, ruleId, pk, metric);
+}
+
+private boolean isInMaintenance(long pk) {
+    return jdbc.queryForObject(
+        "select control.is_in_maintenance(?)",
+        Boolean.class, pk);
 }
 ```
 
----
-
-### Phase 3: UI Geliştirmeleri (ORTA ÖNCELİK)
-**Durum**: Skeleton hazır, form/modal'lar eksik  
-**Tahmini Süre**: 3-4 saat
-
-#### 3.1 Snooze Yönetimi
-**Dosya**: `ui/src/pages/AdaptiveAlerting.tsx` (SnoozePanel)
-
-**Görevler**:
-1. "Snooze Ekle" modal'ı:
-   - Rule seçici (dropdown)
-   - Instance seçici (opsiyonel)
-   - Süre (dakika/saat/gün)
-   - Sebep (textarea)
-2. Aktif snooze listesi:
-   - Kalan süre göster (countdown)
-   - Erken kaldır butonu
-3. API entegrasyonu:
-   - `POST /api/adaptive-alerting/snooze`
-   - `GET /api/adaptive-alerting/snooze`
-   - `DELETE /api/adaptive-alerting/snooze/:id`
-
-#### 3.2 Bakım Pencereleri
-**Dosya**: `ui/src/pages/AdaptiveAlerting.tsx` (MaintenancePanel)
-
-**Görevler**:
-1. "Bakım Penceresi Ekle" modal'ı:
-   - Pencere adı
-   - Instance seçici (multi-select)
-   - Gün seçici (Pazartesi-Pazar, multi-select)
-   - Başlangıç/bitiş saati (time picker)
-   - Timezone seçici
-   - Tüm alert'leri sustur / sadece belirli severity'leri sustur
-2. Bakım penceresi listesi:
-   - Aktif/pasif toggle
-   - Düzenle/sil butonları
-   - Bir sonraki bakım zamanı göster
-3. API entegrasyonu:
-   - `POST /api/adaptive-alerting/maintenance`
-   - `GET /api/adaptive-alerting/maintenance`
-   - `DELETE /api/adaptive-alerting/maintenance/:id`
-
-#### 3.3 Bildirim Kanalları
-**Dosya**: `ui/src/pages/AdaptiveAlerting.tsx` (ChannelsPanel)
-
-**Görevler**:
-1. "Kanal Ekle" modal'ı:
-   - Kanal tipi seçici (Email/Slack/PagerDuty/Teams/Webhook)
-   - Tip'e göre dinamik form:
-     - **Email**: recipients (multi-input), smtp_host, smtp_port, from_address
-     - **Slack**: webhook_url, channel, username
-     - **PagerDuty**: integration_key, severity_mapping
-     - **Teams**: webhook_url
-     - **Webhook**: url, method, headers (key-value pairs), body_template
-   - Min severity (warning/critical/emergency)
-   - Instance filtresi (opsiyonel)
-   - Metrik kategori filtresi (opsiyonel)
-2. Kanal listesi:
-   - Aktif/pasif toggle
-   - Test butonu (test notification gönder)
-   - Düzenle/sil butonları
-3. API entegrasyonu:
-   - `POST /api/adaptive-alerting/channels`
-   - `GET /api/adaptive-alerting/channels`
-   - `POST /api/adaptive-alerting/channels/:id/test`
-   - `DELETE /api/adaptive-alerting/channels/:id`
-
-#### 3.4 Baseline Görselleştirme
-**Dosya**: `ui/src/pages/AdaptiveAlerting.tsx` (BaselinesPanel)
-
-**Görevler**:
-1. Instance seçildikten sonra:
-   - Metrik listesi (31 metrik)
-   - Her metrik için kart:
-     - Genel baseline (avg ± stddev)
-     - Saatlik grafik (24 saat, her saatin avg değeri)
-     - Son güncelleme zamanı
-     - "Baseline'ı Sıfırla" butonu
-2. Baseline invalidation:
-   - Sebep girişi (major upgrade, config change vb.)
-   - Onay modal'ı
-   - API: `POST /api/adaptive-alerting/baselines/:instance_pk/invalidate`
+**Önemli:** `is_alert_snoozed` ve `is_in_maintenance` fonksiyonları V018'de tanımlı — yeniden yazmaya gerek yok, sadece çağır.
 
 ---
 
-### Phase 4: Notification Sender (DÜŞÜK ÖNCELİK)
-**Durum**: Başlanmadı  
-**Tahmini Süre**: 4-5 saat
+## 4. Phase 3 — UI Panelleri (orta öncelik)
 
-#### 4.1 Notification Service
-**Dosya**: `collector/src/main/java/com/pgstat/collector/services/NotificationService.java` (yeni)
+**Her panel için ortak pattern:**
+1. `useQuery` ile `GET` listesi.
+2. Liste render, boş state.
+3. "+ Ekle" modal'ı (mevcut `RuleFormModal` pattern'ini kopyala — `AlertRules.tsx`).
+4. `useMutation` ile `POST`, success'te `invalidateQueries` + toast.
+5. Her satırda "Sil" butonu → `DELETE` mutation.
 
-**Görevler**:
-1. Alert oluşturulduğunda tetiklenecek
-2. `control.notification_channel` tablosundan aktif kanalları çek
-3. Filtreleme:
-   - Min severity kontrolü
-   - Instance filtresi kontrolü
-   - Metrik kategori filtresi kontrolü
-4. Her kanal için notification gönder:
-   - **Email**: JavaMail API kullan
-   - **Slack**: Webhook POST request
-   - **PagerDuty**: Events API v2
-   - **Teams**: Webhook POST request
-   - **Webhook**: Custom HTTP request
-5. Hata yönetimi:
-   - Retry mekanizması (3 deneme)
-   - Başarısız notification'ları logla
-   - Rate limiting (kanal başına max 10 notification/dakika)
+### 3.1 SnoozePanel
+- **List:** `GET /api/adaptive-alerting/snooze` → `{snooze_id, rule_id, rule_name, instance_pk, instance_name, metric_key, snooze_until, snooze_reason, created_by}[]`.
+- **Countdown:** `snooze_until - now()` dakika cinsinden göster. Bittiyse otomatik kaldır.
+- **Form alanları:** rule dropdown (`GET /api/alert-rules`), instance dropdown (`GET /api/instances`), süre (5dk/1sa/4sa/1gün/3gün/1hafta presetleri), `snooze_reason` textarea.
+- **POST body:** `{rule_id, instance_pk, metric_key?, snooze_until, snooze_reason}`.
 
-#### 4.2 Alert Notification Tablosu
-**Dosya**: `db/migrations/V019__alert_notifications.sql` (yeni)
+### 3.2 MaintenancePanel
+- **List:** `GET /api/adaptive-alerting/maintenance-windows`.
+- **Form alanları:** `window_name`, `description`, `instance_pks` (multi-select), `day_of_week` (checkbox 7 gün), `start_time`/`end_time` (time picker), `timezone` (default `Europe/Istanbul`), `suppress_all_alerts` toggle, `suppress_severity` (multi: warning/critical).
+- **POST body aynen.**
 
-**Görevler**:
-1. Tablo oluştur:
-```sql
-create table control.alert_notification (
-  notification_id bigserial primary key,
-  alert_id bigint references control.alert(alert_id) on delete cascade,
-  channel_id integer references control.notification_channel(channel_id),
-  
-  sent_at timestamptz default now(),
-  status text check (status in ('sent', 'failed', 'retrying')),
-  error_message text,
-  retry_count integer default 0,
-  
-  response_code integer,
-  response_body text
-);
-```
-2. Alert detay sayfasında notification geçmişini göster
+### 3.3 ChannelsPanel
+- **List:** `GET /api/adaptive-alerting/notification-channels`.
+- **Form — tip'e göre dinamik:**
+  - `email`: `config = {recipients: [], smtp_host, smtp_port, from_address}`.
+  - `slack`: `config = {webhook_url, channel, username?}`.
+  - `pagerduty`: `config = {integration_key}`.
+  - `teams`: `config = {webhook_url}`.
+  - `webhook`: `config = {url, method, headers, body_template}`.
+- **Test butonu:** `POST /api/adaptive-alerting/notification-channels/:id/test`.
+
+### 3.4 BaselinesPanel
+- Instance seçildikten sonra, her metrik için kart:
+  - `GET /api/adaptive-alerting/instances/:pk/baseline/:metric_key` → `{hourly: [{hour_of_day, avg_value, p95_value, ...}], general: {...}}` gibi.
+  - Kartta: genel `avg ± stddev`, saatlik mini sparkline (24 saat `avg_value`), `updated_at`.
+  - "Baseline'ı Sıfırla" butonu → `POST .../invalidate` (sebep prompt'u).
+
+### 3.5 OverviewPanel
+- Şu anda hard-coded. Gerçek veri:
+  - Aktif baseline sayısı: `GET /api/adaptive-alerting/baseline-count` (YENI ENDPOINT EKLE — basit `select count(distinct instance_pk) from control.metric_baseline`).
+  - Aktif snooze sayısı: `GET /api/adaptive-alerting/snooze` → length.
+  - Aktif maintenance sayısı: aynı yaklaşım.
 
 ---
 
-### Phase 5: İyileştirmeler (GELECEK)
-**Durum**: Planlama aşamasında
+## 5. Phase 4 — Notification Sender (düşük öncelik)
 
-#### 5.1 Machine Learning Baseline
-- Seasonal decomposition (trend + seasonality + residual)
-- Prophet/ARIMA modelleri
-- Anomaly detection (Isolation Forest, LSTM)
+Ancak Phase 2 + 3 bittikten sonra.
 
-#### 5.2 Alert Grouping
-- Aynı instance'ta 5 dakika içinde 10+ alert → tek grup alert
-- Root cause analysis (hangi metrik diğerlerini tetikledi?)
+**Dosya (yeni):** `collector/src/main/java/com/pgstat/collector/service/NotificationService.java`.
+**Tetikleme:** `AlertService.createAlert` çağrıldıktan sonra event yayınla veya aynı method'un sonunda çağır.
 
-#### 5.3 Alert Correlation
-- Replikasyon gecikmesi + yüksek WAL → master'da sorun var
-- Tüm instance'larda aynı anda yüksek CPU → network/storage sorunu
-
-#### 5.4 Baseline Drift Detection
-- Baseline'ın zamanla kayması (yavaş yavaş artan load)
-- Otomatik baseline refresh (her 7 günde bir)
+**Adımlar:**
+1. `control.notification_channel where is_enabled = true` çek.
+2. Filtreler: `min_severity`, `instance_pks`, `metric_categories`.
+3. Eşleşenlere gönder:
+   - Email: Spring Mail Starter (`pom.xml`'e ekle).
+   - Slack/Teams/Webhook: `java.net.http.HttpClient` — minimal, harici dependency yok.
+   - PagerDuty: Events API v2 (basit JSON POST).
+4. `V019__alert_notifications.sql` migration'ı yaz (handoff'un eski hali referans olarak kullanılabilir — şema doğru). Her gönderim için kayıt.
+5. Retry: aynı migration'da `retry_count` kolonu var. Scheduled retry servisi — 5dk arayla `failed` olanları tekrar dene, max 3.
 
 ---
 
-## 📁 ÖNEMLİ DOSYALAR
+## 6. Aksiyon Listesi (bitirme sırası)
 
-### Backend (Java Collector)
-- `collector/src/main/java/com/pgstat/collector/jobs/` - Job'lar buraya
-- `collector/src/main/java/com/pgstat/collector/services/` - Servisler buraya
-- `collector/pom.xml` - Dependency'ler (JavaMail, HTTP client vb.)
+- [ ] **A1** V018'de `scope` constraint'ini mevcut değerlerle uyumlu hale getir.
+- [ ] **B1** V018'den `use_adaptive` kolonunu kaldır.
+- [ ] **B2** V018'den `absolute_warning`/`absolute_critical` kolonlarını kaldır.
+- [ ] **C1** UI formları yazılırken yukarıdaki doğru API path'lerini kullan.
+- [ ] **D1** `BaselineCalculator.java` → `service/` altına yaz, `JobOrchestrator`'dan çağır.
+- [ ] **D2** `AlertRuleEvaluator.evaluateAdaptive()` metodu ekle, switch'e case ekle.
+- [ ] **3.1-3.5** UI panellerini gerçek API ile çalışır hale getir (her birinin POST/GET/DELETE'i).
+- [ ] **4** Notification service + V019 migration (erteleme kabul).
 
-### Backend (Node.js API)
-- `api/src/routes/adaptiveAlerting.ts` - Adaptive alerting endpoint'leri
-- `api/src/index.ts` - Route kayıtları
-- `api/src/config/database.ts` - Database pool
-
-### Frontend (React)
-- `ui/src/pages/AdaptiveAlerting.tsx` - Ana sayfa
-- `ui/src/components/layout/Sidebar.tsx` - Menü
-- `ui/src/App.tsx` - Route tanımları
-- `ui/src/api/client.ts` - API client
-
-### Database
-- `db/migrations/V018__adaptive_alerting.sql` - Mevcut migration
-- `db/migrations/V019__alert_notifications.sql` - Gelecek migration (notification tracking)
-
-### Dokümantasyon
-- `docs/adaptive-alerting-design.md` - Tam tasarım dokümanı (150+ sayfa)
-- `docs/adaptive-alerting-implementation-status.md` - Roadmap
-- `docs/adaptive-alerting-quickstart.md` - API kullanım örnekleri
+**Phase 2 bitirme kriteri:** Bir instance'ı 28 gün izledikten sonra UI'da baseline kartı görünür, `alert_category='smart'` kural adaptive olarak tetiklenir, snooze/maintenance doğru şekilde alert oluşmasını engeller.
 
 ---
 
-## 🔧 TEKNIK DETAYLAR
+## 7. Önemli Dosyalar (referans)
 
-### Database Schema
 ```
-control.metric_baseline
-├── instance_pk (FK → instance_inventory)
-├── metric_key (text) - Örn: 'cache_hit_ratio', 'active_count'
-├── hour_of_day (integer) - -1=genel, 0-23=saatlik
-├── avg_value, stddev_value, min_value, max_value
-├── p50_value, p95_value, p99_value
-├── sample_count
-├── capacity_value (opsiyonel, max_connections gibi)
-└── updated_at
+db/migrations/V018__adaptive_alerting.sql      [düzeltilecek: A1, B1, B2]
+db/migrations/V019__alert_notifications.sql    [yazılacak: Phase 4]
 
-control.metric_baseline_query
-├── instance_pk, queryid (PK)
-├── statement_series_pk (opsiyonel)
-├── avg_exec_time_ms, stddev_exec_time_ms, p95_exec_time_ms
-├── avg_calls_per_hour, max_calls
-├── avg_temp_blks_per_call, max_temp_blks_per_call
-└── updated_at
+api/src/routes/adaptiveAlerting.ts             [mevcut, 18 endpoint tamam]
+api/src/routes/alertRules.ts                   [smart/threshold pattern referansı]
+api/src/index.ts                               [route kayıtları]
 
-control.alert_snooze
-├── snooze_id (PK)
-├── rule_id, instance_pk, metric_key, queryid (opsiyonel)
-├── snooze_until (timestamptz)
-├── snooze_reason, created_by
-└── created_at
+ui/src/pages/AdaptiveAlerting.tsx              [düzeltilecek: Phase 3 tüm panel]
+ui/src/pages/AlertRules.tsx                    [form pattern referansı — kopyala]
 
-control.maintenance_window
-├── window_id (PK)
-├── window_name, description
-├── instance_pks (bigint[])
-├── day_of_week (integer[]) - 0=Pazar, 6=Cumartesi
-├── start_time, end_time (time)
-├── timezone
-├── suppress_all_alerts (boolean)
-├── suppress_severity (text[])
-└── is_enabled
-
-control.notification_channel
-├── channel_id (PK)
-├── channel_name, channel_type (email/slack/pagerduty/teams/webhook)
-├── config (jsonb) - Kanal tipine göre farklı
-├── min_severity (warning/critical/emergency)
-├── instance_pks (bigint[]) - Filtre
-├── metric_categories (text[]) - Filtre
-└── is_enabled
-```
-
-### API Endpoint'leri
-```
-POST   /api/adaptive-alerting/snooze              - Snooze ekle
-GET    /api/adaptive-alerting/snooze              - Aktif snooze'ları listele
-DELETE /api/adaptive-alerting/snooze/:id          - Snooze kaldır
-
-POST   /api/adaptive-alerting/maintenance         - Bakım penceresi ekle
-GET    /api/adaptive-alerting/maintenance         - Bakım pencerelerini listele
-DELETE /api/adaptive-alerting/maintenance/:id     - Bakım penceresi sil
-
-POST   /api/adaptive-alerting/channels            - Bildirim kanalı ekle
-GET    /api/adaptive-alerting/channels            - Kanalları listele
-POST   /api/adaptive-alerting/channels/:id/test   - Test notification gönder
-DELETE /api/adaptive-alerting/channels/:id        - Kanal sil
-
-GET    /api/adaptive-alerting/baselines/:instance_pk           - Baseline'ları getir
-POST   /api/adaptive-alerting/baselines/:instance_pk/invalidate - Baseline'ı sıfırla
-
-POST   /api/adaptive-alerting/groups              - Instance grubu oluştur
-GET    /api/adaptive-alerting/groups              - Grupları listele
-POST   /api/adaptive-alerting/groups/:id/members  - Gruba instance ekle
-DELETE /api/adaptive-alerting/groups/:id/members/:instance_pk - Gruptan çıkar
-```
-
-### Baseline Hesaplama Mantığı
-```
-1. Her gece 02:00'da çalış
-2. Her instance için:
-   a. Son 28 günlük veriyi çek (agg.* tablolarından)
-   b. Her metrik için:
-      - Genel baseline hesapla (tüm saatler)
-      - Saatlik baseline hesapla (0-23 arası her saat)
-   c. control.metric_baseline tablosuna yaz
-   d. control.instance_settings'i güncelle
-3. Top 100 query için:
-   a. Son 28 günlük statement metriklerini çek
-   b. control.metric_baseline_query'ye yaz
-```
-
-### Alert Evaluation Mantığı
-```
-1. Her 1 dakikada çalış
-2. Her alert rule için:
-   a. Snooze kontrolü → varsa skip
-   b. Maintenance kontrolü → varsa skip
-   c. use_adaptive = true ise:
-      - Baseline'dan eşik çek
-      - Sensitivity'ye göre hesapla:
-        * low: avg + 3*stddev
-        * medium: avg + 2*stddev
-        * high: avg + 1.5*stddev
-      - Saatlik baseline varsa kullan
-   d. use_adaptive = false ise:
-      - absolute_warning/absolute_critical kullan
-   e. Eşik aşıldıysa alert oluştur
-   f. Notification kanallarına gönder
+collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java  [düzeltilecek: D2]
+collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java  [yazılacak: D1]
+collector/src/main/java/com/pgstat/collector/scheduler/JobOrchestrator.java   [baseline çağrısı eklenecek]
 ```
 
 ---
 
-## 🚀 HIZLI BAŞLANGIÇ (Cursor'da)
+## 8. Hızlı Komutlar
 
-### 1. Projeyi Aç
 ```bash
-cd /root/pgstat  # veya Windows'ta C:\Users\...\pgstat
-cursor .
-```
+# Migration durumu
+PGPASSWORD=$PGSTAT_DB_PASSWORD psql -h $PGSTAT_DB_HOST -p $PGSTAT_DB_PORT -U $PGSTAT_DB_USER -d $PGSTAT_DB_NAME \
+  -c "\d control.metric_baseline" -c "\d control.alert_rule"
 
-### 2. Phase 2'ye Başla (Collector Entegrasyonu)
-```bash
-# Yeni Java dosyası oluştur
-touch collector/src/main/java/com/pgstat/collector/jobs/BaselineCalculationJob.java
+# V018 çakışma testi (local)
+cd db && ./apply.sh
 
-# Mevcut AlertEvaluationJob'ı aç ve güncelle
-cursor collector/src/main/java/com/pgstat/collector/jobs/AlertEvaluationJob.java
-```
+# API sağlık
+curl -s localhost:3001/api/adaptive-alerting/snooze -H "Authorization: Bearer $TOKEN" | jq
 
-### 3. Test Et
-```bash
-# Migration'ı kontrol et
-psql -h $PGSTAT_DB_HOST -p $PGSTAT_DB_PORT -U $PGSTAT_DB_USER -d $PGSTAT_DB_NAME \
-  -c "SELECT * FROM control.metric_baseline LIMIT 5;"
-
-# API'yi test et
-curl -X GET http://localhost:3001/api/adaptive-alerting/snooze \
-  -H "Authorization: Bearer $TOKEN"
-
-# UI'yi aç
+# UI
 http://localhost:3000/settings/adaptive-alerting
 ```
-
----
-
-## 📊 İLERLEME DURUMU
-
-| Phase | Görev | Durum | Tamamlanma |
-|-------|-------|-------|------------|
-| 1 | Tasarım Dokümantasyonu | ✅ Tamamlandı | 100% |
-| 1 | Database Migration | ✅ Tamamlandı | 100% |
-| 1 | API Endpoints | ✅ Tamamlandı | 100% |
-| 1 | UI Skeleton | ✅ Tamamlandı | 100% |
-| 2 | Baseline Hesaplama Job | ⏳ Başlanmadı | 0% |
-| 2 | Alert Evaluation Güncelleme | ⏳ Başlanmadı | 0% |
-| 3 | Snooze UI | ⏳ Başlanmadı | 0% |
-| 3 | Maintenance UI | ⏳ Başlanmadı | 0% |
-| 3 | Notification Channels UI | ⏳ Başlanmadı | 0% |
-| 3 | Baseline Görselleştirme | ⏳ Başlanmadı | 0% |
-| 4 | Notification Service | ⏳ Başlanmadı | 0% |
-| 5 | ML Baseline | 📋 Planlama | 0% |
-
-**Toplam İlerleme**: ~35% (Phase 1 tamamlandı)
-
----
-
-## 💡 ÖNERİLER
-
-1. **Phase 2'ye öncelik ver** - Baseline hesaplama olmadan sistem çalışmaz
-2. **Test verisi oluştur** - 28 günlük geçmiş veri yoksa mock data ekle
-3. **Loglama ekle** - Baseline hesaplama ve alert evaluation'da detaylı log
-4. **Performance test** - 50+ instance için baseline hesaplama süresi
-5. **UI/UX iyileştir** - Form validasyonları, loading state'leri, error handling
-
----
-
-## 🐛 BİLİNEN SORUNLAR
-
-1. **Baseline verisi yok** - Collector entegrasyonu yapılmadığı için baseline tabloları boş
-2. **UI form'ları eksik** - Snooze/maintenance/channel ekleme modal'ları yapılmadı
-3. **Notification gönderimi yok** - Alert oluştuğunda bildirim gitmiyor
-4. **Test coverage düşük** - Unit test'ler yazılmadı
-
----
-
-## 📞 İLETİŞİM
-
-Sorular için:
-- Tasarım: `docs/adaptive-alerting-design.md` dosyasına bak
-- API: `docs/adaptive-alerting-quickstart.md` dosyasına bak
-- Durum: `docs/adaptive-alerting-implementation-status.md` dosyasına bak
-
----
-
-**Son Güncelleme**: 2026-04-24  
-**Hazırlayan**: Kiro AI  
-**Proje**: pgstat Adaptive Alerting  
-**Versiyon**: Phase 1 Complete
