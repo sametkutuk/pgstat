@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '../api/client';
 import { useToast } from '../components/common/Toast';
+import InfoTip from '../components/common/InfoTip';
 
 // =========================================================================
 // Tipler
@@ -278,7 +279,10 @@ export default function AlertRules() {
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
-        <h1 className="text-xl font-bold">Alert Kuralları</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-bold">Alert Kuralları</h1>
+          <InfoTip text="Kurallar collector tarafından her 5 saniyede değerlendirilir. Hızlı İzleme: eşik girmeden toggle ile aktifleştir (baseline otomatik). Özel Kurallar: sabit eşik veya anomali tespiti. Template Galerisi: hazır şablonlardan hızlıca kural oluştur." />
+        </div>
         <button
           onClick={() => { setEditRule(null); setShowForm(true); }}
           className="px-4 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB] transition-colors"

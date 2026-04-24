@@ -5,6 +5,7 @@ import { useToast } from '../components/common/Toast';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import DataTable from '../components/common/DataTable';
+import InfoTip from '../components/common/InfoTip';
 import { useState } from 'react';
 
 type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru';
@@ -38,15 +39,15 @@ export default function InstanceDetail() {
     if (instance.isLoading) return <div className="py-8 text-[#94A3B8]">Yükleniyor...</div>;
     if (!inst) return <div className="py-8 text-red-500">Instance bulunamadı</div>;
 
-    const tabs: { key: Tab; label: string }[] = [
+    const tabs: { key: Tab; label: string; tip?: string }[] = [
         { key: 'overview', label: 'Genel' },
-        { key: 'statements', label: 'Statements' },
+        { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
-        { key: 'activity', label: 'Activity' },
-        { key: 'functions', label: 'Functions' },
-        { key: 'sequences', label: 'Sequences' },
-        { key: 'wal', label: 'WAL/Archive' },
-        { key: 'slru', label: 'SLRU' },
+        { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
+        { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
+        { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
+        { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
+        { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
     ];
@@ -77,8 +78,11 @@ export default function InstanceDetail() {
             <div className="flex gap-1 mb-4 border-b border-[#E2E8F0] overflow-x-auto">
                 {tabs.map((t) => (
                     <button key={t.key} onClick={() => setTab(t.key)}
-                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${tab === t.key ? 'border-[#3B82F6] text-[#3B82F6]' : 'border-transparent text-[#64748B] hover:text-[#1E293B]'
-                            }`}>{t.label}</button>
+                        className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1 ${tab === t.key ? 'border-[#3B82F6] text-[#3B82F6]' : 'border-transparent text-[#64748B] hover:text-[#1E293B]'
+                            }`}>
+                        {t.label}
+                        {t.tip && tab === t.key && <InfoTip text={t.tip} />}
+                    </button>
                 ))}
             </div>
 

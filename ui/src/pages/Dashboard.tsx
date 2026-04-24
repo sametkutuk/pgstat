@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
 import TimeAgo from '../components/common/TimeAgo';
+import InfoTip from '../components/common/InfoTip';
 
 interface Summary {
   total_instances: number;
@@ -331,7 +332,10 @@ export default function Dashboard() {
     <div>
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
-        <h1 className="text-xl font-bold">Dashboard</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-bold">Dashboard</h1>
+          <InfoTip text="Dashboard her 30 saniyede otomatik yenilenir. Instance kartlarına tıklayarak detay sayfasına gidin. Kırmızı = degraded veya ardışık hata, sarı = açık alert var, mavi = bootstrap aşamasında, yeşil = sağlıklı. WAL/Archiver/SLRU widget'ları son 1 saatlik veriyi gösterir." />
+        </div>
         <button
           onClick={() => { summary.refetch(); health.refetch(); metricsQuery.refetch(); walQuery.refetch(); archiverQuery.refetch(); slruQuery.refetch(); alertSummaryQuery.refetch(); }}
           className="text-xs text-[#64748B] hover:text-[#1E293B] transition-colors px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1]"

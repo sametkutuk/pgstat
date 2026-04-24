@@ -4,6 +4,7 @@ import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
+import InfoTip from '../components/common/InfoTip';
 import { useToast } from '../components/common/Toast';
 import { useState } from 'react';
 
@@ -114,7 +115,10 @@ export default function Alerts() {
     return (
         <div>
             <div className="flex items-center justify-between mb-5">
-                <h1 className="text-xl font-bold">Alerts</h1>
+                <div className="flex items-center gap-2">
+                    <h1 className="text-xl font-bold">Alerts</h1>
+                    <InfoTip text="Collector her 5 saniyede alert kurallarını değerlendirir. Açık alert'ler otomatik tekrar sayısı artar. Onayla = farkındayım, Çöz = sorun giderildi. Snooze ve bakım penceresi ayarları Adaptive Alerting sayfasından yapılır." />
+                </div>
                 <LastUpdated dataUpdatedAt={dataUpdatedAt} />
             </div>
 

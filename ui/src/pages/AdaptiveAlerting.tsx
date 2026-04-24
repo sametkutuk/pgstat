@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiDelete } from '../api/client';
 import { useToast } from '../components/common/Toast';
+import InfoTip from '../components/common/InfoTip';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 
 // =========================================================================
@@ -80,7 +81,10 @@ export default function AdaptiveAlerting() {
         <div>
             <div className="flex items-center justify-between mb-5">
                 <div>
-                    <h1 className="text-xl font-bold">Adaptive Alerting</h1>
+                    <div className="flex items-center gap-2">
+                        <h1 className="text-xl font-bold">Adaptive Alerting</h1>
+                        <InfoTip text="Otomatik baseline profilleme sistemi. Collector gece 02:00 UTC'de son 28 gün verinizden saatlik profil hesaplar. Alert kurallarında evaluation_type=adaptive seçerseniz eşik otomatik gelir. Snooze ile geçici, bakım penceresi ile periyodik susturma yapabilirsiniz." />
+                    </div>
                     <p className="text-sm text-[#64748B] mt-1">
                         Otomatik baseline profilleme ve akıllı alert yönetimi
                     </p>
@@ -316,9 +320,12 @@ function SnoozePanel() {
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
-                <p className="text-sm text-[#64748B]">
-                    Geçici olarak alert'leri sustur. Süre dolunca otomatik kalkar.
-                </p>
+                <div className="flex items-center gap-2">
+                    <p className="text-sm text-[#64748B]">
+                        Geçici olarak alert'leri sustur. Süre dolunca otomatik kalkar.
+                    </p>
+                    <InfoTip text="Snooze belirli bir kural veya instance için alert'leri geçici olarak susturur. Süre dolunca otomatik kalkar. Planlı bakım, bilinen sorunlar veya false positive durumlarında kullanın. Tüm kurallar + tüm instance seçerseniz tüm alert'ler susturulur." />
+                </div>
                 <button onClick={() => setShowForm(true)}
                     className="px-4 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB]">
                     + Snooze Ekle
@@ -480,9 +487,12 @@ function MaintenancePanel() {
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
-                <p className="text-sm text-[#64748B]">
-                    Tekrarlanan bakım pencerelerinde alert'leri otomatik sustur.
-                </p>
+                <div className="flex items-center gap-2">
+                    <p className="text-sm text-[#64748B]">
+                        Tekrarlanan bakım pencerelerinde alert'leri otomatik sustur.
+                    </p>
+                    <InfoTip text="Bakım penceresi belirli gün ve saatlerde alert'leri otomatik susturur. Haftalık bakım, yedekleme veya deploy saatlerinde kullanın. Timezone ayarına dikkat edin — container UTC'de çalışır. Instance seçmezseniz tüm instance'lar etkilenir." />
+                </div>
                 <button onClick={() => setShowForm(true)}
                     className="px-4 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB]">
                     + Pencere Ekle
@@ -670,9 +680,12 @@ function ChannelsPanel() {
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
-                <p className="text-sm text-[#64748B]">
-                    Alert oluşunca bildirim gitmesi için kanal tanımla.
-                </p>
+                <div className="flex items-center gap-2">
+                    <p className="text-sm text-[#64748B]">
+                        Alert oluşunca bildirim gitmesi için kanal tanımla.
+                    </p>
+                    <InfoTip text="Bildirim kanalları alert oluştuğunda otomatik mesaj gönderir. Telegram: BotFather'dan bot oluşturun, gruba ekleyin, chat_id'yi /getUpdates ile bulun. Teams: Incoming Webhook connector ekleyin. Email: .env'de SMTP ayarlarını yapın (PGSTAT_SMTP_HOST vb.). Min severity ile sadece kritik alert'lerde bildirim alabilirsiniz." />
+                </div>
                 <button onClick={() => setShowForm(true)}
                     className="px-4 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB]">
                     + Kanal Ekle
@@ -789,7 +802,12 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                 {(form.channel_type === 'slack' || form.channel_type === 'teams') && (
                     <>
                         <div>
-                            <label className="block text-xs font-medium text-[#475569] mb-1">Webhook URL *</label>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Webhook URL *
+                                {form.channel_type === 'teams' && (
+                                    <InfoTip text="Teams kanalında ... > Connectors > Incoming Webhook ekleyin. Oluşturulan URL'i buraya yapıştırın." className="ml-1" />
+                                )}
+                            </label>
                             <input value={form.webhook_url} onChange={e => set('webhook_url', e.target.value)}
                                 className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
                                 placeholder="https://hooks.slack.com/services/..." />
@@ -806,7 +824,10 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                 )}
                 {form.channel_type === 'email' && (
                     <div>
-                        <label className="block text-xs font-medium text-[#475569] mb-1">Alıcılar (virgülle ayır)</label>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">
+                            Alıcılar (virgülle ayır)
+                            <InfoTip text="Email bildirimi için sunucuda SMTP ayarları gerekir. .env dosyasında PGSTAT_SMTP_HOST, PGSTAT_SMTP_PORT, PGSTAT_SMTP_USER, PGSTAT_SMTP_PASSWORD değerlerini ayarlayın. Gmail için: host=smtp.gmail.com, port=587, App Password kullanın." className="ml-1" />
+                        </label>
                         <input value={form.recipients} onChange={e => set('recipients', e.target.value)}
                             className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
                             placeholder="ops@example.com, dba@example.com" />
@@ -829,13 +850,19 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                 {form.channel_type === 'telegram' && (
                     <>
                         <div>
-                            <label className="block text-xs font-medium text-[#475569] mb-1">Bot Token *</label>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Bot Token *
+                                <InfoTip text="Telegram'da @BotFather'a /newbot yazın, bot oluşturun. Size verilen token'ı buraya yapıştırın. Örn: 123456:ABC-DEF..." className="ml-1" />
+                            </label>
                             <input value={form.bot_token} onChange={e => set('bot_token', e.target.value)}
                                 className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
                                 placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-[#475569] mb-1">Chat ID *</label>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Chat ID *
+                                <InfoTip text="Botu gruba ekledikten sonra gruba bir mesaj yazın. Sonra tarayıcıda https://api.telegram.org/bot{TOKEN}/getUpdates adresini açın. JSON'daki chat.id değerini buraya yazın. Grup ID'leri - ile başlar." className="ml-1" />
+                            </label>
                             <input value={form.chat_id} onChange={e => set('chat_id', e.target.value)}
                                 className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
                                 placeholder="-1001234567890 veya @kanal_adi" />
@@ -844,7 +871,10 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                 )}
 
                 <div>
-                    <label className="block text-xs font-medium text-[#475569] mb-1">Minimum Severity</label>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                        Minimum Severity
+                        <InfoTip text="Bu kanala sadece seçilen seviye ve üstü alert'ler gönderilir. Örn: Warning+ seçerseniz info alert'leri gönderilmez. Boş bırakırsanız tüm alert'ler gönderilir." className="ml-1" />
+                    </label>
                     <select value={form.min_severity} onChange={e => set('min_severity', e.target.value)}
                         className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm">
                         <option value="">Hepsi</option>
