@@ -181,6 +181,34 @@ public class ClusterCollector {
             } catch (Exception e) {
                 log.warn("Conflict snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
+
+            // Adim 13: SLRU snapshot (PG13+)
+            try {
+                rowsWritten += collectSlruSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("SLRU snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 14: Subscription snapshot (logical replication varsa)
+            try {
+                rowsWritten += collectSubscriptionSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Subscription snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 15: Recovery prefetch snapshot (PG15+ standby)
+            try {
+                rowsWritten += collectRecoveryPrefetchSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Recovery prefetch snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 16: User functions snapshot (track_functions acik ise)
+            try {
+                rowsWritten += collectUserFunctionSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("User function snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
         }
 
         log.debug("Cluster toplama tamamlandi: {} — {} satir", instance.instanceId(), rowsWritten);
@@ -650,6 +678,126 @@ public class ClusterCollector {
                     (Long) rs.getObject("confl_snapshot"),
                     (Long) rs.getObject("confl_bufferpin"),
                     (Long) rs.getObject("confl_deadlock")
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 13: SLRU snapshot
+    // =========================================================================
+
+    private long collectSlruSnapshot(Connection conn, SourceQueries queries,
+                                      long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.slruQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertSlruSnapshot(
+                    now, instancePk,
+                    rs.getString("name"),
+                    (Long) rs.getObject("blks_zeroed"),
+                    (Long) rs.getObject("blks_hit"),
+                    (Long) rs.getObject("blks_read"),
+                    (Long) rs.getObject("blks_written"),
+                    (Long) rs.getObject("blks_exists"),
+                    (Long) rs.getObject("flushes"),
+                    (Long) rs.getObject("truncates"),
+                    rs.getObject("stats_reset", OffsetDateTime.class)
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 14: Subscription snapshot (logical replication)
+    // =========================================================================
+
+    private long collectSubscriptionSnapshot(Connection conn, SourceQueries queries,
+                                              long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.subscriptionQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertSubscriptionSnapshot(
+                    now, instancePk,
+                    rs.getLong("subid"),
+                    rs.getString("subname"),
+                    (Integer) rs.getObject("pid"),
+                    (Long) rs.getObject("relid"),
+                    rs.getString("received_lsn"),
+                    rs.getObject("last_msg_send_time", OffsetDateTime.class),
+                    rs.getObject("last_msg_receipt_time", OffsetDateTime.class),
+                    rs.getString("latest_end_lsn"),
+                    rs.getObject("latest_end_time", OffsetDateTime.class),
+                    (Long) rs.getObject("lag_bytes"),
+                    (Long) rs.getObject("apply_error_count"),
+                    (Long) rs.getObject("sync_error_count"),
+                    rs.getObject("stats_reset", OffsetDateTime.class)
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 15: Recovery prefetch snapshot (PG15+ standby)
+    // =========================================================================
+
+    private long collectRecoveryPrefetchSnapshot(Connection conn, SourceQueries queries,
+                                                  long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.recoveryPrefetchQuery();
+        if (sql == null) return 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (!rs.next()) return 0;
+            factRepo.insertRecoveryPrefetchSnapshot(
+                now, instancePk,
+                (Long) rs.getObject("prefetch"),
+                (Long) rs.getObject("hit"),
+                (Long) rs.getObject("skip_init"),
+                (Long) rs.getObject("skip_new"),
+                (Long) rs.getObject("skip_fpw"),
+                (Long) rs.getObject("skip_rep"),
+                rs.getObject("stats_reset", OffsetDateTime.class),
+                (Long) rs.getObject("wal_distance"),
+                (Long) rs.getObject("block_distance"),
+                (Long) rs.getObject("io_depth")
+            );
+            return 1;
+        }
+    }
+
+    // =========================================================================
+    // Adim 16: User functions snapshot (track_functions)
+    // =========================================================================
+
+    private long collectUserFunctionSnapshot(Connection conn, SourceQueries queries,
+                                              long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.userFunctionsQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertUserFunctionSnapshot(
+                    now, instancePk,
+                    rs.getLong("dbid"),
+                    rs.getLong("funcid"),
+                    rs.getString("schemaname"),
+                    rs.getString("funcname"),
+                    (Long) rs.getObject("calls"),
+                    rs.getBigDecimal("total_time"),
+                    rs.getBigDecimal("self_time")
                 );
                 rows++;
             }

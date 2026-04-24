@@ -144,4 +144,44 @@ public class Pg14_16Queries extends Pg13Queries {
             where datid != 0
             """;
     }
+
+    /**
+     * PG14'te subscription_stats yok, PG15+ var. Pragmatik: stats'li sorgu ile
+     * dene; PG14'te collector try/catch ile yakalar, satir atlanir.
+     */
+    @Override
+    public String subscriptionQuery() {
+        return """
+            select
+              s.subid::bigint                    as subid,
+              s.subname,
+              s.pid,
+              s.relid::bigint                    as relid,
+              s.received_lsn::text               as received_lsn,
+              s.last_msg_send_time,
+              s.last_msg_receipt_time,
+              s.latest_end_lsn::text             as latest_end_lsn,
+              s.latest_end_time,
+              case when s.received_lsn is null or s.latest_end_lsn is null
+                then null
+                else (s.received_lsn - s.latest_end_lsn)::bigint
+              end as lag_bytes,
+              ss.apply_error_count,
+              ss.sync_error_count,
+              ss.stats_reset
+            from pg_stat_subscription s
+            left join pg_stat_subscription_stats ss on ss.subid = s.subid
+            """;
+    }
+
+    /** PG15+ icin recovery_prefetch mevcut. */
+    @Override
+    public String recoveryPrefetchQuery() {
+        return """
+            select
+              prefetch, hit, skip_init, skip_new, skip_fpw, skip_rep,
+              stats_reset, wal_distance, block_distance, io_depth
+            from pg_stat_recovery_prefetch
+            """;
+    }
 }

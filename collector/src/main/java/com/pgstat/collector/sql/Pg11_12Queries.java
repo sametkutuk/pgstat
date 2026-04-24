@@ -302,6 +302,43 @@ public class Pg11_12Queries implements SourceQueries {
             """;
     }
 
+    /** PG11-12: pg_stat_slru yok. */
+    @Override
+    public String slruQuery() {
+        return null;
+    }
+
+    /** PG11-12: pg_stat_subscription var ama pg_stat_subscription_stats yok. */
+    @Override
+    public String subscriptionQuery() {
+        return """
+            select
+              s.subid::bigint                    as subid,
+              s.subname,
+              s.pid,
+              s.relid::bigint                    as relid,
+              s.received_lsn::text               as received_lsn,
+              s.last_msg_send_time,
+              s.last_msg_receipt_time,
+              s.latest_end_lsn::text             as latest_end_lsn,
+              s.latest_end_time,
+              case when s.received_lsn is null or s.latest_end_lsn is null
+                then null
+                else (s.received_lsn - s.latest_end_lsn)::bigint
+              end as lag_bytes,
+              null::bigint      as apply_error_count,
+              null::bigint      as sync_error_count,
+              null::timestamptz as stats_reset
+            from pg_stat_subscription s
+            """;
+    }
+
+    /** PG11-12: pg_stat_recovery_prefetch yok. */
+    @Override
+    public String recoveryPrefetchQuery() {
+        return null;
+    }
+
     /** PG11-12: pg_stat_replication_slots yok, wal_status/safe_wal_size yok. */
     @Override
     public String replicationSlotsQuery() {

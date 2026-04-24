@@ -822,6 +822,10 @@ public class AlertRuleEvaluator {
             case "archiver_metric"    -> queryArchiverMetric(metricName, aggFn, interval);
             case "slot_metric"        -> querySlotMetric(metricName, aggFn, interval);
             case "conflict_metric"    -> queryConflictMetric(metricName, aggFn, interval);
+            case "slru_metric"        -> querySnapshotMetric("fact.pg_slru_snapshot", metricName, aggFn, interval);
+            case "subscription_metric"-> querySnapshotMetric("fact.pg_subscription_snapshot", metricName, aggFn, interval);
+            case "prefetch_metric"    -> querySnapshotMetric("fact.pg_recovery_prefetch_snapshot", metricName, aggFn, interval);
+            case "function_metric"    -> querySnapshotMetric("fact.pg_user_function_snapshot", metricName, aggFn, interval);
             default -> { log.warn("Desteklenmeyen metric_type: {}", metricType); yield List.of(); }
         };
     }
@@ -853,6 +857,10 @@ public class AlertRuleEvaluator {
             case "archiver_metric"    -> queryArchiverMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
             case "slot_metric"        -> querySlotMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
             case "conflict_metric"    -> queryConflictMetricBetween(metricName, aggFn, intervalStart, intervalEnd);
+            case "slru_metric"        -> querySnapshotMetricBetween("fact.pg_slru_snapshot", metricName, aggFn, intervalStart, intervalEnd);
+            case "subscription_metric"-> querySnapshotMetricBetween("fact.pg_subscription_snapshot", metricName, aggFn, intervalStart, intervalEnd);
+            case "prefetch_metric"    -> querySnapshotMetricBetween("fact.pg_recovery_prefetch_snapshot", metricName, aggFn, intervalStart, intervalEnd);
+            case "function_metric"    -> querySnapshotMetricBetween("fact.pg_user_function_snapshot", metricName, aggFn, intervalStart, intervalEnd);
             default -> List.of();
         };
     }
@@ -918,6 +926,22 @@ public class AlertRuleEvaluator {
             case "conflict_metric.confl_snapshot"        -> "fact.pg_database_conflict_snapshot|confl_snapshot|sample_ts";
             case "conflict_metric.confl_bufferpin"       -> "fact.pg_database_conflict_snapshot|confl_bufferpin|sample_ts";
             case "conflict_metric.confl_deadlock"        -> "fact.pg_database_conflict_snapshot|confl_deadlock|sample_ts";
+            // SLRU (V026)
+            case "slru_metric.blks_read"                 -> "fact.pg_slru_snapshot|blks_read|sample_ts";
+            case "slru_metric.blks_hit"                  -> "fact.pg_slru_snapshot|blks_hit|sample_ts";
+            case "slru_metric.blks_written"              -> "fact.pg_slru_snapshot|blks_written|sample_ts";
+            // Subscription (V026)
+            case "subscription_metric.apply_error_count" -> "fact.pg_subscription_snapshot|apply_error_count|sample_ts";
+            case "subscription_metric.sync_error_count"  -> "fact.pg_subscription_snapshot|sync_error_count|sample_ts";
+            case "subscription_metric.lag_bytes"         -> "fact.pg_subscription_snapshot|lag_bytes|sample_ts";
+            // Recovery prefetch (V026)
+            case "prefetch_metric.prefetch"              -> "fact.pg_recovery_prefetch_snapshot|prefetch|sample_ts";
+            case "prefetch_metric.hit"                   -> "fact.pg_recovery_prefetch_snapshot|hit|sample_ts";
+            case "prefetch_metric.skip_fpw"              -> "fact.pg_recovery_prefetch_snapshot|skip_fpw|sample_ts";
+            // User functions (V026)
+            case "function_metric.calls"                 -> "fact.pg_user_function_snapshot|calls|sample_ts";
+            case "function_metric.total_time"            -> "fact.pg_user_function_snapshot|total_time|sample_ts";
+            case "function_metric.self_time"             -> "fact.pg_user_function_snapshot|self_time|sample_ts";
             default -> null;
         };
     }
@@ -961,6 +985,10 @@ public class AlertRuleEvaluator {
             case "archiver_metric"    -> "fact.pg_archiver_snapshot";
             case "slot_metric"        -> "fact.pg_replication_slot_snapshot";
             case "conflict_metric"    -> "fact.pg_database_conflict_snapshot";
+            case "slru_metric"        -> "fact.pg_slru_snapshot";
+            case "subscription_metric"-> "fact.pg_subscription_snapshot";
+            case "prefetch_metric"    -> "fact.pg_recovery_prefetch_snapshot";
+            case "function_metric"    -> "fact.pg_user_function_snapshot";
             default -> null;
         };
     }
@@ -1484,6 +1512,26 @@ public class AlertRuleEvaluator {
         return jdbc.queryForList(
             "select instance_pk, " + aggFn + "(" + col + ") as value" +
             " from fact.pg_database_conflict_snapshot" +
+            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
+            intervalStart, intervalEnd);
+    }
+
+    // Generic snapshot table query — SLRU, subscription, prefetch, function icin
+    private List<Map<String, Object>> querySnapshotMetric(String table, String metricName,
+                                                           String aggFn, String interval) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from " + table + " where sample_ts >= now() - ?::interval group by instance_pk",
+            interval);
+    }
+
+    private List<Map<String, Object>> querySnapshotMetricBetween(String table, String metricName,
+                                                                   String aggFn, String intervalStart, String intervalEnd) {
+        String col = sanitizeCol(metricName);
+        return jdbc.queryForList(
+            "select instance_pk, " + aggFn + "(" + col + ") as value" +
+            " from " + table +
             " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
             intervalStart, intervalEnd);
     }

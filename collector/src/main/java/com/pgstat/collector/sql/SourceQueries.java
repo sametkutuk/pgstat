@@ -136,6 +136,76 @@ public interface SourceQueries {
             """;
     }
 
+    /**
+     * pg_stat_slru (PG13+). Null doner PG11-12 icin (override).
+     */
+    default String slruQuery() {
+        return """
+            select
+              name, blks_zeroed, blks_hit, blks_read, blks_written,
+              blks_exists, flushes, truncates, stats_reset
+            from pg_stat_slru
+            """;
+    }
+
+    /**
+     * pg_stat_subscription + pg_stat_subscription_stats (PG15+).
+     * Alt versiyonlarda override — stats_* kolonlari null.
+     */
+    default String subscriptionQuery() {
+        return """
+            select
+              s.subid::bigint                    as subid,
+              s.subname,
+              s.pid,
+              s.relid::bigint                    as relid,
+              s.received_lsn::text               as received_lsn,
+              s.last_msg_send_time,
+              s.last_msg_receipt_time,
+              s.latest_end_lsn::text             as latest_end_lsn,
+              s.latest_end_time,
+              case when s.received_lsn is null or s.latest_end_lsn is null
+                then null
+                else (s.received_lsn - s.latest_end_lsn)::bigint
+              end as lag_bytes,
+              ss.apply_error_count,
+              ss.sync_error_count,
+              ss.stats_reset
+            from pg_stat_subscription s
+            left join pg_stat_subscription_stats ss on ss.subid = s.subid
+            """;
+    }
+
+    /**
+     * pg_stat_recovery_prefetch (PG15+). Null doner alt versiyonlar icin.
+     */
+    default String recoveryPrefetchQuery() {
+        return """
+            select
+              prefetch, hit, skip_init, skip_new, skip_fpw, skip_rep,
+              stats_reset, wal_distance, block_distance, io_depth
+            from pg_stat_recovery_prefetch
+            """;
+    }
+
+    /**
+     * pg_stat_user_functions. Tum versiyonlarda mevcut ama track_functions
+     * ayari 'none' degilse dolar. dbid bagimli — hedef DB'de sorgulanir.
+     */
+    default String userFunctionsQuery() {
+        return """
+            select
+              (select oid from pg_database where datname = current_database())::bigint as dbid,
+              funcid::bigint as funcid,
+              schemaname,
+              funcname,
+              calls,
+              total_time,
+              self_time
+            from pg_stat_user_functions
+            """;
+    }
+
     // =========================================================================
     // Activity / Replication / Lock / Progress
     // =========================================================================

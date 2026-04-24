@@ -103,6 +103,37 @@ public class Pg13Queries extends Pg11_12Queries {
 
     // databaseStatsQuery() → Pg11_12 kalitim ile ayni
 
+    /** PG13-14: pg_stat_subscription_stats yok (PG15+). */
+    @Override
+    public String subscriptionQuery() {
+        return """
+            select
+              s.subid::bigint                    as subid,
+              s.subname,
+              s.pid,
+              s.relid::bigint                    as relid,
+              s.received_lsn::text               as received_lsn,
+              s.last_msg_send_time,
+              s.last_msg_receipt_time,
+              s.latest_end_lsn::text             as latest_end_lsn,
+              s.latest_end_time,
+              case when s.received_lsn is null or s.latest_end_lsn is null
+                then null
+                else (s.received_lsn - s.latest_end_lsn)::bigint
+              end as lag_bytes,
+              null::bigint      as apply_error_count,
+              null::bigint      as sync_error_count,
+              null::timestamptz as stats_reset
+            from pg_stat_subscription s
+            """;
+    }
+
+    /** PG13-14: pg_stat_recovery_prefetch yok (PG15+). */
+    @Override
+    public String recoveryPrefetchQuery() {
+        return null;
+    }
+
     /** PG13: wal_status ve safe_wal_size var ama pg_stat_replication_slots PG14+. */
     @Override
     public String replicationSlotsQuery() {

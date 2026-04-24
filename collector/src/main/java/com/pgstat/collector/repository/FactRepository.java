@@ -475,4 +475,103 @@ public class FactRepository {
             conflLock, conflSnapshot, conflBufferpin, conflDeadlock
         );
     }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_slru_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertSlruSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                   String name, Long blksZeroed, Long blksHit,
+                                   Long blksRead, Long blksWritten, Long blksExists,
+                                   Long flushes, Long truncates,
+                                   OffsetDateTime statsReset) {
+        jdbc.update("""
+            insert into fact.pg_slru_snapshot (
+              sample_ts, instance_pk, name,
+              blks_zeroed, blks_hit, blks_read, blks_written, blks_exists,
+              flushes, truncates, stats_reset
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, name,
+            blksZeroed, blksHit, blksRead, blksWritten, blksExists,
+            flushes, truncates, statsReset
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_subscription_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertSubscriptionSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                           long subid, String subname, Integer pid,
+                                           Long relid, String receivedLsn,
+                                           OffsetDateTime lastMsgSendTime,
+                                           OffsetDateTime lastMsgReceiptTime,
+                                           String latestEndLsn, OffsetDateTime latestEndTime,
+                                           Long lagBytes, Long applyErrorCount,
+                                           Long syncErrorCount, OffsetDateTime statsReset) {
+        jdbc.update("""
+            insert into fact.pg_subscription_snapshot (
+              sample_ts, instance_pk, subid, subname, pid, relid,
+              received_lsn, last_msg_send_time, last_msg_receipt_time,
+              latest_end_lsn, latest_end_time, lag_bytes,
+              apply_error_count, sync_error_count, stats_reset
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, subid, subname, pid, relid,
+            receivedLsn, lastMsgSendTime, lastMsgReceiptTime,
+            latestEndLsn, latestEndTime, lagBytes,
+            applyErrorCount, syncErrorCount, statsReset
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_recovery_prefetch_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertRecoveryPrefetchSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                                Long prefetch, Long hit, Long skipInit,
+                                                Long skipNew, Long skipFpw, Long skipRep,
+                                                OffsetDateTime statsReset, Long walDistance,
+                                                Long blockDistance, Long ioDepth) {
+        jdbc.update("""
+            insert into fact.pg_recovery_prefetch_snapshot (
+              sample_ts, instance_pk,
+              prefetch, hit, skip_init, skip_new, skip_fpw, skip_rep,
+              stats_reset, wal_distance, block_distance, io_depth
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk,
+            prefetch, hit, skipInit, skipNew, skipFpw, skipRep,
+            statsReset, walDistance, blockDistance, ioDepth
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_user_function_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertUserFunctionSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                           long dbid, long funcid, String schemaname,
+                                           String funcname, Long calls,
+                                           java.math.BigDecimal totalTime,
+                                           java.math.BigDecimal selfTime) {
+        jdbc.update("""
+            insert into fact.pg_user_function_snapshot (
+              sample_ts, instance_pk, dbid, funcid,
+              schemaname, funcname, calls, total_time, self_time
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, dbid, funcid,
+            schemaname, funcname, calls, totalTime, selfTime
+        );
+    }
 }

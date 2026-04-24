@@ -49,7 +49,11 @@ public class PurgeEvaluator {
         "fact.pg_wal_snapshot",
         "fact.pg_archiver_snapshot",
         "fact.pg_replication_slot_snapshot",
-        "fact.pg_database_conflict_snapshot"
+        "fact.pg_database_conflict_snapshot",
+        "fact.pg_slru_snapshot",
+        "fact.pg_subscription_snapshot",
+        "fact.pg_recovery_prefetch_snapshot",
+        "fact.pg_user_function_snapshot"
     };
 
     private final JdbcTemplate jdbc;
@@ -157,13 +161,12 @@ public class PurgeEvaluator {
             OffsetDateTime keepFrom = ts.toInstant().atOffset(java.time.ZoneOffset.UTC);
 
             for (String table : SNAPSHOT_FACT_TABLES) {
-                // pg_wal/archiver/slot/conflict tablolari sample_ts kullaniyor,
-                // activity/replication/lock/progress ise snapshot_ts
-                String tsCol = (table.endsWith("_wal_snapshot")
-                             || table.endsWith("_archiver_snapshot")
-                             || table.endsWith("_slot_snapshot")
-                             || table.endsWith("_conflict_snapshot"))
-                    ? "sample_ts" : "snapshot_ts";
+                // Cogu yeni tablo sample_ts kullaniyor; sadece eski snapshot tablolari snapshot_ts
+                String tsCol = (table.endsWith("_activity_snapshot")
+                             || table.endsWith("_replication_snapshot")
+                             || table.endsWith("_lock_snapshot")
+                             || table.endsWith("_progress_snapshot"))
+                    ? "snapshot_ts" : "sample_ts";
                 batchedDeleteByTimestamp(table, tsCol, instancePk, keepFrom);
             }
         }

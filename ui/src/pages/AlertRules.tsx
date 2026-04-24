@@ -56,84 +56,116 @@ const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, Metr
   cluster_metric: {
     label: 'Cluster Sağlığı',
     metrics: {
-      cache_hit_ratio:       { label: 'Cache Hit Ratio',        unit: '%',    unitNote: '0–100 arası yüzde. Örn: 95 = %95', placeholder: '95' },
-      wal_bytes:             { label: 'WAL Üretimi',            unit: 'byte', unitNote: 'Byte cinsinden. Örn: 500000000 = ~476 MB', placeholder: '500000000' },
-      checkpoint_write_time: { label: 'Checkpoint Yazma Süresi', unit: 'ms',  unitNote: 'Milisaniye. Örn: 30000 = 30 saniye', placeholder: '30000' },
-      buffers_checkpoint:    { label: 'Checkpoint Buffer Yazımı', unit: 'adet', unitNote: 'Checkpoint sırasında yazılan buffer sayısı', placeholder: '1000' },
-      buffers_clean:         { label: 'Bgwriter Buffer Temizleme', unit: 'adet', unitNote: 'Bgwriter tarafından temizlenen buffer sayısı', placeholder: '500' },
+      cache_hit_ratio: { label: 'Cache Hit Ratio', unit: '%', unitNote: '0–100 arası yüzde. Örn: 95 = %95', placeholder: '95' },
+      wal_bytes: { label: 'WAL Üretimi', unit: 'byte', unitNote: 'Byte cinsinden. Örn: 500000000 = ~476 MB', placeholder: '500000000' },
+      checkpoint_write_time: { label: 'Checkpoint Yazma Süresi', unit: 'ms', unitNote: 'Milisaniye. Örn: 30000 = 30 saniye', placeholder: '30000' },
+      buffers_checkpoint: { label: 'Checkpoint Buffer Yazımı', unit: 'adet', unitNote: 'Checkpoint sırasında yazılan buffer sayısı', placeholder: '1000' },
+      buffers_clean: { label: 'Bgwriter Buffer Temizleme', unit: 'adet', unitNote: 'Bgwriter tarafından temizlenen buffer sayısı', placeholder: '500' },
     },
   },
   activity_metric: {
     label: 'Bağlantı / Aktivite',
     metrics: {
-      active_count:              { label: 'Aktif Bağlantı',          unit: 'adet', unitNote: 'Anlık aktif sorgu çalıştıran bağlantı sayısı', placeholder: '50' },
-      idle_in_transaction_count: { label: 'Idle in Transaction',      unit: 'adet', unitNote: 'Transaction açık bekleyen bağlantı sayısı', placeholder: '5' },
-      waiting_count:             { label: 'Kilit Bekleyen Bağlantı',  unit: 'adet', unitNote: 'Kilit için bekleyen sorgu sayısı', placeholder: '3' },
+      active_count: { label: 'Aktif Bağlantı', unit: 'adet', unitNote: 'Anlık aktif sorgu çalıştıran bağlantı sayısı', placeholder: '50' },
+      idle_in_transaction_count: { label: 'Idle in Transaction', unit: 'adet', unitNote: 'Transaction açık bekleyen bağlantı sayısı', placeholder: '5' },
+      waiting_count: { label: 'Kilit Bekleyen Bağlantı', unit: 'adet', unitNote: 'Kilit için bekleyen sorgu sayısı', placeholder: '3' },
     },
   },
   replication_metric: {
     label: 'Replikasyon',
     metrics: {
-      replay_lag_bytes:   { label: 'Replay Gecikme (veri)',  unit: 'byte', unitNote: 'Byte cinsinden. Örn: 52428800 = 50 MB, 524288000 = 500 MB', placeholder: '52428800' },
-      replay_lag_seconds: { label: 'Replay Gecikme (süre)',  unit: 'sn',   unitNote: 'Saniye cinsinden. Örn: 60 = 1 dakika, 300 = 5 dakika', placeholder: '60' },
+      replay_lag_bytes: { label: 'Replay Gecikme (veri)', unit: 'byte', unitNote: 'Byte cinsinden. Örn: 52428800 = 50 MB, 524288000 = 500 MB', placeholder: '52428800' },
+      replay_lag_seconds: { label: 'Replay Gecikme (süre)', unit: 'sn', unitNote: 'Saniye cinsinden. Örn: 60 = 1 dakika, 300 = 5 dakika', placeholder: '60' },
     },
   },
   database_metric: {
     label: 'Veritabanı',
     metrics: {
-      deadlocks:      { label: 'Deadlock Sayısı',   unit: 'adet', unitNote: 'Pencere içindeki toplam deadlock sayısı', placeholder: '1' },
-      temp_files:     { label: 'Geçici Dosya',       unit: 'adet', unitNote: 'Oluşturulan geçici dosya sayısı (work_mem yetersizliği)', placeholder: '50' },
-      rollback_ratio: { label: 'Rollback Oranı',     unit: '%',    unitNote: "0–100 arası yüzde. Örn: 5 = commit'lerin %5'i rollback", placeholder: '5' },
-      blk_read_time:  { label: 'Disk Okuma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk okuma süresi', placeholder: '1000' },
-      blk_write_time: { label: 'Disk Yazma Süresi',  unit: 'ms',   unitNote: 'Milisaniye cinsinden toplam disk yazma süresi', placeholder: '1000' },
+      deadlocks: { label: 'Deadlock Sayısı', unit: 'adet', unitNote: 'Pencere içindeki toplam deadlock sayısı', placeholder: '1' },
+      temp_files: { label: 'Geçici Dosya', unit: 'adet', unitNote: 'Oluşturulan geçici dosya sayısı (work_mem yetersizliği)', placeholder: '50' },
+      rollback_ratio: { label: 'Rollback Oranı', unit: '%', unitNote: "0–100 arası yüzde. Örn: 5 = commit'lerin %5'i rollback", placeholder: '5' },
+      blk_read_time: { label: 'Disk Okuma Süresi', unit: 'ms', unitNote: 'Milisaniye cinsinden toplam disk okuma süresi', placeholder: '1000' },
+      blk_write_time: { label: 'Disk Yazma Süresi', unit: 'ms', unitNote: 'Milisaniye cinsinden toplam disk yazma süresi', placeholder: '1000' },
     },
   },
   statement_metric: {
     label: 'Sorgu (pg_stat_statements)',
     metrics: {
-      avg_exec_time_ms:  { label: 'Ort. Çalışma Süresi',  unit: 'ms',   unitNote: 'Milisaniye. Örn: 1000 = 1 saniye, 5000 = 5 saniye', placeholder: '1000' },
-      temp_blks_written: { label: 'Geçici Blok Yazımı',   unit: 'blok', unitNote: 'Pencere içindeki geçici blok yazım sayısı', placeholder: '10000' },
-      calls:             { label: 'Çağrı Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki toplam sorgu çağrı sayısı', placeholder: '10000' },
+      avg_exec_time_ms: { label: 'Ort. Çalışma Süresi', unit: 'ms', unitNote: 'Milisaniye. Örn: 1000 = 1 saniye, 5000 = 5 saniye', placeholder: '1000' },
+      temp_blks_written: { label: 'Geçici Blok Yazımı', unit: 'blok', unitNote: 'Pencere içindeki geçici blok yazım sayısı', placeholder: '10000' },
+      calls: { label: 'Çağrı Sayısı', unit: 'adet', unitNote: 'Pencere içindeki toplam sorgu çağrı sayısı', placeholder: '10000' },
     },
   },
   table_metric: {
     label: 'Tablo',
     metrics: {
-      dead_tuple_ratio: { label: 'Dead Tuple Oranı',       unit: '%',    unitNote: "0–100 arası yüzde. Örn: 20 = satırların %20'si ölü", placeholder: '20' },
-      seq_scan:         { label: 'Sequential Scan Sayısı', unit: 'adet', unitNote: 'Pencere içindeki tam tablo tarama sayısı', placeholder: '10000' },
-      n_tup_ins:        { label: 'INSERT Sayısı',          unit: 'adet', unitNote: 'Pencere içindeki INSERT sayısı', placeholder: '100000' },
+      dead_tuple_ratio: { label: 'Dead Tuple Oranı', unit: '%', unitNote: "0–100 arası yüzde. Örn: 20 = satırların %20'si ölü", placeholder: '20' },
+      seq_scan: { label: 'Sequential Scan Sayısı', unit: 'adet', unitNote: 'Pencere içindeki tam tablo tarama sayısı', placeholder: '10000' },
+      n_tup_ins: { label: 'INSERT Sayısı', unit: 'adet', unitNote: 'Pencere içindeki INSERT sayısı', placeholder: '100000' },
     },
   },
   wal_metric: {
     label: 'WAL',
     metrics: {
-      period_wal_size_byte:    { label: 'Dönem WAL Üretimi',     unit: 'byte', unitNote: 'İki ölçüm arasında üretilen WAL. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
-      wal_directory_size_byte: { label: 'WAL Dizin Boyutu',      unit: 'byte', unitNote: 'pg_wal dizininin toplam boyutu. Örn: 5368709120 = 5 GB', placeholder: '5368709120' },
-      wal_file_count:          { label: 'WAL Dosya Sayısı',      unit: 'adet', unitNote: 'pg_wal dizinindeki WAL dosyası sayısı', placeholder: '1000' },
+      period_wal_size_byte: { label: 'Dönem WAL Üretimi', unit: 'byte', unitNote: 'İki ölçüm arasında üretilen WAL. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
+      wal_directory_size_byte: { label: 'WAL Dizin Boyutu', unit: 'byte', unitNote: 'pg_wal dizininin toplam boyutu. Örn: 5368709120 = 5 GB', placeholder: '5368709120' },
+      wal_file_count: { label: 'WAL Dosya Sayısı', unit: 'adet', unitNote: 'pg_wal dizinindeki WAL dosyası sayısı', placeholder: '1000' },
     },
   },
   archiver_metric: {
     label: 'WAL Archiver',
     metrics: {
-      archived_count: { label: 'Archive Edilen Sayısı',  unit: 'adet', unitNote: 'Kümülatif sayaç — başarıyla archive edilen WAL dosyası', placeholder: '1000' },
-      failed_count:   { label: 'Archive Hata Sayısı',    unit: 'adet', unitNote: 'Kümülatif sayaç — archive_command hatası', placeholder: '10' },
+      archived_count: { label: 'Archive Edilen Sayısı', unit: 'adet', unitNote: 'Kümülatif sayaç — başarıyla archive edilen WAL dosyası', placeholder: '1000' },
+      failed_count: { label: 'Archive Hata Sayısı', unit: 'adet', unitNote: 'Kümülatif sayaç — archive_command hatası', placeholder: '10' },
     },
   },
   slot_metric: {
     label: 'Replication Slot',
     metrics: {
-      slot_lag_bytes: { label: 'Slot Gecikme (byte)',  unit: 'byte', unitNote: 'current_wal_lsn - restart_lsn farkı. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
-      spill_bytes:    { label: 'Decoder Spill (byte)', unit: 'byte', unitNote: 'PG14+ — logical decoding spill to disk', placeholder: '104857600' },
+      slot_lag_bytes: { label: 'Slot Gecikme (byte)', unit: 'byte', unitNote: 'current_wal_lsn - restart_lsn farkı. Örn: 1073741824 = 1 GB', placeholder: '1073741824' },
+      spill_bytes: { label: 'Decoder Spill (byte)', unit: 'byte', unitNote: 'PG14+ — logical decoding spill to disk', placeholder: '104857600' },
     },
   },
   conflict_metric: {
     label: 'Standby Conflict',
     metrics: {
       confl_tablespace: { label: 'Tablespace Conflict', unit: 'adet', unitNote: 'Standby recovery conflict sayısı', placeholder: '10' },
-      confl_lock:       { label: 'Lock Conflict',       unit: 'adet', unitNote: 'Standby lock conflict sayısı', placeholder: '10' },
-      confl_snapshot:   { label: 'Snapshot Conflict',   unit: 'adet', unitNote: 'Standby snapshot conflict sayısı', placeholder: '10' },
-      confl_bufferpin:  { label: 'Buffer Pin Conflict', unit: 'adet', unitNote: 'Standby buffer pin conflict sayısı', placeholder: '10' },
-      confl_deadlock:   { label: 'Deadlock Conflict',   unit: 'adet', unitNote: 'Standby deadlock sayısı', placeholder: '5' },
+      confl_lock: { label: 'Lock Conflict', unit: 'adet', unitNote: 'Standby lock conflict sayısı', placeholder: '10' },
+      confl_snapshot: { label: 'Snapshot Conflict', unit: 'adet', unitNote: 'Standby snapshot conflict sayısı', placeholder: '10' },
+      confl_bufferpin: { label: 'Buffer Pin Conflict', unit: 'adet', unitNote: 'Standby buffer pin conflict sayısı', placeholder: '10' },
+      confl_deadlock: { label: 'Deadlock Conflict', unit: 'adet', unitNote: 'Standby deadlock sayısı', placeholder: '5' },
+    },
+  },
+  slru_metric: {
+    label: 'SLRU',
+    metrics: {
+      blks_read: { label: 'SLRU Blok Okuma', unit: 'adet', unitNote: 'SLRU cache miss — diskten okunan blok sayısı', placeholder: '1000' },
+      blks_hit: { label: 'SLRU Blok Hit', unit: 'adet', unitNote: 'SLRU cache hit — bellekten okunan blok sayısı', placeholder: '10000' },
+      blks_written: { label: 'SLRU Blok Yazma', unit: 'adet', unitNote: 'SLRU cache yazılan blok sayısı', placeholder: '500' },
+    },
+  },
+  subscription_metric: {
+    label: 'Logical Replication',
+    metrics: {
+      lag_bytes: { label: 'Subscription Lag', unit: 'byte', unitNote: 'Byte cinsinden. Örn: 104857600 = 100 MB', placeholder: '104857600' },
+      apply_error_count: { label: 'Apply Hata Sayısı', unit: 'adet', unitNote: 'Subscriber apply hata sayısı (PG15+)', placeholder: '1' },
+      sync_error_count: { label: 'Sync Hata Sayısı', unit: 'adet', unitNote: 'Subscriber sync hata sayısı (PG15+)', placeholder: '1' },
+    },
+  },
+  prefetch_metric: {
+    label: 'Recovery Prefetch',
+    metrics: {
+      prefetch: { label: 'Prefetch Sayısı', unit: 'adet', unitNote: 'Standby recovery prefetch edilen blok sayısı (PG15+)', placeholder: '1000' },
+      hit: { label: 'Prefetch Hit', unit: 'adet', unitNote: 'Prefetch cache hit sayısı', placeholder: '5000' },
+      skip_fpw: { label: 'FPW Skip Sayısı', unit: 'adet', unitNote: 'Full page write nedeniyle atlanan prefetch sayısı', placeholder: '100' },
+    },
+  },
+  function_metric: {
+    label: 'User Functions',
+    metrics: {
+      calls: { label: 'Fonksiyon Çağrı', unit: 'adet', unitNote: 'Toplam fonksiyon çağrı sayısı (track_functions aktif olmalı)', placeholder: '10000' },
+      total_time: { label: 'Toplam Süre', unit: 'ms', unitNote: 'Milisaniye. Fonksiyonun toplam çalışma süresi', placeholder: '5000' },
+      self_time: { label: 'Self Süre', unit: 'ms', unitNote: 'Milisaniye. Alt fonksiyon çağrıları hariç kendi süresi', placeholder: '3000' },
     },
   },
 };
@@ -152,20 +184,20 @@ function getMetricLabel(metricType: string, metricName: string): string {
 function formatValue(value: number, unit: string): string {
   if (unit === 'byte') {
     if (value >= 1073741824) return (value / 1073741824).toFixed(1) + ' GB';
-    if (value >= 1048576)    return (value / 1048576).toFixed(1) + ' MB';
-    if (value >= 1024)       return (value / 1024).toFixed(1) + ' KB';
+    if (value >= 1048576) return (value / 1048576).toFixed(1) + ' MB';
+    if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
     return value + ' B';
   }
   if (unit === 'ms') {
     if (value >= 3600000) return (value / 3600000).toFixed(1) + ' sa';
-    if (value >= 60000)   return (value / 60000).toFixed(1) + ' dk';
-    if (value >= 1000)    return (value / 1000).toFixed(1) + ' sn';
+    if (value >= 60000) return (value / 60000).toFixed(1) + ' dk';
+    if (value >= 1000) return (value / 1000).toFixed(1) + ' sn';
     return value + ' ms';
   }
   if (unit === '%') return value + '%';
   if (unit === 'sn') {
     if (value >= 3600) return (value / 3600).toFixed(1) + ' sa';
-    if (value >= 60)   return (value / 60).toFixed(1) + ' dk';
+    if (value >= 60) return (value / 60).toFixed(1) + ' dk';
     return value + ' sn';
   }
   return String(value);
@@ -184,15 +216,15 @@ const WINDOW_OPTIONS = [1, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
 const COOLDOWN_OPTIONS = [0, 5, 10, 15, 30, 60, 120, 360];
 
 const EVAL_TYPES: Record<string, { label: string; description: string; category: 'threshold' | 'smart' }> = {
-  threshold:      { label: 'Sabit Eşik',             category: 'threshold', description: 'Değer belirlenen eşiği aştığında tetiklenir.' },
-  alltime_high:   { label: 'Tüm Zamanlar En Yüksek', category: 'smart',     description: 'Değer geçmişte hiç bu kadar yüksek olmamışsa tetiklenir. Eşik gerekmez.' },
-  alltime_low:    { label: 'Tüm Zamanlar En Düşük',  category: 'smart',     description: 'Değer geçmişte hiç bu kadar düşük olmamışsa tetiklenir. Eşik gerekmez.' },
-  day_over_day:   { label: 'Günlük Değişim (%)',      category: 'smart',     description: 'Dünün aynı saatine göre % değişim eşiği aşılırsa tetiklenir.' },
-  week_over_week: { label: 'Haftalık Değişim (%)',    category: 'smart',     description: 'Geçen haftanın aynı gününe göre % değişim eşiği aşılırsa tetiklenir.' },
-  spike:          { label: 'Ani Sıçrama',             category: 'smart',     description: 'Son pencere ile önceki pencere karşılaştırılır. Ani artış tetiklenir.' },
-  flatline:       { label: 'Counter Durdu',           category: 'smart',     description: 'Normalde artan bir değer N dakika boyunca hiç değişmediyse tetiklenir.' },
-  hourly_pattern: { label: 'Saatlik Örüntü Sapması',  category: 'smart',     description: 'Bu saatin 4 haftalık ortalamasından sapma. Yeni instance\'ta anlık spike\'a geçer.' },
-  adaptive:       { label: 'Adaptive (otomatik baseline)', category: 'smart', description: 'Gece hesaplanan 28 günlük baseline üzerinden otomatik eşik. Sensitivity ile hassasiyet ayarlanır.' },
+  threshold: { label: 'Sabit Eşik', category: 'threshold', description: 'Değer belirlenen eşiği aştığında tetiklenir.' },
+  alltime_high: { label: 'Tüm Zamanlar En Yüksek', category: 'smart', description: 'Değer geçmişte hiç bu kadar yüksek olmamışsa tetiklenir. Eşik gerekmez.' },
+  alltime_low: { label: 'Tüm Zamanlar En Düşük', category: 'smart', description: 'Değer geçmişte hiç bu kadar düşük olmamışsa tetiklenir. Eşik gerekmez.' },
+  day_over_day: { label: 'Günlük Değişim (%)', category: 'smart', description: 'Dünün aynı saatine göre % değişim eşiği aşılırsa tetiklenir.' },
+  week_over_week: { label: 'Haftalık Değişim (%)', category: 'smart', description: 'Geçen haftanın aynı gününe göre % değişim eşiği aşılırsa tetiklenir.' },
+  spike: { label: 'Ani Sıçrama', category: 'smart', description: 'Son pencere ile önceki pencere karşılaştırılır. Ani artış tetiklenir.' },
+  flatline: { label: 'Counter Durdu', category: 'smart', description: 'Normalde artan bir değer N dakika boyunca hiç değişmediyse tetiklenir.' },
+  hourly_pattern: { label: 'Saatlik Örüntü Sapması', category: 'smart', description: 'Bu saatin 4 haftalık ortalamasından sapma. Yeni instance\'ta anlık spike\'a geçer.' },
+  adaptive: { label: 'Adaptive (otomatik baseline)', category: 'smart', description: 'Gece hesaplanan 28 günlük baseline üzerinden otomatik eşik. Sensitivity ile hassasiyet ayarlanır.' },
 };
 
 const emptyForm = {
@@ -231,9 +263,9 @@ export default function AlertRules() {
   const [templateForm, setTemplateForm] = useState<AlertRule | null>(null);
 
   const tabs = [
-    { k: 'smart',     l: '⚡ Hızlı İzleme',      hint: 'Eşik girmeden, tek tıkla aktifleştir' },
-    { k: 'custom',    l: '⚙ Özel Kurallar',       hint: 'Manuel eşik tanımlı kurallar' },
-    { k: 'templates', l: '📋 Template Galerisi',   hint: 'Hazır şablonlardan oluştur' },
+    { k: 'smart', l: '⚡ Hızlı İzleme', hint: 'Eşik girmeden, tek tıkla aktifleştir' },
+    { k: 'custom', l: '⚙ Özel Kurallar', hint: 'Manuel eşik tanımlı kurallar' },
+    { k: 'templates', l: '📋 Template Galerisi', hint: 'Hazır şablonlardan oluştur' },
   ];
 
   return (
@@ -292,15 +324,15 @@ export default function AlertRules() {
 // =========================================================================
 
 const EVAL_TYPE_BADGES: Record<string, { label: string; bg: string; text: string }> = {
-  threshold:      { label: 'Sabit Eşik',    bg: 'bg-[#F1F5F9]', text: 'text-[#475569]' },
-  alltime_high:   { label: 'Tüm Zaman ↑',  bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
-  alltime_low:    { label: 'Tüm Zaman ↓',  bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
-  day_over_day:   { label: 'Günlük %',      bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
-  week_over_week: { label: 'Haftalık %',    bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
-  spike:          { label: 'Ani Sıçrama',   bg: 'bg-[#FFF7ED]', text: 'text-[#EA580C]' },
-  flatline:       { label: 'Counter Durdu', bg: 'bg-[#FEF2F2]', text: 'text-[#DC2626]' },
+  threshold: { label: 'Sabit Eşik', bg: 'bg-[#F1F5F9]', text: 'text-[#475569]' },
+  alltime_high: { label: 'Tüm Zaman ↑', bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
+  alltime_low: { label: 'Tüm Zaman ↓', bg: 'bg-[#FDF4FF]', text: 'text-[#9333EA]' },
+  day_over_day: { label: 'Günlük %', bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
+  week_over_week: { label: 'Haftalık %', bg: 'bg-[#F0F9FF]', text: 'text-[#0284C7]' },
+  spike: { label: 'Ani Sıçrama', bg: 'bg-[#FFF7ED]', text: 'text-[#EA580C]' },
+  flatline: { label: 'Counter Durdu', bg: 'bg-[#FEF2F2]', text: 'text-[#DC2626]' },
   hourly_pattern: { label: 'Saatlik Örüntü', bg: 'bg-[#F0FDF4]', text: 'text-[#16A34A]' },
-  adaptive:       { label: 'Adaptive', bg: 'bg-[#ECFEFF]', text: 'text-[#0891B2]' },
+  adaptive: { label: 'Adaptive', bg: 'bg-[#ECFEFF]', text: 'text-[#0891B2]' },
 };
 
 // =========================================================================
@@ -392,7 +424,7 @@ function SmartRulePanel({ onEdit }: { onEdit: (r: AlertRule) => void }) {
                         {rule.last_value != null && (
                           <span className={
                             rule.current_severity === 'critical' ? 'text-[#DC2626]' :
-                            rule.current_severity === 'warning' ? 'text-[#D97706]' : 'text-[#16A34A]'
+                              rule.current_severity === 'warning' ? 'text-[#D97706]' : 'text-[#16A34A]'
                           }>
                             şu an: {Number(rule.last_value).toFixed(1)}
                           </span>
@@ -604,8 +636,8 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }: {
           {getMetricLabel(rule.metric_type, rule.metric_name)}
           {' · '}
           {rule.scope === 'all_instances' ? 'Tüm instance\'lar' :
-           rule.scope === 'specific_instance' ? (rule.instance_name || `#${rule.instance_pk}`) :
-           `Grup: ${rule.service_group}`}
+            rule.scope === 'specific_instance' ? (rule.instance_name || `#${rule.instance_pk}`) :
+              `Grup: ${rule.service_group}`}
         </div>
 
         {/* Koşul satırı */}
@@ -632,16 +664,15 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }: {
             {rule.evaluation_window_minutes >= 1440
               ? `${rule.evaluation_window_minutes / 1440}g`
               : rule.evaluation_window_minutes >= 60
-              ? `${rule.evaluation_window_minutes / 60}sa`
-              : `${rule.evaluation_window_minutes}dk`} {AGGREGATIONS[rule.aggregation]}
+                ? `${rule.evaluation_window_minutes / 60}sa`
+                : `${rule.evaluation_window_minutes}dk`} {AGGREGATIONS[rule.aggregation]}
           </span>
           {/* Son değer */}
           {rule.last_value != null && (
-            <span className={`text-xs px-2 py-0.5 rounded ${
-              rule.current_severity === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
-              rule.current_severity === 'warning'  ? 'bg-[#FEF3C7] text-[#D97706]' :
-              'bg-[#F0FDF4] text-[#16A34A]'
-            }`}>
+            <span className={`text-xs px-2 py-0.5 rounded ${rule.current_severity === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
+                rule.current_severity === 'warning' ? 'bg-[#FEF3C7] text-[#D97706]' :
+                  'bg-[#F0FDF4] text-[#16A34A]'
+              }`}>
               şu an: {isTrend ? `%${Number(rule.last_value).toFixed(1)}` : formatValue(Number(rule.last_value), unit)}
             </span>
           )}
@@ -1002,52 +1033,52 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
 
               {/* Threshold: sabit eşik alanları */}
               {form.evaluation_type === 'threshold' && (<>
-              <div>
-                <label className="block text-xs font-medium text-[#475569] mb-1">Operatör</label>
-                <select value={form.condition_operator} onChange={e => set('condition_operator', e.target.value)}
-                  className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                  {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
-                </select>
-              </div>
-              {/* Birim notu */}
-              {(() => {
-                const metricDef = METRIC_TYPES[form.metric_type]?.metrics[form.metric_name];
-                return metricDef ? (
-                  <div className="text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] px-3 py-2 rounded-md">
-                    <strong>Birim:</strong> {metricDef.unitNote}
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">Operatör</label>
+                  <select value={form.condition_operator} onChange={e => set('condition_operator', e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                    {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
+                  </select>
+                </div>
+                {/* Birim notu */}
+                {(() => {
+                  const metricDef = METRIC_TYPES[form.metric_type]?.metrics[form.metric_name];
+                  return metricDef ? (
+                    <div className="text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] px-3 py-2 rounded-md">
+                      <strong>Birim:</strong> {metricDef.unitNote}
+                    </div>
+                  ) : null;
+                })()}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                      <span className="inline-block w-2 h-2 bg-[#FBBF24] rounded-full mr-1"></span>
+                      Uyarı Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
+                    </label>
+                    <input type="number" value={form.warning_threshold} onChange={e => set('warning_threshold', e.target.value)}
+                      className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                      placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
                   </div>
-                ) : null;
-              })()}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-[#475569] mb-1">
-                    <span className="inline-block w-2 h-2 bg-[#FBBF24] rounded-full mr-1"></span>
-                    Uyarı Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
-                  </label>
-                  <input type="number" value={form.warning_threshold} onChange={e => set('warning_threshold', e.target.value)}
-                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                    placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
+                  <div>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                      <span className="inline-block w-2 h-2 bg-[#EF4444] rounded-full mr-1"></span>
+                      Kritik Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
+                    </label>
+                    <input type="number" value={form.critical_threshold} onChange={e => set('critical_threshold', e.target.value)}
+                      className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                      placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-[#475569] mb-1">
-                    <span className="inline-block w-2 h-2 bg-[#EF4444] rounded-full mr-1"></span>
-                    Kritik Eşiği {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''}
-                  </label>
-                  <input type="number" value={form.critical_threshold} onChange={e => set('critical_threshold', e.target.value)}
-                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
-                    placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
-                </div>
-              </div>
               </>)}
               {/* Tüm tipler için pencere + aggregation */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-[#475569] mb-1">
-                    {['day_over_day','week_over_week'].includes(form.evaluation_type) ? 'Karşılaştırma Penceresi' : 'Değerlendirme Penceresi'}
+                    {['day_over_day', 'week_over_week'].includes(form.evaluation_type) ? 'Karşılaştırma Penceresi' : 'Değerlendirme Penceresi'}
                   </label>
                   <select value={form.evaluation_window_minutes} onChange={e => set('evaluation_window_minutes', Number(e.target.value))}
                     className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                    {WINDOW_OPTIONS.map(v => <option key={v} value={v}>{v >= 1440 ? `${v/1440} gün` : v >= 60 ? `${v/60} saat` : `${v} dakika`}</option>)}
+                    {WINDOW_OPTIONS.map(v => <option key={v} value={v}>{v >= 1440 ? `${v / 1440} gün` : v >= 60 ? `${v / 60} saat` : `${v} dakika`}</option>)}
                   </select>
                 </div>
                 <div>
