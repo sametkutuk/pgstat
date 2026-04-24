@@ -26,36 +26,12 @@ router.get('/', async (req: Request, res: Response) => {
     }
   }
 
+  // r.* ile tüm kolonları döndür — yeni kolonlar (sensitivity, instance_group_id)
+  // migration uygulanmadıysa yoksa bile crash etmez.
   const q = `
     select
-      r.rule_id,
-      r.rule_name,
-      r.description,
-      r.metric_type,
-      r.metric_name,
-      r.scope,
-      r.instance_pk,
+      r.*,
       i.display_name as instance_name,
-      r.service_group,
-      r.condition_operator,
-      r.warning_threshold,
-      r.critical_threshold,
-      r.evaluation_window_minutes,
-      r.aggregation,
-      r.evaluation_type,
-      r.change_threshold_pct,
-      r.min_data_days,
-      r.alert_category,
-      r.spike_fallback_pct,
-      r.flatline_minutes,
-      r.sensitivity,
-      r.instance_group_id,
-      r.is_enabled,
-      r.cooldown_minutes,
-      r.auto_resolve,
-      r.created_by,
-      r.created_at,
-      r.updated_at,
       (
         select count(*)
         from ops.alert a
@@ -84,8 +60,9 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const result = await pool.query(q, params);
     res.json(result.rows);
-  } catch (err) {
-    throw err;
+  } catch (e: any) {
+    console.error('alert-rules GET failed:', e.message, e.stack);
+    res.status(500).json({ error: e.message || 'query failed' });
   }
 });
 
@@ -137,7 +114,8 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // Kural oluştur — POST /api/alert-rules
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response, next) => {
+  try {
   const err = validateRuleBody(req.body);
   if (err) return res.status(400).json({ error: err });
 
@@ -150,33 +128,71 @@ router.post('/', async (req: Request, res: Response) => {
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
+  // Dinamik kolon listesi — DB'deki gerçek kolonlara göre INSERT kur.
+  // Bu sayede V018/V019 henüz uygulanmamışsa bile çalışır.
+  const existing = await getExistingColumns();
+
+  const cols: { name: string; val: any; default?: any }[] = [
+    { name: 'rule_name', val: rule_name },
+    { name: 'description', val: description ?? null },
+    { name: 'metric_type', val: metric_type },
+    { name: 'metric_name', val: metric_name },
+    { name: 'scope', val: scope ?? 'all_instances' },
+    { name: 'instance_pk', val: instance_pk ?? null },
+    { name: 'service_group', val: service_group ?? null },
+    { name: 'condition_operator', val: condition_operator ?? '>' },
+    { name: 'warning_threshold', val: warning_threshold ?? null },
+    { name: 'critical_threshold', val: critical_threshold ?? null },
+    { name: 'evaluation_window_minutes', val: evaluation_window_minutes ?? 5 },
+    { name: 'aggregation', val: aggregation ?? 'avg' },
+    { name: 'is_enabled', val: is_enabled !== false },
+    { name: 'cooldown_minutes', val: cooldown_minutes ?? 15 },
+    { name: 'auto_resolve', val: auto_resolve !== false },
+    // V013+
+    { name: 'evaluation_type', val: evaluation_type ?? 'threshold' },
+    { name: 'change_threshold_pct', val: change_threshold_pct ?? null },
+    { name: 'min_data_days', val: min_data_days ?? 7 },
+    // V016+
+    { name: 'alert_category', val: alert_category ?? 'threshold' },
+    { name: 'spike_fallback_pct', val: spike_fallback_pct ?? null },
+    { name: 'flatline_minutes', val: flatline_minutes ?? 30 },
+    // V018+
+    { name: 'sensitivity', val: sensitivity ?? 'medium' },
+    { name: 'instance_group_id', val: instance_group_id ?? null },
+  ];
+
+  const active = cols.filter(c => existing.has(c.name));
+  const colList = active.map(c => c.name).join(', ');
+  const placeholders = active.map((_, i) => `$${i + 1}`).join(', ');
+  const values = active.map(c => c.val);
+
   const result = await pool.query(
-    `insert into control.alert_rule
-       (rule_name, description, metric_type, metric_name, scope, instance_pk,
-        service_group, condition_operator, warning_threshold, critical_threshold,
-        evaluation_window_minutes, aggregation, evaluation_type,
-        change_threshold_pct, min_data_days,
-        alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
-        is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-     returning *`,
-    [
-      rule_name, description ?? null, metric_type, metric_name,
-      scope ?? 'all_instances', instance_pk ?? null, service_group ?? null,
-      condition_operator ?? '>', warning_threshold ?? null, critical_threshold ?? null,
-      evaluation_window_minutes ?? 5, aggregation ?? 'avg',
-      evaluation_type ?? 'threshold', change_threshold_pct ?? null,
-      min_data_days ?? 7,
-      alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
-      sensitivity ?? 'medium', instance_group_id ?? null,
-      is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false
-    ]
+    `insert into control.alert_rule (${colList}) values (${placeholders}) returning *`,
+    values
   );
   res.status(201).json(result.rows[0]);
+  } catch (e: any) {
+    console.error('alert-rules POST failed:', e.message, e.stack);
+    res.status(500).json({ error: e.message || 'insert failed' });
+  }
 });
+
+// Kolon listesi cache (60s TTL)
+let columnsCache: { at: number; cols: Set<string> } | null = null;
+async function getExistingColumns(): Promise<Set<string>> {
+  if (columnsCache && Date.now() - columnsCache.at < 60_000) return columnsCache.cols;
+  const r = await pool.query(
+    `select column_name from information_schema.columns
+     where table_schema='control' and table_name='alert_rule'`
+  );
+  const set = new Set<string>(r.rows.map(x => x.column_name));
+  columnsCache = { at: Date.now(), cols: set };
+  return set;
+}
 
 // Kural güncelle — PUT /api/alert-rules/:id
 router.put('/:id', async (req: Request, res: Response) => {
+  try {
   const id = parseId(req.params.id);
   if (!id) return res.status(400).json({ error: 'Geçersiz rule_id' });
 
@@ -192,31 +208,48 @@ router.put('/:id', async (req: Request, res: Response) => {
     is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
+  // Dinamik UPDATE — DB'deki mevcut kolonlara göre set kur
+  const existing = await getExistingColumns();
+  const cols: { name: string; val: any }[] = [
+    { name: 'rule_name', val: rule_name },
+    { name: 'description', val: description ?? null },
+    { name: 'metric_type', val: metric_type },
+    { name: 'metric_name', val: metric_name },
+    { name: 'scope', val: scope ?? 'all_instances' },
+    { name: 'instance_pk', val: instance_pk ?? null },
+    { name: 'service_group', val: service_group ?? null },
+    { name: 'condition_operator', val: condition_operator ?? '>' },
+    { name: 'warning_threshold', val: warning_threshold ?? null },
+    { name: 'critical_threshold', val: critical_threshold ?? null },
+    { name: 'evaluation_window_minutes', val: evaluation_window_minutes ?? 5 },
+    { name: 'aggregation', val: aggregation ?? 'avg' },
+    { name: 'is_enabled', val: is_enabled !== false },
+    { name: 'cooldown_minutes', val: cooldown_minutes ?? 15 },
+    { name: 'auto_resolve', val: auto_resolve !== false },
+    { name: 'evaluation_type', val: evaluation_type ?? 'threshold' },
+    { name: 'change_threshold_pct', val: change_threshold_pct ?? null },
+    { name: 'min_data_days', val: min_data_days ?? 7 },
+    { name: 'alert_category', val: alert_category ?? 'threshold' },
+    { name: 'spike_fallback_pct', val: spike_fallback_pct ?? null },
+    { name: 'flatline_minutes', val: flatline_minutes ?? 30 },
+    { name: 'sensitivity', val: sensitivity ?? 'medium' },
+    { name: 'instance_group_id', val: instance_group_id ?? null },
+  ];
+  const active = cols.filter(c => existing.has(c.name));
+  const setSql = active.map((c, i) => `${c.name}=$${i + 1}`).join(', ');
+  const values = active.map(c => c.val);
+  values.push(id);
+
   const result = await pool.query(
-    `update control.alert_rule set
-       rule_name=$1, description=$2, metric_type=$3, metric_name=$4, scope=$5,
-       instance_pk=$6, service_group=$7, condition_operator=$8,
-       warning_threshold=$9, critical_threshold=$10,
-       evaluation_window_minutes=$11, aggregation=$12,
-       evaluation_type=$13, change_threshold_pct=$14, min_data_days=$15,
-       alert_category=$16, spike_fallback_pct=$17, flatline_minutes=$18,
-       sensitivity=$19, instance_group_id=$20,
-       is_enabled=$21, cooldown_minutes=$22, auto_resolve=$23
-     where rule_id=$24
-     returning *`,
-    [
-      rule_name, description ?? null, metric_type, metric_name,
-      scope ?? 'all_instances', instance_pk ?? null, service_group ?? null,
-      condition_operator ?? '>', warning_threshold ?? null, critical_threshold ?? null,
-      evaluation_window_minutes ?? 5, aggregation ?? 'avg',
-      evaluation_type ?? 'threshold', change_threshold_pct ?? null, min_data_days ?? 7,
-      alert_category ?? 'threshold', spike_fallback_pct ?? null, flatline_minutes ?? 30,
-      sensitivity ?? 'medium', instance_group_id ?? null,
-      is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false, id
-    ]
+    `update control.alert_rule set ${setSql} where rule_id=$${values.length} returning *`,
+    values
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'Kural bulunamadı' });
   res.json(result.rows[0]);
+  } catch (e: any) {
+    console.error('alert-rules PUT failed:', e.message, e.stack);
+    res.status(500).json({ error: e.message || 'update failed' });
+  }
 });
 
 // Aktif/pasif toggle — PATCH /api/alert-rules/:id/toggle
@@ -250,6 +283,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
 // Template'den kural oluştur — POST /api/alert-rules/from-template
 router.post('/from-template', async (req: Request, res: Response) => {
+  try {
   const { template_rule_id, rule_name, warning_threshold, critical_threshold, scope, instance_pk, service_group } = req.body;
 
   const tId = parseId(template_rule_id);
@@ -262,35 +296,47 @@ router.post('/from-template', async (req: Request, res: Response) => {
   if (tResult.rows.length === 0) return res.status(404).json({ error: 'Template bulunamadı' });
   const t = tResult.rows[0];
 
+  // Template'in tüm ilgili alanlarını kopyala — yeni kolonlar (alert_category,
+  // sensitivity, flatline_minutes, spike_fallback_pct) mevcut DB'de varsa kullan
+  const existing = await getExistingColumns();
+  const cols: { name: string; val: any }[] = [
+    { name: 'rule_name',                 val: rule_name || t.rule_name },
+    { name: 'description',               val: t.description },
+    { name: 'metric_type',               val: t.metric_type },
+    { name: 'metric_name',               val: t.metric_name },
+    { name: 'scope',                     val: scope || t.scope },
+    { name: 'instance_pk',               val: instance_pk ?? null },
+    { name: 'service_group',             val: service_group ?? null },
+    { name: 'condition_operator',        val: t.condition_operator },
+    { name: 'warning_threshold',         val: warning_threshold ?? t.warning_threshold },
+    { name: 'critical_threshold',        val: critical_threshold ?? t.critical_threshold },
+    { name: 'evaluation_window_minutes', val: t.evaluation_window_minutes },
+    { name: 'aggregation',               val: t.aggregation },
+    { name: 'is_enabled',                val: true },
+    { name: 'cooldown_minutes',          val: t.cooldown_minutes },
+    { name: 'auto_resolve',              val: t.auto_resolve },
+    { name: 'evaluation_type',           val: t.evaluation_type },
+    { name: 'change_threshold_pct',      val: t.change_threshold_pct },
+    { name: 'min_data_days',             val: t.min_data_days },
+    { name: 'alert_category',            val: t.alert_category },
+    { name: 'spike_fallback_pct',        val: t.spike_fallback_pct },
+    { name: 'flatline_minutes',          val: t.flatline_minutes },
+    { name: 'sensitivity',               val: t.sensitivity },
+  ];
+  const active = cols.filter(c => existing.has(c.name));
+  const colList = active.map(c => c.name).join(', ');
+  const placeholders = active.map((_, i) => `$${i + 1}`).join(', ');
+  const values = active.map(c => c.val);
+
   const result = await pool.query(
-    `insert into control.alert_rule
-       (rule_name, description, metric_type, metric_name, scope, instance_pk,
-        service_group, condition_operator, warning_threshold, critical_threshold,
-        evaluation_window_minutes, aggregation, evaluation_type,
-        change_threshold_pct, min_data_days, is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,true,$16,$17)
-     returning *`,
-    [
-      rule_name || t.rule_name,
-      t.description,
-      t.metric_type,
-      t.metric_name,
-      scope || t.scope,
-      instance_pk ?? null,
-      service_group ?? null,
-      t.condition_operator,
-      warning_threshold ?? t.warning_threshold,
-      critical_threshold ?? t.critical_threshold,
-      t.evaluation_window_minutes,
-      t.aggregation,
-      t.evaluation_type,
-      t.change_threshold_pct,
-      t.min_data_days,
-      t.cooldown_minutes,
-      t.auto_resolve
-    ]
+    `insert into control.alert_rule (${colList}) values (${placeholders}) returning *`,
+    values
   );
   res.status(201).json(result.rows[0]);
+  } catch (e: any) {
+    console.error('alert-rules from-template failed:', e.message, e.stack);
+    res.status(500).json({ error: e.message || 'from-template failed' });
+  }
 });
 
 // ---
