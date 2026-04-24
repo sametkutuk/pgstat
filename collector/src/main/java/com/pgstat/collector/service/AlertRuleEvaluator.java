@@ -1214,20 +1214,30 @@ public class AlertRuleEvaluator {
     }
 
     private void updateLastEval(long ruleId, long instancePk, BigDecimal value, String severity) {
-        jdbc.update("""
-            insert into control.alert_rule_last_eval
-              (rule_id, instance_pk, last_evaluated_at, last_alert_at, last_value, current_severity)
-            values (?, ?, now(), case when ? is not null then now() else null end, ?, ?)
-            on conflict (rule_id, instance_pk) do update set
-              last_evaluated_at = now(),
-              last_alert_at = case
-                when excluded.current_severity is not null then now()
-                else control.alert_rule_last_eval.last_alert_at
-              end,
-              last_value = excluded.last_value,
-              current_severity = excluded.current_severity
-            """,
-            ruleId, instancePk, severity, value, severity);
+        if (severity != null) {
+            jdbc.update("""
+                insert into control.alert_rule_last_eval
+                  (rule_id, instance_pk, last_evaluated_at, last_alert_at, last_value, current_severity)
+                values (?, ?, now(), now(), ?, ?)
+                on conflict (rule_id, instance_pk) do update set
+                  last_evaluated_at = now(),
+                  last_alert_at = now(),
+                  last_value = excluded.last_value,
+                  current_severity = excluded.current_severity
+                """,
+                ruleId, instancePk, value, severity);
+        } else {
+            jdbc.update("""
+                insert into control.alert_rule_last_eval
+                  (rule_id, instance_pk, last_evaluated_at, last_value, current_severity)
+                values (?, ?, now(), ?, null)
+                on conflict (rule_id, instance_pk) do update set
+                  last_evaluated_at = now(),
+                  last_value = excluded.last_value,
+                  current_severity = null
+                """,
+                ruleId, instancePk, value);
+        }
     }
 
     private String buildThresholdMessage(String metricName, BigDecimal value, String operator,
