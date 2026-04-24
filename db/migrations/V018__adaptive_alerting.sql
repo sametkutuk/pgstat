@@ -9,7 +9,7 @@
 create table if not exists control.metric_baseline (
   instance_pk bigint not null references control.instance_inventory(instance_pk) on delete cascade,
   metric_key text not null,
-  hour_of_day integer check (hour_of_day between 0 and 23),  -- null = genel, 0-23 = saatlik
+  hour_of_day integer not null default -1 check (hour_of_day = -1 or (hour_of_day between 0 and 23)),  -- -1 = genel, 0-23 = saatlik
   
   -- Tarihsel istatistikler (son 4 hafta)
   avg_value numeric,
@@ -28,12 +28,12 @@ create table if not exists control.metric_baseline (
   -- Meta
   baseline_start timestamptz,
   baseline_end timestamptz,
-  updated_at timestamptz default now(),
-  
-  primary key (instance_pk, metric_key, coalesce(hour_of_day, -1))
+  updated_at timestamptz default now()
 );
 
-create index idx_metric_baseline_lookup on control.metric_baseline (instance_pk, metric_key, hour_of_day);
+-- Unique constraint (coalesce kullanılamaz, -1 default ile çözeriz)
+alter table control.metric_baseline alter column hour_of_day set default -1;
+create unique index idx_metric_baseline_pk on control.metric_baseline (instance_pk, metric_key, hour_of_day);
 create index idx_metric_baseline_updated on control.metric_baseline (updated_at);
 
 -- Query bazlı baseline
@@ -189,7 +189,7 @@ create table if not exists control.maintenance_window (
   
   instance_pks bigint[],
   
-  day_of_week integer[] check (array_length(day_of_week, 1) is null or (select bool_and(d between 0 and 6) from unnest(day_of_week) d)),
+  day_of_week integer[],  -- 0-6 arası değerler (0=Pazar, 6=Cumartesi)
   start_time time not null,
   end_time time not null,
   timezone text default 'UTC',
