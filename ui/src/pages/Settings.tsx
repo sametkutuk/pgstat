@@ -169,6 +169,9 @@ function ScheduleTab() {
     const [form, setForm] = useState(emptySchedule);
     const [editId, setEditId] = useState<number | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<{ id: number; code: string } | null>(null);
+    // max_host_concurrency değiştiyse restart gerektiren uyarı banner'ı
+    const [restartNotice, setRestartNotice] = useState(false);
+    const [originalConcurrency, setOriginalConcurrency] = useState<number | null>(null);
 
     const { data, isLoading } = useQuery({ queryKey: ['schedule-profiles'], queryFn: () => apiGet<any[]>('/schedule-profiles') });
 
@@ -180,7 +183,16 @@ function ScheduleTab() {
 
     const editMut = useMutation({
         mutationFn: ({ id, data }: { id: number; data: any }) => apiPut(`/schedule-profiles/${id}`, data),
-        onSuccess: () => { qc.invalidateQueries({ queryKey: ['schedule-profiles'] }); setFormMode('closed'); toast.success('Profil güncellendi.'); },
+        onSuccess: (_res, vars) => {
+            qc.invalidateQueries({ queryKey: ['schedule-profiles'] });
+            setFormMode('closed');
+            // max_host_concurrency değişti mi? Değiştiyse restart banner'ını göster.
+            if (originalConcurrency !== null && vars.data.max_host_concurrency !== originalConcurrency) {
+                setRestartNotice(true);
+            } else {
+                toast.success('Profil güncellendi. Diğer değişiklikler 5 saniye içinde devrede.');
+            }
+        },
         onError: (e: Error) => toast.error('Güncellenemedi: ' + e.message),
     });
 
@@ -193,6 +205,7 @@ function ScheduleTab() {
     const openEdit = (r: any) => {
         setForm({ profile_code: r.profile_code, cluster_interval_seconds: r.cluster_interval_seconds, statements_interval_seconds: r.statements_interval_seconds, db_objects_interval_seconds: r.db_objects_interval_seconds, hourly_rollup_interval_seconds: r.hourly_rollup_interval_seconds, daily_rollup_hour_utc: r.daily_rollup_hour_utc, bootstrap_sql_text_batch: r.bootstrap_sql_text_batch, max_databases_per_run: r.max_databases_per_run, statement_timeout_ms: r.statement_timeout_ms, lock_timeout_ms: r.lock_timeout_ms, connect_timeout_seconds: r.connect_timeout_seconds, max_host_concurrency: r.max_host_concurrency, is_active: r.is_active });
         setEditId(r.schedule_profile_id);
+        setOriginalConcurrency(r.max_host_concurrency);
         setFormMode('edit');
     };
 
@@ -228,6 +241,26 @@ function ScheduleTab() {
 
     return (
         <div>
+            {restartNotice && (
+                <div className="mb-4 bg-[#FEF3C7] border border-[#FCD34D] rounded-lg p-4 flex items-start gap-3">
+                    <span className="text-2xl">⚠️</span>
+                    <div className="flex-1 text-sm">
+                        <div className="font-semibold text-[#92400E]">Collector Yeniden Başlatılmalı</div>
+                        <div className="text-[#B45309] mt-1">
+                            <b>Max Paralel Host</b> değeri değiştirildi. Bu ayar collector başlatılırken yüklenir,
+                            değişikliğin etkili olması için:
+                        </div>
+                        <code className="inline-block mt-2 bg-white px-2 py-1 rounded text-xs text-[#92400E] border border-[#FCD34D]">
+                            ./pgstat restart collector
+                        </code>
+                        <div className="text-xs text-[#78350F] mt-2">
+                            Diğer tüm değişiklikler (interval, timeout) 5 saniye içinde otomatik devrede.
+                        </div>
+                    </div>
+                    <button onClick={() => setRestartNotice(false)}
+                        className="text-[#92400E] hover:text-[#78350F] text-xl leading-none">×</button>
+                </div>
+            )}
             <div className="flex justify-end mb-3">
                 <button onClick={() => { setFormMode(formMode === 'closed' ? 'add' : 'closed'); setForm(emptySchedule); }}
                     className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB]">
@@ -238,6 +271,13 @@ function ScheduleTab() {
             {formMode !== 'closed' && (
                 <div className="bg-white rounded-lg shadow-sm p-5 mb-4">
                     <h3 className="text-sm font-semibold text-[#64748B] mb-3">{formMode === 'edit' ? 'Profil Düzenle' : 'Yeni Zamanlama Profili'}</h3>
+                    {formMode === 'edit' && (
+                        <div className="mb-3 text-xs bg-[#F0F9FF] border border-[#BAE6FD] text-[#0369A1] rounded-md px-3 py-2">
+                            <strong>Bilgi:</strong> Interval ve timeout değişiklikleri <b>5 saniye içinde</b> devreye girer.
+                            Sadece <b>Max Paralel Host</b> değişikliği için collector'ı yeniden başlatmak gerekir
+                            (<code className="bg-white px-1 rounded">./pgstat restart collector</code>).
+                        </div>
+                    )}
                     <form onSubmit={(e) => { e.preventDefault(); formMode === 'edit' && editId ? editMut.mutate({ id: editId, data: form }) : addMut.mutate(form); }} className="grid grid-cols-2 md:grid-cols-4 gap-3">
                         <div>
                             <label className="block text-xs text-[#64748B] mb-1">Kod *</label>
@@ -251,7 +291,22 @@ function ScheduleTab() {
                         {nf('Stmt Timeout (ms)', 'statement_timeout_ms')}
                         {nf('Lock Timeout (ms)', 'lock_timeout_ms')}
                         {nf('Connect Timeout (s)', 'connect_timeout_seconds')}
-                        {nf('Max Paralel Host', 'max_host_concurrency')}
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1 flex items-center gap-1">
+                                Max Paralel Host
+                                <span title="Bu ayar collector başlatılırken yüklenir. Değiştirdikten sonra ./pgstat restart collector gerekir."
+                                      className="text-[#F59E0B] cursor-help">⚠</span>
+                            </label>
+                            <input type="number"
+                                value={form.max_host_concurrency as number}
+                                onChange={(e) => setForm({ ...form, max_host_concurrency: parseInt(e.target.value) || 0 })}
+                                className="w-full border border-[#E2E8F0] rounded px-3 py-2 text-sm" />
+                            {formMode === 'edit' && originalConcurrency !== null && form.max_host_concurrency !== originalConcurrency && (
+                                <div className="text-[11px] text-[#B45309] mt-1">
+                                    Restart gerekir (collector'ı yeniden başlatmadan etkili olmaz).
+                                </div>
+                            )}
+                        </div>
                         {nf('SQL Text Batch', 'bootstrap_sql_text_batch')}
                         {nf('Max DB/Run', 'max_databases_per_run')}
                         {nf('Hourly Rollup (s)', 'hourly_rollup_interval_seconds')}
