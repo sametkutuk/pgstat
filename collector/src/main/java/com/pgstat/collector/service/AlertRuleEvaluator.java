@@ -148,9 +148,6 @@ public class AlertRuleEvaluator {
             if (current.compareTo(upperCritical) > 0) severity = "critical";
             else if (current.compareTo(upperWarning) > 0) severity = "warning";
 
-            log.info("Adaptive eval rule={} inst={}: val={} avg={} std={} k={} warn={} crit={} sev={}",
-                ruleId, instancePk, current, avg, stddev, kMultiplier, upperWarning, upperCritical, severity);
-
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (severity != null) {
@@ -258,10 +255,8 @@ public class AlertRuleEvaluator {
                 "select * from control.get_baseline(?, ?, ?)",
                 instancePk, metricKey, hour);
             if (rows.isEmpty()) {
-                log.warn("Baseline bos dondu instance={} metric={} hour={}", instancePk, metricKey, hour);
                 return null;
             }
-            log.info("Baseline bulundu instance={} metric={} hour={} avg={}", instancePk, metricKey, hour, rows.get(0).get("avg_value"));
             return rows.get(0);
         } catch (Exception e) {
             log.warn("Baseline okuma hatasi instance={} metric={} hour={}: {}", instancePk, metricKey, hour, e.getMessage());
