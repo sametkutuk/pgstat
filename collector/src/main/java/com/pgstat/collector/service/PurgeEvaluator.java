@@ -53,7 +53,8 @@ public class PurgeEvaluator {
         "fact.pg_slru_snapshot",
         "fact.pg_subscription_snapshot",
         "fact.pg_recovery_prefetch_snapshot",
-        "fact.pg_user_function_snapshot"
+        "fact.pg_user_function_snapshot",
+        "fact.pg_sequence_io_snapshot"
     };
 
     private final JdbcTemplate jdbc;

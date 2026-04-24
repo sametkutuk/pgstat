@@ -168,6 +168,13 @@ const METRIC_TYPES: Record<string, { label: string; metrics: Record<string, Metr
       self_time: { label: 'Self Süre', unit: 'ms', unitNote: 'Milisaniye. Alt fonksiyon çağrıları hariç kendi süresi', placeholder: '3000' },
     },
   },
+  sequence_metric: {
+    label: 'Sequence I/O',
+    metrics: {
+      blks_read: { label: 'Sequence Disk Okuma', unit: 'adet', unitNote: 'Sequence disk okuma sayısı — cache miss', placeholder: '100' },
+      blks_hit: { label: 'Sequence Cache Hit', unit: 'adet', unitNote: 'Sequence cache hit sayısı', placeholder: '10000' },
+    },
+  },
 };
 
 // Metrik için birim döndürür
@@ -670,8 +677,8 @@ function RuleCard({ rule, onToggle, onEdit, onDelete }: {
           {/* Son değer */}
           {rule.last_value != null && (
             <span className={`text-xs px-2 py-0.5 rounded ${rule.current_severity === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
-                rule.current_severity === 'warning' ? 'bg-[#FEF3C7] text-[#D97706]' :
-                  'bg-[#F0FDF4] text-[#16A34A]'
+              rule.current_severity === 'warning' ? 'bg-[#FEF3C7] text-[#D97706]' :
+                'bg-[#F0FDF4] text-[#16A34A]'
               }`}>
               şu an: {isTrend ? `%${Number(rule.last_value).toFixed(1)}` : formatValue(Number(rule.last_value), unit)}
             </span>

@@ -346,7 +346,8 @@ const VALID_METRIC_TYPES = [
   'cluster_metric', 'io_metric', 'database_metric', 'statement_metric',
   'table_metric', 'index_metric', 'activity_metric', 'replication_metric',
   'wal_metric', 'archiver_metric', 'slot_metric', 'conflict_metric',
-  'slru_metric', 'subscription_metric', 'prefetch_metric', 'function_metric'
+  'slru_metric', 'subscription_metric', 'prefetch_metric', 'function_metric',
+  'sequence_metric'
 ];
 const VALID_SCOPES = ['all_instances', 'specific_instance', 'service_group', 'instance_group'];
 const VALID_OPS = ['>', '<', '>=', '<=', '='];

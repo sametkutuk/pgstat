@@ -574,4 +574,24 @@ public class FactRepository {
             schemaname, funcname, calls, totalTime, selfTime
         );
     }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_sequence_io_snapshot
+    // -------------------------------------------------------------------------
+
+    public void insertSequenceIoSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                         long dbid, long relid, String schemaname,
+                                         String relname, Long blksRead, Long blksHit) {
+        jdbc.update("""
+            insert into fact.pg_sequence_io_snapshot (
+              sample_ts, instance_pk, dbid, relid,
+              schemaname, relname, blks_read, blks_hit
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, dbid, relid,
+            schemaname, relname, blksRead, blksHit
+        );
+    }
 }

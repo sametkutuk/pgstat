@@ -206,6 +206,23 @@ public interface SourceQueries {
             """;
     }
 
+    /**
+     * pg_statio_all_sequences — sequence I/O istatistikleri.
+     * Tum versiyonlarda mevcut. dbid bagimli — hedef DB'de sorgulanir.
+     */
+    default String sequenceIoQuery() {
+        return """
+            select
+              (select oid from pg_database where datname = current_database())::bigint as dbid,
+              relid::bigint as relid,
+              schemaname,
+              relname,
+              blks_read,
+              blks_hit
+            from pg_statio_all_sequences
+            """;
+    }
+
     // =========================================================================
     // Activity / Replication / Lock / Progress
     // =========================================================================

@@ -826,6 +826,7 @@ public class AlertRuleEvaluator {
             case "subscription_metric"-> querySnapshotMetric("fact.pg_subscription_snapshot", metricName, aggFn, interval);
             case "prefetch_metric"    -> querySnapshotMetric("fact.pg_recovery_prefetch_snapshot", metricName, aggFn, interval);
             case "function_metric"    -> querySnapshotMetric("fact.pg_user_function_snapshot", metricName, aggFn, interval);
+            case "sequence_metric"    -> querySnapshotMetric("fact.pg_sequence_io_snapshot", metricName, aggFn, interval);
             default -> { log.warn("Desteklenmeyen metric_type: {}", metricType); yield List.of(); }
         };
     }
@@ -861,6 +862,7 @@ public class AlertRuleEvaluator {
             case "subscription_metric"-> querySnapshotMetricBetween("fact.pg_subscription_snapshot", metricName, aggFn, intervalStart, intervalEnd);
             case "prefetch_metric"    -> querySnapshotMetricBetween("fact.pg_recovery_prefetch_snapshot", metricName, aggFn, intervalStart, intervalEnd);
             case "function_metric"    -> querySnapshotMetricBetween("fact.pg_user_function_snapshot", metricName, aggFn, intervalStart, intervalEnd);
+            case "sequence_metric"    -> querySnapshotMetricBetween("fact.pg_sequence_io_snapshot", metricName, aggFn, intervalStart, intervalEnd);
             default -> List.of();
         };
     }
@@ -942,6 +944,9 @@ public class AlertRuleEvaluator {
             case "function_metric.calls"                 -> "fact.pg_user_function_snapshot|calls|sample_ts";
             case "function_metric.total_time"            -> "fact.pg_user_function_snapshot|total_time|sample_ts";
             case "function_metric.self_time"             -> "fact.pg_user_function_snapshot|self_time|sample_ts";
+            // Sequence I/O (V028)
+            case "sequence_metric.blks_read"             -> "fact.pg_sequence_io_snapshot|blks_read|sample_ts";
+            case "sequence_metric.blks_hit"              -> "fact.pg_sequence_io_snapshot|blks_hit|sample_ts";
             default -> null;
         };
     }
@@ -989,6 +994,7 @@ public class AlertRuleEvaluator {
             case "subscription_metric"-> "fact.pg_subscription_snapshot";
             case "prefetch_metric"    -> "fact.pg_recovery_prefetch_snapshot";
             case "function_metric"    -> "fact.pg_user_function_snapshot";
+            case "sequence_metric"    -> "fact.pg_sequence_io_snapshot";
             default -> null;
         };
     }

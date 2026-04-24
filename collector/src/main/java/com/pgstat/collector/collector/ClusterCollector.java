@@ -209,6 +209,13 @@ public class ClusterCollector {
             } catch (Exception e) {
                 log.warn("User function snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
+
+            // Adim 17: Sequence I/O snapshot
+            try {
+                rowsWritten += collectSequenceIoSnapshot(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Sequence I/O snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
         }
 
         log.debug("Cluster toplama tamamlandi: {} — {} satir", instance.instanceId(), rowsWritten);
@@ -798,6 +805,33 @@ public class ClusterCollector {
                     (Long) rs.getObject("calls"),
                     rs.getBigDecimal("total_time"),
                     rs.getBigDecimal("self_time")
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 17: Sequence I/O snapshot
+    // =========================================================================
+
+    private long collectSequenceIoSnapshot(Connection conn, SourceQueries queries,
+                                            long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.sequenceIoQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertSequenceIoSnapshot(
+                    now, instancePk,
+                    rs.getLong("dbid"),
+                    rs.getLong("relid"),
+                    rs.getString("schemaname"),
+                    rs.getString("relname"),
+                    (Long) rs.getObject("blks_read"),
+                    (Long) rs.getObject("blks_hit")
                 );
                 rows++;
             }
