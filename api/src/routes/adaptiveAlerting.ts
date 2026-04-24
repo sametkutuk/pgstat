@@ -11,7 +11,7 @@ const router = Router();
 router.post('/snooze', async (req, res, next) => {
     try {
         const { rule_id, instance_pk, metric_key, queryid, duration_minutes, reason } = req.body;
-        const created_by = req.user?.username || 'system';
+        const created_by = 'admin'; // Single admin user system
 
         const snoozeUntil = new Date(Date.now() + duration_minutes * 60 * 1000);
 
@@ -245,7 +245,7 @@ router.post('/instances/:instance_pk/baseline/invalidate', async (req, res, next
     try {
         const { instance_pk } = req.params;
         const { reason } = req.body;
-        const invalidated_by = req.user?.username || 'system';
+        const invalidated_by = 'admin'; // Single admin user system
 
         // Get old version
         const oldVersion = await pool.query(
