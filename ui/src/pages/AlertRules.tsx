@@ -142,8 +142,16 @@ const AGGREGATIONS: Record<string, string> = {
   last: 'Son Değer',
   count: 'Sayı',
 };
-const WINDOW_OPTIONS = [1, 5, 10, 15, 30, 60, 120];
-const COOLDOWN_OPTIONS = [0, 5, 10, 15, 30, 60, 120];
+const WINDOW_OPTIONS = [1, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
+const COOLDOWN_OPTIONS = [0, 5, 10, 15, 30, 60, 120, 360];
+
+const EVAL_TYPES: Record<string, { label: string; description: string }> = {
+  threshold:      { label: 'Sabit Eşik',         description: 'Değer belirlenen eşiği aştığında tetiklenir.' },
+  alltime_high:   { label: 'Tüm Zamanlar En Yüksek', description: 'Değer geçmişte hiç bu kadar yüksek olmamışsa tetiklenir.' },
+  alltime_low:    { label: 'Tüm Zamanlar En Düşük',  description: 'Değer geçmişte hiç bu kadar düşük olmamışsa tetiklenir.' },
+  day_over_day:   { label: 'Günlük Değişim (%)',  description: 'Dünün aynı saatine göre % değişim eşiği aşılırsa tetiklenir.' },
+  week_over_week: { label: 'Haftalık Değişim (%)', description: 'Geçen haftanın aynı gününe göre % değişim eşiği aşılırsa tetiklenir.' },
+};
 
 const emptyForm = {
   rule_name: '',
@@ -158,6 +166,9 @@ const emptyForm = {
   critical_threshold: '' as string | number,
   evaluation_window_minutes: 5,
   aggregation: 'avg',
+  evaluation_type: 'threshold',
+  change_threshold_pct: '' as string | number,
+  min_data_days: 7,
   is_enabled: true,
   cooldown_minutes: 15,
   auto_resolve: true,
@@ -422,6 +433,9 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       critical_threshold: rule.critical_threshold ?? '' as string | number,
       evaluation_window_minutes: rule.evaluation_window_minutes,
       aggregation: rule.aggregation,
+      evaluation_type: (rule as any).evaluation_type || 'threshold',
+      change_threshold_pct: (rule as any).change_threshold_pct ?? '' as string | number,
+      min_data_days: (rule as any).min_data_days ?? 7,
       is_enabled: rule.is_enabled,
       cooldown_minutes: rule.cooldown_minutes,
       auto_resolve: rule.auto_resolve,
@@ -445,10 +459,12 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
   });
 
   const handleSave = () => {
+    const isTrend = ['day_over_day', 'week_over_week'].includes(form.evaluation_type);
     const body = {
       ...form,
-      warning_threshold: form.warning_threshold !== '' ? Number(form.warning_threshold) : null,
-      critical_threshold: form.critical_threshold !== '' ? Number(form.critical_threshold) : null,
+      warning_threshold: !isTrend && form.warning_threshold !== '' ? Number(form.warning_threshold) : null,
+      critical_threshold: !isTrend && form.critical_threshold !== '' ? Number(form.critical_threshold) : null,
+      change_threshold_pct: isTrend && form.change_threshold_pct !== '' ? Number(form.change_threshold_pct) : null,
       instance_pk: form.scope === 'specific_instance' ? form.instance_pk : null,
       service_group: form.scope === 'service_group' ? form.service_group : null,
     };
@@ -558,23 +574,66 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
           {/* Adım 3: Koşul */}
           {step === 3 && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-[#475569] mb-1">Operatör</label>
-                  <select value={form.condition_operator} onChange={e => set('condition_operator', e.target.value)}
-                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                    {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
-                  </select>
+              {/* Değerlendirme tipi */}
+              <div>
+                <label className="block text-xs font-medium text-[#475569] mb-2">Değerlendirme Yöntemi</label>
+                <div className="space-y-2">
+                  {Object.entries(EVAL_TYPES).map(([k, v]) => (
+                    <label key={k} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${form.evaluation_type === k ? 'border-[#3B82F6] bg-[#EFF6FF]' : 'border-[#E2E8F0] hover:border-[#93C5FD]'}`}>
+                      <input type="radio" checked={form.evaluation_type === k} onChange={() => set('evaluation_type', k)}
+                        className="mt-0.5 accent-[#3B82F6]" />
+                      <div>
+                        <div className="text-sm font-medium text-[#1E293B]">{v.label}</div>
+                        <div className="text-xs text-[#64748B] mt-0.5">{v.description}</div>
+                      </div>
+                    </label>
+                  ))}
                 </div>
+              </div>
+
+              {/* Trend: % değişim eşiği */}
+              {['day_over_day', 'week_over_week'].includes(form.evaluation_type) && (
                 <div>
-                  <label className="block text-xs font-medium text-[#475569] mb-1">Toplama</label>
-                  <select value={form.aggregation} onChange={e => set('aggregation', e.target.value)}
-                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                    {Object.entries(AGGREGATIONS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    Değişim Eşiği (%) *
+                  </label>
+                  <input type="number" min="1" max="10000"
+                    value={form.change_threshold_pct}
+                    onChange={e => set('change_threshold_pct', e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                    placeholder="Örn: 50 = %50 artış/azalış" />
+                  <p className="text-xs text-[#64748B] mt-1">
+                    {form.evaluation_type === 'day_over_day'
+                      ? 'Dünün aynı saatine göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.'
+                      : 'Geçen haftanın aynı gününe göre mutlak değişim bu yüzdeyi aşarsa tetiklenir.'}
+                  </p>
                 </div>
+              )}
+
+              {/* Alltime / Trend: min data günü */}
+              {['alltime_high', 'alltime_low', 'day_over_day', 'week_over_week'].includes(form.evaluation_type) && (
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    Minimum Geçmiş Veri (gün)
+                  </label>
+                  <input type="number" min="1" max="365"
+                    value={form.min_data_days}
+                    onChange={e => set('min_data_days', Number(e.target.value))}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]" />
+                  <p className="text-xs text-[#64748B] mt-1">
+                    Bu kadar günlük veri yoksa kural değerlendirilmez (false positive önlemi).
+                  </p>
+                </div>
+              )}
+
+              {/* Threshold: sabit eşik alanları */}
+              {form.evaluation_type === 'threshold' && (<>
+              <div>
+                <label className="block text-xs font-medium text-[#475569] mb-1">Operatör</label>
+                <select value={form.condition_operator} onChange={e => set('condition_operator', e.target.value)}
+                  className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                  {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
+                </select>
               </div>
               {/* Birim notu */}
               {(() => {
@@ -605,12 +664,27 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                     placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-[#475569] mb-1">Değerlendirme Penceresi</label>
-                <select value={form.evaluation_window_minutes} onChange={e => set('evaluation_window_minutes', Number(e.target.value))}
-                  className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
-                  {WINDOW_OPTIONS.map(v => <option key={v} value={v}>Son {v} dakika</option>)}
-                </select>
+              </>)}
+              {/* Tüm tipler için pencere + aggregation */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">
+                    {['day_over_day','week_over_week'].includes(form.evaluation_type) ? 'Karşılaştırma Penceresi' : 'Değerlendirme Penceresi'}
+                  </label>
+                  <select value={form.evaluation_window_minutes} onChange={e => set('evaluation_window_minutes', Number(e.target.value))}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                    {WINDOW_OPTIONS.map(v => <option key={v} value={v}>{v >= 1440 ? `${v/1440} gün` : v >= 60 ? `${v/60} saat` : `${v} dakika`}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[#475569] mb-1">Toplama</label>
+                  <select value={form.aggregation} onChange={e => set('aggregation', e.target.value)}
+                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                    {Object.entries(AGGREGATIONS).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </>
           )}

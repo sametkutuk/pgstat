@@ -13,8 +13,18 @@ interface Alert {
     display_name: string | null; instance_id: string | null; host: string | null;
     title: string; message: string; occurrence_count: number;
     first_seen_at: string; last_seen_at: string; resolved_at: string | null;
+    acknowledged_at: string | null; acknowledge_note: string | null;
     details_json: any;
+    rule_id: number | null; rule_name: string | null; evaluation_type: string | null;
 }
+
+const EVAL_TYPE_LABELS: Record<string, string> = {
+  threshold:      'Sabit Eşik',
+  alltime_high:   'Tüm Zamanlar En Yüksek',
+  alltime_low:    'Tüm Zamanlar En Düşük',
+  day_over_day:   'Günlük Değişim',
+  week_over_week: 'Haftalık Değişim',
+};
 
 export default function Alerts() {
     const [statusFilter, setStatusFilter] = useState('open');
@@ -31,9 +41,20 @@ export default function Alerts() {
         queryFn: () => apiGet<Alert[]>(`/alerts?${params.toString()}`),
     });
 
+    // Acknowledge modal state
+    const [ackModal, setAckModal] = useState<{ id: number; title: string } | null>(null);
+    const [ackNote, setAckNote] = useState('');
+
     const ackMutation = useMutation({
-        mutationFn: (id: number) => apiPatch(`/alerts/${id}/acknowledge`),
-        onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['alerts'] }); toast.success('Alert onaylandı.'); },
+        mutationFn: ({ id, note }: { id: number; note: string }) =>
+            apiPatch(`/alerts/${id}/acknowledge`, { note: note || null }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['alerts'] });
+            toast.success('Alert onaylandı.');
+            setAckModal(null);
+            setAckNote('');
+        },
+        onError: () => toast.error('Onaylama başarısız.'),
     });
 
     const resolveMutation = useMutation({
@@ -46,17 +67,45 @@ export default function Alerts() {
     const columns = [
         { key: 'severity', header: 'Seviye', render: (r: Alert) => <Badge value={r.severity} /> },
         { key: 'status', header: 'Durum', render: (r: Alert) => <Badge value={r.status} /> },
-        { key: 'alert_code', header: 'Kod' },
-        { key: 'title', header: 'Başlık' },
+        {
+            key: 'title', header: 'Alert',
+            render: (r: Alert) => (
+                <div>
+                    <div className="font-medium text-sm text-[#1E293B]">{r.title}</div>
+                    {r.rule_name && (
+                        <div className="text-xs text-[#64748B] mt-0.5 flex items-center gap-1">
+                            <span>📋</span>
+                            <span>{r.rule_name}</span>
+                            {r.evaluation_type && r.evaluation_type !== 'threshold' && (
+                                <span className="bg-[#F1F5F9] px-1.5 py-0.5 rounded text-[10px]">
+                                    {EVAL_TYPE_LABELS[r.evaluation_type] || r.evaluation_type}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )
+        },
         { key: 'display_name', header: 'Instance', render: (r: Alert) => r.display_name || '—' },
         { key: 'occurrence_count', header: 'Tekrar', className: 'text-right' },
-        { key: 'first_seen_at', header: 'İlk Görülme', render: (r: Alert) => <TimeAgo date={r.first_seen_at} /> },
         { key: 'last_seen_at', header: 'Son Görülme', render: (r: Alert) => <TimeAgo date={r.last_seen_at} /> },
         {
             key: 'actions', header: '', render: (r: Alert) => (
                 <div className="flex gap-1">
-                    {r.status === 'open' && <button onClick={(e) => { e.stopPropagation(); ackMutation.mutate(r.alert_id); }} className="px-2 py-1 text-xs bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100">Onayla</button>}
-                    {r.status !== 'resolved' && <button onClick={(e) => { e.stopPropagation(); resolveMutation.mutate(r.alert_id); }} className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100">Çöz</button>}
+                    {r.status === 'open' && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setAckModal({ id: r.alert_id, title: r.title }); setAckNote(''); }}
+                            className="px-2 py-1 text-xs bg-yellow-50 text-yellow-700 rounded hover:bg-yellow-100">
+                            Onayla
+                        </button>
+                    )}
+                    {r.status !== 'resolved' && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); resolveMutation.mutate(r.alert_id); }}
+                            className="px-2 py-1 text-xs bg-green-50 text-green-700 rounded hover:bg-green-100">
+                            Çöz
+                        </button>
+                    )}
                 </div>
             )
         },
@@ -74,7 +123,7 @@ export default function Alerts() {
                     {['open', 'acknowledged', 'resolved', ''].map((s) => (
                         <button key={s} onClick={() => setStatusFilter(s)}
                             className={`px-3 py-1.5 text-sm rounded ${statusFilter === s ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0] hover:bg-[#F8FAFC]'}`}>
-                            {s || 'Tümü'}
+                            {s === 'open' ? 'Açık' : s === 'acknowledged' ? 'Onaylandı' : s === 'resolved' ? 'Çözüldü' : 'Tümü'}
                         </button>
                     ))}
                 </div>
@@ -95,24 +144,81 @@ export default function Alerts() {
                 )}
             </div>
 
+            {/* Detay paneli */}
             {expandedId && data && (() => {
                 const alert = data.find((a) => a.alert_id === expandedId);
                 if (!alert) return null;
                 return (
-                    <div className="mt-4 bg-white rounded-lg shadow-sm p-5">
-                        <h3 className="text-sm font-semibold text-[#64748B] mb-2">Alert Detayı</h3>
-                        <div className="text-sm space-y-1">
-                            <div><span className="text-[#64748B]">Key:</span> {alert.alert_key}</div>
-                            <div><span className="text-[#64748B]">Mesaj:</span> {alert.message}</div>
-                            {alert.details_json && (
-                                <pre className="text-xs bg-[#F8FAFC] p-3 rounded mt-2 overflow-x-auto">
-                                    {typeof alert.details_json === 'string' ? alert.details_json : JSON.stringify(alert.details_json, null, 2)}
-                                </pre>
+                    <div className="mt-4 bg-white rounded-lg shadow-sm p-5 space-y-3">
+                        <h3 className="text-sm font-semibold text-[#64748B]">Alert Detayı</h3>
+                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                            <div><span className="text-[#64748B]">Alert Key:</span> <span className="font-mono text-xs">{alert.alert_key}</span></div>
+                            <div><span className="text-[#64748B]">İlk Görülme:</span> <TimeAgo date={alert.first_seen_at} /></div>
+                            {alert.rule_name && (
+                                <div><span className="text-[#64748B]">Kaynak Kural:</span> {alert.rule_name}
+                                    {alert.evaluation_type && (
+                                        <span className="ml-1 text-xs text-[#94A3B8]">({EVAL_TYPE_LABELS[alert.evaluation_type] || alert.evaluation_type})</span>
+                                    )}
+                                </div>
+                            )}
+                            {alert.acknowledged_at && (
+                                <div><span className="text-[#64748B]">Onaylanma:</span> <TimeAgo date={alert.acknowledged_at} /></div>
                             )}
                         </div>
+                        <div className="text-sm">
+                            <span className="text-[#64748B]">Mesaj:</span>
+                            <p className="mt-1 bg-[#F8FAFC] rounded px-3 py-2 text-[#334155]">{alert.message}</p>
+                        </div>
+                        {alert.acknowledge_note && (
+                            <div className="text-sm">
+                                <span className="text-[#64748B]">Onay Notu:</span>
+                                <p className="mt-1 bg-[#FFFBEB] border border-[#FDE68A] rounded px-3 py-2 text-[#92400E]">{alert.acknowledge_note}</p>
+                            </div>
+                        )}
+                        {alert.details_json && (
+                            <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
+                                {typeof alert.details_json === 'string' ? alert.details_json : JSON.stringify(alert.details_json, null, 2)}
+                            </pre>
+                        )}
                     </div>
                 );
             })()}
+
+            {/* Acknowledge modal */}
+            {ackModal && (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+                        <div className="px-6 py-4 border-b border-[#E2E8F0]">
+                            <h2 className="font-semibold text-[#1E293B]">Alert Onayla</h2>
+                            <p className="text-sm text-[#64748B] mt-1">{ackModal.title}</p>
+                        </div>
+                        <div className="px-6 py-4">
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Not (opsiyonel)
+                            </label>
+                            <textarea
+                                value={ackNote}
+                                onChange={e => setAckNote(e.target.value)}
+                                rows={3}
+                                placeholder="Örn: İncelendi, kapasite artışı planlandı..."
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6] resize-none"
+                            />
+                        </div>
+                        <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2">
+                            <button onClick={() => setAckModal(null)}
+                                className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B]">
+                                İptal
+                            </button>
+                            <button
+                                onClick={() => ackMutation.mutate({ id: ackModal.id, note: ackNote })}
+                                disabled={ackMutation.isPending}
+                                className="px-5 py-2 bg-[#F59E0B] text-white text-sm rounded-md hover:bg-[#D97706] disabled:opacity-50">
+                                {ackMutation.isPending ? 'Onaylanıyor...' : 'Onayla'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

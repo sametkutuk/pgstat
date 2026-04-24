@@ -13,9 +13,11 @@ router.get('/', async (req, res, next) => {
     const limit = parseLimit(req.query.limit, 100);
 
     let query = `
-      select a.*, i.display_name, i.instance_id, i.host, i.port
+      select a.*, i.display_name, i.instance_id, i.host, i.port,
+             r.rule_name, r.evaluation_type
       from ops.alert a
       left join control.instance_inventory i on i.instance_pk = a.instance_pk
+      left join control.alert_rule r on r.rule_id = a.rule_id
       where 1=1
     `;
     const params: any[] = [];
@@ -62,18 +64,22 @@ router.get('/summary', async (_req, res, next) => {
   }
 });
 
-// PATCH /api/alerts/:id/acknowledge — Alert'i onayla
+// PATCH /api/alerts/:id/acknowledge — Alert'i onayla (opsiyonel not ile)
 router.patch('/:id/acknowledge', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const note = typeof req.body?.note === 'string' ? req.body.note.slice(0, 500) : null;
     const result = await pool.query(`
       update ops.alert
-      set status = 'acknowledged', acknowledged_at = now(), last_seen_at = now()
+      set status = 'acknowledged',
+          acknowledged_at = now(),
+          last_seen_at = now(),
+          acknowledge_note = $2
       where alert_id = $1 and status = 'open'
       returning *
-    `, [id]);
+    `, [id, note]);
     if (result.rows.length === 0) {
-      res.status(404).json({ error: 'Alert not found or already acknowledged' });
+      res.status(404).json({ error: 'Alert bulunamadı veya zaten onaylanmış' });
       return;
     }
     res.json(result.rows[0]);

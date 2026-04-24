@@ -131,21 +131,26 @@ router.post('/', async (req: Request, res: Response) => {
     rule_name, description, metric_type, metric_name, scope,
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
-    aggregation, is_enabled, cooldown_minutes, auto_resolve
+    aggregation, evaluation_type, change_threshold_pct, min_data_days,
+    is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
   const result = await pool.query(
     `insert into control.alert_rule
        (rule_name, description, metric_type, metric_name, scope, instance_pk,
         service_group, condition_operator, warning_threshold, critical_threshold,
-        evaluation_window_minutes, aggregation, is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        evaluation_window_minutes, aggregation, evaluation_type,
+        change_threshold_pct, min_data_days,
+        is_enabled, cooldown_minutes, auto_resolve)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
       scope ?? 'all_instances', instance_pk ?? null, service_group ?? null,
       condition_operator ?? '>', warning_threshold ?? null, critical_threshold ?? null,
       evaluation_window_minutes ?? 5, aggregation ?? 'avg',
+      evaluation_type ?? 'threshold', change_threshold_pct ?? null,
+      min_data_days ?? 7,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false
     ]
   );
@@ -164,7 +169,8 @@ router.put('/:id', async (req: Request, res: Response) => {
     rule_name, description, metric_type, metric_name, scope,
     instance_pk, service_group, condition_operator,
     warning_threshold, critical_threshold, evaluation_window_minutes,
-    aggregation, is_enabled, cooldown_minutes, auto_resolve
+    aggregation, evaluation_type, change_threshold_pct, min_data_days,
+    is_enabled, cooldown_minutes, auto_resolve
   } = req.body;
 
   const result = await pool.query(
@@ -172,15 +178,17 @@ router.put('/:id', async (req: Request, res: Response) => {
        rule_name=$1, description=$2, metric_type=$3, metric_name=$4, scope=$5,
        instance_pk=$6, service_group=$7, condition_operator=$8,
        warning_threshold=$9, critical_threshold=$10,
-       evaluation_window_minutes=$11, aggregation=$12, is_enabled=$13,
-       cooldown_minutes=$14, auto_resolve=$15
-     where rule_id=$16
+       evaluation_window_minutes=$11, aggregation=$12,
+       evaluation_type=$13, change_threshold_pct=$14, min_data_days=$15,
+       is_enabled=$16, cooldown_minutes=$17, auto_resolve=$18
+     where rule_id=$19
      returning *`,
     [
       rule_name, description ?? null, metric_type, metric_name,
       scope ?? 'all_instances', instance_pk ?? null, service_group ?? null,
       condition_operator ?? '>', warning_threshold ?? null, critical_threshold ?? null,
       evaluation_window_minutes ?? 5, aggregation ?? 'avg',
+      evaluation_type ?? 'threshold', change_threshold_pct ?? null, min_data_days ?? 7,
       is_enabled !== false, cooldown_minutes ?? 15, auto_resolve !== false, id
     ]
   );
@@ -235,8 +243,9 @@ router.post('/from-template', async (req: Request, res: Response) => {
     `insert into control.alert_rule
        (rule_name, description, metric_type, metric_name, scope, instance_pk,
         service_group, condition_operator, warning_threshold, critical_threshold,
-        evaluation_window_minutes, aggregation, is_enabled, cooldown_minutes, auto_resolve)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13,$14)
+        evaluation_window_minutes, aggregation, evaluation_type,
+        change_threshold_pct, min_data_days, is_enabled, cooldown_minutes, auto_resolve)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,true,$16,$17)
      returning *`,
     [
       rule_name || t.rule_name,
@@ -251,6 +260,9 @@ router.post('/from-template', async (req: Request, res: Response) => {
       critical_threshold ?? t.critical_threshold,
       t.evaluation_window_minutes,
       t.aggregation,
+      t.evaluation_type,
+      t.change_threshold_pct,
+      t.min_data_days,
       t.cooldown_minutes,
       t.auto_resolve
     ]
@@ -260,6 +272,7 @@ router.post('/from-template', async (req: Request, res: Response) => {
 
 // ---
 
+const VALID_EVAL_TYPES = ['threshold','alltime_high','alltime_low','day_over_day','week_over_week'];
 const VALID_METRIC_TYPES = [
   'cluster_metric','io_metric','database_metric','statement_metric',
   'table_metric','index_metric','activity_metric','replication_metric'
@@ -281,8 +294,13 @@ function validateRuleBody(b: any): string | null {
     return 'Geçersiz condition_operator';
   if (b.aggregation && !VALID_AGGS.includes(b.aggregation))
     return 'Geçersiz aggregation';
-  if (b.warning_threshold == null && b.critical_threshold == null)
-    return 'warning_threshold veya critical_threshold zorunlu';
+  if (b.evaluation_type && !VALID_EVAL_TYPES.includes(b.evaluation_type))
+    return 'Geçersiz evaluation_type';
+  const evalType = b.evaluation_type || 'threshold';
+  if (['day_over_day','week_over_week'].includes(evalType) && b.change_threshold_pct == null)
+    return 'day_over_day/week_over_week için change_threshold_pct zorunlu';
+  if (['threshold'].includes(evalType) && b.warning_threshold == null && b.critical_threshold == null)
+    return 'threshold tipi için warning_threshold veya critical_threshold zorunlu';
   if (b.evaluation_window_minutes !== undefined && (b.evaluation_window_minutes < 1))
     return 'evaluation_window_minutes en az 1 olmalı';
   if (b.cooldown_minutes !== undefined && b.cooldown_minutes < 0)
