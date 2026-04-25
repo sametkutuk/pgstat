@@ -112,9 +112,9 @@ services:
       GF_AUTH_PROXY_HEADER_PROPERTY: username
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
       GF_AUTH_PROXY_HEADERS: "Name:X-WEBAUTH-NAME Role:X-WEBAUTH-ROLE"
-      # Auth proxy header'ini sadece nginx (UI container) gonderebilsin
-      # Container network IP araligi — docker default 172.x
-      GF_AUTH_PROXY_WHITELIST: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+      # Auth proxy header'ini gonderebilecek IP whitelist — bos = tum IP'ler
+      # Grafana zaten internal network'ten erisilir, nginx prefix tek giris noktasi
+      GF_AUTH_PROXY_WHITELIST: ""
       # Login form'unu da kapatma — fallback olarak admin/sifre ile manuel girilebilir
       GF_AUTH_DISABLE_LOGIN_FORM: "false"
       # Admin sifresi — .env'den
