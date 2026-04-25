@@ -103,9 +103,20 @@ services:
       # Iframe embed — pgstat UI ileride iframe ile panel gomerse calissin
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SECURITY_COOKIE_SAMESITE: lax
-      # Anonymous viewer — sirketici ag, single-admin sistem
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Anonymous yerine Auth Proxy — pgstat UI'a giren kullanici Grafana'ya
+      # otomatik admin olarak login olur (X-WEBAUTH-USER header'i nginx tarafindan
+      # eklenir). Kullanici manuel login yapmaz.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_HEADERS: "Name:X-WEBAUTH-NAME Role:X-WEBAUTH-ROLE"
+      # Auth proxy header'ini sadece nginx (UI container) gonderebilsin
+      # Container network IP araligi — docker default 172.x
+      GF_AUTH_PROXY_WHITELIST: "172.16.0.0/12 10.0.0.0/8 192.168.0.0/16"
+      # Login form'unu da kapatma — fallback olarak admin/sifre ile manuel girilebilir
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
       # Admin sifresi — .env'den
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-pgstat-admin}
