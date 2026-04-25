@@ -403,7 +403,10 @@ EOF
       echo ""
       echo -e "${C}Grafana container başlatılıyor...${N}"
       $COMPOSE up -d grafana 2>&1 | tail -3
-      $COMPOSE restart ui 2>&1 | tail -3
+      # UI nginx config'inde /grafana/ proxy bloğu — image'a build sırasında
+      # gömülür, restart yetmez, --build gerekiyor
+      echo -e "${C}UI nginx config rebuild ediliyor (Grafana proxy için)...${N}"
+      $COMPOSE up -d --build ui 2>&1 | tail -3
       ok "Grafana hazır: $GRAFANA_ROOT_URL"
     else
       fail "Grafana kullanıcı oluşturulamadı"
