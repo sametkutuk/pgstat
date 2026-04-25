@@ -125,16 +125,16 @@ do_migrate() {
   done
   ok "Migration tamamlandı ($applied yeni, $skipped atlandı, $failed hatalı)"
 
-  # Grafana read-only kullanicisinin sifresini env'den senkronize et.
-  # V031 migration'i kullaniciyi olusturur ama placeholder sifre ile;
-  # gercek sifreyi her upgrade'de env'den ayarliyoruz.
-  if [ -n "$PGSTAT_GRAFANA_DB_PASSWORD" ]; then
-    PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
-      -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
-      -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
-      -c "DO \$\$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='pgstat_grafana_ro') THEN EXECUTE 'ALTER ROLE pgstat_grafana_ro WITH PASSWORD ' || quote_literal('$PGSTAT_GRAFANA_DB_PASSWORD'); END IF; END \$\$;" > /dev/null 2>&1 \
-      && echo "  ✓ Grafana read-only kullanici sifresi senkronize edildi" \
-      || warn "  Grafana sifre senkronizasyonu basarisiz"
+  # Grafana kullanicisinin durumunu kontrol et (rol yoksa kullaniciyi bilgilendir)
+  role_exists=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+    -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+    -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+    -tAc "SELECT 1 FROM pg_roles WHERE rolname='pgstat_grafana_ro'" 2>/dev/null || echo "")
+  if [ -z "$role_exists" ]; then
+    echo ""
+    echo -e "${C}ℹ Grafana entegrasyonu icin pgstat_grafana_ro kullanicisi henuz olusturulmamis.${N}"
+    echo -e "  Olusturmak icin: ${G}./pgstat setup-grafana${N} (superuser bilgisi sorulur)"
+    echo -e "  Sonra tekrar:    ${G}./pgstat upgrade${N}"
   fi
 }
 
@@ -296,6 +296,27 @@ EOF
 
   migrate) load_env; do_migrate ;;
 
+  setup-grafana)
+    # Grafana read-only kullanicisini olustur (superuser ile, tek seferlik)
+    load_env
+    if [ -z "$PGSTAT_GRAFANA_DB_PASSWORD" ]; then
+      fail "PGSTAT_GRAFANA_DB_PASSWORD .env'de set edilmemis"
+    fi
+    echo -e "${C}Grafana read-only kullanicisini olusturmak icin superuser bilgisi gerekli.${N}"
+    read -rp "Superuser kullanici [postgres]: " SU_USER
+    SU_USER=${SU_USER:-postgres}
+    read -rsp "Superuser sifresi: " SU_PWD; echo ""
+    if PGPASSWORD="$SU_PWD" psql \
+        -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+        -U "$SU_USER" -d "$PGSTAT_DB_NAME" \
+        -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
+        -f "$DIR/db/setup/grafana-user.sql" 2>&1; then
+      ok "Grafana kullanici hazir. Simdi: ./pgstat upgrade"
+    else
+      fail "Grafana kullanici olusturulamadi"
+    fi
+    ;;
+
   install)
     INSTALL_DIR="/opt/pgstat"
     [ "$DIR" != "$INSTALL_DIR" ] && { sudo mkdir -p "$INSTALL_DIR"; sudo cp -r "$DIR"/* "$INSTALL_DIR/"; [ -f "$DIR/.env" ] && sudo cp "$DIR/.env" "$INSTALL_DIR/.env"; }
@@ -331,6 +352,7 @@ EOF
     echo -e "  ${G}passwd${N}      Admin şifresini değiştir"
     echo -e "  ${G}backup${N}      DB backup al"
     echo -e "  ${G}migrate${N}     Sadece migration çalıştır"
+    echo -e "  ${G}setup-grafana${N} Grafana read-only kullanıcısını oluştur (superuser ile)"
     echo -e "  ${G}install${N}     Systemd servisi kur"
     echo -e "  ${G}uninstall${N}   Servisi kaldır"
     echo ""

@@ -19,18 +19,31 @@ http://yourhost:${UI_PORT}/grafana/   → Grafana
    PGSTAT_GRAFANA_DB_PASSWORD=<güçlü-şifre>
    ```
 
-2. Migration uygula (V031: `pgstat_grafana_ro` kullanıcısını oluşturur):
+2. **Grafana read-only kullanıcısını oluştur (TEK SEFER, superuser ile)**:
+   ```bash
+   ./pgstat setup-grafana
+   ```
+   Bu komut superuser kullanıcı/şifresini sorar (varsayılan `postgres`) ve
+   `db/setup/grafana-user.sql`'i `.env`'deki `PGSTAT_GRAFANA_DB_PASSWORD`
+   ile çalıştırır. `pgstat_admin` kullanıcısının `CREATEROLE` yetkisi
+   olmadığı için bu adım manueldir.
+
+3. Migration + container build:
    ```bash
    ./pgstat upgrade
    ```
-   `pgstat upgrade` migration sonrası `PGSTAT_GRAFANA_DB_PASSWORD`'ü kullanıcıya senkronize eder.
+   V031 migration `pgstat_grafana_ro` kullanıcısına SELECT yetkilerini
+   verir. Kullanıcı henüz yoksa V031 sessizce atlar (uyarı verir).
 
-3. Grafana container'ını ayağa kaldır:
+4. Grafana container'ını ayağa kaldır (ilk kez):
    ```bash
    docker compose -f docker-compose.prod.yml up -d grafana
+   docker compose -f docker-compose.prod.yml restart ui   # nginx config yenile
    ```
 
-4. Tarayıcıdan `http://yourhost:${UI_PORT}/grafana/` adresine git. Anonymous viewer aktif — login olmadan dashboard'u görürsün. Düzenleme için admin/şifre.
+5. Tarayıcıdan `http://yourhost:${UI_PORT}/grafana/` adresine git. Anonymous viewer aktif — login olmadan dashboard'u görürsün. Düzenleme için admin/şifre.
+
+**Sonraki upgrade'lerde**: sadece `./pgstat upgrade` yeterli. Şifreyi değiştirmek istersen `.env`'i güncelleyip tekrar `./pgstat setup-grafana` çalıştır.
 
 ## Sağlanan Dashboard'lar
 
