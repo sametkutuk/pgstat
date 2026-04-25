@@ -70,10 +70,60 @@ public class PartitionManager {
     public void initOnStartup() {
         try {
             log.info("Startup: partition'lar kontrol ediliyor...");
+            // Yanlis timezone ile olusturulmus partition'lari tespit edip yeniden olustur
+            repairMisalignedPartitions();
             ensureFuturePartitions();
             log.info("Startup: partition kontrolu tamamlandi.");
         } catch (Exception e) {
             log.error("Startup partition olusturma hatasi: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Onceki versiyonlardaki timezone bug'i nedeniyle yanlis range'li olusmus
+     * partition'lari tespit eder, ic verisi yoksa drop eder. Boylece yeni
+     * dogru range'li partition'in olusumu icin yer acilir.
+     *
+     * Yanlis partition: range'i UTC dilim sınırlarına denk gelmeyen (ornegin
+     * '2026-04-24 21:00:00+00' gibi).
+     */
+    private void repairMisalignedPartitions() {
+        for (String parentTable : DAILY_FACT_TABLES) {
+            try {
+                List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) as bound " +
+                    "FROM pg_inherits i " +
+                    "JOIN pg_class c ON c.oid = i.inhrelid " +
+                    "JOIN pg_class p ON p.oid = i.inhparent " +
+                    "JOIN pg_namespace ns ON ns.oid = p.relnamespace " +
+                    "WHERE ns.nspname || '.' || p.relname = ?", parentTable);
+
+                for (Map<String, Object> row : rows) {
+                    String relname = (String) row.get("relname");
+                    String bound = (String) row.get("bound");
+                    if (bound == null) continue;
+
+                    // Tipik dogru range: FROM ('2026-04-25 00:00:00+00') TO ('2026-04-26 00:00:00+00')
+                    // Bug'li: FROM ('2026-04-24 21:00:00+00') TO ('2026-04-25 21:00:00+00')
+                    // Detect: saat 00:00 disinda baslayanlar bug'li
+                    if (bound.matches(".*FROM \\('\\d{4}-\\d{2}-\\d{2} (?!00:00:00)\\d{2}:\\d{2}:\\d{2}.*")) {
+                        // Icerigi var mi?
+                        Long count = jdbc.queryForObject(
+                            "SELECT count(*) FROM " + parentTable.split("\\.")[0] + "." + relname,
+                            Long.class);
+                        if (count != null && count == 0) {
+                            jdbc.execute("DROP TABLE " + parentTable.split("\\.")[0] + "." + relname);
+                            log.info("Yanlis range'li bos partition silindi: {}.{} (range: {})",
+                                parentTable.split("\\.")[0], relname, bound);
+                        } else {
+                            log.warn("Yanlis range'li ama veri iceren partition: {}.{} ({} satir) — manuel inceleme gerek",
+                                parentTable.split("\\.")[0], relname, count);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Partition repair tarama hatasi {}: {}", parentTable, e.getMessage());
+            }
         }
     }
 
@@ -201,7 +251,17 @@ public class PartitionManager {
         return result;
     }
 
-    /** Partition olusturur. */
+    /**
+     * Partition olusturur.
+     *
+     * KRITIK: Sample_ts/snapshot_ts kolonlari timestamptz tipinde. Sadece
+     * '2026-04-25' yazarsak PG session timezone'da yorumlar (ornegin
+     * Europe/Istanbul +3 ise '2026-04-24 21:00 UTC' olur). Bu durumda
+     * partition aralik UTC veri ile uyusmaz, "no partition found" hatasi alinir.
+     *
+     * Cozum: timestamptz literal'i UTC suffix ile acikca yazmak:
+     *   '2026-04-25 00:00:00+00'
+     */
     private void createPartition(String parentTable, String partitionName,
                                  String fromDate, String toDate) {
         // Partition ismi schema.name formatinda olmali
@@ -209,17 +269,31 @@ public class PartitionManager {
         String schema = parentParts[0];
         String fullPartitionName = schema + "." + partitionName.replace(schema + "_", "");
 
+        // Timestamptz icin UTC suffix ekle. Yearly partition'lar (yyyy formati)
+        // yearly olarak '2026-01-01 00:00:00+00' formatina cevrilir.
+        String fromTs = toUtcTimestamp(fromDate);
+        String toTs   = toUtcTimestamp(toDate);
+
         String ddl = String.format(
             "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
-            fullPartitionName, parentTable, fromDate, toDate
+            fullPartitionName, parentTable, fromTs, toTs
         );
 
         try {
             jdbc.execute(ddl);
-            log.info("Partition olusturuldu: {}", fullPartitionName);
+            log.info("Partition olusturuldu: {} [{} → {})", fullPartitionName, fromTs, toTs);
         } catch (Exception e) {
             // Partition zaten varsa veya baska hata — logla, devam et
             log.warn("Partition olusturma hatasi: {} — {}", fullPartitionName, e.getMessage());
         }
+    }
+
+    /** "2026-04-25" → "2026-04-25 00:00:00+00", "2026" → "2026-01-01 00:00:00+00" */
+    private static String toUtcTimestamp(String dateOrYear) {
+        if (dateOrYear.length() == 4) {
+            // Yearly format: "2026" → "2026-01-01 00:00:00+00"
+            return dateOrYear + "-01-01 00:00:00+00";
+        }
+        return dateOrYear + " 00:00:00+00";
     }
 }
