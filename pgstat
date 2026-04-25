@@ -137,16 +137,28 @@ do_migrate() {
   done
   ok "Migration tamamlandı ($applied yeni, $skipped atlandı, $failed hatalı)"
 
-  # Grafana kullanicisinin durumunu kontrol et (rol yoksa kullaniciyi bilgilendir)
+  # Grafana grants — rol varsa V031 SQL'ini her zaman re-apply et
+  # Sebep: V031 migration ilk calistiginda rol henuz yoksa grant'ler atlanir,
+  # ama migration "uygulandi" olarak isaretlenir. Sonra rol olusturulunca
+  # grant'leri uygulamak icin migration tekrar calismaz. Bu fonksiyon idempotent
+  # oldugu icin her upgrade'de safely re-apply edilir — yeni eklenen tablolarin
+  # da grant'i otomatik olur (default_privileges ile).
   role_exists=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
     -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
     -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
     -tAc "SELECT 1 FROM pg_roles WHERE rolname='pgstat_grafana_ro'" 2>/dev/null || echo "")
-  if [ -z "$role_exists" ]; then
+  if [ -n "$role_exists" ]; then
+    if PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+        -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+        -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+        -v ON_ERROR_STOP=1 \
+        -f "$DIR/db/migrations/V031__grafana_readonly_user.sql" > /dev/null 2>&1; then
+      echo "  ✓ Grafana read-only kullanici GRANT'leri guncel"
+    fi
+  else
     echo ""
     echo -e "${C}ℹ Grafana entegrasyonu icin pgstat_grafana_ro kullanicisi henuz olusturulmamis.${N}"
     echo -e "  Olusturmak icin: ${G}./pgstat setup-grafana${N} (superuser bilgisi sorulur)"
-    echo -e "  Sonra tekrar:    ${G}./pgstat upgrade${N}"
   fi
 }
 
@@ -294,7 +306,7 @@ EOF
           -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
           -f "$DIR/db/setup/grafana-user.sql" > /dev/null 2>&1; then
         ok "Grafana kullanıcı hazır"
-        # Grant'leri uygula (V031 zaten uygulanmış olabilir, tekrar çalıştır)
+        # Grant'leri uygula — do_migrate sonunda V031 SQL re-apply edilir
         do_migrate > /dev/null 2>&1 || true
       else
         warn "Grafana kullanıcı oluşturulamadı — sonra ./pgstat setup-grafana çalıştır"
@@ -394,8 +406,9 @@ EOF
     if PGPASSWORD="$SU_PWD" psql \
         -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
         -U "$SU_USER" -d "$PGSTAT_DB_NAME" \
+        -v ON_ERROR_STOP=1 \
         -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
-        -f "$DIR/db/setup/grafana-user.sql" 2>&1; then
+        -f "$DIR/db/setup/grafana-user.sql"; then
       ok "Grafana kullanıcı hazır"
       echo ""
       echo -e "${C}Migration grant'leri uygulanıyor...${N}"
