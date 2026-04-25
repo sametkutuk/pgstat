@@ -14,7 +14,9 @@ datasources:
     secureJsonData:
       password: ${PGSTAT_GRAFANA_DB_PASSWORD}
     jsonData:
-      sslmode: prefer
+      # Grafana PG driver sslmode olarak sadece disable/require/verify-ca/verify-full destekler
+      # Internal docker network'te DB'ye bagli oldugu icin disable yeterli
+      sslmode: disable
       postgresVersion: 1700
       timescaledb: false
       maxOpenConns: 10
