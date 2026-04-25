@@ -43,10 +43,9 @@ begin
   grant select on all tables in schema control to pgstat_grafana_ro;
   grant select on all tables in schema ops    to pgstat_grafana_ro;
 
-  -- Grafana yavas sorgu yazsa bile DB'yi kilitlememesi icin timeout'lar
-  execute 'alter role pgstat_grafana_ro set statement_timeout = ''30s''';
-  execute 'alter role pgstat_grafana_ro set lock_timeout = ''5s''';
-  execute 'alter role pgstat_grafana_ro set idle_in_transaction_session_timeout = ''60s''';
+  -- NOT: ALTER ROLE ... SET statement_timeout superuser/CREATEROLE gerektirir.
+  -- Bu yuzden timeout ayarlari db/setup/grafana-user.sql'de (superuser ile)
+  -- yapilir, V031 sadece pgstat_admin'in yapabilecegi GRANT'leri uygular.
 
   raise notice 'pgstat_grafana_ro: GRANT''ler uygulandi.';
 end $$;

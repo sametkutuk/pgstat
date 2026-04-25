@@ -37,4 +37,10 @@ select format('alter role pgstat_grafana_ro with login password %L', :'grafana_p
 where exists (select 1 from pg_roles where rolname = 'pgstat_grafana_ro')
 \gexec
 
-\echo 'pgstat_grafana_ro rolu hazir (sifre senkronize edildi).'
+-- 3) Grafana yavas sorgu yazsa bile DB'yi kilitlememesi icin timeout'lar
+-- (superuser yetkisi gerekli — V031 migration burada yapamaz)
+alter role pgstat_grafana_ro set statement_timeout = '30s';
+alter role pgstat_grafana_ro set lock_timeout = '5s';
+alter role pgstat_grafana_ro set idle_in_transaction_session_timeout = '60s';
+
+\echo 'pgstat_grafana_ro rolu hazir (sifre + timeout senkronize edildi).'
