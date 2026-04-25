@@ -35,10 +35,62 @@ public class AlertRuleEvaluator {
 
     private final JdbcTemplate jdbc;
     private final AlertRepository alertRepo;
+    private final AlertMessageRenderer renderer;
 
-    public AlertRuleEvaluator(JdbcTemplate jdbc, AlertRepository alertRepo) {
+    public AlertRuleEvaluator(JdbcTemplate jdbc, AlertRepository alertRepo,
+                              AlertMessageRenderer renderer) {
         this.jdbc = jdbc;
         this.alertRepo = alertRepo;
+        this.renderer = renderer;
+    }
+
+    /**
+     * Kural için title + message üretir. Kuralda template tanımlıysa onu render eder,
+     * yoksa default user_defined_rule template'i, o da yoksa fallback string'leri kullanır.
+     *
+     * @param rule          alert_rule satırı
+     * @param fallbackTitle template yoksa kullanılacak başlık (genellikle rule_name)
+     * @param fallbackMsg   template yoksa kullanılacak mesaj (eski String.format çıktısı)
+     * @param ctx           placeholder değerleri
+     * @return [title, message]
+     */
+    private String[] buildAlertText(Map<String, Object> rule, String fallbackTitle,
+                                     String fallbackMsg, Map<String, Object> ctx) {
+        try {
+            return renderer.renderForRule(rule, ctx, fallbackTitle, fallbackMsg);
+        } catch (Exception e) {
+            log.warn("Template render hatası rule_id={}: {}", rule.get("rule_id"), e.getMessage());
+            return new String[]{fallbackTitle, fallbackMsg};
+        }
+    }
+
+    /** Bir kuralın değerlendirmesinde kullanılan ortak context alanlarını doldurur. */
+    private Map<String, Object> baseContext(Map<String, Object> rule, long instancePk,
+                                             String severity) {
+        Map<String, Object> ctx = new java.util.HashMap<>();
+        ctx.put("rule_name", rule.get("rule_name"));
+        ctx.put("rule_id", rule.get("rule_id"));
+        ctx.put("metric", rule.get("metric_name"));
+        ctx.put("metric_type", rule.get("metric_type"));
+        ctx.put("aggregation", rule.get("aggregation"));
+        ctx.put("operator", rule.get("condition_operator"));
+        ctx.put("window", rule.get("evaluation_window_minutes"));
+        ctx.put("warning_threshold", rule.get("warning_threshold"));
+        ctx.put("critical_threshold", rule.get("critical_threshold"));
+        ctx.put("severity", severity);
+        ctx.put("instance_pk", instancePk);
+        ctx.put("instance", lookupInstanceName(instancePk));
+        return ctx;
+    }
+
+    private String lookupInstanceName(long instancePk) {
+        try {
+            return jdbc.queryForObject(
+                "select display_name from control.instance_inventory where instance_pk = ?",
+                String.class, instancePk);
+        } catch (Exception e) {
+            return "instance_pk=" + instancePk;
+        }
     }
 
     public void evaluate() {
@@ -168,14 +220,25 @@ public class AlertRuleEvaluator {
                         avg, upperWarning, upperCritical, currentHour, sensitivity);
                 }
 
+                // Şablon render — kuralda template varsa onu kullan
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", current);
+                ctx.put("baseline_avg", avg);
+                ctx.put("baseline_hour", currentHour);
+                ctx.put("upper_warning", upperWarning);
+                ctx.put("upper_critical", upperCritical);
+                ctx.put("threshold", "critical".equals(severity) ? upperCritical : upperWarning);
+                ctx.put("sensitivity", sensitivity);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
+
                 if (detailsJson != null) {
                     alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
-                        instancePk, serviceGroup, null, ruleName, message, detailsJson);
+                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
                     // severity'yi ayrıca güncelle
                     jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                        severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                        severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 }
                 updateLastEval(ruleId, instancePk, current, severity);
             } else if (prevSeverity != null && autoResolve) {
@@ -309,8 +372,12 @@ public class AlertRuleEvaluator {
             if (severity != null) {
                 BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
                 String message = buildThresholdMessage(metricName, value, operator, threshold, windowMinutes, aggregation);
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", value);
+                ctx.put("threshold", threshold);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 updateLastEval(ruleId, instancePk, value, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -375,8 +442,13 @@ public class AlertRuleEvaluator {
                 String message = String.format(
                     "%s = %.4g — tum zamanlarin en %s degeri (onceki: %.4g)",
                     metricName, currentValue.doubleValue(), direction, historicalExtreme.doubleValue());
+                Map<String, Object> ctx = baseContext(rule, instancePk, "warning");
+                ctx.put("value", currentValue);
+                ctx.put("previous_extreme", historicalExtreme);
+                ctx.put("direction", direction);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    "warning", instancePk, serviceGroup, ruleName, message, ruleId);
+                    "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 updateLastEval(ruleId, instancePk, currentValue, "warning");
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -451,8 +523,16 @@ public class AlertRuleEvaluator {
                 String severity = changePct.compareTo(changeThresholdPct.multiply(new BigDecimal("2"))) > 0
                     ? "critical" : "warning";
 
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", current);
+                ctx.put("previous_value", past);
+                ctx.put("change_pct", changePct);
+                ctx.put("threshold", changeThresholdPct);
+                ctx.put("period", period);
+                ctx.put("direction", direction);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -515,8 +595,14 @@ public class AlertRuleEvaluator {
                     String message = String.format(
                         "%s = %.4g — anlık %.0f%% artis (yeni instance, fallback esik: %.0f%%)",
                         metricName, current.doubleValue(), fallbackChange.doubleValue(), spikeFallbackPct.doubleValue());
+                    Map<String, Object> ctx = baseContext(rule, instancePk, "warning");
+                    ctx.put("value", current);
+                    ctx.put("previous_value", prev);
+                    ctx.put("change_pct", fallbackChange);
+                    ctx.put("threshold", spikeFallbackPct);
+                    String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                        "warning", instancePk, serviceGroup, ruleName, message, ruleId);
+                        "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                     updateLastEval(ruleId, instancePk, current, "warning");
                 } else {
                     updateLastEval(ruleId, instancePk, current, null);
@@ -547,8 +633,14 @@ public class AlertRuleEvaluator {
                     metricName, windowMinutes, current.doubleValue(),
                     windowMinutes, prev.doubleValue(),
                     changePct.doubleValue(), changeThresholdPct.doubleValue());
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", current);
+                ctx.put("previous_value", prev);
+                ctx.put("change_pct", changePct);
+                ctx.put("threshold", changeThresholdPct);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -613,8 +705,12 @@ public class AlertRuleEvaluator {
                     String message = String.format(
                         "%s son %d dakikada hic degismedi (deger: %.4g) — servis durmus olabilir",
                         metricName, flatlineMinutes, mx.doubleValue());
+                    Map<String, Object> ctx = baseContext(rule, instancePk, "critical");
+                    ctx.put("value", mx);
+                    ctx.put("flatline_minutes", flatlineMinutes);
+                    String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                        "critical", instancePk, serviceGroup, ruleName, message, ruleId);
+                        "critical", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                     updateLastEval(ruleId, instancePk, mx, "critical");
                 } else if (!isFlatline && prevSeverity != null && autoResolve) {
                     alertRepo.resolve(alertKey);
@@ -684,8 +780,14 @@ public class AlertRuleEvaluator {
                     String message = String.format(
                         "%s = %.4g — anlık %.0f%% degisim (yeni instance, henuz yeterli gecmis veri yok)",
                         metricName, current.doubleValue(), fallbackChange.doubleValue());
+                    Map<String, Object> ctx = baseContext(rule, instancePk, "warning");
+                    ctx.put("value", current);
+                    ctx.put("previous_value", prev);
+                    ctx.put("change_pct", fallbackChange);
+                    ctx.put("threshold", spikeFallbackPct);
+                    String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                        "warning", instancePk, serviceGroup, ruleName, message, ruleId);
+                        "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                     updateLastEval(ruleId, instancePk, current, "warning");
                 } else {
                     updateLastEval(ruleId, instancePk, current, null);
@@ -718,8 +820,14 @@ public class AlertRuleEvaluator {
                     "%s = %.4g — bu saatin 4 haftalik ortalamasindan (%.4g) %.0f%% sapma (esik: %.0f%%)",
                     metricName, current.doubleValue(), baseline.doubleValue(),
                     changePct.doubleValue(), changeThresholdPct.doubleValue());
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", current);
+                ctx.put("baseline_avg", baseline);
+                ctx.put("change_pct", changePct);
+                ctx.put("threshold", changeThresholdPct);
+                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, ruleName, message, ruleId);
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);

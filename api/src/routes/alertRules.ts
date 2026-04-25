@@ -125,7 +125,8 @@ router.post('/', async (req: Request, res: Response, next) => {
       warning_threshold, critical_threshold, evaluation_window_minutes,
       aggregation, evaluation_type, change_threshold_pct, min_data_days,
       alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
-      is_enabled, cooldown_minutes, auto_resolve
+      is_enabled, cooldown_minutes, auto_resolve,
+      title_template, message_template
     } = req.body;
 
     // Dinamik kolon listesi — DB'deki gerçek kolonlara göre INSERT kur.
@@ -159,6 +160,9 @@ router.post('/', async (req: Request, res: Response, next) => {
       // V018+
       { name: 'sensitivity', val: sensitivity ?? 'medium' },
       { name: 'instance_group_id', val: instance_group_id ?? null },
+      // V030+
+      { name: 'title_template', val: title_template ?? null },
+      { name: 'message_template', val: message_template ?? null },
     ];
 
     const active = cols.filter(c => existing.has(c.name));
@@ -205,7 +209,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       warning_threshold, critical_threshold, evaluation_window_minutes,
       aggregation, evaluation_type, change_threshold_pct, min_data_days,
       alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
-      is_enabled, cooldown_minutes, auto_resolve
+      is_enabled, cooldown_minutes, auto_resolve,
+      title_template, message_template
     } = req.body;
 
     // Dinamik UPDATE — DB'deki mevcut kolonlara göre set kur
@@ -234,6 +239,8 @@ router.put('/:id', async (req: Request, res: Response) => {
       { name: 'flatline_minutes', val: flatline_minutes ?? 30 },
       { name: 'sensitivity', val: sensitivity ?? 'medium' },
       { name: 'instance_group_id', val: instance_group_id ?? null },
+      { name: 'title_template', val: title_template ?? null },
+      { name: 'message_template', val: message_template ?? null },
     ];
     const active = cols.filter(c => existing.has(c.name));
     const setSql = active.map((c, i) => `${c.name}=$${i + 1}`).join(', ');
@@ -381,5 +388,99 @@ function validateRuleBody(b: any): string | null {
     return 'cooldown_minutes negatif olamaz';
   return null;
 }
+
+// =============================================================================
+// V030: Mesaj şablonu yönetimi
+// =============================================================================
+
+// GET /api/alert-rules/message-templates — sistem varsayılan şablonları
+router.get('/message-templates', async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      `select alert_code, title_template, message_template, description, updated_at
+       from control.alert_message_template
+       order by alert_code`
+    );
+    res.json(result.rows);
+  } catch (e: any) {
+    // Migration uygulanmadıysa boş dön
+    if (e.code === '42P01') return res.json([]);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/alert-rules/message-templates/:alert_code — sistem şablonu güncelle
+router.put('/message-templates/:alert_code', async (req: Request, res: Response) => {
+  try {
+    const { alert_code } = req.params;
+    const { title_template, message_template } = req.body;
+    if (!title_template || !message_template) {
+      return res.status(400).json({ error: 'title_template ve message_template zorunlu' });
+    }
+    const result = await pool.query(
+      `update control.alert_message_template
+       set title_template = $1, message_template = $2, is_system = false
+       where alert_code = $3
+       returning alert_code, title_template, message_template, updated_at`,
+      [title_template, message_template, alert_code]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Alert code bulunamadı' });
+    res.json(result.rows[0]);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/alert-rules/preview — şablon önizleme (örnek context'le render eder)
+// Body: { title_template, message_template, context? }
+// Eğer context verilmezse, temsili örnek değerler kullanılır.
+router.post('/preview', async (req: Request, res: Response) => {
+  try {
+    const { title_template, message_template, context } = req.body;
+
+    // Varsayılan örnek context — UI önizlemesi için
+    const sample: Record<string, any> = {
+      instance: 'prod-pg17',
+      instance_pk: 12,
+      rule_name: 'Örnek Kural',
+      rule_id: 99,
+      metric: 'numbackends',
+      metric_type: 'cluster_metric',
+      aggregation: 'avg',
+      operator: '>',
+      window: 5,
+      value: 187.4,
+      threshold: 150,
+      warning_threshold: 120,
+      critical_threshold: 180,
+      severity: 'critical',
+      severity_upper: 'CRITICAL',
+      severity_emoji: '🔴',
+      baseline_avg: 95.2,
+      change_pct: 96.8,
+      previous_value: 95.0,
+      started_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      duration_minutes: 12,
+      ...context,
+    };
+
+    // Basit {{var}} replace
+    const render = (tpl: string | null | undefined): string => {
+      if (!tpl) return '';
+      return tpl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, k) => {
+        const v = sample[k];
+        return v === undefined || v === null ? '' : String(v);
+      });
+    };
+
+    res.json({
+      title: render(title_template),
+      message: render(message_template),
+      context_used: sample,
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 export default router;

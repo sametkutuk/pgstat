@@ -33,6 +33,8 @@ interface AlertRule {
   is_enabled: boolean;
   cooldown_minutes: number;
   auto_resolve: boolean;
+  title_template: string | null;
+  message_template: string | null;
   created_by: string | null;
   open_alert_count: number;
   last_evaluated_at: string | null;
@@ -258,6 +260,8 @@ const emptyForm = {
   is_enabled: true,
   cooldown_minutes: 15,
   auto_resolve: true,
+  title_template: '',
+  message_template: '',
 };
 
 // =========================================================================
@@ -798,6 +802,8 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       is_enabled: rule.is_enabled,
       cooldown_minutes: rule.cooldown_minutes,
       auto_resolve: rule.auto_resolve,
+      title_template: rule.title_template || '',
+      message_template: rule.message_template || '',
     } : { ...emptyForm }
   );
 
@@ -828,6 +834,8 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       instance_pk: form.scope === 'specific_instance' ? form.instance_pk : null,
       service_group: form.scope === 'service_group' ? form.service_group : null,
       alert_category: EVAL_TYPES[form.evaluation_type]?.category ?? 'threshold',
+      title_template: form.title_template?.trim() || null,
+      message_template: form.message_template?.trim() || null,
     };
     saveMut.mutate(body);
   };
@@ -847,7 +855,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
 
         {/* Adım göstergesi */}
         <div className="flex gap-0 border-b border-[#E2E8F0]">
-          {['Metrik', 'Kapsam', 'Koşul', 'Davranış'].map((label, i) => (
+          {['Metrik', 'Kapsam', 'Koşul', 'Davranış', 'Mesaj'].map((label, i) => (
             <button key={i} onClick={() => setStep(i + 1)}
               className={`flex-1 py-2 text-xs font-medium transition-colors border-b-2 ${step === i + 1 ? 'border-[#3B82F6] text-[#3B82F6]' : 'border-transparent text-[#94A3B8]'}`}>
               {i + 1}. {label}
@@ -1131,6 +1139,15 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
               </div>
             </>
           )}
+
+          {/* Adım 5: Mesaj Şablonu */}
+          {step === 5 && (
+            <MessageTemplateStep
+              titleTemplate={form.title_template || ''}
+              messageTemplate={form.message_template || ''}
+              onChange={(t, m) => { set('title_template', t); set('message_template', m); }}
+            />
+          )}
         </div>
 
         <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-between">
@@ -1138,7 +1155,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
             className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B] transition-colors">
             {step > 1 ? '← Geri' : 'İptal'}
           </button>
-          {step < 4 ? (
+          {step < 5 ? (
             <button onClick={() => setStep(s => s + 1)}
               className="px-5 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB] transition-colors">
               İleri →
@@ -1280,6 +1297,199 @@ function FromTemplateModal({ template, onClose }: { template: AlertRule; onClose
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// =========================================================================
+// Mesaj Şablonu Adımı (Step 5)
+// =========================================================================
+//
+// Kullanıcı title_template + message_template alanlarını düzenler.
+// Boş bırakılırsa varsayılan sistem şablonu (user_defined_rule) kullanılır.
+// Sağda placeholder yardım paneli — tıklayınca cursor'a insert eder.
+// "Önizle" butonu API /alert-rules/preview ile örnek değerlerle render eder.
+
+const TEMPLATE_PLACEHOLDERS: { key: string; desc: string }[] = [
+  { key: 'instance', desc: 'Instance görünen adı' },
+  { key: 'rule_name', desc: 'Kural adı' },
+  { key: 'metric', desc: 'Metrik adı (ör. numbackends)' },
+  { key: 'metric_type', desc: 'Metrik tipi (cluster_metric vb.)' },
+  { key: 'value', desc: 'Mevcut metrik değeri' },
+  { key: 'threshold', desc: 'Tetiklenen eşik (warning/critical)' },
+  { key: 'warning_threshold', desc: 'Warning eşik değeri' },
+  { key: 'critical_threshold', desc: 'Critical eşik değeri' },
+  { key: 'severity', desc: 'severity (warning/critical/...)' },
+  { key: 'severity_upper', desc: 'severity büyük harfle' },
+  { key: 'severity_emoji', desc: 'severity için emoji (🔴🟡🔵)' },
+  { key: 'operator', desc: 'Karşılaştırma operatörü (>, <)' },
+  { key: 'window', desc: 'Değerlendirme penceresi (dk)' },
+  { key: 'aggregation', desc: 'Toplama fonksiyonu (avg, max...)' },
+  { key: 'baseline_avg', desc: 'Baseline ortalama (smart kurallar)' },
+  { key: 'change_pct', desc: 'Yüzdesel değişim' },
+  { key: 'previous_value', desc: 'Karşılaştırma penceresinin değeri' },
+  { key: 'started_at', desc: 'Alert başlangıç zamanı' },
+  { key: 'duration_minutes', desc: 'Alert süresi (dk)' },
+];
+
+const DEFAULT_TITLE_TPL =
+  '[{{severity_upper}}] {{instance}} · {{rule_name}}';
+
+const DEFAULT_MESSAGE_TPL =
+  '{{severity_emoji}} **{{rule_name}}**\n' +
+  '📍 Instance: **{{instance}}**\n' +
+  '📊 Metrik: `{{metric}}` = **{{value}}** ({{aggregation}}, son {{window}} dk)\n' +
+  '🎯 Eşik: {{operator}} {{threshold}} ({{severity}})\n' +
+  '🕐 Başlangıç: {{started_at}}';
+
+function MessageTemplateStep({
+  titleTemplate,
+  messageTemplate,
+  onChange,
+}: {
+  titleTemplate: string;
+  messageTemplate: string;
+  onChange: (title: string, msg: string) => void;
+}) {
+  const [activeField, setActiveField] = useState<'title' | 'message'>('message');
+  const [preview, setPreview] = useState<{ title: string; message: string } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const insertPlaceholder = (key: string) => {
+    const token = `{{${key}}}`;
+    if (activeField === 'title') {
+      onChange(titleTemplate + token, messageTemplate);
+    } else {
+      onChange(titleTemplate, messageTemplate + token);
+    }
+  };
+
+  const useDefault = () => {
+    onChange(DEFAULT_TITLE_TPL, DEFAULT_MESSAGE_TPL);
+  };
+
+  const clear = () => {
+    onChange('', '');
+    setPreview(null);
+  };
+
+  const runPreview = async () => {
+    setPreviewLoading(true);
+    try {
+      const tplTitle = titleTemplate.trim() || DEFAULT_TITLE_TPL;
+      const tplMsg = messageTemplate.trim() || DEFAULT_MESSAGE_TPL;
+      const result = await apiPost<{ title: string; message: string }>('/alert-rules/preview', {
+        title_template: tplTitle,
+        message_template: tplMsg,
+      });
+      setPreview({ title: result.title, message: result.message });
+    } catch (e: any) {
+      setPreview({ title: 'Hata: ' + e.message, message: '' });
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-md px-3 py-2 text-xs text-[#1E40AF]">
+        💡 Boş bırakırsan sistem varsayılan şablonu kullanılır. Yazarken{' '}
+        <code className="bg-white px-1 rounded">{'{{placeholder}}'}</code> kullanabilirsin —
+        sağdaki listeden tıklayarak ekleyebilirsin.
+      </div>
+
+      {/* Başlık şablonu */}
+      <div>
+        <label className="block text-xs font-medium text-[#475569] mb-1">Başlık Şablonu</label>
+        <input
+          type="text"
+          value={titleTemplate}
+          onChange={e => onChange(e.target.value, messageTemplate)}
+          onFocus={() => setActiveField('title')}
+          placeholder={DEFAULT_TITLE_TPL}
+          className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+        />
+      </div>
+
+      {/* Mesaj şablonu */}
+      <div>
+        <label className="block text-xs font-medium text-[#475569] mb-1">Mesaj Şablonu</label>
+        <textarea
+          value={messageTemplate}
+          onChange={e => onChange(titleTemplate, e.target.value)}
+          onFocus={() => setActiveField('message')}
+          placeholder={DEFAULT_MESSAGE_TPL}
+          rows={7}
+          className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#3B82F6] resize-y"
+        />
+      </div>
+
+      {/* Placeholder paneli */}
+      <div>
+        <div className="text-xs font-medium text-[#475569] mb-1">
+          Placeholder'lar (tıklayarak {activeField === 'title' ? 'başlığa' : 'mesaja'} ekle)
+        </div>
+        <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto border border-[#E2E8F0] rounded-md p-2 bg-[#F8FAFC]">
+          {TEMPLATE_PLACEHOLDERS.map(p => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => insertPlaceholder(p.key)}
+              title={p.desc}
+              className="px-2 py-0.5 bg-white border border-[#CBD5E1] rounded text-[11px] font-mono text-[#3B82F6] hover:bg-[#EFF6FF] hover:border-[#3B82F6] transition-colors"
+            >
+              {`{{${p.key}}}`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Aksiyonlar */}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={runPreview}
+          disabled={previewLoading}
+          className="px-3 py-1.5 bg-[#3B82F6] text-white text-xs rounded-md hover:bg-[#2563EB] disabled:opacity-50"
+        >
+          {previewLoading ? 'Oluşturuluyor...' : '👁 Önizle'}
+        </button>
+        <button
+          type="button"
+          onClick={useDefault}
+          className="px-3 py-1.5 bg-white border border-[#CBD5E1] text-[#475569] text-xs rounded-md hover:bg-[#F8FAFC]"
+        >
+          Varsayılana Sıfırla
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          className="px-3 py-1.5 bg-white border border-[#CBD5E1] text-[#475569] text-xs rounded-md hover:bg-[#F8FAFC]"
+        >
+          Temizle (sistem varsayılanını kullan)
+        </button>
+      </div>
+
+      {/* Önizleme sonucu */}
+      {preview && (
+        <div className="border border-[#22C55E] rounded-md overflow-hidden">
+          <div className="bg-[#DCFCE7] px-3 py-1 text-xs font-medium text-[#15803D]">
+            Önizleme (örnek değerlerle)
+          </div>
+          <div className="bg-white p-3 space-y-2">
+            <div>
+              <div className="text-[10px] uppercase text-[#94A3B8] tracking-wider mb-0.5">Başlık</div>
+              <div className="text-sm font-medium text-[#1E293B]">{preview.title || <span className="text-[#94A3B8] italic">(boş)</span>}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[#94A3B8] tracking-wider mb-0.5">Mesaj</div>
+              <pre className="text-xs text-[#1E293B] whitespace-pre-wrap font-mono bg-[#F8FAFC] p-2 rounded border border-[#E2E8F0]">
+                {preview.message || <span className="text-[#94A3B8] italic">(boş)</span>}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
