@@ -7,10 +7,11 @@ import { useToast } from '../components/common/Toast';
 import { useState } from 'react';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
+        { key: 'templates' as const, label: 'Alert Mesaj Şablonları' },
     ];
 
     return (
@@ -26,6 +27,7 @@ export default function Settings() {
             </div>
             {tab === 'retention' && <RetentionTab />}
             {tab === 'schedule' && <ScheduleTab />}
+            {tab === 'templates' && <MessageTemplatesTab />}
         </div>
     );
 }
@@ -359,6 +361,202 @@ function ScheduleTab() {
                 message={`"${deleteTarget?.code}" profilini silmek istediğinize emin misiniz?`}
                 onConfirm={() => deleteTarget && delMut.mutate(deleteTarget.id)}
                 onCancel={() => setDeleteTarget(null)} />
+        </div>
+    );
+}
+
+// =========================================================================
+// Alert Mesaj Şablonları
+// =========================================================================
+
+interface MessageTemplate {
+    alert_code: string;
+    title_template: string;
+    message_template: string;
+    description: string | null;
+    updated_at: string;
+}
+
+const TEMPLATE_PLACEHOLDERS = [
+    'instance', 'instance_pk', 'host', 'port',
+    'severity', 'severity_upper', 'severity_emoji',
+    'started_at', 'duration_minutes',
+    'error_message', 'value', 'threshold',
+    'lag_bytes', 'lag_human', 'pid', 'lock_mode', 'waiting_count',
+    'job_type', 'failed_count', 'total_count',
+];
+
+function MessageTemplatesTab() {
+    const { data = [], isLoading } = useQuery<MessageTemplate[]>({
+        queryKey: ['message-templates'],
+        queryFn: () => apiGet('/alert-rules/message-templates'),
+    });
+    const [editing, setEditing] = useState<MessageTemplate | null>(null);
+
+    if (isLoading) return <div className="text-sm text-[#64748B]">Yükleniyor...</div>;
+
+    return (
+        <div>
+            <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-md px-4 py-3 mb-4 text-sm text-[#1E40AF]">
+                💡 Sistem alert kodları için varsayılan başlık ve mesaj şablonları. Bir kodu düzenleyince
+                tüm o tip alert'ler yeni şablonu kullanır. Custom kurallar kendi şablonlarını AlertRules
+                sayfasından düzenler.
+            </div>
+
+            <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <table className="w-full">
+                    <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-[#64748B]">Alert Kodu</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-[#64748B]">Başlık Şablonu</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-[#64748B]">Açıklama</th>
+                            <th className="px-4 py-2 text-right text-xs font-medium text-[#64748B]"></th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#F1F5F9]">
+                        {data.map(t => (
+                            <tr key={t.alert_code} className="hover:bg-[#F8FAFC]">
+                                <td className="px-4 py-2 text-sm font-mono text-[#1E293B]">{t.alert_code}</td>
+                                <td className="px-4 py-2 text-xs font-mono text-[#475569] max-w-md truncate">{t.title_template}</td>
+                                <td className="px-4 py-2 text-xs text-[#64748B]">{t.description || '—'}</td>
+                                <td className="px-4 py-2 text-right">
+                                    <button onClick={() => setEditing(t)}
+                                        className="text-xs text-[#3B82F6] hover:underline">Düzenle</button>
+                                </td>
+                            </tr>
+                        ))}
+                        {data.length === 0 && (
+                            <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-[#64748B]">
+                                Henüz şablon yok — V030 migration'ı uygulayın.
+                            </td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
+            {editing && <TemplateEditModal template={editing} onClose={() => setEditing(null)} />}
+        </div>
+    );
+}
+
+function TemplateEditModal({ template, onClose }: { template: MessageTemplate; onClose: () => void }) {
+    const qc = useQueryClient();
+    const toast = useToast();
+    const [title, setTitle] = useState(template.title_template);
+    const [message, setMessage] = useState(template.message_template);
+    const [activeField, setActiveField] = useState<'title' | 'message'>('message');
+    const [preview, setPreview] = useState<{ title: string; message: string } | null>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+
+    const saveMut = useMutation({
+        mutationFn: () => apiPut(`/alert-rules/message-templates/${template.alert_code}`, {
+            title_template: title,
+            message_template: message,
+        }),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['message-templates'] });
+            toast.success('Şablon güncellendi');
+            onClose();
+        },
+        onError: (e: any) => toast.error(e.message || 'Hata oluştu'),
+    });
+
+    const insertPlaceholder = (key: string) => {
+        const token = `{{${key}}}`;
+        if (activeField === 'title') setTitle(t => t + token);
+        else setMessage(m => m + token);
+    };
+
+    const runPreview = async () => {
+        setPreviewLoading(true);
+        try {
+            const r = await apiPost<{ title: string; message: string }>('/alert-rules/preview', {
+                title_template: title,
+                message_template: message,
+            });
+            setPreview({ title: r.title, message: r.message });
+        } catch (e: any) {
+            setPreview({ title: 'Hata: ' + e.message, message: '' });
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                <div className="px-6 py-4 border-b border-[#E2E8F0] flex items-center justify-between">
+                    <h2 className="font-semibold text-[#1E293B]">
+                        Şablon: <code className="text-sm text-[#3B82F6]">{template.alert_code}</code>
+                    </h2>
+                    <button onClick={onClose} className="text-[#94A3B8] hover:text-[#475569] text-xl">×</button>
+                </div>
+
+                <div className="px-6 py-4 space-y-3">
+                    {template.description && (
+                        <div className="text-xs text-[#64748B] italic">{template.description}</div>
+                    )}
+
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Başlık Şablonu</label>
+                        <input type="text" value={title} onChange={e => setTitle(e.target.value)}
+                            onFocus={() => setActiveField('title')}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#3B82F6]" />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Mesaj Şablonu</label>
+                        <textarea value={message} onChange={e => setMessage(e.target.value)}
+                            onFocus={() => setActiveField('message')} rows={9}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#3B82F6] resize-y" />
+                    </div>
+
+                    <div>
+                        <div className="text-xs font-medium text-[#475569] mb-1">
+                            Placeholder'lar (tıklayarak {activeField === 'title' ? 'başlığa' : 'mesaja'} ekle)
+                        </div>
+                        <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto border border-[#E2E8F0] rounded-md p-2 bg-[#F8FAFC]">
+                            {TEMPLATE_PLACEHOLDERS.map(k => (
+                                <button key={k} type="button" onClick={() => insertPlaceholder(k)}
+                                    className="px-2 py-0.5 bg-white border border-[#CBD5E1] rounded text-[11px] font-mono text-[#3B82F6] hover:bg-[#EFF6FF] hover:border-[#3B82F6]">
+                                    {`{{${k}}}`}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                        <button type="button" onClick={runPreview} disabled={previewLoading}
+                            className="px-3 py-1.5 bg-[#3B82F6] text-white text-xs rounded-md hover:bg-[#2563EB] disabled:opacity-50">
+                            {previewLoading ? 'Oluşturuluyor...' : '👁 Önizle'}
+                        </button>
+                    </div>
+
+                    {preview && (
+                        <div className="border border-[#22C55E] rounded-md overflow-hidden">
+                            <div className="bg-[#DCFCE7] px-3 py-1 text-xs font-medium text-[#15803D]">Önizleme (örnek değerlerle)</div>
+                            <div className="bg-white p-3 space-y-2">
+                                <div>
+                                    <div className="text-[10px] uppercase text-[#94A3B8] mb-0.5">Başlık</div>
+                                    <div className="text-sm font-medium text-[#1E293B]">{preview.title}</div>
+                                </div>
+                                <div>
+                                    <div className="text-[10px] uppercase text-[#94A3B8] mb-0.5">Mesaj</div>
+                                    <pre className="text-xs text-[#1E293B] whitespace-pre-wrap font-mono bg-[#F8FAFC] p-2 rounded border border-[#E2E8F0]">{preview.message}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B]">İptal</button>
+                    <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}
+                        className="px-5 py-2 bg-[#22C55E] text-white text-sm rounded-md hover:bg-[#16A34A] disabled:opacity-50">
+                        {saveMut.isPending ? 'Kaydediliyor...' : 'Kaydet'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
