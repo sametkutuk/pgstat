@@ -215,6 +215,24 @@ case "${1:-help}" in
       done
 
       echo ""
+      echo -e "${C}Grafana entegrasyonu (opsiyonel):${N}"
+      echo "  pgstat UI ile aynı port üzerinden /grafana/ yolundan erişilir."
+      echo "  Trend grafikleri, DoD/WoW karşılaştırması, top sorgu drill-down."
+      read -rp "$(echo -e "${C}?${N} Grafana kurulsun mu? [Y/n]: ")" GRAFANA_ENABLE
+      GRAFANA_ENABLE=${GRAFANA_ENABLE:-Y}
+      if [[ "$GRAFANA_ENABLE" =~ ^[Yy]$ ]]; then
+        GRAFANA_ADMIN_USR=$(ask "Grafana admin kullanıcı" "admin")
+        read -rsp "$(echo -e "${C}?${N} Grafana admin şifre (boş = otomatik üret): ")" GR_ADMIN_PASS; echo ""
+        [ -z "$GR_ADMIN_PASS" ] && GR_ADMIN_PASS=$(gen_secret | head -c 16)
+        # DB read-only kullanici sifresi — otomatik
+        GR_DB_PASS=$(gen_secret | head -c 24)
+        # Root URL — otomatik tahmin
+        HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        DEFAULT_URL="http://${HOST_IP:-localhost}:${UI_P}/grafana/"
+        GR_ROOT_URL=$(ask "Grafana root URL" "$DEFAULT_URL")
+      fi
+
+      echo ""
       ok "Ayarlar hazırlanıyor..."
 
       cat > "$ENV_FILE" << EOF
@@ -232,6 +250,17 @@ API_PORT=$API_P
 UI_PORT=$UI_P
 COLLECTOR_HOSTNAME=$(hostname -s 2>/dev/null || echo "collector-01")
 EOF
+      if [[ "$GRAFANA_ENABLE" =~ ^[Yy]$ ]]; then
+        cat >> "$ENV_FILE" << EOF
+
+# Grafana entegrasyonu
+GRAFANA_ADMIN_USER=$GRAFANA_ADMIN_USR
+GRAFANA_ADMIN_PASSWORD=$GR_ADMIN_PASS
+GRAFANA_ROOT_URL=$GR_ROOT_URL
+PGSTAT_GRAFANA_DB_USER=pgstat_grafana_ro
+PGSTAT_GRAFANA_DB_PASSWORD=$GR_DB_PASS
+EOF
+      fi
       chmod 600 "$ENV_FILE"
       ok ".env oluşturuldu"
     fi
@@ -251,6 +280,26 @@ EOF
     echo -e "${C}Tablolar oluşturuluyor...${N}"
     do_migrate
 
+    # Grafana kurulumu istendiyse: superuser ile rol oluştur
+    if [ -n "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
+      echo ""
+      echo -e "${C}Grafana read-only kullanıcı oluşturuluyor (superuser bilgisi gerekli):${N}"
+      read -rp "$(echo -e "${C}?${N} Superuser kullanıcı [postgres]: ")" SU_USER
+      SU_USER=${SU_USER:-postgres}
+      read -rsp "$(echo -e "${C}?${N} Superuser şifresi: ")" SU_PWD; echo ""
+      if PGPASSWORD="$SU_PWD" psql \
+          -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+          -U "$SU_USER" -d "$PGSTAT_DB_NAME" \
+          -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
+          -f "$DIR/db/setup/grafana-user.sql" > /dev/null 2>&1; then
+        ok "Grafana kullanıcı hazır"
+        # Grant'leri uygula (V031 zaten uygulanmış olabilir, tekrar çalıştır)
+        do_migrate > /dev/null 2>&1 || true
+      else
+        warn "Grafana kullanıcı oluşturulamadı — sonra ./pgstat setup-grafana çalıştır"
+      fi
+    fi
+
     echo -e "${C}Uygulama başlatılıyor (ilk build biraz sürebilir)...${N}"
     $COMPOSE up -d --build 2>&1 | tail -5
     do_health
@@ -260,8 +309,12 @@ EOF
     echo -e "${G}  pgstat kurulumu tamamlandı!${N}"
     echo -e "${G}═══════════════════════════════════════${N}"
     echo ""
-    echo "  UI:  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost):${UI_PORT:-3000}"
-    echo "  API: http://localhost:${API_PORT:-3001}/api/health"
+    HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)
+    echo "  UI:      http://${HOST_IP}:${UI_PORT:-3000}"
+    echo "  API:     http://localhost:${API_PORT:-3001}/api/health"
+    if [ -n "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
+      echo "  Grafana: http://${HOST_IP}:${UI_PORT:-3000}/grafana/  (admin: ${GRAFANA_ADMIN_USER:-admin})"
+    fi
     echo ""
     echo "  Komutlar: ./pgstat help"
     ;;
@@ -311,21 +364,48 @@ EOF
   setup-grafana)
     # Grafana read-only kullanicisini olustur (superuser ile, tek seferlik)
     load_env
+    # Eksik Grafana env'lerini interaktif sor ve .env'e ekle
     if [ -z "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
-      fail "PGSTAT_GRAFANA_DB_PASSWORD .env'de set edilmemis. .env.example'a bak veya su satiri ekle: PGSTAT_GRAFANA_DB_PASSWORD=guclu-sifre"
+      echo -e "${C}Grafana ayarları .env'de yok — şimdi ekleniyor:${N}"
+      GRAFANA_ADMIN_USR=$(ask "Grafana admin kullanıcı" "admin")
+      read -rsp "$(echo -e "${C}?${N} Grafana admin şifre (boş = otomatik): ")" GR_ADMIN_PASS; echo ""
+      [ -z "$GR_ADMIN_PASS" ] && GR_ADMIN_PASS=$(gen_secret | head -c 16)
+      GR_DB_PASS=$(gen_secret | head -c 24)
+      HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+      GR_ROOT_URL=$(ask "Grafana root URL" "http://${HOST_IP:-localhost}:${UI_PORT}/grafana/")
+      cat >> "$ENV_FILE" << EOF
+
+# Grafana entegrasyonu — $(date +%Y-%m-%d)
+GRAFANA_ADMIN_USER=$GRAFANA_ADMIN_USR
+GRAFANA_ADMIN_PASSWORD=$GR_ADMIN_PASS
+GRAFANA_ROOT_URL=$GR_ROOT_URL
+PGSTAT_GRAFANA_DB_USER=pgstat_grafana_ro
+PGSTAT_GRAFANA_DB_PASSWORD=$GR_DB_PASS
+EOF
+      ok "Grafana ayarları .env'e eklendi"
+      load_env
     fi
-    echo -e "${C}Grafana read-only kullanicisini olusturmak icin superuser bilgisi gerekli.${N}"
-    read -rp "Superuser kullanici [postgres]: " SU_USER
+    echo ""
+    echo -e "${C}Grafana read-only kullanıcı oluşturuluyor (superuser bilgisi gerekli):${N}"
+    read -rp "$(echo -e "${C}?${N} Superuser kullanıcı [postgres]: ")" SU_USER
     SU_USER=${SU_USER:-postgres}
-    read -rsp "Superuser sifresi: " SU_PWD; echo ""
+    read -rsp "$(echo -e "${C}?${N} Superuser şifresi: ")" SU_PWD; echo ""
     if PGPASSWORD="$SU_PWD" psql \
         -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
         -U "$SU_USER" -d "$PGSTAT_DB_NAME" \
         -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
         -f "$DIR/db/setup/grafana-user.sql" 2>&1; then
-      ok "Grafana kullanici hazir. Simdi: ./pgstat upgrade"
+      ok "Grafana kullanıcı hazır"
+      echo ""
+      echo -e "${C}Migration grant'leri uygulanıyor...${N}"
+      do_migrate
+      echo ""
+      echo -e "${C}Grafana container başlatılıyor...${N}"
+      $COMPOSE up -d grafana 2>&1 | tail -3
+      $COMPOSE restart ui 2>&1 | tail -3
+      ok "Grafana hazır: $GRAFANA_ROOT_URL"
     else
-      fail "Grafana kullanici olusturulamadi"
+      fail "Grafana kullanıcı oluşturulamadı"
     fi
     ;;
 
