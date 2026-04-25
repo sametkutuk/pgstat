@@ -42,7 +42,7 @@ create table if not exists control.alert_message_template (
 drop trigger if exists trg_alert_message_template_updated_at on control.alert_message_template;
 create trigger trg_alert_message_template_updated_at
   before update on control.alert_message_template
-  for each row execute function set_updated_at();
+  for each row execute function control.set_updated_at();
 
 -- =============================================================================
 -- 3) Seed — varsayılan şablonlar
