@@ -50,6 +50,19 @@ export default function Sidebar() {
                         <span>{l.label}</span>
                     </NavLink>
                 ))}
+
+                {/* Grafana — harici link, ayni port uzerinden /grafana/ ile sunulur */}
+                <a
+                    href="/grafana/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors hover:bg-[#334155] hover:text-white mt-2 border-t border-[#334155] pt-3"
+                    title="Grafana — Trend grafikleri ve drill-down"
+                >
+                    <span>📈</span>
+                    <span>Grafana</span>
+                    <span className="ml-auto text-xs text-[#475569]">↗</span>
+                </a>
             </nav>
             <div className="px-3 py-3 border-t border-[#334155]">
                 <button onClick={handleLogout}
