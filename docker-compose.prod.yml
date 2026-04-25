@@ -89,5 +89,47 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # =========================================================================
+  # Grafana — pgstat UI ile aynı port üzerinden (UI nginx /grafana/ proxy)
+  # Sadece internal network'te calisir, host port expose etmez
+  # =========================================================================
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: pgstat-grafana
+    environment:
+      # Sub-path mount ayarlari — /grafana prefix'inde calisacak
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost/grafana/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Iframe embed — pgstat UI ileride iframe ile panel gomerse calissin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_SECURITY_COOKIE_SAMESITE: lax
+      # Anonymous viewer — sirketici ag, single-admin sistem
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Admin sifresi — .env'den
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-pgstat-admin}
+      # Read-only DB ile data source provisioning
+      PGSTAT_DB_HOST: ${PGSTAT_DB_HOST}
+      PGSTAT_DB_PORT: ${PGSTAT_DB_PORT}
+      PGSTAT_DB_NAME: ${PGSTAT_DB_NAME}
+      PGSTAT_GRAFANA_DB_USER: ${PGSTAT_GRAFANA_DB_USER:-pgstat_grafana_ro}
+      PGSTAT_GRAFANA_DB_PASSWORD: ${PGSTAT_GRAFANA_DB_PASSWORD:-grafana-ro}
+      # Plugin ihtiyaci olursa ileride
+      GF_INSTALL_PLUGINS: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
 volumes:
   pgstat-secrets:
+  grafana-data:

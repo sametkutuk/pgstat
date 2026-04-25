@@ -1,0 +1,331 @@
+{
+  "uid": "pgstat-instance-detail",
+  "title": "pgstat — Instance Detail",
+  "description": "Tek bir instance icin 360 derece gorunum. Time range degistir, tum paneller otomatik adapte olur.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["10s", "30s", "1m", "5m", "15m", "1h"],
+    "time_options": ["5m", "15m", "1h", "6h", "24h", "7d", "30d", "90d"]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "label": "Instance",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Aktif Bağlantılar",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 50},
+            {"color": "red", "value": 100}
+          ]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "rawSql": "select count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes' and state = 'active'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 2,
+      "title": "Açık Alert'ler",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1},
+            {"color": "red", "value": 5}
+          ]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "rawSql": "select count(*) as value from ops.alert where instance_pk = $instance and status = 'open'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 3,
+      "title": "Cache Hit Ratio (anlık)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 90},
+            {"color": "green", "value": 95}
+          ]}
+        }
+      },
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "rawSql": "select cache_hit_ratio as value from fact.pg_cluster_delta where instance_pk = $instance order by sample_ts desc limit 1",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 4,
+      "title": "TPS (commit + rollback)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["mean"]}},
+      "targets": [{
+        "rawSql": "select avg((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 5,
+      "title": "WAL Üretimi (son 1h)",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_cluster_delta where instance_pk = $instance and sample_ts > now() - interval '1 hour'",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 6,
+      "title": "Disk Read",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["sum"]}},
+      "targets": [{
+        "rawSql": "select coalesce(sum(blks_read_delta) * 8192, 0) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 10,
+      "title": "Bağlantı Sayısı — bugün vs dün vs geçen hafta",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, max(numbackends) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $__interval) as time, max(numbackends) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $__interval) as time, max(numbackends) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "WAL Üretimi (bayt/sn) — bugün vs dün vs geçen hafta",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "description": "Otomatik birim formatı: KB/MB/GB/TB. Click+drag ile zoom yapabilirsin.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Bugün\" from fact.pg_cluster_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $__interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Dün\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "C",
+          "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $__interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Geçen hafta\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "TPS (transaction/sn)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "stacking": {"mode": "normal"}}
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, sum(xact_commit_delta / nullif(extract(epoch from sample_interval), 0)) as commits from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1",
+          "format": "time_series"
+        },
+        {
+          "refId": "B",
+          "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, sum(xact_rollback_delta / nullif(extract(epoch from sample_interval), 0)) as rollbacks from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Cache Hit Ratio",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "red", "value": null},
+            {"color": "yellow", "value": 90},
+            {"color": "green", "value": 95}
+          ]}
+        }
+      },
+      "targets": [{
+        "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, avg(cache_hit_ratio) as cache_hit_pct from fact.pg_cluster_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 14,
+      "title": "Aktivite Dağılımı (state bazlı)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 50, "stacking": {"mode": "normal"}}
+        }
+      },
+      "targets": [{
+        "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, state as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) and state is not null group by 1, state order by 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 15,
+      "title": "Wait Events",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 30}
+        }
+      },
+      "targets": [{
+        "rawSql": "select $__timeGroup(sample_ts, $__interval) as time, wait_event_type as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) and wait_event_type is not null group by 1, wait_event_type order by 1",
+        "format": "time_series"
+      }]
+    },
+    {
+      "id": 20,
+      "title": "Top 20 Sorgu (toplam exec süresi)",
+      "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 28},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "left"}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "total_ms"}, "properties": [{"id": "unit", "value": "ms"}]},
+          {"matcher": {"id": "byName", "options": "mean_ms"}, "properties": [{"id": "unit", "value": "ms"}]},
+          {"matcher": {"id": "byName", "options": "wal_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
+          {"matcher": {"id": "byName", "options": "disk_read"}, "properties": [{"id": "unit", "value": "bytes"}]}
+        ]
+      },
+      "targets": [{
+        "rawSql": "select left(coalesce(qt.query_text, '?'), 200) as query, dbr.datname as db, sum(d.calls_delta) as calls, round(sum(d.total_exec_time_ms_delta)::numeric, 0) as total_ms, round((sum(d.total_exec_time_ms_delta)::numeric / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_ms, sum(d.rows_delta) as rows, sum(d.shared_blks_read_delta) * 8192 as disk_read, sum(d.wal_bytes_delta) as wal_bytes from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by 1, 2 order by total_ms desc limit 20",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 21,
+      "title": "Top 20 Tablo (dead tuple oranı)",
+      "type": "table",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 38},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "dead_pct"}, "properties": [{"id": "unit", "value": "percent"}]}
+        ]
+      },
+      "targets": [{
+        "rawSql": "select rr.schemaname || '.' || rr.relname as relation, t.n_live_tup as live, t.n_dead_tup as dead, round(100.0 * t.n_dead_tup / nullif(t.n_live_tup + t.n_dead_tup, 0), 1) as dead_pct, t.last_autovacuum from fact.pg_table_stat_delta t join dim.relation_ref rr on rr.relation_id = t.relation_id where t.instance_pk = $instance and t.sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance) and t.n_dead_tup > 1000 order by dead_pct desc nulls last limit 20",
+        "format": "table"
+      }]
+    },
+    {
+      "id": 22,
+      "title": "Açık Alert'ler",
+      "type": "table",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 38},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{
+        "rawSql": "select severity, alert_code, opened_at, occurrence_count, left(title, 80) as title from ops.alert where instance_pk = $instance and status = 'open' order by opened_at desc limit 50",
+        "format": "table"
+      }]
+    }
+  ]
+}

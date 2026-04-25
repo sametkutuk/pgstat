@@ -1,0 +1,24 @@
+# =============================================================================
+# Grafana data source — pgstat central PG17
+# Otomatik provisioning: Grafana baslarken bu dosyadan datasource kurulur
+# =============================================================================
+apiVersion: 1
+
+datasources:
+  - name: pgstat
+    type: postgres
+    access: proxy
+    url: ${PGSTAT_DB_HOST}:${PGSTAT_DB_PORT}
+    database: ${PGSTAT_DB_NAME}
+    user: ${PGSTAT_GRAFANA_DB_USER}
+    secureJsonData:
+      password: ${PGSTAT_GRAFANA_DB_PASSWORD}
+    jsonData:
+      sslmode: prefer
+      postgresVersion: 1700
+      timescaledb: false
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+    isDefault: true
+    editable: false

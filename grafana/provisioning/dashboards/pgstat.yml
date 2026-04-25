@@ -1,0 +1,17 @@
+# =============================================================================
+# Grafana dashboard provisioning
+# /var/lib/grafana/dashboards icindeki tum JSON'lari otomatik yukler
+# =============================================================================
+apiVersion: 1
+
+providers:
+  - name: pgstat
+    orgId: 1
+    folder: 'pgstat'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
