@@ -6,6 +6,7 @@ import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.FactRepository;
+import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
@@ -56,6 +57,7 @@ public class ClusterCollector {
     private final CapabilityRepository capabilityRepo;
     private final AlertRepository alertRepo;
     private final DeltaCalculator deltaCalc;
+    private final AlertMessageRenderer renderer;
 
     /** In-memory delta cache: instancePk → onceki cluster metric sample */
     private final ConcurrentHashMap<Long, ClusterMetricSample> previousSamples = new ConcurrentHashMap<>();
@@ -71,13 +73,32 @@ public class ClusterCollector {
                             FactRepository factRepo,
                             CapabilityRepository capabilityRepo,
                             AlertRepository alertRepo,
-                            DeltaCalculator deltaCalc) {
+                            DeltaCalculator deltaCalc,
+                            AlertMessageRenderer renderer) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.factRepo = factRepo;
         this.capabilityRepo = capabilityRepo;
         this.alertRepo = alertRepo;
         this.deltaCalc = deltaCalc;
+        this.renderer = renderer;
+    }
+
+    /**
+     * Sablon ile alert raise yardimcisi.
+     * Render hata verirse fallback metinleri kullanilir.
+     */
+    private void raiseTemplated(String alertKey, AlertCode code, long instancePk,
+                                 java.util.Map<String, Object> ctx,
+                                 String fallbackTitle, String fallbackMsg) {
+        String title = fallbackTitle, message = fallbackMsg;
+        try {
+            String[] rendered = renderer.renderForCode(code.getCode(), ctx,
+                    fallbackTitle, fallbackMsg);
+            title = rendered[0];
+            message = rendered[1];
+        } catch (Exception ignore) {}
+        alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, null);
     }
 
     /**
@@ -441,12 +462,26 @@ public class ClusterCollector {
         // Gercek uygulamada interval parse yapilir; burada bytes bazli threshold
         if (replayLagBytes > 100_000_000) { // 100MB uzerinde lag
             String alertKey = "replication_lag:instance:" + instancePk;
-            alertRepo.upsert(alertKey, AlertCode.REPLICATION_LAG,
-                instancePk, null, null,
+            java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", "instance_pk=" + instancePk);
+            ctx.put("instance_pk", instancePk);
+            ctx.put("lag_bytes", replayLagBytes);
+            ctx.put("lag_human", humanBytes(replayLagBytes));
+            ctx.put("replay_lag_seconds", replayLagStr);
+            ctx.put("warning_threshold", "100MB");
+            ctx.put("critical_threshold", "1GB");
+            ctx.put("severity", replayLagBytes > 1_000_000_000 ? "critical" : "warning");
+            raiseTemplated(alertKey, AlertCode.REPLICATION_LAG, instancePk, ctx,
                 "Yuksek replication lag",
-                "Replay lag: " + replayLagStr + " (" + replayLagBytes + " bytes)",
-                null);
+                "Replay lag: " + replayLagStr + " (" + replayLagBytes + " bytes)");
         }
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes >= 1_000_000_000L) return String.format("%.1f GB", bytes / 1_000_000_000.0);
+        if (bytes >= 1_000_000L) return String.format("%.1f MB", bytes / 1_000_000.0);
+        if (bytes >= 1_000L) return String.format("%.1f KB", bytes / 1_000.0);
+        return bytes + " B";
     }
 
     // =========================================================================
@@ -484,11 +519,20 @@ public class ClusterCollector {
                     long waitMs = java.time.Duration.between(waitstart, now).toMillis();
                     if (waitMs > LOCK_WAIT_THRESHOLD_MS) {
                         String alertKey = "lock_contention:instance:" + instancePk;
-                        alertRepo.upsert(alertKey, AlertCode.LOCK_CONTENTION,
-                            instancePk, null, null,
+                        java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+                        ctx.put("instance", "instance_pk=" + instancePk);
+                        ctx.put("instance_pk", instancePk);
+                        ctx.put("waiting_count", blockedByPids != null ? blockedByPids.length : 0);
+                        ctx.put("lock_mode", rs.getString("mode"));
+                        ctx.put("pid", rs.getInt("pid"));
+                        ctx.put("wait_seconds", waitMs / 1000);
+                        ctx.put("relation", rs.getObject("relation_oid") != null
+                                ? "oid=" + rs.getLong("relation_oid") : "—");
+                        ctx.put("severity", "warning");
+                        raiseTemplated(alertKey, AlertCode.LOCK_CONTENTION, instancePk, ctx,
                             "Uzun sureli lock bekleme",
-                            "PID " + rs.getInt("pid") + " " + (waitMs / 1000) + "s suredir bekliyor, mode=" + rs.getString("mode"),
-                            null);
+                            "PID " + rs.getInt("pid") + " " + (waitMs / 1000)
+                                    + "s suredir bekliyor, mode=" + rs.getString("mode"));
                     }
                 }
             }

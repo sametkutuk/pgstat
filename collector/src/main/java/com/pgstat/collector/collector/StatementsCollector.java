@@ -8,6 +8,7 @@ import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
 import com.pgstat.collector.repository.FactRepository;
 import com.pgstat.collector.repository.StateRepository;
+import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.EpochManager;
 import com.pgstat.collector.service.PgssResetTracker;
@@ -54,6 +55,7 @@ public class StatementsCollector {
     private final EpochManager epochManager;
     private final AlertRepository alertRepo;
     private final PgssResetTracker resetTracker;
+    private final AlertMessageRenderer renderer;
 
     /**
      * In-memory delta cache.
@@ -72,7 +74,8 @@ public class StatementsCollector {
                                DeltaCalculator deltaCalc,
                                EpochManager epochManager,
                                AlertRepository alertRepo,
-                               PgssResetTracker resetTracker) {
+                               PgssResetTracker resetTracker,
+                               AlertMessageRenderer renderer) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -83,6 +86,7 @@ public class StatementsCollector {
         this.epochManager = epochManager;
         this.alertRepo = alertRepo;
         this.resetTracker = resetTracker;
+        this.renderer = renderer;
     }
 
     /**
@@ -178,12 +182,25 @@ public class StatementsCollector {
                         queryCount, totalCalls, totalExecTime, lossWindow,
                         currentEpochKey != null ? currentEpochKey : "ilk");
                     
+                    java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+                    ctx.put("instance", "instance_pk=" + instancePk);
+                    ctx.put("instance_pk", instancePk);
+                    ctx.put("query_count", queryCount);
+                    ctx.put("total_calls", totalCalls);
+                    ctx.put("loss_window", lossWindow);
+                    ctx.put("reset_at", java.time.Instant.now().toString());
+                    ctx.put("severity", "info");
+                    String[] rendered = new String[]{"pg_stat_statements Reset", alertMessage};
+                    try {
+                        rendered = renderer.renderForCode(AlertCode.STATS_RESET_DETECTED.getCode(),
+                                ctx, "pg_stat_statements Reset", alertMessage);
+                    } catch (Exception ignore) {}
                     alertRepo.upsert(
                         "pgss_reset:instance:" + instancePk,
                         AlertCode.STATS_RESET_DETECTED,
                         instancePk, null, systemIdentifier,
-                        "pg_stat_statements Reset",
-                        alertMessage, null
+                        rendered[0],
+                        rendered[1], null
                     );
                     
                     log.warn("pg_stat_statements reset: instance={}, {} sorgu, {} calls, kayip penceresi={}",

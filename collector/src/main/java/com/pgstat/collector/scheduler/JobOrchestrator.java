@@ -171,7 +171,11 @@ public class JobOrchestrator {
         try (AdvisoryLockManager.LockHandle lock = lockManager.tryAcquire(jobType)) {
             if (lock == null) {
                 // Lock alinamadi — baska kopya calisiyor, sessizce atla
-                alertService.raiseJobAlert(AlertCode.ADVISORY_LOCK_SKIP,
+                java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+                ctx.put("job_type", jobType);
+                ctx.put("skipped_at", java.time.Instant.now().toString());
+                ctx.put("severity", "info");
+                alertService.raiseJobAlert(AlertCode.ADVISORY_LOCK_SKIP, ctx,
                     "Advisory lock alinamadi: " + jobType,
                     jobType + " job'i icin lock alinamadi, baska kopya calisiyor olabilir");
                 return;
@@ -179,7 +183,12 @@ public class JobOrchestrator {
             jobAction.run();
         } catch (Exception e) {
             log.error("{} job hatasi: {}", jobType, e.getMessage(), e);
-            alertService.raiseJobAlert(AlertCode.JOB_FAILED,
+            java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("job_type", jobType);
+            ctx.put("error_message", e.getMessage());
+            ctx.put("job_run_at", java.time.Instant.now().toString());
+            ctx.put("severity", "error");
+            alertService.raiseJobAlert(AlertCode.JOB_FAILED, ctx,
                 jobType + " job basarisiz", e.getMessage());
         }
     }
@@ -413,7 +422,13 @@ public class JobOrchestrator {
             log.error("Rollup job hatasi: {}", e.getMessage(), e);
             status = "failed";
             errorText = truncate(e.getMessage());
-            alertService.raiseJobAlert(AlertCode.JOB_FAILED, "Rollup job basarisiz", e.getMessage());
+            java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("job_type", "rollup");
+            ctx.put("error_message", e.getMessage());
+            ctx.put("job_run_at", java.time.Instant.now().toString());
+            ctx.put("severity", "error");
+            alertService.raiseJobAlert(AlertCode.JOB_FAILED, ctx,
+                "Rollup job basarisiz", e.getMessage());
         }
 
         opsRepo.finishJobRun(jobRunId, status, totalRows, 0, 0, errorText);
@@ -458,11 +473,19 @@ public class JobOrchestrator {
         opsRepo.finishJobRun(jobRunId, status, totalRows, succeeded, failed, errorText);
 
         if (failed > 0) {
-            alertService.raiseJobAlert(
-                failed == futures.size() ? AlertCode.JOB_FAILED : AlertCode.JOB_PARTIAL_FAILURE,
+            AlertCode code = failed == futures.size() ? AlertCode.JOB_FAILED : AlertCode.JOB_PARTIAL_FAILURE;
+            java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("job_type", jobType);
+            ctx.put("failed_count", failed);
+            ctx.put("total_count", succeeded + failed);
+            ctx.put("succeeded_count", succeeded);
+            ctx.put("error_message", errorText != null ? errorText : "—");
+            ctx.put("failed_instances", errorText != null ? errorText : "—");
+            ctx.put("job_run_at", java.time.Instant.now().toString());
+            ctx.put("severity", code == AlertCode.JOB_FAILED ? "error" : "warning");
+            alertService.raiseJobAlert(code, ctx,
                 jobType + " job: " + failed + "/" + (succeeded + failed) + " basarisiz",
-                errorText
-            );
+                errorText);
         }
 
         log.info("{} job tamamlandi: {} basarili, {} basarisiz, {} satir",

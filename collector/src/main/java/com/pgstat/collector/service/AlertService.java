@@ -6,6 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.Map;
+
 /**
  * Alert olusturma/cozme facade'i.
  *
@@ -21,9 +23,25 @@ public class AlertService {
     private static final Logger log = LoggerFactory.getLogger(AlertService.class);
 
     private final AlertRepository alertRepo;
+    private final AlertMessageRenderer renderer;
 
-    public AlertService(AlertRepository alertRepo) {
+    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer) {
         this.alertRepo = alertRepo;
+        this.renderer = renderer;
+    }
+
+    /**
+     * Sablon render yardimcisi. Hata durumunda fallback metinler donulur.
+     */
+    private String[] renderTemplate(AlertCode code, Map<String, Object> ctx,
+                                     String fallbackTitle, String fallbackMessage) {
+        if (ctx == null) return new String[]{fallbackTitle, fallbackMessage};
+        try {
+            return renderer.renderForCode(code.getCode(), ctx, fallbackTitle, fallbackMessage);
+        } catch (Exception e) {
+            log.debug("Alert template render hatasi code={}: {}", code.getCode(), e.getMessage());
+            return new String[]{fallbackTitle, fallbackMessage};
+        }
     }
 
     // =========================================================================
@@ -41,6 +59,17 @@ public class AlertService {
     public void raiseInstanceAlert(AlertCode code, long instancePk,
                                    String title, String message) {
         raiseInstanceAlert(code, instancePk, null, null, title, message, null);
+    }
+
+    /**
+     * Sablon destekli instance alert. ctx null degilse alert_message_template'den
+     * sablon cekilir; render basarisiz olursa fallback title/message kullanilir.
+     */
+    public void raiseInstanceAlert(AlertCode code, long instancePk,
+                                   Map<String, Object> ctx,
+                                   String fallbackTitle, String fallbackMessage) {
+        String[] rendered = renderTemplate(code, ctx, fallbackTitle, fallbackMessage);
+        raiseInstanceAlert(code, instancePk, null, null, rendered[0], rendered[1], null);
     }
 
     /**
@@ -85,10 +114,20 @@ public class AlertService {
      * @param message detayli mesaj
      */
     public void raiseJobAlert(AlertCode code, String title, String message) {
+        raiseJobAlert(code, null, title, message);
+    }
+
+    /**
+     * Sablon destekli job alert. ctx null degilse alert_message_template'den
+     * sablon cekilir; render basarisiz olursa fallback title/message kullanilir.
+     */
+    public void raiseJobAlert(AlertCode code, Map<String, Object> ctx,
+                              String fallbackTitle, String fallbackMessage) {
         String alertKey = code.getCode() + ":" + code.getSourceComponent() + ":global";
+        String[] rendered = renderTemplate(code, ctx, fallbackTitle, fallbackMessage);
         try {
-            alertRepo.upsert(alertKey, code, null, null, null, title, message, null);
-            log.debug("Job alert olusturuldu: {} — {}", alertKey, title);
+            alertRepo.upsert(alertKey, code, null, null, null, rendered[0], rendered[1], null);
+            log.debug("Job alert olusturuldu: {} — {}", alertKey, rendered[0]);
         } catch (Exception e) {
             log.error("Job alert yazma hatasi: {} — {}", alertKey, e.getMessage());
         }
