@@ -1,5 +1,6 @@
 package com.pgstat.collector.service;
 
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -61,6 +62,22 @@ public class PartitionManager {
     }
 
     /**
+     * Collector startup'ta partition'lari hemen kontrol et.
+     * Rollup job'a baglanmadan, ilk veri yazilmadan once partition'larin
+     * hazir oldugundan emin olur. Boylece 'no partition found' hatalari onlenir.
+     */
+    @PostConstruct
+    public void initOnStartup() {
+        try {
+            log.info("Startup: partition'lar kontrol ediliyor...");
+            ensureFuturePartitions();
+            log.info("Startup: partition kontrolu tamamlandi.");
+        } catch (Exception e) {
+            log.error("Startup partition olusturma hatasi: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
      * Gelecek partisyonlarin varligini kontrol eder ve eksikleri olusturur.
      * Rollup job tarafindan her calistiginda cagirilir.
      */
@@ -74,6 +91,15 @@ public class PartitionManager {
     // Gunluk fact partisyonlari (14 gun ileri)
     // =========================================================================
 
+    /**
+     * Daily partition lookahead — dunden bugune + 14 gun ileri.
+     * Genis bir pencere acmak rollup job'in birkac gun fail etmesi durumunda
+     * collector'in veri yazmaya devam etmesini saglar.
+     * Dun de dahil cunku timezone farklari ve ge cikan insertler icin guvenli.
+     */
+    private static final int DAILY_LOOKBEHIND_DAYS = 1;
+    private static final int DAILY_LOOKAHEAD_DAYS  = 14;
+
     private void ensureDailyPartitions() {
         LocalDate today = LocalDate.now();
 
@@ -81,7 +107,7 @@ public class PartitionManager {
             Set<String> existing = findExistingPartitions(parentTable);
             String baseName = parentTable.replace(".", "_"); // fact_pgss_delta
 
-            for (int d = 0; d <= 3; d++) {
+            for (int d = -DAILY_LOOKBEHIND_DAYS; d <= DAILY_LOOKAHEAD_DAYS; d++) {
                 LocalDate day = today.plusDays(d);
                 String suffix = day.format(DATE_FMT);
                 String partitionName = baseName + "_" + suffix;
