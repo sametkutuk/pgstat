@@ -231,6 +231,40 @@ router.post('/notification-channels/:channel_id/test', async (req, res, next) =>
                     }
                     break;
                 }
+                case 'webhook': {
+                    const url = config.url || config.webhook_url;
+                    if (!url) return res.status(400).json({ error: 'url tanımlı değil' });
+                    const method = (config.method || 'POST').toUpperCase();
+                    const headers: Record<string, string> = {
+                        'Content-Type': 'application/json',
+                        ...(config.headers || {}),
+                    };
+                    // body_template varsa kullan, yoksa varsayılan JSON
+                    let body: string;
+                    if (config.body_template) {
+                        body = String(config.body_template)
+                            .replace(/\{\{title\}\}/g, testTitle)
+                            .replace(/\{\{message\}\}/g, testMessage)
+                            .replace(/\{\{severity\}\}/g, 'info')
+                            .replace(/\{\{instance\}\}/g, channel.channel_name)
+                            .replace(/\{\{metric\}\}/g, 'test')
+                            .replace(/\{\{value\}\}/g, '0');
+                    } else {
+                        body = JSON.stringify({
+                            title: testTitle,
+                            message: testMessage,
+                            severity: 'info',
+                            channel: channel.channel_name,
+                            test: true,
+                        });
+                    }
+                    const resp = await fetch(url, { method, headers, body });
+                    if (!resp.ok) {
+                        const txt = await resp.text().catch(() => '');
+                        return res.status(502).json({ error: `Webhook hatası: ${resp.status} ${txt.slice(0, 200)}` });
+                    }
+                    break;
+                }
                 case 'email':
                     // Email testi collector tarafında yapılır (SMTP ayarları collector'da)
                     return res.json({ message: 'Email testi collector üzerinden yapılır. Collector loglarını kontrol edin.' });

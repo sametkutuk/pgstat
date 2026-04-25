@@ -745,6 +745,15 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
         url: '',
         bot_token: '',
         chat_id: '',
+        webhook_method: 'POST',
+        webhook_headers: '{"Content-Type": "application/json"}',
+        webhook_body_template: `{
+  "alert_id": "{{alert_id}}",
+  "severity": "{{severity}}",
+  "title": "{{title}}",
+  "message": "{{message}}",
+  "timestamp": "{{timestamp}}"
+}`,
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
@@ -756,7 +765,12 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                 case 'teams': config = { webhook_url: form.webhook_url }; break;
                 case 'email': config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
                 case 'pagerduty': config = { integration_key: form.integration_key }; break;
-                case 'webhook': config = { url: form.url, method: 'POST' }; break;
+                case 'webhook': config = {
+                    url: form.url,
+                    method: form.webhook_method,
+                    headers: (() => { try { return JSON.parse(form.webhook_headers); } catch { return { 'Content-Type': 'application/json' }; } })(),
+                    body_template: form.webhook_body_template,
+                }; break;
                 case 'telegram': config = { bot_token: form.bot_token, chat_id: form.chat_id }; break;
             }
             return apiPost('/adaptive-alerting/notification-channels', {
@@ -841,11 +855,48 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
                     </div>
                 )}
                 {form.channel_type === 'webhook' && (
-                    <div>
-                        <label className="block text-xs font-medium text-[#475569] mb-1">URL *</label>
-                        <input value={form.url} onChange={e => set('url', e.target.value)}
-                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
-                    </div>
+                    <>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                URL *
+                                <InfoTip text="Alert oluştuğunda HTTP isteği gönderilecek endpoint. Herhangi bir REST API, n8n, Zapier, custom endpoint olabilir." className="ml-1" />
+                            </label>
+                            <input value={form.url} onChange={e => set('url', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                placeholder="https://api.example.com/alerts" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">HTTP Method</label>
+                            <select value={form.webhook_method} onChange={e => set('webhook_method', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm">
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="PATCH">PATCH</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Headers (JSON)
+                                <InfoTip text="HTTP header'ları JSON formatında. Örn: Authorization header eklemek için {&quot;Content-Type&quot;: &quot;application/json&quot;, &quot;Authorization&quot;: &quot;Bearer TOKEN&quot;}" className="ml-1" />
+                            </label>
+                            <textarea value={form.webhook_headers} onChange={e => set('webhook_headers', e.target.value)}
+                                rows={2}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono text-xs resize-none" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Body Template (JSON)
+                                <InfoTip text="Gönderilecek JSON body. Değişkenler: {{alert_id}}, {{severity}}, {{title}}, {{message}}, {{instance_pk}}, {{timestamp}}. Değişkenler gönderim sırasında gerçek değerlerle değiştirilir." className="ml-1" />
+                            </label>
+                            <textarea value={form.webhook_body_template} onChange={e => set('webhook_body_template', e.target.value)}
+                                rows={6}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono text-xs resize-y"
+                                placeholder={'{\n  "severity": "{{severity}}",\n  "title": "{{title}}"\n}'} />
+                            <div className="text-[10px] text-[#94A3B8] mt-1">
+                                Değişkenler: <code className="bg-[#F1F5F9] px-1 rounded">{'{{alert_id}}'}</code> <code className="bg-[#F1F5F9] px-1 rounded">{'{{severity}}'}</code> <code className="bg-[#F1F5F9] px-1 rounded">{'{{title}}'}</code> <code className="bg-[#F1F5F9] px-1 rounded">{'{{message}}'}</code> <code className="bg-[#F1F5F9] px-1 rounded">{'{{instance_pk}}'}</code> <code className="bg-[#F1F5F9] px-1 rounded">{'{{timestamp}}'}</code>
+                            </div>
+                        </div>
+                    </>
                 )}
                 {form.channel_type === 'telegram' && (
                     <>

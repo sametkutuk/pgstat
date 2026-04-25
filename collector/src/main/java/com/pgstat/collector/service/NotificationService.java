@@ -94,6 +94,7 @@ public class NotificationService {
                 case "email" -> sendEmail(config, testTitle, testMessage, "info");
                 case "teams" -> sendTeams(config, testTitle, testMessage, "info");
                 case "telegram" -> sendTelegram(config, testTitle, testMessage, "info");
+                case "webhook" -> sendWebhook(config, 0, "info", null, testTitle, testMessage);
                 default -> { return "Desteklenmeyen kanal tipi: " + type; }
             }
             return "OK";
@@ -115,6 +116,7 @@ public class NotificationService {
             case "email"    -> sendEmail(config, title, message, severity);
             case "teams"    -> sendTeams(config, title, message, severity);
             case "telegram" -> sendTelegram(config, title, message, severity);
+            case "webhook"  -> sendWebhook(config, alertId, severity, instancePk, title, message);
             default -> log.warn("Desteklenmeyen kanal tipi: {}", type);
         }
 
@@ -233,6 +235,81 @@ public class NotificationService {
 
         postWebhook(url, payload);
         log.info("Telegram bildirimi gönderildi: chat_id={}", chatId);
+    }
+
+    // =========================================================================
+    // Generic Webhook (body template destekli)
+    // =========================================================================
+
+    private void sendWebhook(String configJson, long alertId, String severity,
+                              Long instancePk, String title, String message) {
+        Map<String, Object> config = parseJson(configJson);
+        String url = (String) config.get("url");
+        if (url == null || url.isBlank()) {
+            log.warn("Webhook kanalında url tanımlı değil");
+            return;
+        }
+
+        String method = config.containsKey("method") ? (String) config.get("method") : "POST";
+        String bodyTemplate = config.containsKey("body_template") ? (String) config.get("body_template") : null;
+
+        // Headers
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json");
+        if (config.containsKey("headers")) {
+            Object hdrs = config.get("headers");
+            if (hdrs instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> hdrMap = (Map<String, Object>) hdrs;
+                hdrMap.forEach((k, v) -> headers.put(k, String.valueOf(v)));
+            } else if (hdrs instanceof String) {
+                // JSON string olarak gelmiş olabilir
+                Map<String, Object> parsed = parseJson((String) hdrs);
+                parsed.forEach((k, v) -> headers.put(k, String.valueOf(v)));
+            }
+        }
+
+        // Body: template varsa değişkenleri değiştir, yoksa default JSON
+        String body;
+        if (bodyTemplate != null && !bodyTemplate.isBlank()) {
+            body = bodyTemplate
+                    .replace("{{alert_id}}", String.valueOf(alertId))
+                    .replace("{{severity}}", severity != null ? severity : "info")
+                    .replace("{{title}}", title != null ? title : "")
+                    .replace("{{message}}", message != null ? escapeJson(message) : "")
+                    .replace("{{instance_pk}}", instancePk != null ? String.valueOf(instancePk) : "null")
+                    .replace("{{timestamp}}", java.time.Instant.now().toString());
+        } else {
+            body = """
+                {"alert_id": %d, "severity": "%s", "title": "%s", "message": "%s", "instance_pk": %s, "timestamp": "%s"}
+                """.formatted(alertId, severity, escapeJson(title), escapeJson(message),
+                    instancePk != null ? String.valueOf(instancePk) : "null",
+                    java.time.Instant.now().toString());
+        }
+
+        try {
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(15));
+
+            headers.forEach(reqBuilder::header);
+
+            switch (method.toUpperCase()) {
+                case "PUT"   -> reqBuilder.PUT(HttpRequest.BodyPublishers.ofString(body));
+                case "PATCH" -> reqBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(body));
+                default      -> reqBuilder.POST(HttpRequest.BodyPublishers.ofString(body));
+            }
+
+            HttpResponse<String> response = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 400) {
+                log.error("Webhook hatası: HTTP {} — {}", response.statusCode(), response.body());
+            } else {
+                log.info("Webhook bildirimi gönderildi: {} {}", method, url);
+            }
+        } catch (Exception e) {
+            log.error("Webhook gönderme hatası: {}", e.getMessage());
+        }
     }
 
     // =========================================================================
