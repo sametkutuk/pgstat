@@ -13,6 +13,7 @@
 --   PGPASSWORD=<superuser-pwd> psql \
 --     -h $PGSTAT_DB_HOST -p $PGSTAT_DB_PORT \
 --     -U postgres -d $PGSTAT_DB_NAME \
+--     -v ON_ERROR_STOP=1 \
 --     -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
 --     -f db/setup/grafana-user.sql
 -- =============================================================================
@@ -20,18 +21,20 @@
 \if :{?grafana_pwd}
 \else
   \echo 'HATA: -v grafana_pwd=... ile sifre verilmedi. Bkz dosya basindaki yorum.'
-  \quit
+  \quit 1
 \endif
 
-do $$
-declare
-  v_pwd text := :'grafana_pwd';
-begin
-  if not exists (select 1 from pg_roles where rolname = 'pgstat_grafana_ro') then
-    execute format('create role pgstat_grafana_ro with login password %L', v_pwd);
-    raise notice 'pgstat_grafana_ro rolu olusturuldu.';
-  else
-    execute format('alter role pgstat_grafana_ro with login password %L', v_pwd);
-    raise notice 'pgstat_grafana_ro rolu zaten vardi, sifre guncellendi.';
-  end if;
-end $$;
+-- psql :var substitution sadece düz SQL'de çalışır, PL/pgSQL DO blogunda
+-- calismaz. Bu yuzden \gexec ile dinamik SQL uretip calistirmak gerekiyor.
+
+-- 1) Rol yoksa olustur
+select format('create role pgstat_grafana_ro login password %L', :'grafana_pwd')
+where not exists (select 1 from pg_roles where rolname = 'pgstat_grafana_ro')
+\gexec
+
+-- 2) Rol varsa sifreyi guncelle (idempotent)
+select format('alter role pgstat_grafana_ro with login password %L', :'grafana_pwd')
+where exists (select 1 from pg_roles where rolname = 'pgstat_grafana_ro')
+\gexec
+
+\echo 'pgstat_grafana_ro rolu hazir (sifre senkronize edildi).'

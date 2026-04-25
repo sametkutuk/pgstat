@@ -290,6 +290,7 @@ EOF
       if PGPASSWORD="$SU_PWD" psql \
           -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
           -U "$SU_USER" -d "$PGSTAT_DB_NAME" \
+          -v ON_ERROR_STOP=1 \
           -v grafana_pwd="$PGSTAT_GRAFANA_DB_PASSWORD" \
           -f "$DIR/db/setup/grafana-user.sql" > /dev/null 2>&1; then
         ok "Grafana kullanıcı hazır"
