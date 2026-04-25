@@ -27,6 +27,18 @@ ask()  { read -rp "$(echo -e "${C}?${N} $1 ${Y}[$2]${N}: ")" val; echo "${val:-$
 load_env() {
   [ -f "$ENV_FILE" ] || fail ".env bulunamadı. Önce: ./pgstat setup"
   set -a; source "$ENV_FILE"; set +a
+  # Opsiyonel degiskenler — set -u altinda unbound olmasinlar
+  : "${UI_PORT:=3000}"
+  : "${API_PORT:=3001}"
+  : "${COLLECTOR_HOSTNAME:=collector-01}"
+  : "${GRAFANA_ADMIN_USER:=admin}"
+  : "${GRAFANA_ADMIN_PASSWORD:=pgstat-admin}"
+  : "${GRAFANA_ROOT_URL:=http://localhost:${UI_PORT}/grafana/}"
+  : "${PGSTAT_GRAFANA_DB_USER:=pgstat_grafana_ro}"
+  : "${PGSTAT_GRAFANA_DB_PASSWORD:=}"
+  export UI_PORT API_PORT COLLECTOR_HOSTNAME
+  export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_ROOT_URL
+  export PGSTAT_GRAFANA_DB_USER PGSTAT_GRAFANA_DB_PASSWORD
 }
 
 gen_secret() {
@@ -299,8 +311,8 @@ EOF
   setup-grafana)
     # Grafana read-only kullanicisini olustur (superuser ile, tek seferlik)
     load_env
-    if [ -z "$PGSTAT_GRAFANA_DB_PASSWORD" ]; then
-      fail "PGSTAT_GRAFANA_DB_PASSWORD .env'de set edilmemis"
+    if [ -z "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
+      fail "PGSTAT_GRAFANA_DB_PASSWORD .env'de set edilmemis. .env.example'a bak veya su satiri ekle: PGSTAT_GRAFANA_DB_PASSWORD=guclu-sifre"
     fi
     echo -e "${C}Grafana read-only kullanicisini olusturmak icin superuser bilgisi gerekli.${N}"
     read -rp "Superuser kullanici [postgres]: " SU_USER
