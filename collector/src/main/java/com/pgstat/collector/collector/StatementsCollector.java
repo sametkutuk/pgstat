@@ -115,6 +115,23 @@ public class StatementsCollector {
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.pgssStatsQuery())) {
 
+            // Once role'leri yukle — pgss_delta'daki userid'leri rolname'e cevirebilmek icin
+            // dim.role_ref tablosunun dolu olmasi gerek. Hafif sorgu, her cycle'da idempotent.
+            try (Statement roleStmt = conn.createStatement();
+                 ResultSet roleRs = roleStmt.executeQuery(
+                     "select oid::bigint as userid, rolname from pg_roles")) {
+                int roleCount = 0;
+                while (roleRs.next()) {
+                    dimensionRepo.upsertRoleRef(instancePk,
+                        roleRs.getLong("userid"),
+                        roleRs.getString("rolname"));
+                    roleCount++;
+                }
+                log.debug("Role refresh: {} role yuklendi instance={}", roleCount, instancePk);
+            } catch (Exception e) {
+                log.warn("Role refresh hatasi instance={}: {}", instancePk, e.getMessage());
+            }
+
             // pgss_info'dan epoch key olusturmak icin reset time lazim
             OffsetDateTime pgssResetAt = null;
             OffsetDateTime postmasterStartAt = null;
