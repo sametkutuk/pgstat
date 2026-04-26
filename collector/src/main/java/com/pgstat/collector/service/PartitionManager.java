@@ -88,6 +88,12 @@ public class PartitionManager {
      * '2026-04-24 21:00:00+00' gibi).
      */
     private void repairMisalignedPartitions() {
+        // Once session timezone'u UTC'ye al — pg_get_expr() boylece UTC formatinda
+        // render eder, bound parse'i deterministik olur.
+        try {
+            jdbc.execute("SET SESSION TimeZone = 'UTC'");
+        } catch (Exception ignore) {}
+
         for (String parentTable : DAILY_FACT_TABLES) {
             try {
                 List<Map<String, Object>> rows = jdbc.queryForList(
@@ -103,10 +109,10 @@ public class PartitionManager {
                     String bound = (String) row.get("bound");
                     if (bound == null) continue;
 
-                    // Tipik dogru range: FROM ('2026-04-25 00:00:00+00') TO ('2026-04-26 00:00:00+00')
-                    // Bug'li: FROM ('2026-04-24 21:00:00+00') TO ('2026-04-25 21:00:00+00')
-                    // Detect: saat 00:00 disinda baslayanlar bug'li
-                    if (bound.matches(".*FROM \\('\\d{4}-\\d{2}-\\d{2} (?!00:00:00)\\d{2}:\\d{2}:\\d{2}.*")) {
+                    // UTC session'da dogru format: FROM ('2026-04-25 00:00:00+00') TO ('2026-04-26 00:00:00+00')
+                    // Bug'li format ornegi: FROM ('2026-04-24 21:00:00+00') TO ('2026-04-25 21:00:00+00')
+                    // Sadece UTC'de 00:00:00 ile baslamayan range'leri bug'li sayariz.
+                    if (bound.matches(".*FROM \\('\\d{4}-\\d{2}-\\d{2} (?!00:00:00\\+00)[^']*'\\).*")) {
                         String schema = parentTable.split("\\.")[0];
                         String fullName = schema + "." + relname;
 
