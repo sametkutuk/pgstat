@@ -38,8 +38,9 @@
         "name": "metric",
         "type": "custom",
         "label": "Sırala",
-        "query": "total_exec_time_ms_delta : Toplam Exec Süresi,calls_delta : Çağrı Sayısı,wal_bytes_delta : WAL Üretimi,shared_blks_read_delta : Disk Read,rows_delta : Dönen Satır",
-        "current": {"selected": true, "text": "Toplam Exec Süresi", "value": "total_exec_time_ms_delta"}
+        "query": "total_exec_time_ms_delta,calls_delta,wal_bytes_delta,shared_blks_read_delta,rows_delta",
+        "current": {"selected": true, "text": "total_exec_time_ms_delta", "value": "total_exec_time_ms_delta"},
+        "description": "Sıralama metriği: total_exec_time_ms_delta=exec süresi, calls_delta=çağrı, wal_bytes_delta=WAL, shared_blks_read_delta=disk read, rows_delta=satır"
       },
       {
         "name": "queryid",
