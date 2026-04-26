@@ -653,6 +653,7 @@ function ChannelsPanel() {
     const toast = useToast();
     const qc = useQueryClient();
     const [showForm, setShowForm] = useState(false);
+    const [editingChannel, setEditingChannel] = useState<NotificationChannel | null>(null);
 
     const { data: channels = [] } = useQuery<NotificationChannel[]>({
         queryKey: ['channels'],
@@ -715,6 +716,10 @@ function ChannelsPanel() {
                                 className="text-xs px-2.5 py-1 bg-[#EFF6FF] text-[#2563EB] rounded hover:bg-[#DBEAFE]">
                                 Test Gönder
                             </button>
+                            <button onClick={() => setEditingChannel(c)}
+                                className="text-xs px-2.5 py-1 bg-[#FEF3C7] text-[#B45309] rounded hover:bg-[#FDE68A]">
+                                Düzenle
+                            </button>
                             <button onClick={() => deleteMut.mutate(c.channel_id)}
                                 className="text-xs px-2.5 py-1 bg-[#FEE2E2] text-[#DC2626] rounded hover:bg-[#FECACA]">
                                 Sil
@@ -725,29 +730,36 @@ function ChannelsPanel() {
             )}
 
             {showForm && <ChannelFormModal onClose={() => setShowForm(false)} />}
+            {editingChannel && <ChannelFormModal channel={editingChannel} onClose={() => setEditingChannel(null)} />}
         </div>
     );
 }
 
-function ChannelFormModal({ onClose }: { onClose: () => void }) {
+function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel; onClose: () => void }) {
     const toast = useToast();
     const qc = useQueryClient();
+    const isEdit = !!channel;
+
+    // Mevcut config'ten form alanlarını çıkar
+    const existingConfig: any = channel?.config && typeof channel.config === 'object'
+        ? channel.config
+        : (typeof channel?.config === 'string' ? (() => { try { return JSON.parse(channel.config as any); } catch { return {}; } })() : {});
 
     const [form, setForm] = useState({
-        channel_name: '',
-        channel_type: 'telegram' as NotificationChannel['channel_type'],
-        min_severity: '' as string,
-        // config alanları
-        webhook_url: '',
-        channel: '',
-        recipients: '',
-        integration_key: '',
-        url: '',
-        bot_token: '',
-        chat_id: '',
-        webhook_method: 'POST',
-        webhook_headers: '{"Content-Type": "application/json"}',
-        webhook_body_template: `{
+        channel_name: channel?.channel_name ?? '',
+        channel_type: (channel?.channel_type ?? 'telegram') as NotificationChannel['channel_type'],
+        min_severity: channel?.min_severity ?? '',
+        // config alanları (mevcut kanaldan doldurulur)
+        webhook_url: existingConfig.webhook_url ?? '',
+        channel: existingConfig.channel ?? '',
+        recipients: Array.isArray(existingConfig.recipients) ? existingConfig.recipients.join(', ') : (existingConfig.recipients ?? ''),
+        integration_key: existingConfig.integration_key ?? '',
+        url: existingConfig.url ?? '',
+        bot_token: existingConfig.bot_token ?? '',
+        chat_id: existingConfig.chat_id ?? '',
+        webhook_method: existingConfig.method ?? 'POST',
+        webhook_headers: existingConfig.headers ? JSON.stringify(existingConfig.headers, null, 2) : '{"Content-Type": "application/json"}',
+        webhook_body_template: existingConfig.body_template ?? `{
   "alert_id": "{{alert_id}}",
   "severity": "{{severity}}",
   "title": "{{title}}",
@@ -757,42 +769,47 @@ function ChannelFormModal({ onClose }: { onClose: () => void }) {
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-    const createMut = useMutation({
+    const buildConfig = () => {
+        let config: any = {};
+        switch (form.channel_type) {
+            case 'slack': config = { webhook_url: form.webhook_url, channel: form.channel || undefined }; break;
+            case 'teams': config = { webhook_url: form.webhook_url }; break;
+            case 'email': config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
+            case 'pagerduty': config = { integration_key: form.integration_key }; break;
+            case 'webhook': config = {
+                url: form.url,
+                method: form.webhook_method,
+                headers: (() => { try { return JSON.parse(form.webhook_headers); } catch { return { 'Content-Type': 'application/json' }; } })(),
+                body_template: form.webhook_body_template,
+            }; break;
+            case 'telegram': config = { bot_token: form.bot_token, chat_id: form.chat_id }; break;
+        }
+        return config;
+    };
+
+    const saveMut = useMutation({
         mutationFn: () => {
-            let config: any = {};
-            switch (form.channel_type) {
-                case 'slack': config = { webhook_url: form.webhook_url, channel: form.channel || undefined }; break;
-                case 'teams': config = { webhook_url: form.webhook_url }; break;
-                case 'email': config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
-                case 'pagerduty': config = { integration_key: form.integration_key }; break;
-                case 'webhook': config = {
-                    url: form.url,
-                    method: form.webhook_method,
-                    headers: (() => { try { return JSON.parse(form.webhook_headers); } catch { return { 'Content-Type': 'application/json' }; } })(),
-                    body_template: form.webhook_body_template,
-                }; break;
-                case 'telegram': config = { bot_token: form.bot_token, chat_id: form.chat_id }; break;
-            }
-            return apiPost('/adaptive-alerting/notification-channels', {
+            const body = {
                 channel_name: form.channel_name,
                 channel_type: form.channel_type,
-                config,
+                config: buildConfig(),
                 min_severity: form.min_severity || null,
-                instance_pks: null,
-                metric_categories: null,
-            });
+            };
+            return isEdit
+                ? apiPut(`/adaptive-alerting/notification-channels/${channel!.channel_id}`, body)
+                : apiPost('/adaptive-alerting/notification-channels', { ...body, instance_pks: null, metric_categories: null });
         },
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['channels'] });
             qc.invalidateQueries({ queryKey: ['adaptive-overview'] });
-            toast.success('Kanal eklendi');
+            toast.success(isEdit ? 'Kanal güncellendi' : 'Kanal eklendi');
             onClose();
         },
         onError: (e: any) => toast.error(e?.message || 'Hata'),
     });
 
     return (
-        <Modal title="Bildirim Kanalı Ekle" onClose={onClose}>
+        <Modal title={isEdit ? 'Bildirim Kanalı Düzenle' : 'Bildirim Kanalı Ekle'} onClose={onClose}>
             <div className="space-y-4">
                 <div>
                     <label className="block text-xs font-medium text-[#475569] mb-1">Kanal Adı *</label>

@@ -302,6 +302,50 @@ router.post('/notification-channels/:channel_id/test', async (req, res, next) =>
     }
 });
 
+// PUT /api/notification-channels/:channel_id — kanal düzenle
+router.put('/notification-channels/:channel_id', async (req, res, _next) => {
+    try {
+        const id = parseInt(req.params.channel_id, 10);
+        if (!id) return res.status(400).json({ error: 'Geçersiz channel_id' });
+
+        const { channel_name, channel_type, config, min_severity, instance_pks,
+                metric_categories, is_enabled } = req.body;
+
+        // Dinamik kolon tespiti — eski DB'lerde bazı kolonlar olmayabilir
+        const colsRes = await pool.query(
+            `select column_name from information_schema.columns
+             where table_schema='control' and table_name='notification_channel'`
+        );
+        const existingCols = new Set<string>(colsRes.rows.map((r: any) => r.column_name));
+
+        const cols: { name: string; val: any }[] = [];
+        if (channel_name      !== undefined) cols.push({ name: 'channel_name',      val: channel_name });
+        if (channel_type      !== undefined) cols.push({ name: 'channel_type',      val: channel_type });
+        if (config            !== undefined) cols.push({ name: 'config',            val: JSON.stringify(config) });
+        if (min_severity      !== undefined) cols.push({ name: 'min_severity',      val: min_severity });
+        if (instance_pks      !== undefined) cols.push({ name: 'instance_pks',      val: instance_pks });
+        if (metric_categories !== undefined) cols.push({ name: 'metric_categories', val: metric_categories });
+        if (is_enabled        !== undefined) cols.push({ name: 'is_enabled',        val: is_enabled });
+
+        const active = cols.filter(c => existingCols.has(c.name));
+        if (active.length === 0) return res.status(400).json({ error: 'Güncellenecek alan yok' });
+
+        const setSql = active.map((c, i) => `${c.name}=$${i + 1}`).join(', ');
+        const values = active.map(c => c.val);
+        values.push(id);
+
+        const result = await pool.query(
+            `update control.notification_channel set ${setSql} where channel_id=$${values.length} returning *`,
+            values
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Kanal bulunamadı' });
+        res.json({ ...result.rows[0], message: 'Kanal güncellendi' });
+    } catch (err: any) {
+        console.error('notification-channel PUT hatasi:', err.message, err.code, err.detail);
+        res.status(500).json({ error: err.message || 'Update failed', detail: err.detail, code: err.code });
+    }
+});
+
 // DELETE /api/notification-channels/:channel_id
 router.delete('/notification-channels/:channel_id', async (req, res, next) => {
     try {

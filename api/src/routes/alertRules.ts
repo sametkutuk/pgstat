@@ -97,6 +97,77 @@ router.get('/templates', async (_req: Request, res: Response) => {
   res.json(result.rows);
 });
 
+// =============================================================================
+// V030+: Mesaj şablonu yönetimi
+// ÖNEMLI: Bu rotalar /:id'den ÖNCE tanımlanmalı, aksi halde Express
+// /message-templates'i :id parametresi sanır ve 400 döner.
+// =============================================================================
+
+// GET /api/alert-rules/message-templates — sistem varsayılan şablonları
+router.get('/message-templates', async (_req: Request, res: Response) => {
+  try {
+    const result = await pool.query(
+      `select alert_code, title_template, message_template, description, updated_at
+       from control.alert_message_template
+       order by alert_code`
+    );
+    res.json(result.rows);
+  } catch (e: any) {
+    if (e.code === '42P01') return res.json([]);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/alert-rules/message-templates/:alert_code — sistem şablonu güncelle
+router.put('/message-templates/:alert_code', async (req: Request, res: Response) => {
+  try {
+    const { alert_code } = req.params;
+    const { title_template, message_template } = req.body;
+    if (!title_template || !message_template) {
+      return res.status(400).json({ error: 'title_template ve message_template zorunlu' });
+    }
+    const result = await pool.query(
+      `update control.alert_message_template
+       set title_template = $1, message_template = $2, is_system = false
+       where alert_code = $3
+       returning alert_code, title_template, message_template, updated_at`,
+      [title_template, message_template, alert_code]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Alert code bulunamadı' });
+    res.json(result.rows[0]);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/alert-rules/preview — şablon önizleme
+router.post('/preview', async (req: Request, res: Response) => {
+  try {
+    const { title_template, message_template, context } = req.body;
+    const sample: Record<string, any> = {
+      instance: 'prod-pg17', instance_pk: 12, rule_name: 'Örnek Kural', rule_id: 99,
+      metric: 'numbackends', metric_type: 'cluster_metric', aggregation: 'avg',
+      operator: '>', window: 5, value: 187.4, threshold: 150,
+      warning_threshold: 120, critical_threshold: 180,
+      severity: 'critical', severity_upper: 'CRITICAL', severity_emoji: '🔴',
+      baseline_avg: 95.2, change_pct: 96.8, previous_value: 95.0,
+      started_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      duration_minutes: 12,
+      ...context,
+    };
+    const render = (tpl: string | null | undefined): string => {
+      if (!tpl) return '';
+      return tpl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, k) => {
+        const v = sample[k];
+        return v === undefined || v === null ? '' : String(v);
+      });
+    };
+    res.json({ title: render(title_template), message: render(message_template), context_used: sample });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Tek kural detayı — GET /api/alert-rules/:id
 router.get('/:id', async (req: Request, res: Response) => {
   const id = parseId(req.params.id);
@@ -388,99 +459,5 @@ function validateRuleBody(b: any): string | null {
     return 'cooldown_minutes negatif olamaz';
   return null;
 }
-
-// =============================================================================
-// V030: Mesaj şablonu yönetimi
-// =============================================================================
-
-// GET /api/alert-rules/message-templates — sistem varsayılan şablonları
-router.get('/message-templates', async (_req: Request, res: Response) => {
-  try {
-    const result = await pool.query(
-      `select alert_code, title_template, message_template, description, updated_at
-       from control.alert_message_template
-       order by alert_code`
-    );
-    res.json(result.rows);
-  } catch (e: any) {
-    // Migration uygulanmadıysa boş dön
-    if (e.code === '42P01') return res.json([]);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// PUT /api/alert-rules/message-templates/:alert_code — sistem şablonu güncelle
-router.put('/message-templates/:alert_code', async (req: Request, res: Response) => {
-  try {
-    const { alert_code } = req.params;
-    const { title_template, message_template } = req.body;
-    if (!title_template || !message_template) {
-      return res.status(400).json({ error: 'title_template ve message_template zorunlu' });
-    }
-    const result = await pool.query(
-      `update control.alert_message_template
-       set title_template = $1, message_template = $2, is_system = false
-       where alert_code = $3
-       returning alert_code, title_template, message_template, updated_at`,
-      [title_template, message_template, alert_code]
-    );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Alert code bulunamadı' });
-    res.json(result.rows[0]);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/alert-rules/preview — şablon önizleme (örnek context'le render eder)
-// Body: { title_template, message_template, context? }
-// Eğer context verilmezse, temsili örnek değerler kullanılır.
-router.post('/preview', async (req: Request, res: Response) => {
-  try {
-    const { title_template, message_template, context } = req.body;
-
-    // Varsayılan örnek context — UI önizlemesi için
-    const sample: Record<string, any> = {
-      instance: 'prod-pg17',
-      instance_pk: 12,
-      rule_name: 'Örnek Kural',
-      rule_id: 99,
-      metric: 'numbackends',
-      metric_type: 'cluster_metric',
-      aggregation: 'avg',
-      operator: '>',
-      window: 5,
-      value: 187.4,
-      threshold: 150,
-      warning_threshold: 120,
-      critical_threshold: 180,
-      severity: 'critical',
-      severity_upper: 'CRITICAL',
-      severity_emoji: '🔴',
-      baseline_avg: 95.2,
-      change_pct: 96.8,
-      previous_value: 95.0,
-      started_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      duration_minutes: 12,
-      ...context,
-    };
-
-    // Basit {{var}} replace
-    const render = (tpl: string | null | undefined): string => {
-      if (!tpl) return '';
-      return tpl.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, k) => {
-        const v = sample[k];
-        return v === undefined || v === null ? '' : String(v);
-      });
-    };
-
-    res.json({
-      title: render(title_template),
-      message: render(message_template),
-      context_used: sample,
-    });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 export default router;
