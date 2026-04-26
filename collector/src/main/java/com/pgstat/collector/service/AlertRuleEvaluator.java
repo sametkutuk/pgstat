@@ -347,6 +347,15 @@ public class AlertRuleEvaluator {
         List<Map<String, Object>> targets = loadTargetInstances(rule);
         if (targets.isEmpty()) return;
 
+        // Granular tipler (statement/table/index) icin per-record threshold —
+        // hangi sorgu/tablo/index esigi astiysa onu net soyleyen alert
+        if (isGranularMetricType(metricType)) {
+            evaluateThresholdPerRecord(rule, targets, metricType, metricName,
+                windowMinutes, operator, warningThreshold, criticalThreshold,
+                cooldownMinutes, autoResolve, ruleName, ruleId);
+            return;
+        }
+
         List<Map<String, Object>> metricRows = queryMetric(metricType, metricName,
             toSqlAgg(aggregation), windowMinutes + " minutes");
 
@@ -386,6 +395,13 @@ public class AlertRuleEvaluator {
                 updateLastEval(ruleId, instancePk, value, null);
             }
         }
+    }
+
+    /** Per-record yapilacak granular metric tipleri */
+    private static boolean isGranularMetricType(String metricType) {
+        return "statement_metric".equals(metricType)
+            || "table_metric".equals(metricType)
+            || "index_metric".equals(metricType);
     }
 
     // =========================================================================
@@ -447,8 +463,26 @@ public class AlertRuleEvaluator {
                 ctx.put("previous_extreme", historicalExtreme);
                 ctx.put("direction", direction);
                 String[] rendered = buildAlertText(rule, ruleName, message, ctx);
-                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+
+                // Granular tipte: en cok katki yapan record'lari detail JSON'a koy
+                String detailsJson = null;
+                if (isGranularMetricType(metricType)) {
+                    List<Map<String, Object>> contributors = findRecordsTopContributors(
+                        instancePk, metricType, metricName, windowMinutes, isHigh);
+                    if (!contributors.isEmpty()) {
+                        detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
+                            historicalExtreme.toPlainString(), "alltime_record_contributors");
+                    }
+                }
+
+                if (detailsJson != null) {
+                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", "warning", alertKey);
+                } else {
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                }
                 updateLastEval(ruleId, instancePk, currentValue, "warning");
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -531,8 +565,26 @@ public class AlertRuleEvaluator {
                 ctx.put("period", period);
                 ctx.put("direction", direction);
                 String[] rendered = buildAlertText(rule, ruleName, message, ctx);
-                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+
+                // Granular tipte: en cok katki yapan record'lari detail JSON'a
+                String detailsJson = null;
+                if (isGranularMetricType(metricType)) {
+                    List<Map<String, Object>> contributors = findRecordsTopContributors(
+                        instancePk, metricType, metricName, windowMinutes, true);
+                    if (!contributors.isEmpty()) {
+                        detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
+                            changeThresholdPct.toPlainString() + "%", "trend_top_contributors");
+                    }
+                }
+
+                if (detailsJson != null) {
+                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                } else {
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -563,12 +615,13 @@ public class AlertRuleEvaluator {
         List<Map<String, Object>> targets = loadTargetInstances(rule);
         if (targets.isEmpty()) return;
 
-        // statement_metric icin per-query spike kontrolu — instance toplam yerine
-        // her queryid icin ayri spike analizi. Hangi sorgu spike yapti net belli.
-        if ("statement_metric".equals(metricType)) {
-            evaluateStatementSpike(rule, targets, windowMinutes,
+        // Granular metric tipleri (statement/table/index) icin per-record spike —
+        // instance toplam yerine her record icin ayri spike. Hangi sorgu/tablo/index
+        // spike yapti net belli olur.
+        if (isGranularMetricType(metricType)) {
+            evaluateGranularSpike(rule, targets, metricType, metricName, windowMinutes,
                 changeThresholdPct != null ? changeThresholdPct : new BigDecimal("100"),
-                cooldownMinutes, autoResolve, ruleName, ruleId, metricName);
+                cooldownMinutes, autoResolve, ruleName, ruleId);
             return;
         }
 
@@ -665,109 +718,223 @@ public class AlertRuleEvaluator {
     // =========================================================================
 
     /**
-     * Her instance icin: son N dk vs onceki N dk pencereleri arasinda
-     * her queryid icin ayri spike kontrolu. En cok artan sorgu icin alert
-     * uretir. Mesajda sorgu metni, db, user, onceki/su anki call sayilari
-     * yer alir.
+     * Granular spike (statement/table/index): her record icin son N dk vs
+     * onceki N dk karsilastirmasi. En cok artan record icin alert.
      */
-    private void evaluateStatementSpike(Map<String, Object> rule, List<Map<String, Object>> targets,
-                                         int windowMinutes, BigDecimal thresholdPct,
-                                         int cooldownMinutes, boolean autoResolve,
-                                         String ruleName, long ruleId, String metricName) {
-        String deltaCol = toFactColumn(metricName, "statement_metric");
-        if (deltaCol == null) {
-            log.debug("statement_metric icin bilinmeyen metric: {}", metricName);
-            return;
-        }
-
+    private void evaluateGranularSpike(Map<String, Object> rule, List<Map<String, Object>> targets,
+                                        String metricType, String metricName, int windowMinutes,
+                                        BigDecimal thresholdPct, int cooldownMinutes,
+                                        boolean autoResolve, String ruleName, long ruleId) {
         for (Map<String, Object> target : targets) {
             long instancePk = toLong(target.get("instance_pk"));
             String serviceGroup = (String) target.get("service_group");
             String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
 
-            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
-                continue;
-            }
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) continue;
 
-            // Per-query spike eden sorgular
-            List<Map<String, Object>> spiking = findTopSpikingStatements(
-                instancePk, deltaCol, windowMinutes, thresholdPct);
+            List<Map<String, Object>> spiking = findRecordsSpiking(
+                instancePk, metricType, metricName, windowMinutes, thresholdPct);
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (spiking.isEmpty()) {
-                if (prevSeverity != null && autoResolve) {
-                    alertRepo.resolve(alertKey);
-                }
+                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 continue;
             }
 
-            // En cok artan sorgu — ana alert hedefi
             Map<String, Object> top = spiking.get(0);
             BigDecimal currentVal = toBDSafe(top.get("current_val"));
             BigDecimal prevVal    = toBDSafe(top.get("prev_val"));
             BigDecimal changePct  = toBDSafe(top.get("change_pct"));
-            String queryText      = (String) top.get("query_text");
-            String datname        = (String) top.get("datname");
-            String rolname        = (String) top.get("rolname");
-            Object queryid        = top.get("queryid");
-
-            // 3x esik = critical, aksi halde warning
             String severity = changePct.compareTo(thresholdPct.multiply(new BigDecimal("3"))) > 0
                 ? "critical" : "warning";
 
-            String fallbackMsg = String.format(
-                "Sorgu spike: %s = %s (onceki dönem: %s, %.0f%% artis). DB=%s User=%s Query=%s",
-                metricName,
-                currentVal != null ? currentVal.toPlainString() : "?",
-                prevVal != null ? prevVal.toPlainString() : "0",
-                changePct != null ? changePct.doubleValue() : 0.0,
-                datname != null ? datname : "?",
-                rolname != null ? rolname : "?",
-                queryText != null ? queryText.substring(0, Math.min(80, queryText.length())) : "?");
-
-            // Context'i zenginlestir — template'te {{spiking_query}}, {{previous_value}},
-            // {{current_value}}, {{change_pct}}, {{database}}, {{user}}, {{queryid}} kullanilabilir
             Map<String, Object> ctx = baseContext(rule, instancePk, severity);
             ctx.put("value", currentVal);
             ctx.put("current_value", currentVal);
             ctx.put("previous_value", prevVal);
             ctx.put("change_pct", changePct);
             ctx.put("threshold", thresholdPct);
-            ctx.put("spiking_query", queryText != null ? queryText.substring(0, Math.min(200, queryText.length())) : "");
-            ctx.put("queryid", queryid);
-            ctx.put("database", datname);
-            ctx.put("user", rolname);
             ctx.put("window", windowMinutes);
+            populateRecordCtx(ctx, top, metricType);
 
-            // Birden fazla spike varsa detaylari JSON olarak ekle
-            String detailsJson = buildSpikingQueriesJson(spiking, windowMinutes, thresholdPct);
+            String fallbackMsg = buildPerRecordSpikeMessage(metricType, metricName, top,
+                prevVal, currentVal, changePct, windowMinutes);
+            String detailsJson = buildPerRecordsJson(spiking, metricType, windowMinutes,
+                thresholdPct.toPlainString() + "%", "spike");
 
-            // Per-query spike icin ozellestirilmis template (V032 statement_spike).
-            // Kullanici kuralda kendi template'ini set etmisse onu kullan, yoksa
-            // statement_spike default'una git, o da yoksa fallback string'e dus.
-            String userTitleTpl = rule.get("title_template") != null ? rule.get("title_template").toString().trim() : "";
-            String userMsgTpl   = rule.get("message_template") != null ? rule.get("message_template").toString().trim() : "";
-            String[] rendered;
-            if (!userTitleTpl.isEmpty() || !userMsgTpl.isEmpty()) {
-                // Kullanici kendi template'ini yazmis — buildAlertText kullansin
-                rendered = buildAlertText(rule, ruleName, fallbackMsg, ctx);
-            } else {
-                // Default — statement_spike template'i kullan
-                try {
-                    rendered = renderer.renderForCode("statement_spike", ctx, ruleName, fallbackMsg);
-                } catch (Exception e) {
-                    rendered = new String[]{ruleName, fallbackMsg};
-                }
-            }
+            String code = templateCodeForType(metricType, "spike");
+            String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, code);
 
             alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                 instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-            // severity'yi guncelle
             jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
 
             updateLastEval(ruleId, instancePk, changePct, severity);
+        }
+    }
+
+    private String buildPerRecordSpikeMessage(String metricType, String metricName,
+                                               Map<String, Object> rec, BigDecimal prevVal,
+                                               BigDecimal currentVal, BigDecimal changePct,
+                                               int windowMinutes) {
+        return switch (metricType) {
+            case "statement_metric" -> String.format(
+                "Sorgu spike: %s = %s (onceki: %s, %s%% artis, %d dk). DB=%s User=%s Q=%s",
+                metricName, currentVal, prevVal, changePct, windowMinutes,
+                rec.get("datname"), rec.get("rolname"),
+                trimText((String) rec.get("query_text"), 80));
+            case "table_metric" -> String.format(
+                "Tablo spike: %s = %s (onceki: %s, %s%% artis, %d dk). Tablo=%s.%s",
+                metricName, currentVal, prevVal, changePct, windowMinutes,
+                rec.get("schemaname"), rec.get("relname"));
+            case "index_metric" -> String.format(
+                "Index spike: %s = %s (onceki: %s, %s%% artis, %d dk). Index=%s.%s",
+                metricName, currentVal, prevVal, changePct, windowMinutes,
+                rec.get("schemaname"), rec.get("indexrelname"));
+            default -> "Spike";
+        };
+    }
+
+    /**
+     * Trend/alltime/hourly_pattern alert'lerine zenginlestirme: hangi record en cok
+     * katki yapti? Top 10 record'u doner — alert detail'a JSON olarak konur.
+     */
+    private List<Map<String, Object>> findRecordsTopContributors(long instancePk,
+                                                                  String metricType, String metricName,
+                                                                  int windowMinutes, boolean isHigh) {
+        try {
+            String order = isHigh ? "desc" : "asc";
+            return switch (metricType) {
+                case "statement_metric" -> {
+                    String col = toFactColumn(metricName, "statement_metric");
+                    yield jdbc.queryForList(
+                        "select ss.queryid, sum(d." + col + ")::numeric as current_val," +
+                        "       left(coalesce(qt.query_text, '?'), 200) as query_text," +
+                        "       dbr.datname, rr.rolname" +
+                        "  from fact.pgss_delta d" +
+                        "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                        "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
+                        "  left join dim.role_ref    rr  on rr.instance_pk  = ss.instance_pk and rr.userid  = ss.userid" +
+                        "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+                        "  group by ss.queryid, qt.query_text, dbr.datname, rr.rolname" +
+                        "  having sum(d." + col + ") is not null" +
+                        "  order by current_val " + order + " nulls last limit 10",
+                        instancePk, windowMinutes + " minutes");
+                }
+                case "table_metric" -> {
+                    String col = toFactColumn(metricName, "table_metric");
+                    yield jdbc.queryForList(
+                        "select t.schemaname, t.relname, sum(t." + col + ")::numeric as current_val," +
+                        "       max(t.n_dead_tup_estimate) as dead_tup, max(t.n_live_tup_estimate) as live_tup," +
+                        "       dbr.datname" +
+                        "  from fact.pg_table_stat_delta t" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                        "  group by t.schemaname, t.relname, dbr.datname" +
+                        "  having sum(t." + col + ") is not null" +
+                        "  order by current_val " + order + " nulls last limit 10",
+                        instancePk, windowMinutes + " minutes");
+                }
+                case "index_metric" -> {
+                    String col = toFactColumn(metricName, "index_metric");
+                    yield jdbc.queryForList(
+                        "select i.schemaname, i.indexrelname, i.table_relname," +
+                        "       sum(i." + col + ")::numeric as current_val, dbr.datname" +
+                        "  from fact.pg_index_stat_delta i" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid" +
+                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
+                        "  group by i.schemaname, i.indexrelname, i.table_relname, dbr.datname" +
+                        "  having sum(i." + col + ") is not null" +
+                        "  order by current_val " + order + " nulls last limit 10",
+                        instancePk, windowMinutes + " minutes");
+                }
+                default -> java.util.Collections.emptyList();
+            };
+        } catch (Exception e) {
+            log.debug("findRecordsTopContributors hatasi: {}", e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /** Generic spike SQL — her granular tipte uygun query */
+    private List<Map<String, Object>> findRecordsSpiking(long instancePk, String metricType,
+                                                          String metricName, int windowMinutes,
+                                                          BigDecimal thresholdPct) {
+        try {
+            return switch (metricType) {
+                case "statement_metric" -> findTopSpikingStatements(instancePk,
+                    toFactColumn(metricName, "statement_metric"), windowMinutes, thresholdPct);
+
+                case "table_metric" -> {
+                    String col = toFactColumn(metricName, "table_metric");
+                    yield jdbc.queryForList(
+                        "with curr as (" +
+                        "  select t.schemaname, t.relname, t.dbid, sum(t." + col + ")::numeric as current_val" +
+                        "  from fact.pg_table_stat_delta t" +
+                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                        "  group by t.schemaname, t.relname, t.dbid" +
+                        "), prev as (" +
+                        "  select t.schemaname, t.relname, t.dbid, sum(t." + col + ")::numeric as prev_val" +
+                        "  from fact.pg_table_stat_delta t" +
+                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                        "    and t.sample_ts <= now() - ?::interval" +
+                        "  group by t.schemaname, t.relname, t.dbid" +
+                        ")" +
+                        "select c.schemaname, c.relname, c.dbid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
+                        "       case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
+                        "            else round((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0), 1) end as change_pct," +
+                        "       dbr.datname" +
+                        "  from curr c" +
+                        "  left join prev p on p.schemaname = c.schemaname and p.relname = c.relname and p.dbid = c.dbid" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = c.dbid" +
+                        "  where c.current_val > 0" +
+                        "    and (case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
+                        "              else (c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0) end) > ?" +
+                        "  order by change_pct desc nulls last limit 10",
+                        instancePk, windowMinutes + " minutes",
+                        instancePk, (windowMinutes * 2) + " minutes", windowMinutes + " minutes",
+                        instancePk, thresholdPct);
+                }
+
+                case "index_metric" -> {
+                    String col = toFactColumn(metricName, "index_metric");
+                    yield jdbc.queryForList(
+                        "with curr as (" +
+                        "  select i.schemaname, i.indexrelname, i.table_relname, i.dbid, sum(i." + col + ")::numeric as current_val" +
+                        "  from fact.pg_index_stat_delta i" +
+                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
+                        "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid" +
+                        "), prev as (" +
+                        "  select i.schemaname, i.indexrelname, i.dbid, sum(i." + col + ")::numeric as prev_val" +
+                        "  from fact.pg_index_stat_delta i" +
+                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval and i.sample_ts <= now() - ?::interval" +
+                        "  group by i.schemaname, i.indexrelname, i.dbid" +
+                        ")" +
+                        "select c.schemaname, c.indexrelname, c.table_relname, c.dbid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
+                        "       case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
+                        "            else round((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0), 1) end as change_pct," +
+                        "       dbr.datname" +
+                        "  from curr c" +
+                        "  left join prev p on p.schemaname = c.schemaname and p.indexrelname = c.indexrelname and p.dbid = c.dbid" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = c.dbid" +
+                        "  where c.current_val > 0" +
+                        "    and (case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
+                        "              else (c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0) end) > ?" +
+                        "  order by change_pct desc nulls last limit 10",
+                        instancePk, windowMinutes + " minutes",
+                        instancePk, (windowMinutes * 2) + " minutes", windowMinutes + " minutes",
+                        instancePk, thresholdPct);
+                }
+
+                default -> java.util.Collections.emptyList();
+            };
+        } catch (Exception e) {
+            log.warn("findRecordsSpiking hatasi {}/{} instance={}: {}",
+                metricType, metricName, instancePk, e.getMessage());
+            return java.util.Collections.emptyList();
         }
     }
 
@@ -832,6 +999,280 @@ public class AlertRuleEvaluator {
         } catch (Exception e) {
             log.warn("findTopSpikingStatements hatasi instance={}: {}", instancePk, e.getMessage());
             return java.util.Collections.emptyList();
+        }
+    }
+
+    // =========================================================================
+    // Per-record THRESHOLD evaluator — statement/table/index granularitesinde
+    // =========================================================================
+
+    /**
+     * Granular metric tiplerinde threshold kontrolu.
+     * statement_metric → her queryid icin
+     * table_metric    → her schema.relname icin
+     * index_metric    → her schemaname.indexrelname icin
+     *
+     * Esigi asan kayitlar bulunursa en yuksek olani icin alert + tum liste
+     * details_json'da yer alir.
+     */
+    private void evaluateThresholdPerRecord(Map<String, Object> rule, List<Map<String, Object>> targets,
+                                             String metricType, String metricName,
+                                             int windowMinutes, String operator,
+                                             BigDecimal warningThreshold, BigDecimal criticalThreshold,
+                                             int cooldownMinutes, boolean autoResolve,
+                                             String ruleName, long ruleId) {
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) continue;
+
+            // Esigi asan kayitlari bul (max threshold = warning, critical varsa hari)
+            BigDecimal probeThreshold = warningThreshold != null ? warningThreshold : criticalThreshold;
+            if (probeThreshold == null) continue;
+
+            List<Map<String, Object>> exceeding = findRecordsExceedingThreshold(
+                instancePk, metricType, metricName, windowMinutes, operator, probeThreshold);
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+
+            if (exceeding.isEmpty()) {
+                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                continue;
+            }
+
+            // En yuksek deger ana hedef
+            Map<String, Object> top = exceeding.get(0);
+            BigDecimal currentVal = toBDSafe(top.get("current_val"));
+            String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
+            if (severity == null) {
+                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, currentVal, null);
+                continue;
+            }
+            BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
+
+            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+            ctx.put("value", currentVal);
+            ctx.put("current_value", currentVal);
+            ctx.put("threshold", threshold);
+            ctx.put("window", windowMinutes);
+            populateRecordCtx(ctx, top, metricType);
+
+            String fallbackMsg = buildPerRecordThresholdMessage(metricType, metricName, top,
+                operator, threshold, windowMinutes);
+            String detailsJson = buildPerRecordsJson(exceeding, metricType, windowMinutes,
+                threshold.toPlainString(), "exceeding_threshold");
+
+            // Template kodu: granular tip icin uygun statement_spike-benzeri code,
+            // yoksa user_defined_rule
+            String alertCodeForTemplate = templateCodeForType(metricType, "threshold");
+            String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, alertCodeForTemplate);
+
+            alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+
+            updateLastEval(ruleId, instancePk, currentVal, severity);
+        }
+    }
+
+    /** Granular tip + evaluation type icin uygun template code'u secer. */
+    private static String templateCodeForType(String metricType, String evalType) {
+        // V032: statement_spike, V033: statement_threshold, table_threshold, vb.
+        return switch (metricType) {
+            case "statement_metric" -> "statement_" + evalType;
+            case "table_metric"     -> "table_"     + evalType;
+            case "index_metric"     -> "index_"     + evalType;
+            default -> "user_defined_rule";
+        };
+    }
+
+    /** Render: granular code varsa onu kullan, yoksa rule template, yoksa user_defined fallback */
+    private String[] renderWithCode(Map<String, Object> rule, Map<String, Object> ctx,
+                                     String fallbackTitle, String fallbackMsg, String code) {
+        String userTitleTpl = rule.get("title_template") != null ? rule.get("title_template").toString().trim() : "";
+        String userMsgTpl   = rule.get("message_template") != null ? rule.get("message_template").toString().trim() : "";
+        if (!userTitleTpl.isEmpty() || !userMsgTpl.isEmpty()) {
+            return buildAlertText(rule, fallbackTitle, fallbackMsg, ctx);
+        }
+        try {
+            return renderer.renderForCode(code, ctx, fallbackTitle, fallbackMsg);
+        } catch (Exception e) {
+            return new String[]{fallbackTitle, fallbackMsg};
+        }
+    }
+
+    /** Per-record context'i doldurur (queryid/relation/index_name vs.) */
+    private void populateRecordCtx(Map<String, Object> ctx, Map<String, Object> rec, String metricType) {
+        switch (metricType) {
+            case "statement_metric" -> {
+                ctx.put("queryid", rec.get("queryid"));
+                ctx.put("spiking_query", trimText((String) rec.get("query_text"), 200));
+                ctx.put("query_text",   trimText((String) rec.get("query_text"), 200));
+                ctx.put("database", rec.get("datname"));
+                ctx.put("user",     rec.get("rolname"));
+            }
+            case "table_metric" -> {
+                String relation = rec.get("schemaname") + "." + rec.get("relname");
+                ctx.put("relation", relation);
+                ctx.put("table",    relation);
+                ctx.put("schema",   rec.get("schemaname"));
+                ctx.put("database", rec.get("datname"));
+                ctx.put("dead_tup", rec.get("dead_tup"));
+                ctx.put("live_tup", rec.get("live_tup"));
+            }
+            case "index_metric" -> {
+                String idx = rec.get("schemaname") + "." + rec.get("indexrelname");
+                ctx.put("index",    idx);
+                ctx.put("table",    rec.get("schemaname") + "." + rec.get("table_relname"));
+                ctx.put("schema",   rec.get("schemaname"));
+                ctx.put("database", rec.get("datname"));
+            }
+        }
+    }
+
+    private static String trimText(String s, int max) {
+        if (s == null) return "";
+        return s.length() > max ? s.substring(0, max) + "…" : s;
+    }
+
+    /** Esigi asan top-N kaydi (per-record) granular metric tipinde */
+    private List<Map<String, Object>> findRecordsExceedingThreshold(long instancePk,
+                                                                    String metricType, String metricName,
+                                                                    int windowMinutes, String operator,
+                                                                    BigDecimal threshold) {
+        String op = sanitizeOperator(operator);
+        try {
+            return switch (metricType) {
+                case "statement_metric" -> jdbc.queryForList(
+                    "select ss.queryid, ss.dbid, ss.userid," +
+                    "       sum(d." + toFactColumn(metricName, "statement_metric") + ")::numeric as current_val," +
+                    "       left(coalesce(qt.query_text, '?'), 300) as query_text," +
+                    "       dbr.datname, rr.rolname" +
+                    "  from fact.pgss_delta d" +
+                    "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                    "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+                    "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
+                    "  left join dim.role_ref    rr  on rr.instance_pk  = ss.instance_pk and rr.userid  = ss.userid" +
+                    "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+                    "  group by ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
+                    "  having sum(d." + toFactColumn(metricName, "statement_metric") + ")::numeric " + op + " ?" +
+                    "  order by current_val desc limit 10",
+                    instancePk, windowMinutes + " minutes", threshold);
+
+                case "table_metric" -> {
+                    String col = toFactColumn(metricName, "table_metric");
+                    if ("dead_tuple_ratio".equals(metricName)) {
+                        yield jdbc.queryForList(
+                            "select t.schemaname, t.relname, t.dbid," +
+                            "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
+                            "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname" +
+                            "  from fact.pg_table_stat_delta t" +
+                            "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+                            "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                            "    and (t.n_live_tup_estimate + t.n_dead_tup_estimate) > 1000" +
+                            "    and 100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) " + op + " ?" +
+                            "  order by current_val desc limit 10",
+                            instancePk, windowMinutes + " minutes", threshold);
+                    }
+                    yield jdbc.queryForList(
+                        "select t.schemaname, t.relname, t.dbid," +
+                        "       sum(t." + col + ")::numeric as current_val," +
+                        "       max(t.n_dead_tup_estimate) as dead_tup, max(t.n_live_tup_estimate) as live_tup," +
+                        "       dbr.datname" +
+                        "  from fact.pg_table_stat_delta t" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                        "  group by t.schemaname, t.relname, t.dbid, dbr.datname" +
+                        "  having sum(t." + col + ")::numeric " + op + " ?" +
+                        "  order by current_val desc limit 10",
+                        instancePk, windowMinutes + " minutes", threshold);
+                }
+
+                case "index_metric" -> {
+                    String col = toFactColumn(metricName, "index_metric");
+                    yield jdbc.queryForList(
+                        "select i.schemaname, i.indexrelname, i.table_relname, i.dbid," +
+                        "       sum(i." + col + ")::numeric as current_val, dbr.datname" +
+                        "  from fact.pg_index_stat_delta i" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid" +
+                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
+                        "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid, dbr.datname" +
+                        "  having sum(i." + col + ")::numeric " + op + " ?" +
+                        "  order by current_val desc limit 10",
+                        instancePk, windowMinutes + " minutes", threshold);
+                }
+
+                default -> java.util.Collections.emptyList();
+            };
+        } catch (Exception e) {
+            log.warn("findRecordsExceedingThreshold hatasi {}/{} instance={}: {}",
+                metricType, metricName, instancePk, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    private static String sanitizeOperator(String op) {
+        if (op == null) return ">";
+        return switch (op) {
+            case ">", "<", ">=", "<=", "=" -> op;
+            default -> ">";
+        };
+    }
+
+    private String buildPerRecordThresholdMessage(String metricType, String metricName,
+                                                   Map<String, Object> rec, String operator,
+                                                   BigDecimal threshold, int windowMinutes) {
+        return switch (metricType) {
+            case "statement_metric" -> String.format(
+                "Sorgu esigi asti: %s = %s (%s %s, %d dk pencere). DB=%s User=%s Query=%s",
+                metricName, rec.get("current_val"), operator, threshold,
+                windowMinutes, rec.get("datname"), rec.get("rolname"),
+                trimText((String) rec.get("query_text"), 80));
+            case "table_metric" -> String.format(
+                "Tablo esigi asti: %s = %s (%s %s, %d dk). Tablo=%s.%s DB=%s",
+                metricName, rec.get("current_val"), operator, threshold,
+                windowMinutes, rec.get("schemaname"), rec.get("relname"), rec.get("datname"));
+            case "index_metric" -> String.format(
+                "Index esigi asti: %s = %s (%s %s, %d dk). Index=%s.%s",
+                metricName, rec.get("current_val"), operator, threshold,
+                windowMinutes, rec.get("schemaname"), rec.get("indexrelname"));
+            default -> "Esik asildi";
+        };
+    }
+
+    private String buildPerRecordsJson(List<Map<String, Object>> records, String metricType,
+                                        int windowMinutes, String thresholdStr, String reason) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"reason\":\"").append(reason).append("\"");
+            sb.append(",\"window_minutes\":").append(windowMinutes);
+            sb.append(",\"threshold\":\"").append(thresholdStr).append("\"");
+            sb.append(",\"metric_type\":\"").append(metricType).append("\"");
+            sb.append(",\"records\":[");
+            for (int i = 0; i < records.size(); i++) {
+                Map<String, Object> r = records.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{");
+                boolean first = true;
+                for (Map.Entry<String, Object> e : r.entrySet()) {
+                    if (!first) sb.append(",");
+                    first = false;
+                    sb.append("\"").append(e.getKey()).append("\":");
+                    Object v = e.getValue();
+                    if (v == null) sb.append("null");
+                    else if (v instanceof Number) sb.append(v);
+                    else sb.append("\"").append(escapeJson(v.toString())).append("\"");
+                }
+                sb.append("}");
+            }
+            sb.append("]}");
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -1037,8 +1478,26 @@ public class AlertRuleEvaluator {
                 ctx.put("change_pct", changePct);
                 ctx.put("threshold", changeThresholdPct);
                 String[] rendered = buildAlertText(rule, ruleName, message, ctx);
-                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+
+                // Granular tipte: en cok katki yapan record'lari detail JSON'a
+                String detailsJson = null;
+                if (isGranularMetricType(metricType)) {
+                    List<Map<String, Object>> contributors = findRecordsTopContributors(
+                        instancePk, metricType, metricName, windowMinutes, true);
+                    if (!contributors.isEmpty()) {
+                        detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
+                            baseline.toPlainString(), "hourly_pattern_top_contributors");
+                    }
+                }
+
+                if (detailsJson != null) {
+                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                } else {
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
