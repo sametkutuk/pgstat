@@ -144,20 +144,42 @@ router.post('/notification-channels', async (req, res, next) => {
             metric_categories
         } = req.body;
 
+        if (!channel_name || !channel_type) {
+            return res.status(400).json({ error: 'channel_name ve channel_type zorunlu' });
+        }
+
+        // Dinamik kolon tespiti — eski DB'lerde metric_categories olmayabilir
+        const colsRes = await pool.query(
+            `select column_name from information_schema.columns
+             where table_schema='control' and table_name='notification_channel'`
+        );
+        const existingCols = new Set<string>(colsRes.rows.map((r: any) => r.column_name));
+
+        const cols: { name: string; val: any }[] = [
+            { name: 'channel_name', val: channel_name },
+            { name: 'channel_type', val: channel_type },
+            { name: 'config', val: JSON.stringify(config || {}) },
+            { name: 'min_severity', val: min_severity ?? null },
+            { name: 'instance_pks', val: instance_pks ?? null },
+            { name: 'metric_categories', val: metric_categories ?? null },
+        ];
+        const active = cols.filter(c => existingCols.has(c.name));
+        const colList = active.map(c => c.name).join(', ');
+        const placeholders = active.map((_, i) => `$${i + 1}`).join(', ');
+        const values = active.map(c => c.val);
+
         const result = await pool.query(
-            `insert into control.notification_channel 
-       (channel_name, channel_type, config, min_severity, instance_pks, metric_categories)
-       values ($1, $2, $3, $4, $5, $6)
-       returning channel_id`,
-            [channel_name, channel_type, JSON.stringify(config), min_severity, instance_pks, metric_categories]
+            `insert into control.notification_channel (${colList}) values (${placeholders}) returning channel_id`,
+            values
         );
 
         res.json({
             channel_id: result.rows[0].channel_id,
             message: 'Notification channel created'
         });
-    } catch (err) {
-        next(err);
+    } catch (err: any) {
+        console.error('notification-channel POST hatasi:', err.message, err.code, err.detail);
+        res.status(500).json({ error: err.message || 'Insert failed', detail: err.detail, code: err.code });
     }
 });
 
