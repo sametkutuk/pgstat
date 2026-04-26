@@ -154,6 +154,13 @@ public class PartitionManager {
         LocalDate today = LocalDate.now();
 
         for (String parentTable : DAILY_FACT_TABLES) {
+            // Parent tablo gercekten partitioned mi? (V023+ tablolari migration
+            // yoksa olmayabilir). Degilse bu tabloyu atla.
+            if (!isPartitionedTable(parentTable)) {
+                log.debug("Tablo partitioned degil veya yok, atlandi: {}", parentTable);
+                continue;
+            }
+
             Set<String> existing = findExistingPartitions(parentTable);
             String baseName = parentTable.replace(".", "_"); // fact_pgss_delta
 
@@ -283,8 +290,33 @@ public class PartitionManager {
             jdbc.execute(ddl);
             log.info("Partition olusturuldu: {} [{} → {})", fullPartitionName, fromTs, toTs);
         } catch (Exception e) {
-            // Partition zaten varsa veya baska hata — logla, devam et
-            log.warn("Partition olusturma hatasi: {} — {}", fullPartitionName, e.getMessage());
+            // Spring "bad SQL grammar" ile sariyor — gercek PG nedenini bul
+            Throwable cause = e;
+            while (cause.getCause() != null && cause.getCause() != cause) {
+                cause = cause.getCause();
+            }
+            log.warn("Partition olusturma hatasi: {} — {} (gercek neden: {})",
+                    fullPartitionName, e.getMessage(), cause.getMessage());
+        }
+    }
+
+    /**
+     * Parent tablonun gercekten partitioned olup olmadigini kontrol eder.
+     * V023+ migration'lar uygulanmadiysa veya tablo yoksa false doner.
+     */
+    private boolean isPartitionedTable(String parentTable) {
+        try {
+            String[] parts = parentTable.split("\\.", 2);
+            String schema = parts[0];
+            String table = parts[1];
+            Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM pg_class c " +
+                "JOIN pg_namespace n ON n.oid = c.relnamespace " +
+                "WHERE n.nspname = ? AND c.relname = ? AND c.relkind = 'p'",
+                Integer.class, schema, table);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            return false;
         }
     }
 
