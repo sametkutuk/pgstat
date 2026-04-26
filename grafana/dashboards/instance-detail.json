@@ -260,17 +260,18 @@
         "defaults": {
           "custom": {"align": "left"},
           "links": [
-            {"title": "Drill-down: Top Queries Detail", "url": "/grafana/d/pgstat-top-queries-detail?var-instance=${instance}&from=${__from}&to=${__to}", "targetBlank": false}
+            {"title": "Drill-down: Bu sorgunun detayina git", "url": "/grafana/d/pgstat-top-queries-detail?var-instance=${instance}&var-queryid=${__data.fields.queryid}&from=${__from}&to=${__to}", "targetBlank": false}
           ]
         },
         "overrides": [
           {"matcher": {"id": "byName", "options": "total_ms"}, "properties": [{"id": "unit", "value": "ms"}]},
           {"matcher": {"id": "byName", "options": "mean_ms"}, "properties": [{"id": "unit", "value": "ms"}]},
           {"matcher": {"id": "byName", "options": "wal_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
-          {"matcher": {"id": "byName", "options": "disk_read"}, "properties": [{"id": "unit", "value": "bytes"}]}
+          {"matcher": {"id": "byName", "options": "disk_read"}, "properties": [{"id": "unit", "value": "bytes"}]},
+          {"matcher": {"id": "byName", "options": "queryid"}, "properties": [{"id": "custom.hidden", "value": false}]}
         ]
       },
-      "targets": [{"rawSql": "select left(coalesce(qt.query_text, '?'), 200) as query, dbr.datname as db, sum(d.calls_delta) as calls, round(sum(d.total_exec_time_ms_delta)::numeric, 0) as total_ms, round((sum(d.total_exec_time_ms_delta)::numeric / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_ms, sum(d.rows_delta) as rows, sum(d.shared_blks_read_delta) * 8192 as disk_read, sum(d.wal_bytes_delta) as wal_bytes from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by 1, 2 order by total_ms desc limit 20", "format": "table"}]
+      "targets": [{"rawSql": "select ss.queryid, left(coalesce(qt.query_text, '?'), 200) as query, dbr.datname as db, rr.rolname as \"user\", sum(d.calls_delta) as calls, round(sum(d.total_exec_time_ms_delta)::numeric, 0) as total_ms, round((sum(d.total_exec_time_ms_delta)::numeric / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_ms, sum(d.rows_delta) as rows, sum(d.shared_blks_read_delta) * 8192 as disk_read, sum(d.wal_bytes_delta) as wal_bytes from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by ss.queryid, qt.query_text, dbr.datname, rr.rolname order by total_ms desc nulls last limit 20", "format": "table"}]
     },
     {
       "id": 21,
@@ -288,7 +289,7 @@
       "gridPos": {"h": 11, "w": 12, "x": 12, "y": 51},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"links": [{"title": "pgstat UI'da aç", "url": "/alerts/${__data.fields.alert_id}", "targetBlank": false}]}},
-      "targets": [{"rawSql": "select alert_id, severity, alert_code, opened_at, occurrence_count, left(title, 80) as title from ops.alert where instance_pk = $instance and status = 'open' order by opened_at desc limit 50", "format": "table"}]
+      "targets": [{"rawSql": "select alert_id, severity, alert_code, status, first_seen_at, last_seen_at, acknowledged_at, occurrence_count, left(title, 100) as title, left(message, 200) as message from ops.alert where instance_pk = $instance and status = 'open' order by severity, first_seen_at desc limit 50", "format": "table"}]
     }
   ]
 }

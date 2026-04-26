@@ -40,6 +40,13 @@
         "label": "Sırala",
         "query": "total_exec_time_ms_delta : Toplam Exec Süresi,calls_delta : Çağrı Sayısı,wal_bytes_delta : WAL Üretimi,shared_blks_read_delta : Disk Read,rows_delta : Dönen Satır",
         "current": {"selected": true, "text": "Toplam Exec Süresi", "value": "total_exec_time_ms_delta"}
+      },
+      {
+        "name": "queryid",
+        "type": "textbox",
+        "label": "Tek queryid filtresi (opsiyonel)",
+        "current": {"selected": false, "text": "", "value": ""},
+        "description": "Bos: tum sorgular. Doluysa sadece o queryid'nin detayi gosterilir."
       }
     ]
   },
@@ -52,7 +59,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(calls_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(calls_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts) and ('$queryid' = '' or statement_series_id in (select statement_series_id from dim.statement_series where queryid::text = '$queryid' or '$queryid' = ''))", "format": "table"}]
     },
     {
       "id": 2,
@@ -62,7 +69,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "ms", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(total_exec_time_ms_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(total_exec_time_ms_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts) and ('$queryid' = '' or statement_series_id in (select statement_series_id from dim.statement_series where queryid::text = '$queryid' or '$queryid' = ''))", "format": "table"}]
     },
     {
       "id": 3,
@@ -72,7 +79,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(wal_bytes_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(wal_bytes_delta), 0) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts) and ('$queryid' = '' or statement_series_id in (select statement_series_id from dim.statement_series where queryid::text = '$queryid' or '$queryid' = ''))", "format": "table"}]
     },
     {
       "id": 4,
@@ -82,7 +89,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short", "decimals": 0}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(distinct statement_series_id) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+      "targets": [{"rawSql": "select count(distinct statement_series_id) as value from fact.pgss_delta where instance_pk = $instance and $__timeFilter(sample_ts) and ('$queryid' = '' or statement_series_id in (select statement_series_id from dim.statement_series where queryid::text = '$queryid' or '$queryid' = ''))", "format": "table"}]
     },
     {
       "id": 10,
@@ -92,7 +99,7 @@
       "description": "Seçtiğin metrikte en yoğun 10 sorgunun zaman içindeki seyri. Bir spike → sorumlu sorguyu görmek için.",
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 10}}},
-      "targets": [{"rawSql": "with top10 as (select ss.statement_series_id, sum(d.${metric}) as total from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by ss.statement_series_id order by total desc limit 10) select $__timeGroup(d.sample_ts, $interval) as time, left(coalesce(qt.query_text, ss.queryid::text), 60) as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id where d.instance_pk = $instance and ss.statement_series_id in (select statement_series_id from top10) and $__timeFilter(d.sample_ts) group by 1, ss.statement_series_id, qt.query_text, ss.queryid order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "with top10 as (select ss.statement_series_id, sum(d.${metric}) as total from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by ss.statement_series_id order by total desc limit 10) select $__timeGroup(d.sample_ts, $interval) as time, left(coalesce(qt.query_text, ss.queryid::text), 60) as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id where d.instance_pk = $instance and ss.statement_series_id in (select statement_series_id from top10) and $__timeFilter(d.sample_ts) group by 1, ss.statement_series_id, qt.query_text, ss.queryid order by 1", "format": "time_series"}]
     },
     {
       "id": 11,
@@ -102,7 +109,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "pieType": "donut"},
-      "targets": [{"rawSql": "select coalesce(dbr.datname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by dbr.datname order by value desc", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(dbr.datname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by dbr.datname order by value desc", "format": "table"}]
     },
     {
       "id": 12,
@@ -112,7 +119,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "pieType": "donut"},
-      "targets": [{"rawSql": "select coalesce(rr.rolname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by rr.rolname order by value desc", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(rr.rolname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by rr.rolname order by value desc", "format": "table"}]
     },
     {
       "id": 20,
@@ -131,7 +138,7 @@
           {"matcher": {"id": "byName", "options": "temp_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]}
         ]
       },
-      "targets": [{"rawSql": "select left(coalesce(qt.query_text, '?'), 300) as query, dbr.datname as db, rr.rolname as \"user\", sum(d.calls_delta) as calls, round(sum(d.total_exec_time_ms_delta)::numeric, 0) as total_ms, round((sum(d.total_exec_time_ms_delta)::numeric / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_ms, sum(d.rows_delta) as rows, sum(d.shared_blks_read_delta) * 8192 as disk_read, sum(d.shared_blks_hit_delta) * 8192 as shared_hit, sum(d.temp_blks_written_delta) * 8192 as temp_bytes, sum(d.wal_bytes_delta) as wal_bytes, round((100.0 * sum(d.shared_blks_hit_delta) / nullif(sum(d.shared_blks_hit_delta + d.shared_blks_read_delta), 0))::numeric, 1) as cache_hit_pct from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) group by 1, 2, 3 order by sum(d.${metric}) desc nulls last limit 50", "format": "table"}]
+      "targets": [{"rawSql": "select left(coalesce(qt.query_text, '?'), 300) as query, dbr.datname as db, rr.rolname as \"user\", sum(d.calls_delta) as calls, round(sum(d.total_exec_time_ms_delta)::numeric, 0) as total_ms, round((sum(d.total_exec_time_ms_delta)::numeric / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_ms, sum(d.rows_delta) as rows, sum(d.shared_blks_read_delta) * 8192 as disk_read, sum(d.shared_blks_hit_delta) * 8192 as shared_hit, sum(d.temp_blks_written_delta) * 8192 as temp_bytes, sum(d.wal_bytes_delta) as wal_bytes, round((100.0 * sum(d.shared_blks_hit_delta) / nullif(sum(d.shared_blks_hit_delta + d.shared_blks_read_delta), 0))::numeric, 1) as cache_hit_pct from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by 1, 2, 3 order by sum(d.${metric}) desc nulls last limit 50", "format": "table"}]
     }
   ],
   "links": [
