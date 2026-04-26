@@ -65,27 +65,27 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 90}, {"color": "green", "value": 95}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select round((100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0))::numeric, 2) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
+      "targets": [{"rawSql": "select round((100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0))::numeric, 2) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
     },
     {
       "id": 4,
-      "title": "TPS (son 5 dk ortalama)",
+      "title": "TPS (son 1h ortalama)",
       "type": "stat",
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "ops", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select round((sum(xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0))::numeric, 1) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
+      "targets": [{"rawSql": "select round((sum(xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0))::numeric, 1) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
     },
     {
       "id": 5,
-      "title": "WAL Üretimi (son 1h)",
+      "title": "WAL Üretimi (son 24h)",
       "type": "stat",
       "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts > now() - interval '24 hours'", "format": "table"}]
     },
     {
       "id": 6,
@@ -144,8 +144,30 @@
       ]
     },
     {
+      "id": 17,
+      "title": "Sorgu Tipi Breakdown — commit / rollback / insert / update / delete / select",
+      "type": "timeseries",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 62},
+      "description": "Saniye basina commit, rollback, insert/update/delete tuple, ve select (tup_returned) sayilari. Yuk profilini cikarir.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "stacking": {"mode": "none"}}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "commit"},   "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]},
+          {"matcher": {"id": "byName", "options": "rollback"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]},
+          {"matcher": {"id": "byName", "options": "insert"},   "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]},
+          {"matcher": {"id": "byName", "options": "update"},   "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}]},
+          {"matcher": {"id": "byName", "options": "delete"},   "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "purple"}}]},
+          {"matcher": {"id": "byName", "options": "select (tup_returned)"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]}
+        ]
+      },
+      "targets": [
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(xact_commit_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as commit, sum(xact_rollback_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as rollback, sum(tup_inserted_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as insert, sum(tup_updated_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as update, sum(tup_deleted_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as delete, sum(tup_returned_delta)::float / nullif(extract(epoch from '$interval'::interval), 0) as \"select (tup_returned)\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}
+      ]
+    },
+    {
       "id": 12,
-      "title": "TPS — bugün vs dün vs geçen hafta vs geçen ay",
+      "title": "TPS toplam (commit + rollback) — bugün vs dün vs geçen hafta vs geçen ay",
       "type": "timeseries",
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 13},
       "description": "Bucket'taki delta toplamı, bucket boyutuna bölünerek saniye başına oran.",
