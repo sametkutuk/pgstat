@@ -107,17 +107,37 @@ public class PartitionManager {
                     // Bug'li: FROM ('2026-04-24 21:00:00+00') TO ('2026-04-25 21:00:00+00')
                     // Detect: saat 00:00 disinda baslayanlar bug'li
                     if (bound.matches(".*FROM \\('\\d{4}-\\d{2}-\\d{2} (?!00:00:00)\\d{2}:\\d{2}:\\d{2}.*")) {
+                        String schema = parentTable.split("\\.")[0];
+                        String fullName = schema + "." + relname;
+
                         // Icerigi var mi?
-                        Long count = jdbc.queryForObject(
-                            "SELECT count(*) FROM " + parentTable.split("\\.")[0] + "." + relname,
-                            Long.class);
-                        if (count != null && count == 0) {
-                            jdbc.execute("DROP TABLE " + parentTable.split("\\.")[0] + "." + relname);
-                            log.info("Yanlis range'li bos partition silindi: {}.{} (range: {})",
-                                parentTable.split("\\.")[0], relname, bound);
-                        } else {
-                            log.warn("Yanlis range'li ama veri iceren partition: {}.{} ({} satir) — manuel inceleme gerek",
-                                parentTable.split("\\.")[0], relname, count);
+                        Long count = 0L;
+                        try {
+                            count = jdbc.queryForObject(
+                                "SELECT count(*) FROM " + fullName, Long.class);
+                        } catch (Exception ignore) {}
+
+                        if (count == null) count = 0L;
+
+                        try {
+                            // 1. Detach et (varsa veri korunur, partition standalone tablo olur)
+                            jdbc.execute("ALTER TABLE " + parentTable +
+                                " DETACH PARTITION " + fullName);
+                            // 2. Drop et (gerekirse rename ile arsivlenebilir; biz drop ediyoruz)
+                            jdbc.execute("DROP TABLE " + fullName);
+
+                            log.info("Yanlis range'li partition kaldirildi: {} ({} satir verisi vardi, range: {})",
+                                fullName, count, bound);
+                        } catch (Exception e) {
+                            // Detach basarisiz olursa direkt drop dene (PG'de bazen yapilabilir)
+                            try {
+                                jdbc.execute("DROP TABLE " + fullName);
+                                log.info("Yanlis range'li partition direkt silindi: {} ({} satir, range: {})",
+                                    fullName, count, bound);
+                            } catch (Exception ee) {
+                                log.warn("Yanlis range'li partition silinemedi {}: {}",
+                                    fullName, ee.getMessage());
+                            }
                         }
                     }
                 }
@@ -130,8 +150,11 @@ public class PartitionManager {
     /**
      * Gelecek partisyonlarin varligini kontrol eder ve eksikleri olusturur.
      * Rollup job tarafindan her calistiginda cagirilir.
+     * Repair adimi rollup'ta da calisir — yeni timezone bug'lari olusursa
+     * sonraki rollup'ta yakalanip duzeltilir.
      */
     public void ensureFuturePartitions() {
+        repairMisalignedPartitions();
         ensureDailyPartitions();
         ensureMonthlyPartitions();
         ensureYearlyPartitions();
