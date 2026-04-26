@@ -563,6 +563,15 @@ public class AlertRuleEvaluator {
         List<Map<String, Object>> targets = loadTargetInstances(rule);
         if (targets.isEmpty()) return;
 
+        // statement_metric icin per-query spike kontrolu — instance toplam yerine
+        // her queryid icin ayri spike analizi. Hangi sorgu spike yapti net belli.
+        if ("statement_metric".equals(metricType)) {
+            evaluateStatementSpike(rule, targets, windowMinutes,
+                changeThresholdPct != null ? changeThresholdPct : new BigDecimal("100"),
+                cooldownMinutes, autoResolve, ruleName, ruleId, metricName);
+            return;
+        }
+
         String aggFn = toSqlAgg(aggregation);
 
         // Mevcut pencere: son N dakika
@@ -648,6 +657,208 @@ public class AlertRuleEvaluator {
             } else {
                 updateLastEval(ruleId, instancePk, changePct, null);
             }
+        }
+    }
+
+    // =========================================================================
+    // statement_metric spike: per-query bazli, hangi sorgu spike yapti soyler
+    // =========================================================================
+
+    /**
+     * Her instance icin: son N dk vs onceki N dk pencereleri arasinda
+     * her queryid icin ayri spike kontrolu. En cok artan sorgu icin alert
+     * uretir. Mesajda sorgu metni, db, user, onceki/su anki call sayilari
+     * yer alir.
+     */
+    private void evaluateStatementSpike(Map<String, Object> rule, List<Map<String, Object>> targets,
+                                         int windowMinutes, BigDecimal thresholdPct,
+                                         int cooldownMinutes, boolean autoResolve,
+                                         String ruleName, long ruleId, String metricName) {
+        String deltaCol = toFactColumn(metricName, "statement_metric");
+        if (deltaCol == null) {
+            log.debug("statement_metric icin bilinmeyen metric: {}", metricName);
+            return;
+        }
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
+                continue;
+            }
+
+            // Per-query spike eden sorgular
+            List<Map<String, Object>> spiking = findTopSpikingStatements(
+                instancePk, deltaCol, windowMinutes, thresholdPct);
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+
+            if (spiking.isEmpty()) {
+                if (prevSeverity != null && autoResolve) {
+                    alertRepo.resolve(alertKey);
+                }
+                updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                continue;
+            }
+
+            // En cok artan sorgu — ana alert hedefi
+            Map<String, Object> top = spiking.get(0);
+            BigDecimal currentVal = toBDSafe(top.get("current_val"));
+            BigDecimal prevVal    = toBDSafe(top.get("prev_val"));
+            BigDecimal changePct  = toBDSafe(top.get("change_pct"));
+            String queryText      = (String) top.get("query_text");
+            String datname        = (String) top.get("datname");
+            String rolname        = (String) top.get("rolname");
+            Object queryid        = top.get("queryid");
+
+            // 3x esik = critical, aksi halde warning
+            String severity = changePct.compareTo(thresholdPct.multiply(new BigDecimal("3"))) > 0
+                ? "critical" : "warning";
+
+            String fallbackMsg = String.format(
+                "Sorgu spike: %s = %s (onceki dönem: %s, %.0f%% artis). DB=%s User=%s Query=%s",
+                metricName,
+                currentVal != null ? currentVal.toPlainString() : "?",
+                prevVal != null ? prevVal.toPlainString() : "0",
+                changePct != null ? changePct.doubleValue() : 0.0,
+                datname != null ? datname : "?",
+                rolname != null ? rolname : "?",
+                queryText != null ? queryText.substring(0, Math.min(80, queryText.length())) : "?");
+
+            // Context'i zenginlestir — template'te {{spiking_query}}, {{previous_value}},
+            // {{current_value}}, {{change_pct}}, {{database}}, {{user}}, {{queryid}} kullanilabilir
+            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+            ctx.put("value", currentVal);
+            ctx.put("current_value", currentVal);
+            ctx.put("previous_value", prevVal);
+            ctx.put("change_pct", changePct);
+            ctx.put("threshold", thresholdPct);
+            ctx.put("spiking_query", queryText != null ? queryText.substring(0, Math.min(200, queryText.length())) : "");
+            ctx.put("queryid", queryid);
+            ctx.put("database", datname);
+            ctx.put("user", rolname);
+            ctx.put("window", windowMinutes);
+
+            // Birden fazla spike varsa detaylari JSON olarak ekle
+            String detailsJson = buildSpikingQueriesJson(spiking, windowMinutes, thresholdPct);
+
+            // Per-query spike icin ozellestirilmis template (V032 statement_spike).
+            // Kullanici kuralda kendi template'ini set etmisse onu kullan, yoksa
+            // statement_spike default'una git, o da yoksa fallback string'e dus.
+            String userTitleTpl = rule.get("title_template") != null ? rule.get("title_template").toString().trim() : "";
+            String userMsgTpl   = rule.get("message_template") != null ? rule.get("message_template").toString().trim() : "";
+            String[] rendered;
+            if (!userTitleTpl.isEmpty() || !userMsgTpl.isEmpty()) {
+                // Kullanici kendi template'ini yazmis — buildAlertText kullansin
+                rendered = buildAlertText(rule, ruleName, fallbackMsg, ctx);
+            } else {
+                // Default — statement_spike template'i kullan
+                try {
+                    rendered = renderer.renderForCode("statement_spike", ctx, ruleName, fallbackMsg);
+                } catch (Exception e) {
+                    rendered = new String[]{ruleName, fallbackMsg};
+                }
+            }
+
+            alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+            // severity'yi guncelle
+            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+
+            updateLastEval(ruleId, instancePk, changePct, severity);
+        }
+    }
+
+    /**
+     * Her queryid icin: son N dk delta toplami vs onceki N dk delta toplami,
+     * threshold'u asanlari yuzde sapma sirasina gore doner.
+     */
+    private List<Map<String, Object>> findTopSpikingStatements(long instancePk,
+                                                                String deltaCol,
+                                                                int windowMinutes,
+                                                                BigDecimal thresholdPct) {
+        try {
+            // current: now - N dk → now
+            // prev:    now - 2*N dk → now - N dk
+            String sql =
+                "with current_window as (" +
+                "  select ss.statement_series_id, ss.queryid, ss.dbid, ss.userid," +
+                "         sum(d." + deltaCol + ") as current_val" +
+                "  from fact.pgss_delta d" +
+                "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+                "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid" +
+                "), prev_window as (" +
+                "  select ss.statement_series_id," +
+                "         sum(d." + deltaCol + ") as prev_val" +
+                "  from fact.pgss_delta d" +
+                "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                "  where d.instance_pk = ?" +
+                "    and d.sample_ts > now() - ?::interval" +
+                "    and d.sample_ts <= now() - ?::interval" +
+                "  group by ss.statement_series_id" +
+                ")" +
+                "select c.queryid, c.dbid, c.userid," +
+                "       coalesce(c.current_val, 0)::numeric as current_val," +
+                "       coalesce(p.prev_val, 0)::numeric as prev_val," +
+                "       case when coalesce(p.prev_val,0) = 0 and coalesce(c.current_val,0) > 0 then 9999.0" +
+                "            when coalesce(p.prev_val,0) = 0 then 0.0" +
+                "            else round(((c.current_val::numeric - p.prev_val::numeric) * 100.0 / nullif(p.prev_val::numeric, 0))::numeric, 1)" +
+                "       end as change_pct," +
+                "       left(coalesce(qt.query_text, '?'), 300) as query_text," +
+                "       dbr.datname, rr.rolname" +
+                "  from current_window c" +
+                "  left join prev_window p on p.statement_series_id = c.statement_series_id" +
+                "  left join dim.statement_series ss on ss.statement_series_id = c.statement_series_id" +
+                "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+                "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = c.dbid" +
+                "  left join dim.role_ref    rr  on rr.instance_pk  = ? and rr.userid  = c.userid" +
+                "  where c.current_val > 0" +
+                "    and (case when coalesce(p.prev_val,0) = 0 and coalesce(c.current_val,0) > 0 then 9999.0" +
+                "              when coalesce(p.prev_val,0) = 0 then 0.0" +
+                "              else (c.current_val::numeric - p.prev_val::numeric) * 100.0 / nullif(p.prev_val::numeric, 0)" +
+                "         end) > ?::numeric" +
+                "  order by change_pct desc nulls last" +
+                "  limit 10";
+
+            return jdbc.queryForList(sql,
+                instancePk, windowMinutes + " minutes",         // current_window
+                instancePk, (windowMinutes * 2) + " minutes",   // prev_window from
+                            windowMinutes + " minutes",         // prev_window to
+                instancePk, instancePk,                         // refs
+                thresholdPct);
+        } catch (Exception e) {
+            log.warn("findTopSpikingStatements hatasi instance={}: {}", instancePk, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /** Spike eden sorgu listesini JSON olarak detail icin paketler */
+    private String buildSpikingQueriesJson(List<Map<String, Object>> spiking,
+                                            int windowMinutes, BigDecimal thresholdPct) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"window_minutes\":").append(windowMinutes);
+            sb.append(",\"threshold_pct\":").append(thresholdPct);
+            sb.append(",\"spiking_queries\":[");
+            for (int i = 0; i < spiking.size(); i++) {
+                Map<String, Object> q = spiking.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{\"queryid\":").append(q.get("queryid"));
+                sb.append(",\"datname\":\"").append(q.get("datname") != null ? q.get("datname") : "");
+                sb.append("\",\"rolname\":\"").append(q.get("rolname") != null ? q.get("rolname") : "");
+                sb.append("\",\"current_val\":").append(q.get("current_val"));
+                sb.append(",\"prev_val\":").append(q.get("prev_val"));
+                sb.append(",\"change_pct\":").append(q.get("change_pct"));
+                sb.append(",\"query_text\":\"").append(escapeJson(q.get("query_text")));
+                sb.append("\"}");
+            }
+            sb.append("]}");
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
         }
     }
 
