@@ -108,9 +108,15 @@
       "type": "piechart",
       "gridPos": {"h": 10, "w": 12, "x": 0, "y": 16},
       "datasource": {"type": "postgres", "uid": "pgstat"},
-      "fieldConfig": {"defaults": {"unit": "short"}},
-      "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "pieType": "donut"},
-      "targets": [{"rawSql": "select coalesce(dbr.datname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by dbr.datname order by value desc", "format": "table"}]
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"hideFrom": {"legend": false, "tooltip": false, "viz": false}}}},
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]},
+        "pieType": "donut",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "targets": [{"rawSql": "select coalesce(dbr.datname, 'unknown') as \"Database\", sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by dbr.datname having sum(d.${metric}) > 0 order by value desc", "format": "table"}]
     },
     {
       "id": 12,
@@ -118,9 +124,15 @@
       "type": "piechart",
       "gridPos": {"h": 10, "w": 12, "x": 12, "y": 16},
       "datasource": {"type": "postgres", "uid": "pgstat"},
-      "fieldConfig": {"defaults": {"unit": "short"}},
-      "options": {"legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]}, "pieType": "donut"},
-      "targets": [{"rawSql": "select coalesce(rr.rolname, 'unknown') as metric, sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by rr.rolname order by value desc", "format": "table"}]
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"hideFrom": {"legend": false, "tooltip": false, "viz": false}}}},
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right", "values": ["value", "percent"]},
+        "pieType": "donut",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true},
+        "tooltip": {"mode": "single", "sort": "none"}
+      },
+      "targets": [{"rawSql": "select coalesce(rr.rolname, 'unknown') as \"User\", sum(d.${metric}) as value from fact.pgss_delta d join dim.statement_series ss on ss.statement_series_id = d.statement_series_id left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid where d.instance_pk = $instance and $__timeFilter(d.sample_ts) and ('$queryid' = '' or ss.queryid::text = '$queryid') group by rr.rolname having sum(d.${metric}) > 0 order by value desc", "format": "table"}]
     },
     {
       "id": 20,
