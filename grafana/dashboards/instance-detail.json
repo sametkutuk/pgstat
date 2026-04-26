@@ -1,11 +1,11 @@
 {
   "uid": "pgstat-instance-detail",
   "title": "pgstat — Instance Detail",
-  "description": "Tek instance icin 360 derece gorunum. Instance dropdown'dan sec, time range degistir, kritik metrikler bugun/dun/gecen hafta/gecen ay overlay'leri ile karsilastirilir. Top 20 sorgu/tablo tablolarina tiklayinca drill-down dashboard'una sicrar.",
+  "description": "Tek instance icin 360 derece gorunum. Kritik metriklerde bugun/dun/gecen hafta/gecen ay overlay'leri. Top 20 sorgu/tablo tablolarinda drill-down link.",
   "tags": ["pgstat"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": {"from": "now-6h", "to": "now"},
   "timepicker": {
@@ -45,7 +45,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "none", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}, {"color": "red", "value": 100}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes' and state = 'active'", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(numbackends), 0) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_database_delta where instance_pk = $instance)", "format": "table"}]
     },
     {
       "id": 2,
@@ -65,17 +65,17 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "percent", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 90}, {"color": "green", "value": 95}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select cache_hit_ratio as value from fact.pg_cluster_delta where instance_pk = $instance order by sample_ts desc limit 1", "format": "table"}]
+      "targets": [{"rawSql": "select round((100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0))::numeric, 2) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
     },
     {
       "id": 4,
-      "title": "TPS (ortalama)",
+      "title": "TPS (son 5 dk ortalama)",
       "type": "stat",
       "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "ops", "decimals": 1}},
-      "options": {"reduceOptions": {"calcs": ["mean"]}},
-      "targets": [{"rawSql": "select avg((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select round((sum(xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0))::numeric, 1) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
     },
     {
       "id": 5,
@@ -85,7 +85,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_cluster_delta where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
     },
     {
       "id": 6,
@@ -137,10 +137,10 @@
         ]
       },
       "targets": [
-        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Bugün\" from fact.pg_cluster_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
-        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Dün\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
-        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Geçen hafta\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
-        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(period_wal_size_byte / nullif(extract(epoch from sample_interval), 0)) as \"Geçen ay\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from $interval::interval), 0) as \"Bugün\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
+        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from $interval::interval), 0) as \"Dün\" from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
+        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen hafta\" from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
+        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen ay\" from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
       ]
     },
     {
@@ -148,6 +148,7 @@
       "title": "TPS — bugün vs dün vs geçen hafta vs geçen ay",
       "type": "timeseries",
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 13},
+      "description": "Bucket'taki delta toplamı, bucket boyutuna bölünerek saniye başına oran.",
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {
         "defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}},
@@ -159,10 +160,10 @@
         ]
       },
       "targets": [
-        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
-        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
-        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
-        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum((xact_commit_delta + xact_rollback_delta) / nullif(extract(epoch from sample_interval), 0)) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(xact_commit_delta + xact_rollback_delta)::float / nullif(extract(epoch from $interval::interval), 0) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
+        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum(xact_commit_delta + xact_rollback_delta)::float / nullif(extract(epoch from $interval::interval), 0) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
+        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(xact_commit_delta + xact_rollback_delta)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
+        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(xact_commit_delta + xact_rollback_delta)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
       ]
     },
     {
@@ -181,10 +182,10 @@
         ]
       },
       "targets": [
-        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, avg(cache_hit_ratio) as \"Bugün\" from fact.pg_cluster_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
-        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, avg(cache_hit_ratio) as \"Dün\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
-        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, avg(cache_hit_ratio) as \"Geçen hafta\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
-        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, avg(cache_hit_ratio) as \"Geçen ay\" from fact.pg_cluster_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, 100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
+        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, 100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
+        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, 100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
+        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, 100.0 * sum(blks_hit_delta) / nullif(sum(blks_hit_delta + blks_read_delta), 0) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
       ]
     },
     {
@@ -203,10 +204,10 @@
         ]
       },
       "targets": [
-        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(blks_read_delta * 8192 / nullif(extract(epoch from sample_interval), 0)) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
-        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum(blks_read_delta * 8192 / nullif(extract(epoch from sample_interval), 0)) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
-        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(blks_read_delta * 8192 / nullif(extract(epoch from sample_interval), 0)) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
-        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(blks_read_delta * 8192 / nullif(extract(epoch from sample_interval), 0)) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, sum(blks_read_delta * 8192)::float / nullif(extract(epoch from $interval::interval), 0) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"},
+        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, sum(blks_read_delta * 8192)::float / nullif(extract(epoch from $interval::interval), 0) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 order by 1", "format": "time_series"},
+        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(blks_read_delta * 8192)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
+        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(blks_read_delta * 8192)::float / nullif(extract(epoch from $interval::interval), 0) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
       ]
     },
     {
@@ -216,7 +217,7 @@
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 22},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "none", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 50, "stacking": {"mode": "normal"}}}},
-      "targets": [{"rawSql": "select $__timeGroup(sample_ts, $interval) as time, state as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) and state is not null group by 1, state order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroup(snapshot_ts, $interval) as time, state as metric, count(*)::float / nullif(extract(epoch from $interval::interval), 0) * 60 as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) and state is not null group by 1, state order by 1", "format": "time_series"}]
     },
     {
       "id": 16,
@@ -225,7 +226,7 @@
       "gridPos": {"h": 9, "w": 24, "x": 0, "y": 31},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "none", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 30}}},
-      "targets": [{"rawSql": "select $__timeGroup(sample_ts, $interval) as time, wait_event_type as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) and wait_event_type is not null group by 1, wait_event_type order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroup(snapshot_ts, $interval) as time, wait_event_type as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) and wait_event_type is not null group by 1, wait_event_type order by 1", "format": "time_series"}]
     },
     {
       "id": 20,
@@ -256,7 +257,7 @@
       "gridPos": {"h": 11, "w": 12, "x": 0, "y": 51},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "dead_pct"}, "properties": [{"id": "unit", "value": "percent"}]}]},
-      "targets": [{"rawSql": "select rr.schemaname || '.' || rr.relname as relation, t.n_live_tup as live, t.n_dead_tup as dead, round(100.0 * t.n_dead_tup / nullif(t.n_live_tup + t.n_dead_tup, 0), 1) as dead_pct, t.last_autovacuum from fact.pg_table_stat_delta t join dim.relation_ref rr on rr.relation_id = t.relation_id where t.instance_pk = $instance and t.sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance) and t.n_dead_tup > 1000 order by dead_pct desc nulls last limit 20", "format": "table"}]
+      "targets": [{"rawSql": "select t.schemaname || '.' || t.relname as relation, t.n_live_tup_estimate as live, t.n_dead_tup_estimate as dead, round(100.0 * t.n_dead_tup_estimate / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0), 1) as dead_pct from fact.pg_table_stat_delta t where t.instance_pk = $instance and t.sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance) and t.n_dead_tup_estimate > 1000 order by dead_pct desc nulls last limit 20", "format": "table"}]
     },
     {
       "id": 22,
