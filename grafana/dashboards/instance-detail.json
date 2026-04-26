@@ -125,10 +125,10 @@
       "title": "WAL Üretimi (bayt/sn) — bugün vs dün vs geçen hafta vs geçen ay",
       "type": "timeseries",
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
-      "description": "Otomatik birim: KB/MB/GB/TB. Click+drag ile zoom.",
+      "description": "Otomatik birim: B/s, KB/s, MB/s, GB/s. Click+drag ile zoom. DB idle ise 0 normal — yazma operasyonu (insert/update/delete) gerek.",
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {
-        "defaults": {"unit": "Bps", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}},
+        "defaults": {"unit": "Bps", "decimals": 2, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "spanNulls": false}, "min": 0},
         "overrides": [
           {"matcher": {"id": "byName", "options": "Bugün"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}, {"id": "custom.lineWidth", "value": 3}]},
           {"matcher": {"id": "byName", "options": "Dün"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}, {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10,10]}}]},
@@ -142,6 +142,16 @@
         {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from '$interval'::interval), 0) as \"Geçen hafta\" from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 order by 1", "format": "time_series"},
         {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, sum(period_wal_size_byte)::float / nullif(extract(epoch from '$interval'::interval), 0) as \"Geçen ay\" from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 order by 1", "format": "time_series"}
       ]
+    },
+    {
+      "id": 18,
+      "title": "WAL Üretimi (bucket toplamı) — küçük değerleri okumak için",
+      "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 53},
+      "description": "Bucket içindeki toplam WAL bytes. Bayt/sn'den daha okunabilir küçük değerlerde.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 2, "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 50}, "min": 0}},
+      "targets": [{"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, coalesce(sum(period_wal_size_byte), 0) as \"WAL bytes\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
     },
     {
       "id": 17,
