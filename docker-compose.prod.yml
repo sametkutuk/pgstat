@@ -117,6 +117,8 @@ services:
       GF_AUTH_PROXY_WHITELIST: ""
       # Login form'unu da kapatma — fallback olarak admin/sifre ile manuel girilebilir
       GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      # Varsayilan tema — light (acik renk, dashboard'lar daha iyi okunur)
+      GF_USERS_DEFAULT_THEME: light
       # Admin sifresi — .env'den
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-pgstat-admin}
