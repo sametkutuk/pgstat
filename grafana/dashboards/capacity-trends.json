@@ -1,7 +1,7 @@
 {
   "uid": "pgstat-capacity-trends",
   "title": "pgstat — Capacity & Trends",
-  "description": "Kapasite planlamasi: connection trend, WAL growth, query volume, exec time, DB boyut buyumesi.",
+  "description": "Kapasite planlamasi: connection, WAL, TPS, query volume, DB boyut.",
   "tags": [
     "pgstat",
     "capacity"
@@ -42,7 +42,6 @@
         "x": 0,
         "y": 0
       },
-      "description": "Her instance için P95 bağlantı sayısı. Trend yukarı doğruysa kapasite artırımı düşün.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -74,7 +73,6 @@
         "x": 12,
         "y": 0
       },
-      "description": "WAL üretim hızı (byte/interval). Yüksek WAL = yoğun yazma.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -98,15 +96,14 @@
     },
     {
       "id": 3,
-      "title": "Günlük WAL Tablosu",
+      "title": "Günlük WAL Özeti",
       "type": "table",
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 9
       },
-      "description": "Günlük WAL üretimi, WAL dizin boyutu, dosya sayısı ve archiver durumu.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -133,7 +130,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "max_wal_dir"
+              "options": "wal_dir_max"
             },
             "properties": [
               {
@@ -149,7 +146,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "max_files"
+              "options": "files_max"
             },
             "properties": [
               {
@@ -186,22 +183,21 @@
       },
       "targets": [
         {
-          "rawSql": "select date_trunc('day', w.sample_ts)::date as day, i.display_name as instance, sum(w.period_wal_size_byte) as daily_wal, max(w.wal_directory_size_byte) as max_wal_dir, max(w.wal_file_count) as max_files, max(a.archived_count) as archived, max(a.failed_count) as failed from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk left join fact.pg_archiver_snapshot a on a.instance_pk = w.instance_pk and date_trunc('day', a.sample_ts) = date_trunc('day', w.sample_ts) where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1 desc, i.display_name",
+          "rawSql": "select date_trunc('day', w.sample_ts)::date as day, i.display_name as instance, sum(w.period_wal_size_byte) as daily_wal, max(w.wal_directory_size_byte) as wal_dir_max, max(w.wal_file_count) as files_max, max(a.archived_count) as archived, max(a.failed_count) as failed from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk left join fact.pg_archiver_snapshot a on a.instance_pk = w.instance_pk and date_trunc('day', a.sample_ts) = date_trunc('day', w.sample_ts) where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1 desc",
           "format": "table"
         }
       ]
     },
     {
       "id": 10,
-      "title": "Sorgu Hacmi (calls)",
+      "title": "Sorgu Hacmi (calls/saat)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 18
+        "y": 17
       },
-      "description": "Toplam sorgu çağrı sayısı. pgss_hourly rollup verisinden.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -225,15 +221,14 @@
     },
     {
       "id": 11,
-      "title": "Toplam Exec Süresi",
+      "title": "Toplam Exec Süresi (ms/saat)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 18
+        "y": 17
       },
-      "description": "Toplam sorgu çalışma süresi. Artış = yavaşlayan sorgular veya artan yük.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -256,48 +251,16 @@
       ]
     },
     {
-      "id": 20,
-      "title": "Database Boyut Büyümesi (live tup)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 27
-      },
-      "description": "Tablo bazlı live tuple toplamı. Hızla büyüyen DB'leri belirler.",
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 5
-          }
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select $__timeGroupAlias(t.sample_ts, $__interval), dbr.datname as metric, max(t.n_live_tup_estimate) as value from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where (t.instance_pk in ($instance) or 'All' in ($instance)) and $__timeFilter(t.sample_ts) group by 1, dbr.datname order by 1",
-          "format": "time_series"
-        }
-      ]
-    },
-    {
       "id": 30,
-      "title": "TPS Trendi (Transactions/sec)",
+      "title": "TPS Trendi (instance toplam)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 26
       },
-      "description": "Saniyedeki ortalama transaction sayısı (commit + rollback). Kapasite planlaması için kritik metrik.",
+      "description": "Instance bazında toplam TPS (tüm database'lerin commit+rollback toplamı / saniye).",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -305,6 +268,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
@@ -314,7 +278,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name || ' / ' || coalesce(dbr.datname, '?') as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from '$__interval'::interval), 1)) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name, dbr.datname order by 1",
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from '$__interval'::interval), 1)) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
@@ -324,12 +288,12 @@
       "title": "Günlük TPS Tablosu",
       "type": "table",
       "gridPos": {
-        "h": 10,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 35
       },
-      "description": "Günlük ortalama TPS, commit/rollback dağılımı.",
+      "description": "Günlük ortalama TPS — instance bazında tüm DB'lerin toplamı.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -393,22 +357,54 @@
       },
       "targets": [
         {
-          "rawSql": "select date_trunc('day', d.sample_ts)::date as day, i.display_name as instance, dbr.datname as database, sum(d.xact_commit_delta) as commits, sum(d.xact_rollback_delta) as rollbacks, sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name, dbr.datname order by 1 desc, i.display_name, dbr.datname",
+          "rawSql": "select date_trunc('day', d.sample_ts)::date as day, i.display_name as instance, sum(d.xact_commit_delta) as commits, sum(d.xact_rollback_delta) as rollbacks, sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1 desc, i.display_name",
           "format": "table"
         }
       ]
     },
     {
-      "id": 40,
-      "title": "30 Gün Lineer Tahmin (connection)",
-      "type": "stat",
+      "id": 20,
+      "title": "Database Boyut Trendi (live tuple)",
+      "type": "timeseries",
       "gridPos": {
-        "h": 5,
+        "h": 9,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 44
       },
-      "description": "Son 30 günden lineer regresyon ile 30 gün sonraki P95 tahmini.",
+      "description": "Her database'in günlük max live tuple sayısı. Hızla büyüyen DB'leri belirler.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "with daily as (select date_trunc('day', t.sample_ts)::date as day, i.display_name || ' / ' || coalesce(dbr.datname, '?') as series, max(t.n_live_tup_estimate) as live from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where $__timeFilter(t.sample_ts) and (t.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name, dbr.datname) select day::timestamptz as time, series as metric, sum(live) as value from daily group by 1, series order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Kapasite Özeti",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "description": "Mevcut durum: ortalama TPS, toplam bağlantı, günlük WAL üretimi.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -425,11 +421,24 @@
             "lastNotNull"
           ]
         },
-        "textMode": "value_and_name"
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
       },
       "targets": [
         {
-          "rawSql": "with daily_p95 as (select i.display_name, date_trunc('day', d.sample_ts)::date as day, percentile_cont(0.95) within group (order by d.numbackends) as p95 from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts > now() - interval '30 days' and (d.instance_pk in ($instance) or 'All' in ($instance)) group by i.display_name, day) select display_name as metric, regr_intercept(p95, extract(epoch from day)) + regr_slope(p95, extract(epoch from day)) * extract(epoch from now() + interval '30 days') as value from daily_p95 group by display_name",
+          "refId": "A",
+          "rawSql": "select 'Ort. TPS (bugün)' as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 1)) as value from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "rawSql": "select 'Max Bağlantı (bugün)' as metric, max(d.numbackends) as value from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "rawSql": "select 'WAL Bugün' as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w where w.sample_ts >= current_date and (w.instance_pk in ($instance) or 'All' in ($instance))",
           "format": "table"
         }
       ]
