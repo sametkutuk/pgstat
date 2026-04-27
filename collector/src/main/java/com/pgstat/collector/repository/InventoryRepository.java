@@ -148,7 +148,7 @@ public class InventoryRepository {
             join control.instance_state s on s.instance_pk = i.instance_pk
             join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
             where i.is_active
-              and i.bootstrap_state in ('ready', 'degraded')
+              and i.bootstrap_state = 'ready'
               and (s.backoff_until is null or s.backoff_until <= now())
               and (
                 coalesce(s.next_cluster_collect_at, '-infinity'::timestamptz) <= now()

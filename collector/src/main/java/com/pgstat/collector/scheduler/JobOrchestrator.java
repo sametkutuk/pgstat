@@ -250,6 +250,18 @@ public class JobOrchestrator {
             log.error("Cluster toplama hatasi: {} — {}", instance.instanceId(), e.getMessage());
             stateRepo.updateAfterFailure(instance.instancePk(), truncate(e.getMessage()));
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
+
+            // Secret/connection hatasi → instance'i degraded'a cek, bootstrap retry baslat.
+            // Bu sayede steady-state queue artik bu instance'i cekmez (V035 sonrasi
+            // findDueInstances sadece 'ready' aliyor) ve JOB_PARTIAL_FAILURE her cycle
+            // tekrar tetiklenmez. SECRET_REF_ERROR alert'i bootstrap'tan zaten gelir.
+            String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            if (em.contains("secret_ref") || em.contains("authentication") || em.contains("password")) {
+                try {
+                    inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
+                    log.info("Instance degraded'a cekildi (secret/auth hatasi): {}", instance.instanceId());
+                } catch (Exception ignore) {}
+            }
             return new InstanceResult(instance.instancePk(), false, 0, e.getMessage());
         }
     }
