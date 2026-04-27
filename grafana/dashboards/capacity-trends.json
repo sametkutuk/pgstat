@@ -1,7 +1,6 @@
 {
   "uid": "pgstat-capacity-trends",
   "title": "pgstat — Capacity & Trends",
-  "description": "Kapasite planlamasi: connection, WAL, TPS, query volume, DB boyut.",
   "tags": [
     "pgstat",
     "capacity"
@@ -33,46 +32,16 @@
   },
   "panels": [
     {
-      "id": 1,
-      "title": "Bağlantı Trendi (P95)",
+      "id": 2,
+      "title": "Saatlik WAL Üretimi",
       "type": "timeseries",
       "gridPos": {
-        "h": 9,
-        "w": 12,
+        "h": 10,
+        "w": 24,
         "x": 0,
         "y": 0
       },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 5
-          }
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
-          "format": "time_series"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "WAL Üretimi",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
+      "description": "Saatlik WAL üretimi. Spike'lar yoğun yazma dönemlerini gösterir.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -80,16 +49,28 @@
       "fieldConfig": {
         "defaults": {
           "unit": "decbytes",
+          "decimals": 2,
           "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 15
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "axisSoftMin": 0,
+            "showPoints": "never"
           }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
         }
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(w.sample_ts, '1h'), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
@@ -99,10 +80,10 @@
       "title": "Günlük WAL Özeti",
       "type": "table",
       "gridPos": {
-        "h": 8,
+        "h": 7,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 10
       },
       "datasource": {
         "type": "postgres",
@@ -189,13 +170,44 @@
       ]
     },
     {
+      "id": 1,
+      "title": "Bağlantı Trendi (P95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
       "id": 10,
       "title": "Sorgu Hacmi (calls/saat)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 17
       },
       "datasource": {
@@ -220,47 +232,15 @@
       ]
     },
     {
-      "id": 11,
-      "title": "Toplam Exec Süresi (ms/saat)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 17
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10
-          }
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.exec_time_ms_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
-          "format": "time_series"
-        }
-      ]
-    },
-    {
       "id": 30,
       "title": "TPS Trendi (instance toplam)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
-        "w": 24,
+        "w": 12,
         "x": 0,
         "y": 26
       },
-      "description": "Instance bazında toplam TPS (tüm database'lerin commit+rollback toplamı / saniye).",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -284,16 +264,46 @@
       ]
     },
     {
+      "id": 11,
+      "title": "Toplam Exec Süresi (ms/saat)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.exec_time_ms_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
       "id": 31,
       "title": "Günlük TPS Tablosu",
       "type": "table",
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 24,
         "x": 0,
         "y": 35
       },
-      "description": "Günlük ortalama TPS — instance bazında tüm DB'lerin toplamı.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -312,16 +322,8 @@
                 "value": "right"
               },
               {
-                "id": "custom.width",
-                "value": 100
-              },
-              {
                 "id": "decimals",
                 "value": 0
-              },
-              {
-                "id": "unit",
-                "value": "short"
               }
             ]
           },
@@ -378,9 +380,8 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 43
       },
-      "description": "Her database'in günlük max live tuple sayısı. Hızla büyüyen DB'leri belirler.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -410,7 +411,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 53
+        "y": 52
       },
       "datasource": {
         "type": "postgres",
