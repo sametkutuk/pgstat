@@ -70,8 +70,11 @@ public class AlertRuleEvaluator {
         Map<String, Object> ctx = new java.util.HashMap<>();
         ctx.put("rule_name", rule.get("rule_name"));
         ctx.put("rule_id", rule.get("rule_id"));
-        ctx.put("metric", rule.get("metric_name"));
-        ctx.put("metric_type", rule.get("metric_type"));
+        String metricName = (String) rule.get("metric_name");
+        String metricType = (String) rule.get("metric_type");
+        String evalType   = rule.get("evaluation_type") != null ? (String) rule.get("evaluation_type") : "threshold";
+        ctx.put("metric", metricName);
+        ctx.put("metric_type", metricType);
         ctx.put("aggregation", rule.get("aggregation"));
         ctx.put("operator", rule.get("condition_operator"));
         ctx.put("window", rule.get("evaluation_window_minutes"));
@@ -80,7 +83,80 @@ public class AlertRuleEvaluator {
         ctx.put("severity", severity);
         ctx.put("instance_pk", instancePk);
         ctx.put("instance", lookupInstanceName(instancePk));
+        // Kullanıcıya anlamlı Türkçe açıklamalar
+        ctx.put("metric_description", getMetricDescription(metricType, metricName));
+        ctx.put("eval_description", getEvalDescription(evalType));
         return ctx;
+    }
+
+    /**
+     * Metrik adını kullanıcıya anlamlı Türkçe açıklamaya çevirir.
+     * Alert mesajlarında {{metric_description}} olarak kullanılır.
+     */
+    private static String getMetricDescription(String metricType, String metricName) {
+        String key = metricType + "." + metricName;
+        return switch (key) {
+            // Statement metrikleri
+            case "statement_metric.calls"                -> "Sorgu çağrı sayısı (pg_stat_statements). Bir sorgunun kaç kez çalıştırıldığı.";
+            case "statement_metric.avg_exec_time_ms"     -> "Ortalama sorgu çalışma süresi (ms). Yavaşlayan sorgular bu değeri artırır.";
+            case "statement_metric.temp_blks_written"    -> "Geçici blok yazımı. work_mem yetersizse sorgular diske geçici dosya yazar — performansı düşürür.";
+            case "statement_metric.total_exec_time_ms"   -> "Toplam sorgu çalışma süresi (ms). Tüm çağrıların toplam süresi.";
+            case "statement_metric.rows"                 -> "Sorgunun döndürdüğü/etkilediği satır sayısı.";
+            case "statement_metric.shared_blks_read"     -> "Diskten okunan paylaşımlı blok sayısı. Yüksekse cache miss var, shared_buffers yetersiz olabilir.";
+            // Cluster metrikleri
+            case "cluster_metric.cache_hit_ratio"        -> "Buffer cache isabet oranı (%). Düşükse sorgular diske gidiyor, shared_buffers artırılmalı.";
+            case "cluster_metric.wal_bytes"              -> "WAL (Write-Ahead Log) üretimi (byte). Yüksekse yoğun yazma işlemi var.";
+            case "cluster_metric.checkpoint_write_time"   -> "Checkpoint yazma süresi (ms). Uzunsa disk I/O yavaş veya checkpoint_completion_target düşük.";
+            case "cluster_metric.buffers_checkpoint"     -> "Checkpoint sırasında yazılan buffer sayısı.";
+            case "cluster_metric.buffers_clean"          -> "Background writer tarafından temizlenen buffer sayısı.";
+            // Activity metrikleri
+            case "activity_metric.active_count"          -> "Aktif sorgu çalıştıran bağlantı sayısı. Yüksekse CPU/IO baskısı olabilir.";
+            case "activity_metric.idle_in_transaction_count" -> "Transaction açık bekleyen bağlantı sayısı. Uzun süre açık kalırsa lock ve bloat sorunlarına yol açar.";
+            case "activity_metric.waiting_count"         -> "Kilit bekleyen bağlantı sayısı. Lock contention var demektir.";
+            // Database metrikleri
+            case "database_metric.deadlocks"             -> "Deadlock sayısı. İki veya daha fazla transaction birbirini bekliyor, biri otomatik iptal edildi.";
+            case "database_metric.temp_files"            -> "Oluşturulan geçici dosya sayısı. work_mem yetersizse sorgular diske taşar.";
+            case "database_metric.blk_read_time"         -> "Toplam disk okuma süresi (ms). track_io_timing aktifse ölçülür.";
+            case "database_metric.rollback_ratio"        -> "Rollback oranı (%). Yüksekse uygulama hataları veya retry storm olabilir.";
+            // Replication
+            case "replication_metric.replay_lag_bytes"   -> "Replikasyon gecikmesi (byte). Standby, primary'den ne kadar geride.";
+            case "replication_metric.replay_lag_seconds"  -> "Replikasyon gecikmesi (saniye).";
+            // Table metrikleri
+            case "table_metric.dead_tuple_ratio"         -> "Ölü satır oranı (%). Yüksekse VACUUM gerekli, tablo şişmiş olabilir.";
+            case "table_metric.seq_scan"                 -> "Sequential scan sayısı. Yüksekse eksik index olabilir.";
+            case "table_metric.n_tup_ins"                -> "INSERT sayısı. Yoğun veri girişi var.";
+            // WAL
+            case "wal_metric.period_wal_size_byte"       -> "İki ölçüm arasında üretilen WAL miktarı (byte).";
+            case "wal_metric.wal_directory_size_byte"     -> "pg_wal dizininin toplam boyutu. Yüksekse archiver geride kalmış olabilir.";
+            case "wal_metric.wal_file_count"             -> "WAL dosya sayısı. Çok fazlaysa archiver veya replication geride.";
+            // Archiver
+            case "archiver_metric.failed_count"          -> "Archive başarısız sayısı. archive_command hata veriyor.";
+            case "archiver_metric.archived_count"        -> "Başarıyla archive edilen WAL dosya sayısı.";
+            // Slot
+            case "slot_metric.slot_lag_bytes"            -> "Replication slot gecikmesi (byte). Yüksekse WAL dosyaları birikir, disk dolar.";
+            // SLRU
+            case "slru_metric.blks_read"                 -> "SLRU cache miss — diskten okunan blok. Yüksekse performans etkilenir.";
+            // Function
+            case "function_metric.calls"                 -> "Fonksiyon çağrı sayısı (pg_stat_user_functions).";
+            case "function_metric.total_time"            -> "Fonksiyonun toplam çalışma süresi (ms).";
+            default -> metricType.replace("_metric", "") + " · " + metricName;
+        };
+    }
+
+    /** Evaluation type'ı kullanıcıya anlamlı Türkçe açıklamaya çevirir. */
+    private static String getEvalDescription(String evalType) {
+        return switch (evalType) {
+            case "threshold"      -> "Sabit eşik karşılaştırması";
+            case "spike"          -> "Önceki döneme göre ani artış tespiti";
+            case "flatline"       -> "Değer belirli süre hiç değişmedi";
+            case "day_over_day"   -> "Dünün aynı saatine göre değişim";
+            case "week_over_week" -> "Geçen haftanın aynı gününe göre değişim";
+            case "alltime_high"   -> "Tüm zamanların en yüksek değeri aşıldı";
+            case "alltime_low"    -> "Tüm zamanların en düşük değerinin altına düşüldü";
+            case "hourly_pattern" -> "Bu saatin 4 haftalık ortalamasından sapma";
+            case "adaptive"       -> "28 günlük baseline üzerinden otomatik eşik";
+            default -> evalType;
+        };
     }
 
     private String lookupInstanceName(long instancePk) {
