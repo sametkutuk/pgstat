@@ -388,7 +388,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "locale",
+          "decimals": 0,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
