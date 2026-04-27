@@ -483,6 +483,51 @@ router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/:id/tps — Günlük ve saatlik TPS tablosu
+router.get('/:id/tps', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const days = parseInt(req.query.days as string) || 7;
+
+    const [daily, hourly] = await Promise.all([
+      pool.query(`
+        select
+          date_trunc('day', d.sample_ts)::date as day,
+          dbr.datname,
+          sum(d.xact_commit_delta) as commits,
+          sum(d.xact_rollback_delta) as rollbacks,
+          sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+          round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps
+        from fact.pg_database_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts >= now() - make_interval(days => $2)
+        group by 1, dbr.datname
+        order by 1 desc, dbr.datname
+      `, [id, days]),
+      pool.query(`
+        select
+          date_trunc('hour', d.sample_ts) as hour,
+          dbr.datname,
+          sum(d.xact_commit_delta) as commits,
+          sum(d.xact_rollback_delta) as rollbacks,
+          sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+          round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 3600) as avg_tps
+        from fact.pg_database_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts >= now() - interval '25 hours'
+        group by 1, dbr.datname
+        order by 1 desc, dbr.datname
+      `, [id]),
+    ]);
+
+    res.json({ daily: daily.rows, hourly: hourly.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/functions — User function istatistikleri
 router.get('/:id/functions', async (req, res, next) => {
   try {

@@ -194,13 +194,124 @@
     },
     {
       "id": 30,
+      "title": "TPS Trendi (Transactions/sec)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "description": "Saniyedeki ortalama transaction sayısı (commit + rollback). Kapasite planlaması için kritik metrik.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name || ' / ' || coalesce(dbr.datname, '?') as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from '$__interval'::interval), 1)) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name, dbr.datname order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Günlük TPS Tablosu",
+      "type": "table",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "description": "Günlük ortalama TPS, commit/rollback dağılımı.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_tps"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commits"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rollbacks"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_xact"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "select date_trunc('day', d.sample_ts)::date as day, i.display_name as instance, dbr.datname as database, sum(d.xact_commit_delta) as commits, sum(d.xact_rollback_delta) as rollbacks, sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name, dbr.datname order by 1 desc, i.display_name, dbr.datname",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 40,
       "title": "30 Gün Lineer Tahmin (connection)",
       "type": "stat",
       "gridPos": {
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 46
       },
       "description": "Son 30 günden lineer regresyon ile 30 gün sonraki P95 tahmini.",
       "datasource": {

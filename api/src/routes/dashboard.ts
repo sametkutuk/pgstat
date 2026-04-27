@@ -243,4 +243,58 @@ router.get('/alert-summary', async (_req, res, next) => {
   }
 });
 
+// GET /api/dashboard/tps — Günlük/saatlik TPS (Transactions Per Second) tablosu
+// ?instance_pk=1&mode=daily|hourly&days=7
+router.get('/tps', async (req, res, next) => {
+  try {
+    const instancePk = req.query.instance_pk as string | undefined;
+    const mode = (req.query.mode as string) || 'daily';
+    const days = parseInt(req.query.days as string) || 7;
+
+    if (mode === 'hourly') {
+      // Saatlik TPS — son N gün
+      const result = await pool.query(`
+        select
+          date_trunc('hour', d.sample_ts) as bucket,
+          i.display_name,
+          dbr.datname,
+          sum(d.xact_commit_delta) as commits,
+          sum(d.xact_rollback_delta) as rollbacks,
+          sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+          round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 3600) as avg_tps
+        from fact.pg_database_delta d
+        join control.instance_inventory i on i.instance_pk = d.instance_pk
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.sample_ts >= now() - make_interval(days => $1)
+          and ($2::bigint is null or d.instance_pk = $2::bigint)
+        group by 1, i.display_name, dbr.datname
+        order by 1 desc, i.display_name, dbr.datname
+      `, [days, instancePk || null]);
+      res.json(result.rows);
+    } else {
+      // Günlük TPS — son N gün
+      const result = await pool.query(`
+        select
+          date_trunc('day', d.sample_ts)::date as day,
+          i.display_name,
+          dbr.datname,
+          sum(d.xact_commit_delta) as commits,
+          sum(d.xact_rollback_delta) as rollbacks,
+          sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+          round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps
+        from fact.pg_database_delta d
+        join control.instance_inventory i on i.instance_pk = d.instance_pk
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.sample_ts >= now() - make_interval(days => $1)
+          and ($2::bigint is null or d.instance_pk = $2::bigint)
+        group by 1, i.display_name, dbr.datname
+        order by 1 desc, i.display_name, dbr.datname
+      `, [days, instancePk || null]);
+      res.json(result.rows);
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

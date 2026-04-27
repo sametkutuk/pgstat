@@ -8,7 +8,7 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import { useState } from 'react';
 
-type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru';
+type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -32,6 +32,7 @@ export default function InstanceDetail() {
     const sequences = useQuery({ queryKey: ['inst-sequences', id], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?hours=1`), enabled: tab === 'sequences' });
     const walData = useQuery({ queryKey: ['inst-wal', id], queryFn: () => apiGet<any>(`/instances/${id}/wal?hours=1`), enabled: tab === 'wal' });
     const slruData = useQuery({ queryKey: ['inst-slru', id], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?hours=1`), enabled: tab === 'slru' });
+    const tpsData = useQuery({ queryKey: ['inst-tps', id], queryFn: () => apiGet<any>(`/instances/${id}/tps?days=7`), enabled: tab === 'tps' });
 
     const inst = instance.data;
     const cap = capability.data;
@@ -43,6 +44,7 @@ export default function InstanceDetail() {
         { key: 'overview', label: 'Genel' },
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
+        { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
@@ -94,6 +96,7 @@ export default function InstanceDetail() {
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
+            {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
         </div>
@@ -346,6 +349,65 @@ function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean 
         { key: 'total_truncates', header: 'Truncates', render: (r: any) => Number(r.total_truncates).toLocaleString(), className: 'text-right' },
     ];
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="SLRU verisi yok (PG13+)" /></div>;
+}
+
+function TpsTab({ data, loading }: { data: any | undefined; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const daily = data?.daily || [];
+    const hourly = data?.hourly || [];
+
+    return (
+        <div className="space-y-5">
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük TPS (son 7 gün)</h3>
+                {daily.length === 0 ? (
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">Günlük TPS verisi yok</div>
+                ) : (
+                    <DataTable columns={[
+                        { key: 'day', header: 'Gün', render: (r: any) => new Date(r.day).toLocaleDateString('tr-TR') },
+                        { key: 'datname', header: 'Database' },
+                        { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
+                        {
+                            key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
+                                const n = Number(r.rollbacks);
+                                return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
+                            }, className: 'text-right'
+                        },
+                        { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
+                        {
+                            key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
+                                <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
+                            ), className: 'text-right'
+                        },
+                    ]} data={daily} />
+                )}
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Saatlik TPS (son 25 saat)</h3>
+                {hourly.length === 0 ? (
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">Saatlik TPS verisi yok</div>
+                ) : (
+                    <DataTable columns={[
+                        { key: 'hour', header: 'Saat', render: (r: any) => new Date(r.hour).toLocaleString('tr-TR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) },
+                        { key: 'datname', header: 'Database' },
+                        { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
+                        {
+                            key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
+                                const n = Number(r.rollbacks);
+                                return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
+                            }, className: 'text-right'
+                        },
+                        { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
+                        {
+                            key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
+                                <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
+                            ), className: 'text-right'
+                        },
+                    ]} data={hourly} />
+                )}
+            </div>
+        </div>
+    );
 }
 
 function formatBytesCompact(bytes: number): string {
