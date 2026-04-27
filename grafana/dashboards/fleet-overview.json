@@ -1,0 +1,110 @@
+{
+  "uid": "pgstat-fleet-overview",
+  "title": "pgstat — Fleet Overview",
+  "description": "Tüm instance'larin tek ekranda saglik panosu. NOC/TV ekrani icin uygundur. Bir instance'a tikla → Instance Detail.",
+  "tags": ["pgstat", "fleet"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service_group",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select distinct service_group from control.instance_inventory where service_group is not null order by 1",
+        "refresh": 1, "multi": true, "includeAll": true, "label": "Service Group"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Toplam Instance", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from control.instance_inventory where is_active and (service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Açık Critical Alert", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and a.severity = 'critical' and (i.service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "Açık Warning Alert", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and a.severity = 'warning' and (i.service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "Toplam TPS (son 5 dk)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ops", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / nullif(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 0), 1) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts > now() - interval '5 minutes' and (i.service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 5, "title": "Toplam Aktif Bağlantı", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'active' and (i.service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 6, "title": "WAL Üretimi (son 1h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(w.period_wal_size_byte), 0) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where w.sample_ts > now() - interval '1 hour' and (i.service_group in ($service_group) or 'All' in ($service_group))", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Instance Sağlık Tablosu — tıkla, detaya git", "type": "table",
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 4},
+      "description": "Bir satıra tıklayınca Instance Detail dashboard'una geçer.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {
+          "links": [{"title": "Instance Detail'a git", "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"}]
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "TPS (5dk)"}, "properties": [{"id": "unit", "value": "ops"}]},
+          {"matcher": {"id": "byName", "options": "WAL (1h)"}, "properties": [{"id": "unit", "value": "bytes"}]},
+          {"matcher": {"id": "byName", "options": "Cache Hit %"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "yellow", "value": 90}, {"color": "green", "value": 95}]}}, {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}}]},
+          {"matcher": {"id": "byName", "options": "Açık Alert"}, "properties": [{"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]}}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}
+        ]
+      },
+      "targets": [{"rawSql": "with active_conn as (select instance_pk, count(*) as conn_count from fact.pg_activity_snapshot where snapshot_ts > now() - interval '5 minutes' and state = 'active' group by instance_pk), tps as (select instance_pk, round(sum(xact_commit_delta + xact_rollback_delta)::numeric / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0), 1) as tps_val from fact.pg_database_delta where sample_ts > now() - interval '5 minutes' group by instance_pk), wal as (select instance_pk, sum(period_wal_size_byte) as wal_bytes from fact.pg_wal_snapshot where sample_ts > now() - interval '1 hour' group by instance_pk), cache as (select instance_pk, round(100.0 * sum(blks_hit_delta)::numeric / nullif(sum(blks_hit_delta + blks_read_delta), 0), 2) as cache_pct from fact.pg_database_delta where sample_ts > now() - interval '1 hour' group by instance_pk), alerts as (select instance_pk, count(*) as alert_count from ops.alert where status = 'open' group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, '—') as group_name, i.host, coalesce(c.conn_count, 0) as \"Aktif Bağlantı\", coalesce(t.tps_val, 0) as \"TPS (5dk)\", coalesce(w.wal_bytes, 0) as \"WAL (1h)\", coalesce(ca.cache_pct, 0) as \"Cache Hit %\", coalesce(a.alert_count, 0) as \"Açık Alert\" from control.instance_inventory i left join active_conn c on c.instance_pk = i.instance_pk left join tps t on t.instance_pk = i.instance_pk left join wal w on w.instance_pk = i.instance_pk left join cache ca on ca.instance_pk = i.instance_pk left join alerts a on a.instance_pk = i.instance_pk where i.is_active and (i.service_group in ($service_group) or 'All' in ($service_group)) order by \"Açık Alert\" desc, i.display_name", "format": "table"}]
+    },
+    {
+      "id": 20, "title": "TPS — Per Instance (son time range)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 16},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 5}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.xact_commit_delta + d.xact_rollback_delta)::float / nullif(extract(epoch from $__interval::interval), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 21, "title": "Cache Hit Ratio — Per Instance", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 16},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 5}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, 100.0 * sum(d.blks_hit_delta) / nullif(sum(d.blks_hit_delta + d.blks_read_delta), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 30, "title": "Açık Alert'ler (severity sıralı)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 25},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{"rawSql": "select a.severity, i.display_name as instance, a.alert_code, a.first_seen_at, a.occurrence_count, left(a.title, 100) as title from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by case a.severity when 'critical' then 1 when 'error' then 2 when 'warning' then 3 else 4 end, a.first_seen_at desc limit 100", "format": "table"}]
+    }
+  ]
+}

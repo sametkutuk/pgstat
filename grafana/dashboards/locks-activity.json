@@ -1,0 +1,91 @@
+{
+  "uid": "pgstat-locks-activity",
+  "title": "pgstat — Locks & Activity",
+  "description": "Aktif sorgu, bekleme olaylari, idle in transaction, blocking chain, vacuum/analyze progress.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "instance", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1, "multi": false, "includeAll": false, "label": "Instance"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Aktif Bağlantı (anlık)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 50}, {"color": "red", "value": 100}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes' and state = 'active'", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Idle in Transaction", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes' and state = 'idle in transaction'", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "Bekleyen Lock Sayısı", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_lock_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes' and granted = false", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "Vacuum/Analyze Devam Eden", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Aktivite Dağılımı (state bazlı, stacked)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 50, "stacking": {"mode": "normal"}}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(snapshot_ts, $__interval), state as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) and state is not null group by 1, state order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 11, "title": "Wait Events (wait_event_type)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 30}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(snapshot_ts, $__interval), wait_event_type as metric, count(*) as value from fact.pg_activity_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) and wait_event_type is not null group by 1, wait_event_type order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 20, "title": "Uzun Süreli Aktif Sorgu (>1 dk)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "süre_sn"}, "properties": [{"id": "unit", "value": "s"}]}]},
+      "targets": [{"rawSql": "select snapshot_ts, pid, datname, usename as \"user\", state, wait_event_type, wait_event, extract(epoch from (snapshot_ts - query_start))::int as \"süre_sn\", left(query, 200) as query from fact.pg_activity_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes' and state = 'active' and query_start is not null and (snapshot_ts - query_start) > interval '1 minute' order by query_start asc limit 50", "format": "table"}]
+    },
+    {
+      "id": 21, "title": "Blocking Chains (granted=false, anlık)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 23},
+      "description": "Kim kimi bekliyor — bekleyen lock'lar ve onları bloklayan PID'ler.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "bekleme_sn"}, "properties": [{"id": "unit", "value": "s"}]}]},
+      "targets": [{"rawSql": "select sample_ts, pid as \"bekleyen_pid\", locktype, mode, array_to_string(blocked_by_pids, ',') as \"blocked_by\", coalesce(extract(epoch from (sample_ts - waitstart))::int, 0) as \"bekleme_sn\" from fact.pg_lock_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_lock_snapshot where instance_pk = $instance) and granted = false order by waitstart asc limit 50", "format": "table"}]
+    },
+    {
+      "id": 22, "title": "Vacuum / Analyze Progress (anlık)", "type": "table",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 33},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "progress_pct"}, "properties": [{"id": "unit", "value": "percent"}]}]},
+      "targets": [{"rawSql": "select sample_ts, command, datname, relname, phase, blocks_total, blocks_done, tuples_total, tuples_done, progress_pct from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_progress_snapshot where instance_pk = $instance) order by command, relname", "format": "table"}]
+    }
+  ]
+}

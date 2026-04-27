@@ -1,0 +1,81 @@
+{
+  "uid": "pgstat-vacuum-bloat",
+  "title": "pgstat — Vacuum & Bloat",
+  "description": "Tablolardaki dead tuple oranlari, autovacuum/autoanalyze gecmisi, vacuum/analyze devam edenler.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-24h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "instance", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1, "multi": false, "includeAll": false, "label": "Instance"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Toplam Dead Tuple", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(n_dead_tup_estimate), 0) as value from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance)", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Toplam Live Tuple", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(n_live_tup_estimate), 0) as value from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance)", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "Dead Tuple Oranı (cluster avg)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "percent", "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 10}, {"color": "red", "value": 25}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select round(100.0 * sum(n_dead_tup_estimate)::numeric / nullif(sum(n_dead_tup_estimate + n_live_tup_estimate), 0), 1) as value from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance)", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "Vacuum Devam Eden", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes' and command in ('VACUUM','ANALYZE')", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Top 30 Tablo — Dead Tuple Oranı", "type": "table",
+      "gridPos": {"h": 14, "w": 24, "x": 0, "y": 4},
+      "description": "Dead tuple oranı yüksek tablolar — VACUUM adayları.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "dead_pct"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 10}, {"color": "red", "value": 25}]}}, {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}}]}
+        ]
+      },
+      "targets": [{"rawSql": "with current as (select schemaname, relname, n_live_tup_estimate, n_dead_tup_estimate from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance)), range_acc as (select schemaname, relname, sum(autovacuum_count_delta) as autovacs, sum(autoanalyze_count_delta) as autoanalyzes from fact.pg_table_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by schemaname, relname) select c.schemaname || '.' || c.relname as relation, c.n_live_tup_estimate as live_tup, c.n_dead_tup_estimate as dead_tup, round(100.0 * c.n_dead_tup_estimate::numeric / nullif(c.n_live_tup_estimate + c.n_dead_tup_estimate, 0), 1) as dead_pct, coalesce(r.autovacs, 0) as autovacs_in_range, coalesce(r.autoanalyzes, 0) as autoanalyzes_in_range from current c left join range_acc r on r.schemaname = c.schemaname and r.relname = c.relname where (c.n_live_tup_estimate + c.n_dead_tup_estimate) > 1000 order by dead_pct desc nulls last limit 30", "format": "table"}]
+    },
+    {
+      "id": 20, "title": "Hiç Autovacuum Görmemiş Tablolar", "type": "table",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 18},
+      "description": "Tablo > 1000 tup ama autovacuum_count = 0 — config sorunu olabilir.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{"rawSql": "with current as (select schemaname, relname, n_live_tup_estimate, n_dead_tup_estimate from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_table_stat_delta where instance_pk = $instance) and (n_live_tup_estimate + n_dead_tup_estimate) > 1000), recent_vac as (select schemaname, relname from fact.pg_table_stat_delta where instance_pk = $instance and sample_ts > now() - interval '7 days' group by schemaname, relname having sum(coalesce(autovacuum_count_delta, 0) + coalesce(vacuum_count_delta, 0)) > 0) select c.schemaname || '.' || c.relname as relation, c.n_live_tup_estimate as live_tup, c.n_dead_tup_estimate as dead_tup from current c left join recent_vac rv on rv.schemaname = c.schemaname and rv.relname = c.relname where rv.relname is null order by c.n_live_tup_estimate desc nulls last limit 30", "format": "table"}]
+    },
+    {
+      "id": 21, "title": "Devam Eden Vacuum/Analyze", "type": "table",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 18},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "progress_pct"}, "properties": [{"id": "unit", "value": "percent"}]}]},
+      "targets": [{"rawSql": "select sample_ts, command, datname, relname, phase, blocks_total, blocks_done, progress_pct from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_progress_snapshot where instance_pk = $instance) order by command, relname", "format": "table"}]
+    }
+  ]
+}

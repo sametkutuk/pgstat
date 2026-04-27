@@ -1,0 +1,92 @@
+{
+  "uid": "pgstat-alerts-slo",
+  "title": "pgstat — Alerts & SLO",
+  "description": "Alert hacmi, en gurultuluve alert kodlari, MTTA, MTTR, bildirim kanal basari orani.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-7d", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service_group", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select distinct service_group from control.instance_inventory where service_group is not null order by 1",
+        "refresh": 1, "multi": true, "includeAll": true, "label": "Service Group"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Şu An Açık Alert", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Range İçinde Tetiklenen", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where $__timeFilter(a.first_seen_at) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "MTTA (acknowledged'a kadar dakika)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "m", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select round(avg(extract(epoch from acknowledged_at - first_seen_at) / 60)::numeric, 1) as value from ops.alert where acknowledged_at is not null and $__timeFilter(first_seen_at)", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "MTTR (resolved'a kadar dakika)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "m", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select round(avg(extract(epoch from resolved_at - first_seen_at) / 60)::numeric, 1) as value from ops.alert where resolved_at is not null and $__timeFilter(first_seen_at)", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Alert Tetikleme Hızı (severity bazlı)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 80, "stacking": {"mode": "normal"}}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(first_seen_at, $__interval), severity as metric, count(*) as value from ops.alert where $__timeFilter(first_seen_at) group by 1, severity order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 11, "title": "En Gürültülü 10 Alert Kodu", "type": "barchart",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"orientation": "horizontal", "legend": {"showLegend": false}},
+      "targets": [{"rawSql": "select alert_code, count(*) as value from ops.alert where $__timeFilter(first_seen_at) group by alert_code order by value desc limit 10", "format": "table"}]
+    },
+    {
+      "id": 20, "title": "Açık Alert'ler (severity sıralı)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"links": [{"title": "Alert Detail", "url": "/alerts/${__data.fields.alert_id}"}]}},
+      "targets": [{"rawSql": "select a.alert_id, a.severity, a.alert_code, i.display_name as instance, a.first_seen_at, a.last_seen_at, a.occurrence_count, left(a.title, 100) as title from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by case a.severity when 'critical' then 1 when 'error' then 2 when 'warning' then 3 else 4 end, a.first_seen_at desc limit 200", "format": "table"}]
+    },
+    {
+      "id": 30, "title": "Bildirim Kanal Başarı Oranı", "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 23},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [
+        {"matcher": {"id": "byName", "options": "success_rate"}, "properties": [{"id": "unit", "value": "percent"}, {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "yellow", "value": 90}, {"color": "green", "value": 99}]}}]}
+      ]},
+      "targets": [{"rawSql": "select channel_type, count(*) as total, count(*) filter (where status = 'sent') as success, count(*) filter (where status != 'sent') as failed, round(100.0 * count(*) filter (where status = 'sent')::numeric / nullif(count(*), 0), 1) as success_rate from ops.notification_log where $__timeFilter(sent_at) group by channel_type order by total desc", "format": "table"}]
+    },
+    {
+      "id": 31, "title": "Son 50 Bildirim Kaydı", "type": "table",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 23},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{"rawSql": "select sent_at, channel_type, status, alert_id from ops.notification_log where $__timeFilter(sent_at) order by sent_at desc limit 50", "format": "table"}]
+    }
+  ]
+}

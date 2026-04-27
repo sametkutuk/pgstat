@@ -1,0 +1,85 @@
+{
+  "uid": "pgstat-replication-wal",
+  "title": "pgstat — Replication & WAL",
+  "description": "Replikasyon lag (bytes/seconds), replication slots durumu, WAL uretimi, archiver lag.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "instance", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1, "multi": false, "includeAll": false, "label": "Instance"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Standby Sayısı", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_replication_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes'", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Max Replay Lag (bytes)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 100000000}, {"color": "red", "value": 1000000000}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(max(replay_lag_bytes), 0) as value from fact.pg_replication_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes'", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "Aktif Replication Slot", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(*) filter (where active) as value from fact.pg_replication_slot_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $instance)", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "WAL Üretimi (son 1h)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Replikasyon Lag (bayt) — per standby", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 100000000}, {"color": "red", "value": 1000000000}]}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(snapshot_ts, $__interval), coalesce(application_name, client_addr::text, 'standby') as metric, max(replay_lag_bytes) as value from fact.pg_replication_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) group by 1, coalesce(application_name, client_addr::text, 'standby') order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 11, "title": "WAL Üretimi (bayt/sn)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), sum(period_wal_size_byte)::float / nullif(extract(epoch from $__interval::interval), 0) as \"WAL B/s\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 20, "title": "Replication Slot Durumu (anlık)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [
+        {"matcher": {"id": "byName", "options": "lag_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
+        {"matcher": {"id": "byName", "options": "safe_wal_size"}, "properties": [{"id": "unit", "value": "bytes"}]}
+      ]},
+      "targets": [{"rawSql": "select slot_name, slot_type, plugin, active, wal_status, slot_lag_bytes as lag_bytes, safe_wal_size, total_bytes, spill_bytes from fact.pg_replication_slot_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $instance) order by slot_lag_bytes desc nulls last", "format": "table"}]
+    },
+    {
+      "id": 21, "title": "Archiver Durumu (anlık)", "type": "table",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 23},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{"rawSql": "select sample_ts, archived_count, last_archived_wal, last_archived_time, failed_count, last_failed_wal, last_failed_time from fact.pg_archiver_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_archiver_snapshot where instance_pk = $instance) limit 1", "format": "table"}]
+    }
+  ]
+}

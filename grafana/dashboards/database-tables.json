@@ -1,0 +1,86 @@
+{
+  "uid": "pgstat-database-tables",
+  "title": "pgstat — Database & Tables",
+  "description": "Per-database TPS, tup_returned/fetched, conflict; tablo bazli buyume ve top sorgu istatistikleri.",
+  "tags": ["pgstat"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-6h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "instance", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1, "multi": false, "includeAll": false, "label": "Instance"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Toplam Database", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select count(distinct dbid) as value from fact.pg_database_delta where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
+    },
+    {
+      "id": 2, "title": "Toplam Conflict (range)", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 100}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(conflicts_delta), 0) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+    },
+    {
+      "id": 3, "title": "Toplam Deadlock", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(deadlocks_delta), 0) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+    },
+    {
+      "id": 4, "title": "Toplam Temp Files", "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{"rawSql": "select coalesce(sum(temp_files_delta), 0) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts)", "format": "table"}]
+    },
+    {
+      "id": 10, "title": "Per-Database TPS", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 5, "stacking": {"mode": "normal"}}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), datname as metric, sum(xact_commit_delta + xact_rollback_delta)::float / nullif(extract(epoch from $__interval::interval), 0) as value from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1, datname order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 11, "title": "Tup Returned vs Fetched (per DB toplam)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), sum(tup_returned_delta)::float / nullif(extract(epoch from $__interval::interval), 0) as \"tup_returned\", sum(tup_fetched_delta)::float / nullif(extract(epoch from $__interval::interval), 0) as \"tup_fetched\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 20, "title": "Per-Database Aktivite (range içi toplam)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"overrides": [
+        {"matcher": {"id": "byName", "options": "disk_read"}, "properties": [{"id": "unit", "value": "bytes"}]},
+        {"matcher": {"id": "byName", "options": "temp_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
+        {"matcher": {"id": "byName", "options": "cache_hit_pct"}, "properties": [{"id": "unit", "value": "percent"}]}
+      ]},
+      "targets": [{"rawSql": "select datname as database, sum(xact_commit_delta) as commits, sum(xact_rollback_delta) as rollbacks, sum(tup_inserted_delta) as inserts, sum(tup_updated_delta) as updates, sum(tup_deleted_delta) as deletes, sum(tup_returned_delta) as returned, sum(blks_read_delta) * 8192 as disk_read, round(100.0 * sum(blks_hit_delta)::numeric / nullif(sum(blks_hit_delta + blks_read_delta), 0), 1) as cache_hit_pct, sum(temp_bytes_delta) as temp_bytes, sum(deadlocks_delta) as deadlocks, sum(conflicts_delta) as conflicts from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by datname order by commits desc nulls last", "format": "table"}]
+    },
+    {
+      "id": 30, "title": "En Çok Yazma Yapan 30 Tablo", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 23},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "targets": [{"rawSql": "select schemaname || '.' || relname as relation, sum(n_tup_ins_delta) as inserts, sum(n_tup_upd_delta) as updates, sum(n_tup_del_delta) as deletes, sum(n_tup_hot_upd_delta) as hot_updates, sum(seq_scan_delta) as seq_scans, sum(idx_scan_delta) as idx_scans from fact.pg_table_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by schemaname, relname having sum(n_tup_ins_delta + n_tup_upd_delta + n_tup_del_delta) > 0 order by sum(n_tup_ins_delta + n_tup_upd_delta + n_tup_del_delta) desc nulls last limit 30", "format": "table"}]
+    }
+  ]
+}

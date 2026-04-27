@@ -1,0 +1,70 @@
+{
+  "uid": "pgstat-capacity-trends",
+  "title": "pgstat — Capacity & Trends",
+  "description": "Uzun zaman araliginda kapasite planlamasi: connection trend, WAL daily growth, query volume, slow query trend.",
+  "tags": ["pgstat", "capacity"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {"from": "now-30d", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "instance", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
+        "refresh": 1, "multi": true, "includeAll": true, "label": "Instance"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "title": "Bağlantı Trendi (P95) — son 30 gün", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+      "description": "Her instance için P95 bağlantı sayısı, günlük bucket. Trend yukarı doğruysa kapasite artırımı düşün.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(d.sample_ts, '1d'), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 2, "title": "Günlük WAL Üretimi", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 80}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(w.sample_ts, '1d'), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 10, "title": "Günlük Sorgu Hacmi (calls)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 9},
+      "description": "agg.pgss_daily kullanır — uzun zaman aralığı için optimize.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "targets": [{"rawSql": "select bucket_date as time, i.display_name as metric, sum(a.calls_total) as value from agg.pgss_daily a join control.instance_inventory i on i.instance_pk = a.instance_pk where bucket_date >= now() - interval '30 days' and bucket_date <= now() and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 11, "title": "Günlük Toplam Exec Süresi", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 9},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "ms", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
+      "targets": [{"rawSql": "select bucket_date as time, i.display_name as metric, sum(a.total_exec_time_ms_total) as value from agg.pgss_daily a join control.instance_inventory i on i.instance_pk = a.instance_pk where bucket_date >= now() - interval '30 days' and bucket_date <= now() and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 20, "title": "Database Boyut Buyumesi (live tup, son 30 gün)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 18},
+      "description": "Tablo bazlı live tuple toplamı — günlük bucket. Hızla büyüyen DB'leri belirler.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "targets": [{"rawSql": "with daily as (select date_trunc('day', t.sample_ts) as day, dbr.datname, sum(t.n_live_tup_estimate) as live from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where t.instance_pk in ($instance) and $__timeFilter(t.sample_ts) group by 1, dbr.datname) select day as time, datname as metric, max(live) as value from daily group by 1, datname order by 1", "format": "time_series"}]
+    },
+    {
+      "id": 30, "title": "30 Gün Lineer Tahmin (connection)", "type": "stat",
+      "gridPos": {"h": 5, "w": 24, "x": 0, "y": 27},
+      "description": "Son 30 günden lineer regresyon ile 30 gün sonraki P95 tahmini.",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0}},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "textMode": "value_and_name"},
+      "targets": [{"rawSql": "with daily_p95 as (select i.display_name, date_trunc('day', d.sample_ts)::date as day, percentile_cont(0.95) within group (order by d.numbackends) as p95 from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts > now() - interval '30 days' and (d.instance_pk in ($instance) or 'All' in ($instance)) group by i.display_name, day) select display_name as metric, regr_intercept(p95, extract(epoch from day)) + regr_slope(p95, extract(epoch from day)) * extract(epoch from now() + interval '30 days') as value from daily_p95 group by display_name", "format": "table"}]
+    }
+  ]
+}
