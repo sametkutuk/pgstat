@@ -251,18 +251,26 @@ public class JobOrchestrator {
             stateRepo.updateAfterFailure(instance.instancePk(), truncate(e.getMessage()));
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
 
-            // Secret/connection hatasi → instance'i degraded'a cek, bootstrap retry baslat.
-            // Bu sayede steady-state queue artik bu instance'i cekmez (V035 sonrasi
-            // findDueInstances sadece 'ready' aliyor) ve JOB_PARTIAL_FAILURE her cycle
-            // tekrar tetiklenmez. SECRET_REF_ERROR alert'i bootstrap'tan zaten gelir.
-            String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
-            if (em.contains("secret_ref") || em.contains("authentication") || em.contains("password")) {
-                try {
-                    inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
-                    log.info("Instance degraded'a cekildi (secret/auth hatasi): {}", instance.instanceId());
-                } catch (Exception ignore) {}
-            }
+            handleSecretOrAuthError(instance, e);
             return new InstanceResult(instance.instancePk(), false, 0, e.getMessage());
+        }
+    }
+
+    /**
+     * Secret/auth hatasi → instance'i degraded'a cek, bootstrap retry baslat.
+     * Steady-state queue artik bu instance'i cekmez (V035 sonrasi findDueInstances
+     * sadece 'ready' aliyor) ve JOB_PARTIAL_FAILURE her cycle tekrar tetiklenmez.
+     * SECRET_REF_ERROR alert'i bootstrap'tan zaten gelir.
+     */
+    private void handleSecretOrAuthError(InstanceInfo instance, Exception e) {
+        String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+        if (em.contains("secret_ref") || em.contains("authentication") || em.contains("password")
+                || em.contains("connect")) {
+            try {
+                inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
+                log.info("Instance degraded'a cekildi (secret/auth/connect hatasi): {}",
+                    instance.instanceId());
+            } catch (Exception ignore) {}
         }
     }
 
@@ -331,6 +339,7 @@ public class JobOrchestrator {
             log.error("Statements toplama hatasi: {} — {}", instance.instanceId(), e.getMessage());
             stateRepo.updateAfterFailure(instance.instancePk(), truncate(e.getMessage()));
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
+            handleSecretOrAuthError(instance, e);
             return new InstanceResult(instance.instancePk(), false, 0, e.getMessage());
         }
     }
@@ -382,6 +391,17 @@ public class JobOrchestrator {
                 target.instanceId(), target.datname(), e.getMessage());
             stateRepo.updateDatabaseStateAfterFailure(target.instancePk(), target.dbid());
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
+
+            // Secret/auth hatasi → instance'i degraded'a cek
+            String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            if (em.contains("secret_ref") || em.contains("authentication") || em.contains("password")
+                    || em.contains("connect")) {
+                try {
+                    inventoryRepo.scheduleBootstrapRetry(target.instancePk());
+                    log.info("Instance degraded'a cekildi (secret/auth/connect, db_objects job): pk={}",
+                        target.instancePk());
+                } catch (Exception ignore) {}
+            }
             return new InstanceResult(target.instancePk(), false, 0, e.getMessage());
         }
     }

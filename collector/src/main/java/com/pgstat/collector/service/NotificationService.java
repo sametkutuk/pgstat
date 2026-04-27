@@ -51,6 +51,37 @@ public class NotificationService {
     public void notifyIfNeeded(long alertId, String alertKey, String severity,
                                 Long instancePk, String title, String message) {
         try {
+            // Spam koruma: ayni alert_id tekrar tetiklendiginde bildirim gonderme.
+            // Sadece YENI alert (notification_log'da kayit yok) veya severity
+            // yukseldi (eski yuksek severity zaten gonderildi) ise bildirim git.
+            try {
+                Long previousNotifications = jdbc.queryForObject(
+                    "select count(*) from ops.notification_log where alert_id = ? and status = 'sent'",
+                    Long.class, alertId);
+                if (previousNotifications != null && previousNotifications > 0) {
+                    // Bu alert icin daha onceden bildirim gonderildi.
+                    // Severity yukseldiyse tekrar gonder, yoksa atla.
+                    Long higherSeverityNotifications = jdbc.queryForObject(
+                        "select count(*) from ops.notification_log nl " +
+                        "join ops.alert a on a.alert_id = nl.alert_id " +
+                        "where nl.alert_id = ? and nl.status = 'sent' " +
+                        "  and (case a.severity when 'info' then 0 when 'warning' then 1 " +
+                        "                       when 'error' then 2 when 'critical' then 3 " +
+                        "                       when 'emergency' then 4 else 0 end) >= " +
+                        "      (case ? when 'info' then 0 when 'warning' then 1 " +
+                        "              when 'error' then 2 when 'critical' then 3 " +
+                        "              when 'emergency' then 4 else 0 end)",
+                        Long.class, alertId, severity);
+                    if (higherSeverityNotifications != null && higherSeverityNotifications > 0) {
+                        log.debug("Spam koruma: alert_id={} ayni/dusuk severity zaten gonderilmis, atlandi",
+                            alertId);
+                        return;
+                    }
+                }
+            } catch (Exception ignore) {
+                // Log query hatasi olursa devam et, yine bildirim gonder
+            }
+
             // Snooze kontrolü
             if (isAlertSnoozed(alertKey, instancePk)) {
                 log.debug("Alert snoozed, bildirim atlanıyor: {}", alertKey);
