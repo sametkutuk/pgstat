@@ -15,6 +15,13 @@
         "datasource": {"type": "postgres", "uid": "pgstat"},
         "query": "select distinct service_group from control.instance_inventory where service_group is not null order by 1",
         "refresh": 1, "multi": true, "includeAll": true, "label": "Service Group"
+      },
+      {
+        "name": "instance_filter", "type": "query",
+        "datasource": {"type": "postgres", "uid": "pgstat"},
+        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active and (service_group in ($service_group) or 'All' in ($service_group) or service_group is null) order by display_name",
+        "refresh": 2, "multi": true, "includeAll": true, "label": "Instance (opsiyonel)",
+        "current": {"selected": true, "text": ["All"], "value": ["$__all"]}
       }
     ]
   },
@@ -25,7 +32,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and (a.instance_pk in ($instance_filter) or '$__all' in ($instance_filter) or a.instance_pk is null)", "format": "table"}]
     },
     {
       "id": 2, "title": "Range İçinde Tetiklenen", "type": "stat",
@@ -33,7 +40,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where $__timeFilter(a.first_seen_at) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
+      "targets": [{"rawSql": "select count(*) as value from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where $__timeFilter(a.first_seen_at) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and (a.instance_pk in ($instance_filter) or '$__all' in ($instance_filter) or a.instance_pk is null)", "format": "table"}]
     },
     {
       "id": 3, "title": "MTTA (acknowledged'a kadar dakika)", "type": "stat",
@@ -71,7 +78,7 @@
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"links": [{"title": "Alert Detail", "url": "/alerts/${__data.fields.alert_id}"}]}},
-      "targets": [{"rawSql": "select a.alert_id, a.severity, a.alert_code, i.display_name as instance, a.first_seen_at, a.last_seen_at, a.occurrence_count, left(a.title, 100) as title from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by case a.severity when 'critical' then 1 when 'error' then 2 when 'warning' then 3 else 4 end, a.first_seen_at desc limit 200", "format": "table"}]
+      "targets": [{"rawSql": "select a.alert_id, a.severity, a.alert_code, i.display_name as instance, a.first_seen_at, a.last_seen_at, a.occurrence_count, left(a.title, 100) as title from ops.alert a left join control.instance_inventory i on i.instance_pk = a.instance_pk where a.status = 'open' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and (a.instance_pk in ($instance_filter) or '$__all' in ($instance_filter) or a.instance_pk is null) order by case a.severity when 'critical' then 1 when 'error' then 2 when 'warning' then 3 else 4 end, a.first_seen_at desc limit 200", "format": "table"}]
     },
     {
       "id": 30, "title": "Bildirim Kanal Başarı Oranı", "type": "table",
