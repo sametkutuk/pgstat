@@ -187,7 +187,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(t.sample_ts, $__interval) as time, dbr.datname as metric, max(t.n_live_tup_estimate) as value from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where (t.instance_pk in ($instance) or 'All' in ($instance)) and $__timeFilter(t.sample_ts) group by 1, dbr.datname order by 1",
+          "rawSql": "select $__timeGroupAlias(t.sample_ts, $__interval), dbr.datname as metric, max(t.n_live_tup_estimate) as value from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where (t.instance_pk in ($instance) or 'All' in ($instance)) and $__timeFilter(t.sample_ts) group by 1, dbr.datname order by 1",
           "format": "time_series"
         }
       ]
