@@ -697,12 +697,42 @@ public class AlertRuleEvaluator {
                     changePct.doubleValue(), changeThresholdPct.doubleValue());
                 Map<String, Object> ctx = baseContext(rule, instancePk, severity);
                 ctx.put("value", current);
+                ctx.put("current_value", current);
                 ctx.put("previous_value", prev);
                 ctx.put("change_pct", changePct);
                 ctx.put("threshold", changeThresholdPct);
-                String[] rendered = buildAlertText(rule, ruleName, message, ctx);
-                alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                ctx.put("window", windowMinutes);
+
+                // Statement/table/index metrikleri icin top contributor query bilgisi ekle
+                String detailsJson = null;
+                if (isGranularMetricType(metricType)) {
+                    List<Map<String, Object>> contributors = findRecordsTopContributors(
+                        instancePk, metricType, metricName, windowMinutes, true);
+                    if (!contributors.isEmpty()) {
+                        populateRecordCtx(ctx, contributors.get(0), metricType);
+                        detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
+                            changePct.toPlainString() + "% artis", "spike");
+                    }
+                }
+
+                String code = isGranularMetricType(metricType)
+                    ? templateCodeForType(metricType, "spike") : null;
+                String[] rendered;
+                if (code != null) {
+                    rendered = renderWithCode(rule, ctx, ruleName, message, code);
+                } else {
+                    rendered = buildAlertText(rule, ruleName, message, ctx);
+                }
+
+                if (detailsJson != null) {
+                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+                    jdbc.update("update ops.alert set severity = ?, rule_id = ? where alert_key = ?",
+                        severity, ruleId, alertKey);
+                } else {
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -738,6 +768,56 @@ public class AlertRuleEvaluator {
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (spiking.isEmpty()) {
+                // Per-record spike bulunamadi ama instance toplami spike yapmis olabilir.
+                // Instance-level fallback: toplam current vs prev karsilastir, top query'leri ekle.
+                BigDecimal instCurrent = queryInstanceTotal(instancePk, metricType, metricName, "sum", windowMinutes + " minutes");
+                BigDecimal instPrev    = queryInstanceTotalPrev(instancePk, metricType, metricName, "sum", windowMinutes);
+                if (instCurrent != null && instPrev != null && instPrev.compareTo(BigDecimal.ZERO) > 0) {
+                    BigDecimal instChange = computeChangePct(instCurrent, instPrev);
+                    if (instChange.compareTo(thresholdPct) > 0) {
+                        // Instance-level spike var ama tek query degil, dagilmis artis
+                        String severity = instChange.compareTo(thresholdPct.multiply(new BigDecimal("3"))) > 0
+                            ? "critical" : "warning";
+
+                        // Top contributor query'leri bul
+                        List<Map<String, Object>> contributors = findRecordsTopContributors(
+                            instancePk, metricType, metricName, windowMinutes, true);
+
+                        Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                        ctx.put("value", instCurrent);
+                        ctx.put("current_value", instCurrent);
+                        ctx.put("previous_value", instPrev);
+                        ctx.put("change_pct", instChange);
+                        ctx.put("threshold", thresholdPct);
+                        ctx.put("window", windowMinutes);
+
+                        // Top contributor varsa context'e ekle
+                        if (!contributors.isEmpty()) {
+                            Map<String, Object> topC = contributors.get(0);
+                            populateRecordCtx(ctx, topC, metricType);
+                            ctx.put("note", "Tek sorgu spike etmedi, toplam artis birden fazla sorgudan geldi");
+                        }
+
+                        String fallbackMsg = String.format(
+                            "%s: instance toplam son %d dk = %s, onceki %d dk = %s — %%.0f artis (esik: %%.0f%%). " +
+                            "Tek sorgu spike etmedi, artis birden fazla sorgudan geldi.",
+                            metricName, windowMinutes, instCurrent, windowMinutes, instPrev)
+                            .formatted(instChange.doubleValue(), thresholdPct.doubleValue());
+
+                        String detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
+                            thresholdPct.toPlainString() + "%", "spike_distributed");
+
+                        String code = templateCodeForType(metricType, "spike");
+                        String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, code);
+
+                        alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                            instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+                        jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                        updateLastEval(ruleId, instancePk, instChange, severity);
+                        continue;
+                    }
+                }
+
                 if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 continue;
@@ -1000,6 +1080,24 @@ public class AlertRuleEvaluator {
             log.warn("findTopSpikingStatements hatasi instance={}: {}", instancePk, e.getMessage());
             return java.util.Collections.emptyList();
         }
+    }
+
+    // =========================================================================
+    // Instance-level toplam sorgu (granular spike fallback icin)
+    // =========================================================================
+
+    /** Tek instance icin mevcut penceredeki toplam metrik degeri */
+    private BigDecimal queryInstanceTotal(long instancePk, String metricType,
+                                           String metricName, String aggFn, String interval) {
+        List<Map<String, Object>> rows = queryMetric(metricType, metricName, aggFn, interval);
+        return findValueForInstance(rows, instancePk);
+    }
+
+    /** Tek instance icin onceki penceredeki toplam metrik degeri (spike: 2*window..window) */
+    private BigDecimal queryInstanceTotalPrev(long instancePk, String metricType,
+                                               String metricName, String aggFn, int windowMinutes) {
+        List<Map<String, Object>> rows = queryMetricAtOffset(metricType, metricName, aggFn, windowMinutes, 0);
+        return findValueForInstance(rows, instancePk);
     }
 
     // =========================================================================
