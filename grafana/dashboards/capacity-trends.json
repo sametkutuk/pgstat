@@ -34,7 +34,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Bağlantı Trendi (P95) — son 30 gün",
+      "title": "Bağlantı Trendi (P95)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
@@ -97,7 +97,7 @@
     },
     {
       "id": 10,
-      "title": "Günlük Sorgu Hacmi (calls)",
+      "title": "Sorgu Hacmi (calls)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
@@ -105,7 +105,7 @@
         "x": 0,
         "y": 9
       },
-      "description": "agg.pgss_daily kullanır — uzun zaman aralığı için optimize.",
+      "description": "Saatlik sorgu çağrı sayısı toplamı. Kısa aralıkta saatlik, uzun aralıkta günlük bucket.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -122,14 +122,14 @@
       },
       "targets": [
         {
-          "rawSql": "select bucket_start::timestamptz as time, i.display_name as metric, sum(a.calls_sum) as value from agg.pgss_daily a join control.instance_inventory i on i.instance_pk = a.instance_pk where bucket_start >= (now() - interval '30 days')::date and bucket_start <= now()::date and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.calls_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
     },
     {
       "id": 11,
-      "title": "Günlük Toplam Exec Süresi",
+      "title": "Toplam Exec Süresi",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
@@ -137,6 +137,7 @@
         "x": 12,
         "y": 9
       },
+      "description": "Saatlik toplam sorgu çalışma süresi. Artış trendi yavaşlayan sorguları veya artan yükü gösterir.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -153,14 +154,14 @@
       },
       "targets": [
         {
-          "rawSql": "select bucket_start::timestamptz as time, i.display_name as metric, sum(a.exec_time_ms_sum) as value from agg.pgss_daily a join control.instance_inventory i on i.instance_pk = a.instance_pk where bucket_start >= (now() - interval '30 days')::date and bucket_start <= now()::date and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.exec_time_ms_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
     },
     {
       "id": 20,
-      "title": "Database Boyut Buyumesi (live tup, son 30 gün)",
+      "title": "Database Boyut Büyümesi (live tup)",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
