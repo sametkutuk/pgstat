@@ -61,6 +61,14 @@ public class BootstrapHandler {
         String state = instance.bootstrapState();
         log.debug("Bootstrap adimi: {} — state={}", instance.instanceId(), state);
 
+        // 'degraded' instance retry zamani geldi → pending'den basla
+        // (state guncel value pending degil ama queue bunu retry icin getirdi)
+        if ("degraded".equals(state)) {
+            log.info("Otomatik retry: {} — pending'e cekiliyor", instance.instanceId());
+            inventoryRepo.updateBootstrapState(instance.instancePk(), "pending");
+            return;
+        }
+
         try {
             switch (state) {
                 case "pending" -> handlePending(instance);
@@ -78,7 +86,7 @@ public class BootstrapHandler {
             ctx.put("secret_ref", e.getMessage());
             raiseAlert(instance, AlertCode.SECRET_REF_ERROR, ctx,
                     "Secret cozumleme hatasi: " + instance.instanceId(), msg);
-            inventoryRepo.updateBootstrapState(instance.instancePk(), "degraded");
+            inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             stateRepo.updateLastError(instance.instancePk(), msg);
 
         } catch (Exception e) {
@@ -90,7 +98,7 @@ public class BootstrapHandler {
             ctx.put("error_message", e.getMessage());
             raiseAlert(instance, AlertCode.BOOTSTRAP_FAILED, ctx,
                     "Bootstrap basarisiz: " + instance.instanceId(), msg);
-            inventoryRepo.updateBootstrapState(instance.instancePk(), "degraded");
+            inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             stateRepo.updateLastError(instance.instancePk(), msg);
         }
     }
@@ -121,7 +129,7 @@ public class BootstrapHandler {
             raiseAlert(instance, AlertCode.EXTENSION_MISSING, ctx,
                     "Extension eksik: " + instance.instanceId(),
                     "pg_stat_statements extension'i bulunamadi");
-            inventoryRepo.updateBootstrapState(instance.instancePk(), "degraded");
+            inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             return;
         }
 

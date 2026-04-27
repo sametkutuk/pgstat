@@ -176,12 +176,19 @@ router.patch('/:id/toggle', async (req, res, next) => {
 router.patch('/:id/retry', async (req, res, next) => {
   try {
     const { id } = req.params;
-    // bootstrap_state'i pending'e al, last_error'ı temizle
-    await pool.query(`
-      update control.instance_inventory
-      set bootstrap_state = 'pending', updated_at = now()
-      where instance_pk = $1
-    `, [id]);
+    // bootstrap_state'i pending'e al, retry sayacini sifirla, last_error'ı temizle
+    // V035 sonrasi bootstrap_retry_count + next_bootstrap_retry_at kolonlari var.
+    // Eski DB'lerde yoksa silently atla.
+    const colsRes = await pool.query(
+      `select column_name from information_schema.columns
+       where table_schema='control' and table_name='instance_inventory'
+         and column_name in ('bootstrap_retry_count','next_bootstrap_retry_at')`
+    );
+    const hasRetryCols = colsRes.rows.length === 2;
+    const setSql = hasRetryCols
+      ? `bootstrap_state = 'pending', bootstrap_retry_count = 0, next_bootstrap_retry_at = null, updated_at = now()`
+      : `bootstrap_state = 'pending', updated_at = now()`;
+    await pool.query(`update control.instance_inventory set ${setSql} where instance_pk = $1`, [id]);
     await pool.query(`
       update control.instance_state
       set last_error = null, last_error_at = null,

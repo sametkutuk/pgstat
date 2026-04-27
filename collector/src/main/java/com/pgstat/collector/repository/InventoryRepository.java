@@ -46,7 +46,13 @@ public class InventoryRepository {
             from control.instance_inventory i
             join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
             where i.is_active
-              and i.bootstrap_state in ('pending', 'discovering', 'baselining', 'enriching')
+              and (
+                i.bootstrap_state in ('pending', 'discovering', 'baselining', 'enriching')
+                or (
+                  i.bootstrap_state = 'degraded'
+                  and (i.next_bootstrap_retry_at is null or i.next_bootstrap_retry_at <= now())
+                )
+              )
             order by i.instance_pk
             for update of i skip locked
             limit ?
@@ -184,13 +190,61 @@ public class InventoryRepository {
 
     /** Bootstrap state'ini gunceller (pending → discovering → ... → ready). */
     public void updateBootstrapState(long instancePk, String newState) {
+        // Eger ready/baselining/enriching gibi pozitif state'e geciyorsak retry sayacini sifirla
+        // (bootstrap basarili devam ediyor demektir)
+        if (!"degraded".equals(newState)) {
+            jdbc.update("""
+                update control.instance_inventory
+                set bootstrap_state = ?,
+                    bootstrap_retry_count = 0,
+                    next_bootstrap_retry_at = null
+                where instance_pk = ?
+                """,
+                newState, instancePk);
+        } else {
+            jdbc.update("update control.instance_inventory set bootstrap_state = ? where instance_pk = ?",
+                newState, instancePk);
+        }
+    }
+
+    /**
+     * Bootstrap basarisiz olunca exponential backoff ile yeniden deneme zamani ayarlar.
+     *   1. deneme: hemen (next_retry_at = now)
+     *   2. deneme: +1 dk
+     *   3. deneme: +5 dk
+     *   4. deneme: +15 dk
+     *   5+ deneme: +1 saat (cap)
+     * Manuel reactivate (UI'dan) bu sayaci sifirlar (updateBootstrapState ile pending'e cekildiginde).
+     */
+    public void scheduleBootstrapRetry(long instancePk) {
         jdbc.update("""
             update control.instance_inventory
-            set bootstrap_state = ?
+            set bootstrap_state = 'degraded',
+                bootstrap_retry_count = bootstrap_retry_count + 1,
+                next_bootstrap_retry_at = now() + (
+                  case
+                    when bootstrap_retry_count = 0 then interval '1 minute'
+                    when bootstrap_retry_count = 1 then interval '5 minutes'
+                    when bootstrap_retry_count = 2 then interval '15 minutes'
+                    else interval '1 hour'
+                  end
+                )
             where instance_pk = ?
-            """,
-            newState, instancePk
-        );
+            """, instancePk);
+    }
+
+    /**
+     * Manuel reactivate: retry sayacini sifirla, pending'e cek.
+     * UI'daki "Yeniden Dene" butonu bunu cagirir.
+     */
+    public void resetBootstrap(long instancePk) {
+        jdbc.update("""
+            update control.instance_inventory
+            set bootstrap_state = 'pending',
+                bootstrap_retry_count = 0,
+                next_bootstrap_retry_at = null
+            where instance_pk = ?
+            """, instancePk);
     }
 
     // -------------------------------------------------------------------------
