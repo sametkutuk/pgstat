@@ -74,7 +74,7 @@
         "x": 12,
         "y": 0
       },
-      "description": "WAL üretim miktarı. Yüksek WAL = yoğun yazma. Archiver geride kalırsa disk dolabilir.",
+      "description": "WAL üretim hızı (byte/interval). Yüksek WAL = yoğun yazma.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -83,9 +83,9 @@
         "defaults": {
           "unit": "bytes",
           "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 80
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15
           }
         }
       },
@@ -97,6 +97,101 @@
       ]
     },
     {
+      "id": 3,
+      "title": "Günlük WAL Tablosu",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "description": "Günlük WAL üretimi, WAL dizin boyutu, dosya sayısı ve archiver durumu.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "daily_wal"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max_wal_dir"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max_files"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "archived"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "select date_trunc('day', w.sample_ts)::date as day, i.display_name as instance, sum(w.period_wal_size_byte) as daily_wal, max(w.wal_directory_size_byte) as max_wal_dir, max(w.wal_file_count) as max_files, max(a.archived_count) as archived, max(a.failed_count) as failed from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk left join fact.pg_archiver_snapshot a on a.instance_pk = w.instance_pk and date_trunc('day', a.sample_ts) = date_trunc('day', w.sample_ts) where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1 desc, i.display_name",
+          "format": "table"
+        }
+      ]
+    },
+    {
       "id": 10,
       "title": "Sorgu Hacmi (calls)",
       "type": "timeseries",
@@ -104,7 +199,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 9
+        "y": 18
       },
       "description": "Toplam sorgu çağrı sayısı. pgss_hourly rollup verisinden.",
       "datasource": {
@@ -136,7 +231,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 9
+        "y": 18
       },
       "description": "Toplam sorgu çalışma süresi. Artış = yavaşlayan sorgular veya artan yük.",
       "datasource": {
@@ -168,7 +263,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 27
       },
       "description": "Tablo bazlı live tuple toplamı. Hızla büyüyen DB'leri belirler.",
       "datasource": {
@@ -200,7 +295,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 36
       },
       "description": "Saniyedeki ortalama transaction sayısı (commit + rollback). Kapasite planlaması için kritik metrik.",
       "datasource": {
@@ -232,7 +327,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 45
       },
       "description": "Günlük ortalama TPS, commit/rollback dağılımı.",
       "datasource": {
@@ -311,7 +406,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 55
       },
       "description": "Son 30 günden lineer regresyon ile 30 gün sonraki P95 tahmini.",
       "datasource": {
