@@ -79,7 +79,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "decbytes",
           "custom": {
             "drawStyle": "line",
             "lineWidth": 2,
@@ -119,7 +119,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "bytes"
+                "value": "decbytes"
               },
               {
                 "id": "custom.align",
@@ -135,7 +135,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "bytes"
+                "value": "decbytes"
               },
               {
                 "id": "custom.align",
@@ -314,6 +314,14 @@
               {
                 "id": "custom.width",
                 "value": 100
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "unit",
+                "value": "short"
               }
             ]
           },
@@ -396,24 +404,60 @@
     },
     {
       "id": 40,
-      "title": "Kapasite Özeti",
+      "title": "Bugünkü Kapasite Özeti",
       "type": "stat",
       "gridPos": {
-        "h": 6,
+        "h": 5,
         "w": 24,
         "x": 0,
         "y": 53
       },
-      "description": "Mevcut durum: ortalama TPS, toplam bağlantı, günlük WAL üretimi.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
           "decimals": 0
-        }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ort. TPS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max Bağlantı"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "WAL Üretimi"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
@@ -428,17 +472,17 @@
       "targets": [
         {
           "refId": "A",
-          "rawSql": "select 'Ort. TPS (bugün)' as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 1)) as value from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
+          "rawSql": "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 1)) as \"Ort. TPS\" from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
           "format": "table"
         },
         {
           "refId": "B",
-          "rawSql": "select 'Max Bağlantı (bugün)' as metric, max(d.numbackends) as value from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
+          "rawSql": "select max(d.numbackends) as \"Max Bağlantı\" from fact.pg_database_delta d where d.sample_ts >= current_date and (d.instance_pk in ($instance) or 'All' in ($instance))",
           "format": "table"
         },
         {
           "refId": "C",
-          "rawSql": "select 'WAL Bugün' as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w where w.sample_ts >= current_date and (w.instance_pk in ($instance) or 'All' in ($instance))",
+          "rawSql": "select sum(w.period_wal_size_byte) as \"WAL Üretimi\" from fact.pg_wal_snapshot w where w.sample_ts >= current_date and (w.instance_pk in ($instance) or 'All' in ($instance))",
           "format": "table"
         }
       ]
