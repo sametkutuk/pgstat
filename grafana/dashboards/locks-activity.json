@@ -41,7 +41,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 1}, {"color": "red", "value": 5}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from fact.pg_lock_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes' and granted = false", "format": "table"}]
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_lock_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes' and granted = false", "format": "table"}]
     },
     {
       "id": 4, "title": "Vacuum/Analyze Devam Eden", "type": "stat",
@@ -49,7 +49,7 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts > now() - interval '5 minutes'", "format": "table"}]
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_progress_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes'", "format": "table"}]
     },
     {
       "id": 10, "title": "Aktivite Dağılımı (state bazlı, stacked)", "type": "timeseries",
@@ -78,14 +78,14 @@
       "description": "Kim kimi bekliyor — bekleyen lock'lar ve onları bloklayan PID'ler.",
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "bekleme_sn"}, "properties": [{"id": "unit", "value": "s"}]}]},
-      "targets": [{"rawSql": "select sample_ts, pid as \"bekleyen_pid\", locktype, mode, array_to_string(blocked_by_pids, ',') as \"blocked_by\", coalesce(extract(epoch from (sample_ts - waitstart))::int, 0) as \"bekleme_sn\" from fact.pg_lock_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_lock_snapshot where instance_pk = $instance) and granted = false order by waitstart asc limit 50", "format": "table"}]
+      "targets": [{"rawSql": "select snapshot_ts, pid as \"bekleyen_pid\", locktype, mode, array_to_string(blocked_by_pids, ',') as \"blocked_by\", coalesce(extract(epoch from (snapshot_ts - waitstart))::int, 0) as \"bekleme_sn\" from fact.pg_lock_snapshot where instance_pk = $instance and snapshot_ts = (select max(sample_ts) from fact.pg_lock_snapshot where instance_pk = $instance) and granted = false order by waitstart asc limit 50", "format": "table"}]
     },
     {
       "id": 22, "title": "Vacuum / Analyze Progress (anlık)", "type": "table",
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 33},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"overrides": [{"matcher": {"id": "byName", "options": "progress_pct"}, "properties": [{"id": "unit", "value": "percent"}]}]},
-      "targets": [{"rawSql": "select sample_ts, command, datname, relname, phase, blocks_total, blocks_done, tuples_total, tuples_done, progress_pct from fact.pg_progress_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_progress_snapshot where instance_pk = $instance) order by command, relname", "format": "table"}]
+      "targets": [{"rawSql": "select snapshot_ts, command, datname, relname, phase, blocks_total, blocks_done, tuples_total, tuples_done, progress_pct from fact.pg_progress_snapshot where instance_pk = $instance and snapshot_ts = (select max(sample_ts) from fact.pg_progress_snapshot where instance_pk = $instance) order by command, relname", "format": "table"}]
     }
   ]
 }
