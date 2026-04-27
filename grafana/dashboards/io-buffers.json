@@ -56,14 +56,14 @@
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 10}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), backend_type || '/' || context as metric, sum(reads_delta * 8192)::float / nullif(extract(epoch from $__interval::interval), 0) as value from fact.pg_io_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1, backend_type, context order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), backend_type || '/' || context as metric, sum(reads_delta * 8192)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_io_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1, backend_type, context order by 1", "format": "time_series"}]
     },
     {
       "id": 11, "title": "Write Hızı per backend_type / context", "type": "timeseries",
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "Bps", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 10}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), backend_type || '/' || context as metric, sum(writes_delta * 8192)::float / nullif(extract(epoch from $__interval::interval), 0) as value from fact.pg_io_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1, backend_type, context order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), backend_type || '/' || context as metric, sum(writes_delta * 8192)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_io_stat_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1, backend_type, context order by 1", "format": "time_series"}]
     },
     {
       "id": 12, "title": "Read Time (ms)", "type": "timeseries",

@@ -99,7 +99,7 @@
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 16},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "ops", "custom": {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 5}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.xact_commit_delta + d.xact_rollback_delta)::float / nullif(extract(epoch from $__interval::interval), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.xact_commit_delta + d.xact_rollback_delta)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1", "format": "time_series"}]
     },
     {
       "id": 21, "title": "Cache Hit Ratio — Per Instance", "type": "timeseries",

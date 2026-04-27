@@ -63,7 +63,7 @@
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), sum(period_wal_size_byte)::float / nullif(extract(epoch from $__interval::interval), 0) as \"WAL B/s\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), sum(period_wal_size_byte)::float / nullif(extract(epoch from '$__interval'::interval), 0) as \"WAL B/s\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
     },
     {
       "id": 20, "title": "Replication Slot Durumu (anlık)", "type": "table",
