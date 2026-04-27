@@ -120,9 +120,12 @@ export default function GrafanaEmbed() {
 
     // Belirli dashboard — iframe ile göster
     const selected = DASHBOARDS.find(d => d.uid === uid);
-    // kiosk=tv mode → Grafana'nın kendi top/side bar'ı gizli
     // theme=light → açık tema (env'de de varsayılan light)
-    const grafanaUrl = `/grafana/d/${uid}/?orgId=1&kiosk=tv&theme=light`;
+    // kiosk parametresi YOK çünkü:
+    //   kiosk=tv → variable dropdown'lari da gizliyor (instance secimi yapilamaz)
+    //   kiosk=1  → bazi Grafana surumlerinde same effect
+    // Sadece sol Grafana sidebar'i (hamburger menu) acik kalir, kullanici onu zaten ignore eder
+    const grafanaUrl = `/grafana/d/${uid}/?orgId=1&theme=light`;
 
     return (
         <div className="-m-6 flex flex-col" style={{ height: 'calc(100vh - 0px)' }}>
