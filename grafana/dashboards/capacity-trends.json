@@ -1,7 +1,7 @@
 {
   "uid": "pgstat-capacity-trends",
   "title": "pgstat — Capacity & Trends",
-  "description": "Uzun zaman araliginda kapasite planlamasi: connection trend, WAL daily growth, query volume, slow query trend.",
+  "description": "Kapasite planlamasi: connection trend, WAL growth, query volume, exec time, DB boyut buyumesi.",
   "tags": [
     "pgstat",
     "capacity"
@@ -11,7 +11,7 @@
   "version": 1,
   "refresh": "5m",
   "time": {
-    "from": "now-30d",
+    "from": "now-7d",
     "to": "now"
   },
   "templating": {
@@ -42,7 +42,7 @@
         "x": 0,
         "y": 0
       },
-      "description": "Her instance için P95 bağlantı sayısı, günlük bucket. Trend yukarı doğruysa kapasite artırımı düşün.",
+      "description": "Her instance için P95 bağlantı sayısı. Trend yukarı doğruysa kapasite artırımı düşün.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -59,14 +59,14 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, '1d'), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
     },
     {
       "id": 2,
-      "title": "Günlük WAL Üretimi",
+      "title": "WAL Üretimi",
       "type": "timeseries",
       "gridPos": {
         "h": 9,
@@ -74,6 +74,7 @@
         "x": 12,
         "y": 0
       },
+      "description": "WAL üretim miktarı. Yüksek WAL = yoğun yazma. Archiver geride kalırsa disk dolabilir.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -90,7 +91,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(w.sample_ts, '1d'), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or 'All' in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
@@ -105,7 +106,7 @@
         "x": 0,
         "y": 9
       },
-      "description": "Saatlik sorgu çağrı sayısı toplamı. Kısa aralıkta saatlik, uzun aralıkta günlük bucket.",
+      "description": "Toplam sorgu çağrı sayısı. pgss_hourly rollup verisinden.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -137,7 +138,7 @@
         "x": 12,
         "y": 9
       },
-      "description": "Saatlik toplam sorgu çalışma süresi. Artış trendi yavaşlayan sorguları veya artan yükü gösterir.",
+      "description": "Toplam sorgu çalışma süresi. Artış = yavaşlayan sorgular veya artan yük.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -169,7 +170,7 @@
         "x": 0,
         "y": 18
       },
-      "description": "Tablo bazlı live tuple toplamı — günlük bucket. Hızla büyüyen DB'leri belirler.",
+      "description": "Tablo bazlı live tuple toplamı. Hızla büyüyen DB'leri belirler.",
       "datasource": {
         "type": "postgres",
         "uid": "pgstat"
@@ -186,7 +187,7 @@
       },
       "targets": [
         {
-          "rawSql": "with daily as (select date_trunc('day', t.sample_ts) as day, dbr.datname, sum(t.n_live_tup_estimate) as live from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where t.instance_pk in ($instance) and $__timeFilter(t.sample_ts) group by 1, dbr.datname) select day as time, datname as metric, max(live) as value from daily group by 1, datname order by 1",
+          "rawSql": "select $__timeGroupAlias(t.sample_ts, $__interval) as time, dbr.datname as metric, max(t.n_live_tup_estimate) as value from fact.pg_table_stat_delta t left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where (t.instance_pk in ($instance) or 'All' in ($instance)) and $__timeFilter(t.sample_ts) group by 1, dbr.datname order by 1",
           "format": "time_series"
         }
       ]
