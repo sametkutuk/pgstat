@@ -1025,7 +1025,7 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                     </select>
                 </div>
             </div>
-            <ModalFooter onClose={onClose} onSave={() => createMut.mutate()} busy={createMut.isPending} />
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
         </Modal>
     );
 }
