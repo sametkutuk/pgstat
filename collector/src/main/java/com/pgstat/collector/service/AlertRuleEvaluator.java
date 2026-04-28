@@ -965,20 +965,41 @@ public class AlertRuleEvaluator {
             return switch (metricType) {
                 case "statement_metric" -> {
                     String col = toFactColumn(metricName, "statement_metric");
+                    // Mevcut pencere + önceki pencere karşılaştırması ile top contributor
                     yield jdbc.queryForList(
-                        "select ss.queryid, sum(d." + col + ")::numeric as current_val," +
-                        "       left(coalesce(qt.query_text, '?'), 200) as query_text," +
-                        "       dbr.datname, rr.rolname" +
+                        "with curr as (" +
+                        "  select ss.queryid, ss.dbid, ss.userid, ss.statement_series_id," +
+                        "         sum(d." + col + ")::numeric as current_val" +
                         "  from fact.pgss_delta d" +
                         "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
-                        "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
-                        "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
-                        "  left join dim.role_ref    rr  on rr.instance_pk  = ss.instance_pk and rr.userid  = ss.userid" +
                         "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
-                        "  group by ss.queryid, qt.query_text, dbr.datname, rr.rolname" +
-                        "  having sum(d." + col + ") is not null" +
-                        "  order by current_val " + order + " nulls last limit 10",
-                        instancePk, windowMinutes + " minutes");
+                        "  group by ss.queryid, ss.dbid, ss.userid, ss.statement_series_id" +
+                        "), prev as (" +
+                        "  select ss.statement_series_id, sum(d." + col + ")::numeric as prev_val" +
+                        "  from fact.pgss_delta d" +
+                        "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                        "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+                        "    and d.sample_ts <= now() - ?::interval" +
+                        "  group by ss.statement_series_id" +
+                        ")" +
+                        " select c.queryid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
+                        "   case when coalesce(p.prev_val,0) = 0 and c.current_val > 0 then 9999.0" +
+                        "        when coalesce(p.prev_val,0) = 0 then 0.0" +
+                        "        else round(((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0))::numeric, 1)" +
+                        "   end as change_pct," +
+                        "   left(coalesce(qt.query_text, '?'), 200) as query_text," +
+                        "   dbr.datname, rr.rolname" +
+                        " from curr c" +
+                        " left join prev p on p.statement_series_id = c.statement_series_id" +
+                        " left join dim.statement_series ss on ss.statement_series_id = c.statement_series_id" +
+                        " left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+                        " left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = c.dbid" +
+                        " left join dim.role_ref rr on rr.instance_pk = ? and rr.userid = c.userid" +
+                        " where c.current_val > 0" +
+                        " order by c.current_val " + order + " nulls last limit 10",
+                        instancePk, windowMinutes + " minutes",
+                        instancePk, (windowMinutes * 2) + " minutes", windowMinutes + " minutes",
+                        instancePk, instancePk);
                 }
                 case "table_metric" -> {
                     String col = toFactColumn(metricName, "table_metric");

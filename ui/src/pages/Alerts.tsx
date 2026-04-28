@@ -229,7 +229,11 @@ export default function Alerts() {
 function AlertDetails({ details }: { details: any }) {
     if (!details) return null;
 
-    const hasTopQueries = details.top_queries && details.top_queries.length > 0;
+    // Farklı formatları normalize et
+    const records = details.records || details.top_queries || details.spiking_queries || [];
+    const hasRecords = records.length > 0;
+    const reason = details.reason || '';
+    const isSpike = reason.includes('spike') || details.spiking_queries;
 
     return (
         <div className="space-y-3 mt-2">
@@ -266,61 +270,91 @@ function AlertDetails({ details }: { details: any }) {
                 </div>
             )}
 
-            {/* Top queries */}
-            {hasTopQueries && (
+            {/* Sorgu detay tablosu */}
+            {hasRecords && (
                 <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
-                    <div className="px-3 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0]">
-                        <span className="text-xs font-semibold text-[#475569]">En Çok Katkı Yapan Sorgular</span>
+                    <div className="px-3 py-2 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between">
+                        <span className="text-xs font-semibold text-[#475569]">
+                            {isSpike ? 'Spike Eden Sorgular' : 'En Çok Katkı Yapan Sorgular'}
+                        </span>
+                        {details.window_minutes && (
+                            <span className="text-[10px] text-[#94A3B8]">Pencere: {details.window_minutes} dk</span>
+                        )}
                     </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-xs">
                             <thead>
-                                <tr className="border-b border-[#F1F5F9]">
-                                    <th className="text-left py-2 px-3 text-[#64748B] font-medium">Query</th>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="text-left py-2 px-3 text-[#64748B] font-medium">Sorgu</th>
                                     <th className="text-left py-2 px-3 text-[#64748B] font-medium">DB / Rol</th>
-                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Değer</th>
-                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Calls</th>
-                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Exec Time</th>
+                                    <th className="text-right py-2 px-3 text-[#64748B] font-medium">Şu Anki</th>
+                                    {hasPrevVal(records) && (
+                                        <th className="text-right py-2 px-3 text-[#64748B] font-medium">Önceki</th>
+                                    )}
+                                    {hasChangePct(records) && (
+                                        <th className="text-right py-2 px-3 text-[#64748B] font-medium">Artış %</th>
+                                    )}
                                 </tr>
                             </thead>
                             <tbody>
-                                {details.top_queries.map((q: any, i: number) => (
-                                    <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                                        <td className="py-2 px-3 max-w-xs">
-                                            <div className="truncate font-mono text-[#1E293B]" title={q.query_text}>
-                                                {q.query_text || '—'}
-                                            </div>
-                                            <div className="text-[#94A3B8] mt-0.5">qid: {q.queryid}</div>
-                                        </td>
-                                        <td className="py-2 px-3 text-[#64748B]">
-                                            <div>{q.datname || '—'}</div>
-                                            <div className="text-[#94A3B8]">{q.rolname || '—'}</div>
-                                        </td>
-                                        <td className="py-2 px-3 text-right font-mono text-[#1E293B]">
-                                            {Number(q.metric_value).toLocaleString()}
-                                        </td>
-                                        <td className="py-2 px-3 text-right font-mono text-[#64748B]">
-                                            {Number(q.total_calls).toLocaleString()}
-                                        </td>
-                                        <td className="py-2 px-3 text-right font-mono text-[#64748B]">
-                                            {Number(q.total_exec_time_ms) >= 1000
-                                                ? (Number(q.total_exec_time_ms) / 1000).toFixed(1) + 's'
-                                                : Number(q.total_exec_time_ms).toFixed(0) + 'ms'}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {records.map((q: any, i: number) => {
+                                    const currentVal = q.current_val ?? q.metric_value ?? q.total_calls ?? 0;
+                                    const prevVal = q.prev_val ?? q.previous_value;
+                                    const changePct = q.change_pct;
+                                    return (
+                                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                            <td className="py-2 px-3 max-w-sm">
+                                                <div className="truncate font-mono text-[#1E293B] text-[11px]" title={q.query_text}>
+                                                    {q.query_text || '—'}
+                                                </div>
+                                                <div className="text-[#94A3B8] mt-0.5">qid: {q.queryid}</div>
+                                            </td>
+                                            <td className="py-2 px-3 text-[#64748B] whitespace-nowrap">
+                                                <div>{q.datname || '—'}</div>
+                                                <div className="text-[#94A3B8]">{q.rolname || '—'}</div>
+                                            </td>
+                                            <td className="py-2 px-3 text-right font-mono font-semibold text-[#1E293B]">
+                                                {Number(currentVal).toLocaleString()}
+                                            </td>
+                                            {hasPrevVal(records) && (
+                                                <td className="py-2 px-3 text-right font-mono text-[#64748B]">
+                                                    {prevVal != null ? Number(prevVal).toLocaleString() : '—'}
+                                                </td>
+                                            )}
+                                            {hasChangePct(records) && (
+                                                <td className="py-2 px-3 text-right font-mono">
+                                                    {changePct != null ? (
+                                                        <span className={Number(changePct) > 100 ? 'text-red-600 font-semibold' : Number(changePct) > 50 ? 'text-amber-600' : 'text-[#64748B]'}>
+                                                            {Number(changePct) >= 9999 ? 'yeni' : `%${Number(changePct).toFixed(0)}`}
+                                                        </span>
+                                                    ) : '—'}
+                                                </td>
+                                            )}
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                 </div>
             )}
 
-            {/* Fallback: top_queries yoksa ham JSON göster */}
-            {!hasTopQueries && !details.baseline_avg && (
+            {/* Fallback: tanınmayan format — ham JSON */}
+            {!hasRecords && !details.baseline_avg && (
                 <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
                     {JSON.stringify(details, null, 2)}
                 </pre>
             )}
         </div>
     );
+}
+
+/** Records listesinde prev_val alanı var mı? */
+function hasPrevVal(records: any[]): boolean {
+    return records.some(r => r.prev_val != null || r.previous_value != null);
+}
+
+/** Records listesinde change_pct alanı var mı? */
+function hasChangePct(records: any[]): boolean {
+    return records.some(r => r.change_pct != null);
 }
