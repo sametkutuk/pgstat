@@ -766,6 +766,13 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
   "message": "{{message}}",
   "timestamp": "{{timestamp}}"
 }`,
+        // Email subject + body template (V038+)
+        email_from: existingConfig.from ?? '',
+        email_subject_template: existingConfig.subject_template ?? '',
+        email_body_template: existingConfig.body_template ?? '',
+        // Teams card_template + theme_color (V038+)
+        teams_theme_color: existingConfig.theme_color ?? '',
+        teams_card_template: existingConfig.card_template ?? '',
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
@@ -773,8 +780,21 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
         let config: any = {};
         switch (form.channel_type) {
             case 'slack': config = { webhook_url: form.webhook_url, channel: form.channel || undefined }; break;
-            case 'teams': config = { webhook_url: form.webhook_url }; break;
-            case 'email': config = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) }; break;
+            case 'teams': {
+                const c: any = { webhook_url: form.webhook_url };
+                if (form.teams_theme_color?.trim()) c.theme_color = form.teams_theme_color.trim();
+                if (form.teams_card_template?.trim()) c.card_template = form.teams_card_template.trim();
+                config = c;
+                break;
+            }
+            case 'email': {
+                const c: any = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) };
+                if (form.email_from?.trim()) c.from = form.email_from.trim();
+                if (form.email_subject_template?.trim()) c.subject_template = form.email_subject_template.trim();
+                if (form.email_body_template?.trim()) c.body_template = form.email_body_template.trim();
+                config = c;
+                break;
+            }
             case 'pagerduty': config = { integration_key: form.integration_key }; break;
             case 'webhook': config = {
                 url: form.url,
@@ -851,18 +871,71 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                                     placeholder="#alerts" />
                             </div>
                         )}
+                        {form.channel_type === 'teams' && (
+                            <>
+                                <div>
+                                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                                        Theme Color (opsiyonel)
+                                        <InfoTip text="Kart sol kenar rengi. Boş bırakılırsa severity'ye göre (kırmızı/turuncu/mavi). Hex: FF0000" className="ml-1" />
+                                    </label>
+                                    <input value={form.teams_theme_color} onChange={e => set('teams_theme_color', e.target.value)}
+                                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono"
+                                        placeholder="0078D4" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                                        Card Template (opsiyonel, JSON)
+                                        <InfoTip text="Boş bırakılırsa default Adaptive Card kullanılır. Custom JSON yazarsan placeholder: {{title}}, {{message}}, {{severity}}, {{severity_upper}}, {{color}}" className="ml-1" />
+                                    </label>
+                                    <textarea value={form.teams_card_template} onChange={e => set('teams_card_template', e.target.value)}
+                                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-xs font-mono"
+                                        rows={6}
+                                        placeholder={"{\"@type\":\"MessageCard\",\"themeColor\":\"{{color}}\",\"summary\":\"{{title}}\",\"text\":\"{{message}}\"}"} />
+                                </div>
+                            </>
+                        )}
                     </>
                 )}
                 {form.channel_type === 'email' && (
-                    <div>
-                        <label className="block text-xs font-medium text-[#475569] mb-1">
-                            Alıcılar (virgülle ayır)
-                            <InfoTip text="Email bildirimi için sunucuda SMTP ayarları gerekir. .env dosyasında PGSTAT_SMTP_HOST, PGSTAT_SMTP_PORT, PGSTAT_SMTP_USER, PGSTAT_SMTP_PASSWORD değerlerini ayarlayın. Gmail için: host=smtp.gmail.com, port=587, App Password kullanın." className="ml-1" />
-                        </label>
-                        <input value={form.recipients} onChange={e => set('recipients', e.target.value)}
-                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
-                            placeholder="ops@example.com, dba@example.com" />
-                    </div>
+                    <>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Alıcılar (virgülle ayır)
+                                <InfoTip text="Email bildirimi için sunucuda SMTP ayarları gerekir. .env dosyasında PGSTAT_SMTP_HOST, PGSTAT_SMTP_PORT, PGSTAT_SMTP_USER, PGSTAT_SMTP_PASSWORD değerlerini ayarlayın. Gmail için: host=smtp.gmail.com, port=587, App Password kullanın." className="ml-1" />
+                            </label>
+                            <input value={form.recipients} onChange={e => set('recipients', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                placeholder="ops@example.com, dba@example.com" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                From (opsiyonel)
+                                <InfoTip text="Boş bırakılırsa pgstat@localhost kullanılır. SMTP'nin izin verdiği bir from adresi yazın." className="ml-1" />
+                            </label>
+                            <input value={form.email_from} onChange={e => set('email_from', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                placeholder="pgstat@example.com" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Subject Template (opsiyonel)
+                                <InfoTip text="Boş bırakılırsa: '[pgstat SEVERITY] title'. Placeholder: {{title}}, {{message}}, {{severity}}, {{severity_upper}}" className="ml-1" />
+                            </label>
+                            <input value={form.email_subject_template} onChange={e => set('email_subject_template', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm font-mono"
+                                placeholder="[{{severity_upper}}] pgstat: {{title}}" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">
+                                Body Template (opsiyonel)
+                                <InfoTip text="Email gövdesi. Boş bırakılırsa default mesaj gönderilir. Placeholder: {{title}}, {{message}}, {{severity}}, {{severity_upper}}" className="ml-1" />
+                            </label>
+                            <textarea value={form.email_body_template} onChange={e => set('email_body_template', e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-xs font-mono"
+                                rows={5}
+                                placeholder={"Severity: {{severity_upper}}\nKonu: {{title}}\n\n{{message}}\n\n— pgstat Monitoring"} />
+                        </div>
+                    </>
                 )}
                 {form.channel_type === 'pagerduty' && (
                     <div>
