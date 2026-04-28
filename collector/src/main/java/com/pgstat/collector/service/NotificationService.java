@@ -171,7 +171,8 @@ public class NotificationService {
             log.warn("Email gönderilemedi: SMTP ayarları yapılandırılmamış (PGSTAT_SMTP_HOST)");
             return;
         }
-        // config: {"recipients": ["a@b.com", "c@d.com"], "from": "pgstat@example.com"}
+        // config: {"recipients": [...], "from": "...", "subject_template": "...", "body_template": "..."}
+        // Template'lerde {{title}} {{message}} {{severity}} {{severity_upper}} kullanilabilir.
         Map<String, Object> config = parseJson(configJson);
         @SuppressWarnings("unchecked")
         List<String> recipients = (List<String>) config.get("recipients");
@@ -182,14 +183,35 @@ public class NotificationService {
 
         String from = config.containsKey("from") ? (String) config.get("from") : "pgstat@localhost";
 
+        // Subject — kullanıcı subject_template verdi mi?
+        String subjectTpl = (String) config.get("subject_template");
+        String subject = (subjectTpl != null && !subjectTpl.isBlank())
+            ? renderEmailTpl(subjectTpl, title, message, severity)
+            : "[pgstat " + severity.toUpperCase() + "] " + title;
+
+        // Body — kullanıcı body_template verdi mi?
+        String bodyTpl = (String) config.get("body_template");
+        String body = (bodyTpl != null && !bodyTpl.isBlank())
+            ? renderEmailTpl(bodyTpl, title, message, severity)
+            : message + "\n\n---\npgstat Monitoring System";
+
         SimpleMailMessage mail = new SimpleMailMessage();
         mail.setFrom(from);
         mail.setTo(recipients.toArray(new String[0]));
-        mail.setSubject("[pgstat " + severity.toUpperCase() + "] " + title);
-        mail.setText(message + "\n\n---\npgstat Monitoring System");
+        mail.setSubject(subject);
+        mail.setText(body);
 
         mailSender.send(mail);
-        log.info("Email gönderildi: {} alıcıya, konu: {}", recipients.size(), title);
+        log.info("Email gönderildi: {} alıcıya, konu: {}", recipients.size(), subject);
+    }
+
+    /** Email subject/body template render — basit {{var}} replace */
+    private String renderEmailTpl(String tpl, String title, String message, String severity) {
+        return tpl
+            .replace("{{title}}", title != null ? title : "")
+            .replace("{{message}}", message != null ? message : "")
+            .replace("{{severity}}", severity != null ? severity : "info")
+            .replace("{{severity_upper}}", severity != null ? severity.toUpperCase() : "INFO");
     }
 
     // =========================================================================
@@ -204,31 +226,48 @@ public class NotificationService {
             return;
         }
 
-        String color = switch (severity) {
-            case "critical", "emergency" -> "FF0000";
-            case "warning" -> "FFA500";
-            default -> "0078D4";
-        };
+        // Kullanıcı theme_color verdi mi? Yoksa severity'ye göre default
+        String color = (String) config.get("theme_color");
+        if (color == null || color.isBlank()) {
+            color = switch (severity) {
+                case "critical", "emergency" -> "FF0000";
+                case "warning" -> "FFA500";
+                default -> "0078D4";
+            };
+        }
 
-        // Adaptive Card formatı (Teams webhook)
-        String payload = """
-            {
-                "@type": "MessageCard",
-                "@context": "http://schema.org/extensions",
-                "themeColor": "%s",
-                "summary": "%s",
-                "sections": [{
-                    "activityTitle": "🔔 pgstat Alert — %s",
-                    "activitySubtitle": "%s",
-                    "facts": [
-                        {"name": "Severity", "value": "%s"},
-                        {"name": "Detay", "value": "%s"}
-                    ],
-                    "markdown": true
-                }]
-            }
-            """.formatted(color, escapeJson(title), severity.toUpperCase(),
-                escapeJson(title), severity, escapeJson(message));
+        // Kullanıcı tam custom card_template verdi mi? Verdiyse onu kullan.
+        // Template'te {{title}}, {{message}}, {{severity}}, {{severity_upper}}, {{color}} placeholder'lari geçerli.
+        String cardTpl = (String) config.get("card_template");
+        String payload;
+        if (cardTpl != null && !cardTpl.isBlank()) {
+            payload = cardTpl
+                .replace("{{title}}", escapeJson(title))
+                .replace("{{message}}", escapeJson(message))
+                .replace("{{severity}}", severity)
+                .replace("{{severity_upper}}", severity.toUpperCase())
+                .replace("{{color}}", color);
+        } else {
+            // Default Adaptive Card
+            payload = """
+                {
+                    "@type": "MessageCard",
+                    "@context": "http://schema.org/extensions",
+                    "themeColor": "%s",
+                    "summary": "%s",
+                    "sections": [{
+                        "activityTitle": "🔔 pgstat Alert — %s",
+                        "activitySubtitle": "%s",
+                        "facts": [
+                            {"name": "Severity", "value": "%s"},
+                            {"name": "Detay", "value": "%s"}
+                        ],
+                        "markdown": true
+                    }]
+                }
+                """.formatted(color, escapeJson(title), severity.toUpperCase(),
+                    escapeJson(title), severity, escapeJson(message));
+        }
 
         postWebhook(webhookUrl, payload);
         log.info("Teams bildirimi gönderildi: {}", title);

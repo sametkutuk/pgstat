@@ -8,6 +8,7 @@ import path from 'path';
 import { pool } from './config/database';
 import { validateAuthConfig, requireAuth } from './config/auth';
 import { errorHandler } from './middleware/errorHandler';
+import { auditLogMiddleware } from './middleware/auditLog';
 import authRoutes from './routes/auth';
 import dashboardRoutes from './routes/dashboard';
 import instanceRoutes from './routes/instances';
@@ -90,15 +91,59 @@ app.get('/api/version', (_req, res) => {
     }
 });
 
-// Sağlık kontrolü — korumasız (Docker healthcheck için)
+// Sağlık kontrolü — korumasız (Docker healthcheck + external monitoring için)
+// 3 katmanlı kontrol:
+//   - DB connection
+//   - Collector son job_run zamanı (5 dk'dan eski ise unhealthy → collector çökmüş demektir)
+//   - Aktif instance sayısı (0 ise OK ama warning)
 app.get('/api/health', async (_req, res) => {
     try {
         await pool.query('SELECT 1');
-        res.json({ status: 'ok', database: 'connected' });
     } catch {
-        res.status(503).json({ status: 'error', database: 'disconnected' });
+        return res.status(503).json({ status: 'error', database: 'disconnected' });
     }
+
+    // Collector liveness — son job_run < 5dk değilse alarm
+    let collectorStatus: 'ok' | 'stale' | 'unknown' = 'unknown';
+    let lastJobRun: string | null = null;
+    let lagSeconds: number | null = null;
+    try {
+        const r = await pool.query(
+            `select max(started_at) as last_run,
+                    extract(epoch from (now() - max(started_at)))::int as lag_seconds
+             from ops.job_run`
+        );
+        if (r.rows[0]?.last_run) {
+            lastJobRun = r.rows[0].last_run;
+            lagSeconds = r.rows[0].lag_seconds;
+            // 5dk üzeri stale (poll loop 5sn'de bir job çalışır, normal lag <30sn)
+            collectorStatus = (lagSeconds !== null && lagSeconds < 300) ? 'ok' : 'stale';
+        }
+    } catch (e: any) {
+        // ops.job_run yoksa veya migration yapılmadıysa
+        collectorStatus = 'unknown';
+    }
+
+    let activeInstances = 0;
+    try {
+        const r = await pool.query(`select count(*) as cnt from control.instance_inventory where is_active`);
+        activeInstances = parseInt(r.rows[0]?.cnt || '0', 10);
+    } catch { /* ignore */ }
+
+    const overall = collectorStatus === 'stale' ? 503 : 200;
+    res.status(overall).json({
+        status: overall === 200 ? 'ok' : 'degraded',
+        database: 'connected',
+        collector: collectorStatus,
+        last_job_run: lastJobRun,
+        collector_lag_seconds: lagSeconds,
+        active_instances: activeInstances,
+    });
 });
+
+// Audit log middleware — PUT/POST/DELETE/PATCH istekleri ops.audit_log'a yazilir
+// requireAuth'tan SONRA, route'lardan ONCE — sadece auth gecmis istekleri logla
+app.use('/api', auditLogMiddleware);
 
 // Korumalı route'lar — JWT zorunlu
 app.use('/api/dashboard', requireAuth, dashboardRoutes);
