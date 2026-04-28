@@ -1,9 +1,13 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY pom.xml .
-RUN mvn dependency:go-offline -q
+# -q kaldirildi, hata olusursa gorunsun. Network timeout retry ekledik.
+RUN mvn -B -ntp dependency:go-offline \
+      -Daether.connector.connectTimeout=60000 \
+      -Daether.connector.requestTimeout=60000 \
+      -Dmaven.wagon.http.retryHandler.count=3
 COPY src ./src
-RUN mvn package -DskipTests -q
+RUN mvn -B -ntp package -DskipTests
 
 FROM eclipse-temurin:17-jre
 RUN groupadd -g 10001 pgstat 2>/dev/null || true && \
