@@ -1,85 +1,102 @@
 {
   "uid": "pgstat-replication-wal",
-  "title": "pgstat — Replication & WAL",
-  "description": "Replikasyon lag (bytes/seconds), replication slots durumu, WAL uretimi, archiver lag.",
-  "tags": ["pgstat"],
+  "title": "pgstat — Replication & WAL Overview",
+  "description": "Fleet genelinde replikasyon lag, slot durumu, WAL uretimi, archiver. Bir satira tikla → Instance Detail.",
+  "tags": ["pgstat", "fleet"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {"from": "now-6h", "to": "now"},
   "templating": {
     "list": [
       {
-        "name": "instance", "type": "query",
+        "name": "service_group", "type": "query",
         "datasource": {"type": "postgres", "uid": "pgstat"},
-        "query": "select display_name as __text, instance_pk as __value from control.instance_inventory where is_active order by display_name",
-        "refresh": 1, "multi": false, "includeAll": false, "label": "Instance"
+        "query": "select distinct service_group from control.instance_inventory where service_group is not null order by 1",
+        "refresh": 1, "multi": true, "includeAll": true, "label": "Service Group"
       }
     ]
   },
   "panels": [
     {
-      "id": 1, "title": "Standby Sayısı", "type": "stat",
+      "id": 1, "title": "Toplam Standby", "type": "stat",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) as value from fact.pg_replication_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes'", "format": "table"}]
+      "targets": [{"rawSql": "select count(*) as value from fact.pg_replication_snapshot r join control.instance_inventory i on i.instance_pk = r.instance_pk where r.snapshot_ts > now() - interval '5 minutes' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
     },
     {
-      "id": 2, "title": "Max Replay Lag (bytes)", "type": "stat",
+      "id": 2, "title": "Max Replay Lag (bayt)", "type": "stat",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 100000000}, {"color": "red", "value": 1000000000}]}}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(max(replay_lag_bytes), 0) as value from fact.pg_replication_snapshot where instance_pk = $instance and snapshot_ts > now() - interval '5 minutes'", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(max(r.replay_lag_bytes), 0) as value from fact.pg_replication_snapshot r join control.instance_inventory i on i.instance_pk = r.instance_pk where r.snapshot_ts > now() - interval '5 minutes' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
     },
     {
-      "id": 3, "title": "Aktif Replication Slot", "type": "stat",
+      "id": 3, "title": "Aktif Slot", "type": "stat",
       "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "short"}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select count(*) filter (where active) as value from fact.pg_replication_slot_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $instance)", "format": "table"}]
+      "targets": [{"rawSql": "with latest as (select instance_pk, max(sample_ts) as ts from fact.pg_replication_slot_snapshot group by instance_pk) select count(*) filter (where s.active) as value from fact.pg_replication_slot_snapshot s join latest l on l.instance_pk = s.instance_pk and l.ts = s.sample_ts join control.instance_inventory i on i.instance_pk = s.instance_pk where (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
     },
     {
-      "id": 4, "title": "WAL Üretimi (son 1h)", "type": "stat",
+      "id": 4, "title": "WAL Üretimi (son 1h, fleet)", "type": "stat",
       "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "decimals": 1}},
       "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
-      "targets": [{"rawSql": "select coalesce(sum(period_wal_size_byte), 0) as value from fact.pg_wal_snapshot where instance_pk = $instance and sample_ts > now() - interval '1 hour'", "format": "table"}]
+      "targets": [{"rawSql": "select coalesce(sum(w.period_wal_size_byte), 0) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where w.sample_ts > now() - interval '1 hour' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)", "format": "table"}]
     },
     {
-      "id": 10, "title": "Replikasyon Lag (bayt) — per standby", "type": "timeseries",
-      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 4},
+      "id": 10, "title": "Replikasyon Lag — Per Primary (zaman serisi)", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 4},
+      "description": "Tüm primary'lerin replay lag'i. En yüksek olanlar dikkat gerektirir.",
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"unit": "bytes", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 100000000}, {"color": "red", "value": 1000000000}]}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(snapshot_ts, $__interval), coalesce(application_name, client_addr::text, 'standby') as metric, max(replay_lag_bytes) as value from fact.pg_replication_snapshot where instance_pk = $instance and $__timeFilter(snapshot_ts) group by 1, coalesce(application_name, client_addr::text, 'standby') order by 1", "format": "time_series"}]
+      "targets": [{"rawSql": "select $__timeGroupAlias(r.snapshot_ts, $__interval), i.display_name || ' → ' || coalesce(r.application_name, r.client_addr::text, 'standby') as metric, max(r.replay_lag_bytes) as value from fact.pg_replication_snapshot r join control.instance_inventory i on i.instance_pk = r.instance_pk where $__timeFilter(r.snapshot_ts) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by 1, i.display_name, coalesce(r.application_name, r.client_addr::text, 'standby') order by 1", "format": "time_series"}]
     },
     {
-      "id": 11, "title": "WAL Üretimi (bayt/sn)", "type": "timeseries",
-      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 4},
+      "id": 11, "title": "WAL Üretimi (bayt/sn) — Per Instance", "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 13},
       "datasource": {"type": "postgres", "uid": "pgstat"},
-      "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10}}},
-      "targets": [{"rawSql": "select $__timeGroupAlias(sample_ts, $__interval), sum(period_wal_size_byte)::float / nullif(extract(epoch from '$__interval'::interval), 0) as \"WAL B/s\" from fact.pg_wal_snapshot where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 order by 1", "format": "time_series"}]
+      "fieldConfig": {"defaults": {"unit": "Bps", "decimals": 2, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5}}},
+      "targets": [{"rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1", "format": "time_series"}]
     },
     {
-      "id": 20, "title": "Replication Slot Durumu (anlık)", "type": "table",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 13},
+      "id": 20, "title": "Anlık Replication Lag — Per Primary/Standby (sıralı)", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 22},
       "datasource": {"type": "postgres", "uid": "pgstat"},
-      "fieldConfig": {"overrides": [
-        {"matcher": {"id": "byName", "options": "lag_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
-        {"matcher": {"id": "byName", "options": "safe_wal_size"}, "properties": [{"id": "unit", "value": "bytes"}]}
-      ]},
-      "targets": [{"rawSql": "select slot_name, slot_type, plugin, active, wal_status, slot_lag_bytes as lag_bytes, safe_wal_size, total_bytes, spill_bytes from fact.pg_replication_slot_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $instance) order by slot_lag_bytes desc nulls last", "format": "table"}]
+      "fieldConfig": {
+        "defaults": {"links": [{"title": "Instance Detail'a git", "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"}]},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "lag_bytes"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 100000000}, {"color": "red", "value": 1000000000}]}}, {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}}]}
+        ]
+      },
+      "targets": [{"rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_replication_snapshot group by instance_pk) select i.instance_pk, i.display_name as primary_instance, coalesce(r.application_name, r.client_addr::text, '—') as standby, r.state, r.sync_state, r.replay_lag_bytes as lag_bytes, r.replay_lag::text as replay_lag_interval from fact.pg_replication_snapshot r join latest l on l.instance_pk = r.instance_pk and l.ts = r.snapshot_ts join control.instance_inventory i on i.instance_pk = r.instance_pk where (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by lag_bytes desc nulls last", "format": "table"}]
     },
     {
-      "id": 21, "title": "Archiver Durumu (anlık)", "type": "table",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 23},
+      "id": 21, "title": "Replication Slot Durumu — Tüm Instance'lar", "type": "table",
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 32},
       "datasource": {"type": "postgres", "uid": "pgstat"},
-      "targets": [{"rawSql": "select sample_ts, archived_count, last_archived_wal, last_archived_time, failed_count, last_failed_wal, last_failed_time from fact.pg_archiver_snapshot where instance_pk = $instance and sample_ts = (select max(sample_ts) from fact.pg_archiver_snapshot where instance_pk = $instance) limit 1", "format": "table"}]
+      "fieldConfig": {
+        "defaults": {"links": [{"title": "Instance Detail'a git", "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"}]},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "lag_bytes"}, "properties": [{"id": "unit", "value": "bytes"}]},
+          {"matcher": {"id": "byName", "options": "safe_wal_size"}, "properties": [{"id": "unit", "value": "bytes"}]}
+        ]
+      },
+      "targets": [{"rawSql": "with latest as (select instance_pk, max(sample_ts) as ts from fact.pg_replication_slot_snapshot group by instance_pk) select i.instance_pk, i.display_name as instance, s.slot_name, s.slot_type, s.active, s.wal_status, s.slot_lag_bytes as lag_bytes, s.safe_wal_size from fact.pg_replication_slot_snapshot s join latest l on l.instance_pk = s.instance_pk and l.ts = s.sample_ts join control.instance_inventory i on i.instance_pk = s.instance_pk where (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by lag_bytes desc nulls last", "format": "table"}]
+    },
+    {
+      "id": 22, "title": "Archiver Durumu — Tüm Instance'lar", "type": "table",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42},
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {"defaults": {"links": [{"title": "Instance Detail'a git", "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"}]}},
+      "targets": [{"rawSql": "with latest as (select instance_pk, max(sample_ts) as ts from fact.pg_archiver_snapshot group by instance_pk) select i.instance_pk, i.display_name as instance, a.archived_count, a.last_archived_wal, a.last_archived_time, a.failed_count, a.last_failed_wal, a.last_failed_time from fact.pg_archiver_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.sample_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by a.failed_count desc nulls last, i.display_name", "format": "table"}]
     }
   ]
 }

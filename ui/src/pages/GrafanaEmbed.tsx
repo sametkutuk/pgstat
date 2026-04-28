@@ -14,103 +14,150 @@ interface DashboardEntry {
     title: string;
     description: string;
     icon: string;
+    category: 'fleet' | 'topic' | 'detail';
 }
 
+// Sıralama: Fleet (NOC, başlangıç) → Topics (konu odaklı, fleet karşılaştırma)
+// → Detail-only (drill-down hedefleri)
 const DASHBOARDS: DashboardEntry[] = [
+    // === FLEET ===
     {
         uid: 'pgstat-fleet-overview',
         title: 'Fleet Overview',
-        description: 'Tüm instance\'ların tek ekrandaki durumu — NOC için',
+        description: 'Tüm instance\'ların tek ekrandaki durumu — başlangıç sayfası, NOC için',
         icon: '🌐',
-    },
-    {
-        uid: 'pgstat-instance-detail',
-        title: 'Instance Detail',
-        description: '360° instance görünümü — DoD/WoW/MoM overlay\'li',
-        icon: '🔍',
-    },
-    {
-        uid: 'pgstat-top-queries-detail',
-        title: 'Top Queries Detail',
-        description: 'Sorgu seviyesinde derin analiz — drill-down\'dan açılır',
-        icon: '📝',
-    },
-    {
-        uid: 'pgstat-locks-activity',
-        title: 'Locks & Activity',
-        description: 'Aktif sorgu, wait events, blocking chains, vacuum progress',
-        icon: '🔒',
-    },
-    {
-        uid: 'pgstat-replication-wal',
-        title: 'Replication & WAL',
-        description: 'Replikasyon lag, slot durumu, WAL üretimi, archiver',
-        icon: '🔄',
-    },
-    {
-        uid: 'pgstat-io-buffers',
-        title: 'I/O & Buffers (PG16+)',
-        description: 'pg_stat_io detay — backend_type × context kırılımı',
-        icon: '💾',
-    },
-    {
-        uid: 'pgstat-vacuum-bloat',
-        title: 'Vacuum & Bloat',
-        description: 'Dead tuple oranı, autovacuum geçmişi, devam eden vacuumlar',
-        icon: '🧹',
-    },
-    {
-        uid: 'pgstat-database-tables',
-        title: 'Database & Tables',
-        description: 'Per-DB aktivite, en çok yazılan tablolar, deadlock/conflict',
-        icon: '🗄️',
+        category: 'fleet',
     },
     {
         uid: 'pgstat-alerts-slo',
         title: 'Alerts & SLO',
         description: 'Alert hacmi, MTTA/MTTR, gürültülü alert kodları, kanal başarı oranı',
         icon: '🚨',
+        category: 'fleet',
+    },
+
+    // === TOPICS (cross-instance, drill-down ile Instance Detail'a geçer) ===
+    {
+        uid: 'pgstat-locks-activity',
+        title: 'Locks & Activity Overview',
+        description: 'Fleet aktif sorgu, idle in tx, blocking chains, uzun süreli sorgular',
+        icon: '🔒',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-replication-wal',
+        title: 'Replication & WAL Overview',
+        description: 'Tüm primary/standby replikasyon lag, slot durumu, WAL üretimi',
+        icon: '🔄',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-io-buffers',
+        title: 'I/O & Buffers Overview (PG16+)',
+        description: 'Top read/write yapan instance\'lar, backend_type × context kırılımı',
+        icon: '💾',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-vacuum-bloat',
+        title: 'Vacuum & Bloat Overview',
+        description: 'Cross-instance dead tuple sıralaması, vacuum geçmişi, aktif vacuum',
+        icon: '🧹',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-database-tables',
+        title: 'Database & Tables Overview',
+        description: 'Cross-instance en aktif DB\'ler, en çok yazılan tablolar',
+        icon: '🗄️',
+        category: 'topic',
     },
     {
         uid: 'pgstat-capacity-trends',
         title: 'Capacity & Trends',
         description: '30 günlük trend, lineer tahmin, kapasite planlaması',
         icon: '📈',
+        category: 'topic',
+    },
+
+    // === DETAIL (genelde drill-down ile açılır, list'te de gösterilir) ===
+    {
+        uid: 'pgstat-instance-detail',
+        title: 'Instance Detail',
+        description: '360° tek instance görünümü — DoD/WoW/MoM overlay\'li',
+        icon: '🔍',
+        category: 'detail',
+    },
+    {
+        uid: 'pgstat-top-queries-detail',
+        title: 'Top Queries Detail',
+        description: 'Cross-instance sorgu listesi VEYA tek queryid filtreli detay',
+        icon: '📝',
+        category: 'detail',
     },
 ];
+
+const CATEGORY_LABELS: Record<DashboardEntry['category'], { label: string; description: string }> = {
+    fleet:  { label: '🌍 Fleet — Genel Görünüm',         description: 'Tüm sistemin sağlık panosu' },
+    topic:  { label: '🎯 Konular — Cross-Instance',       description: 'Konu seç, tüm instance\'ları karşılaştır, bir satıra tıklayınca instance detayına git' },
+    detail: { label: '🔬 Detay — Tek Instance / Sorgu',   description: 'Drill-down hedefleri (genelde otomatik açılır)' },
+};
 
 export default function GrafanaEmbed() {
     const { uid } = useParams<{ uid?: string }>();
     const navigate = useNavigate();
     const [iframeKey, setIframeKey] = useState(0);
 
-    // UID belirtilmediyse — dashboard listesi göster
+    // UID belirtilmediyse — dashboard listesi göster (kategorili)
     if (!uid) {
+        const grouped = (cat: DashboardEntry['category']) =>
+            DASHBOARDS.filter(d => d.category === cat);
+
         return (
             <div className="p-6">
                 <div className="mb-6">
                     <h1 className="text-xl font-bold text-[#1E293B]">Grafana Dashboards</h1>
                     <p className="text-sm text-[#64748B] mt-1">
-                        Detaylı analiz ve trend grafikleri için bir dashboard seç. Pgstat UI içinde gömülü açılır.
+                        Bir konuyu seç, tüm fleet'i karşılaştır, sonra bir satıra/instance'a tıklayarak detaya git.
                     </p>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {DASHBOARDS.map(d => (
-                        <Link
-                            key={d.uid}
-                            to={`/grafana/${d.uid}`}
-                            className="block bg-white border border-[#E2E8F0] rounded-lg p-4 hover:border-[#3B82F6] hover:shadow-md transition-all"
-                        >
-                            <div className="flex items-start gap-3">
-                                <span className="text-3xl">{d.icon}</span>
-                                <div className="flex-1">
-                                    <h3 className="font-semibold text-[#1E293B] mb-1">{d.title}</h3>
-                                    <p className="text-xs text-[#64748B]">{d.description}</p>
-                                </div>
+
+                {(['fleet', 'topic', 'detail'] as const).map(cat => {
+                    const items = grouped(cat);
+                    if (items.length === 0) return null;
+                    const meta = CATEGORY_LABELS[cat];
+                    return (
+                        <div key={cat} className="mb-8">
+                            <div className="mb-3">
+                                <h2 className="text-sm font-bold text-[#1E293B] uppercase tracking-wide">{meta.label}</h2>
+                                <p className="text-xs text-[#64748B] mt-0.5">{meta.description}</p>
                             </div>
-                        </Link>
-                    ))}
-                </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {items.map(d => (
+                                    <Link
+                                        key={d.uid}
+                                        to={`/grafana/${d.uid}`}
+                                        className="block bg-white border border-[#E2E8F0] rounded-lg p-4 hover:border-[#3B82F6] hover:shadow-md transition-all"
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <span className="text-3xl">{d.icon}</span>
+                                            <div className="flex-1">
+                                                <h3 className="font-semibold text-[#1E293B] mb-1">{d.title}</h3>
+                                                <p className="text-xs text-[#64748B]">{d.description}</p>
+                                                {d.uid === 'pgstat-top-queries-detail' && (
+                                                    <div className="mt-2 flex gap-2">
+                                                        <span className="text-[10px] bg-[#EFF6FF] text-[#1E40AF] px-1.5 py-0.5 rounded">List</span>
+                                                        <span className="text-[10px] bg-[#FEF3C7] text-[#92400E] px-1.5 py-0.5 rounded">Drill-Down (queryid)</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </Link>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                })}
                 <div className="mt-6 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md px-4 py-3 text-xs text-[#1E40AF]">
                     💡 Yeni sekmede tam ekran açmak istersen <a href="/grafana/" target="_blank" rel="noopener noreferrer" className="underline font-medium">Grafana ana sayfası</a>'na git.
                 </div>

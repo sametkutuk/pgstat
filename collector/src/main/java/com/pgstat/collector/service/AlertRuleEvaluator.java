@@ -786,6 +786,7 @@ public class AlertRuleEvaluator {
                         instancePk, metricType, metricName, windowMinutes, true);
                     if (!contributors.isEmpty()) {
                         populateRecordCtx(ctx, contributors.get(0), metricType);
+                        ctx.put("top_queries_summary", buildTopSummaryText(contributors, metricType));
                         detailsJson = buildPerRecordsJson(contributors, metricType, windowMinutes,
                             changePct.toPlainString() + "% artis", "spike");
                     }
@@ -871,6 +872,7 @@ public class AlertRuleEvaluator {
                         if (!contributors.isEmpty()) {
                             Map<String, Object> topC = contributors.get(0);
                             populateRecordCtx(ctx, topC, metricType);
+                            ctx.put("top_queries_summary", buildTopSummaryText(contributors, metricType));
                             ctx.put("note", "Tek sorgu spike etmedi, toplam artis birden fazla sorgudan geldi");
                         }
 
@@ -914,6 +916,7 @@ public class AlertRuleEvaluator {
             ctx.put("threshold", thresholdPct);
             ctx.put("window", windowMinutes);
             populateRecordCtx(ctx, top, metricType);
+            ctx.put("top_queries_summary", buildTopSummaryText(spiking, metricType));
 
             String fallbackMsg = buildPerRecordSpikeMessage(metricType, metricName, top,
                 prevVal, currentVal, changePct, windowMinutes);
@@ -1332,6 +1335,61 @@ public class AlertRuleEvaluator {
     private static String trimText(String s, int max) {
         if (s == null) return "";
         return s.length() > max ? s.substring(0, max) + "…" : s;
+    }
+
+    /**
+     * Top sorgu/tablo/index listesinden bildirim mesajına eklenecek kısa özet üretir.
+     * Her satır: "sorgu_metni (50 kar) → şu_anki (önceki, %artış)"
+     * Context'e "top_queries_summary" olarak konur, template'de {{top_queries_summary}} ile kullanılır.
+     */
+    private static String buildTopSummaryText(List<Map<String, Object>> records, String metricType) {
+        if (records == null || records.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        int limit = Math.min(records.size(), 5);
+        for (int i = 0; i < limit; i++) {
+            Map<String, Object> r = records.get(i);
+            if (i > 0) sb.append("\n");
+            sb.append(i + 1).append(". ");
+
+            // Sorgu/tablo/index adı
+            String label;
+            switch (metricType) {
+                case "statement_metric" -> label = trimText((String) r.get("query_text"), 50);
+                case "table_metric"     -> label = r.get("schemaname") + "." + r.get("relname");
+                case "index_metric"     -> label = r.get("schemaname") + "." + r.get("indexrelname");
+                default                 -> label = "?";
+            }
+            sb.append("`").append(label).append("`");
+
+            // Değerler: şu anki (önceki → artış%)
+            Object currentVal = r.get("current_val");
+            Object prevVal = r.get("prev_val");
+            Object changePct = r.get("change_pct");
+
+            if (currentVal != null) {
+                sb.append(" → **").append(formatNum(currentVal)).append("**");
+                if (prevVal != null) {
+                    sb.append(" (önceki: ").append(formatNum(prevVal));
+                    if (changePct != null) {
+                        double pct = ((Number) changePct).doubleValue();
+                        sb.append(", ").append(pct >= 9999 ? "yeni" : "%" + Math.round(pct));
+                    }
+                    sb.append(")");
+                }
+            }
+        }
+        if (records.size() > 5) {
+            sb.append("\n... ve ").append(records.size() - 5).append(" sorgu daha");
+        }
+        return sb.toString();
+    }
+
+    private static String formatNum(Object val) {
+        if (val == null) return "0";
+        double d = ((Number) val).doubleValue();
+        if (d >= 1_000_000) return String.format("%.1fM", d / 1_000_000);
+        if (d >= 1_000) return String.format("%.1fK", d / 1_000);
+        return String.format("%.0f", d);
     }
 
     /** Esigi asan top-N kaydi (per-record) granular metric tipinde */
