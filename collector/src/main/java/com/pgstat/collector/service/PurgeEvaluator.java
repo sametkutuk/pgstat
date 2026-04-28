@@ -333,4 +333,65 @@ public class PurgeEvaluator {
                 parentTable, instancePk, totalDeleted);
         }
     }
+
+    // =========================================================================
+    // Job run history cleanup — 30g üstü eski kayıtları siler
+    // =========================================================================
+
+    /**
+     * ops.job_run ve ops.job_run_instance tablolarından eski kayıtları temizler.
+     * Günde 1 kez (UTC 02:00) JobOrchestrator tarafından çağrılır.
+     * Batch halinde siler — ilk çalışmada çok satır birikmiş olabilir.
+     */
+    public void purgeJobRunHistory() {
+        try {
+            // Retention süresini policy'den oku (ilk aktif policy)
+            int retentionDays = 30;
+            try {
+                Integer configured = jdbc.queryForObject(
+                    "select job_run_retention_days from control.retention_policy where is_active limit 1",
+                    Integer.class);
+                if (configured != null && configured > 0) retentionDays = configured;
+            } catch (Exception e) {
+                // Kolon henüz yoksa (V037 uygulanmamış) veya satır yoksa default kullan
+            }
+
+            String interval = retentionDays + " days";
+
+            // Batch halinde sil — çok büyük tablolarda tek DELETE lock tutar
+            int totalInstDeleted = 0;
+            int totalRunDeleted = 0;
+            int deleted;
+
+            // Önce child tablo (FK bağımlılığı)
+            do {
+                deleted = jdbc.update(
+                    "delete from ops.job_run_instance where ctid in (" +
+                    "  select i.ctid from ops.job_run_instance i" +
+                    "  join ops.job_run r on r.job_run_id = i.job_run_id" +
+                    "  where r.started_at < now() - ?::interval" +
+                    "  limit 10000)",
+                    interval);
+                totalInstDeleted += deleted;
+            } while (deleted >= 10000);
+
+            // Sonra parent tablo
+            do {
+                deleted = jdbc.update(
+                    "delete from ops.job_run where ctid in (" +
+                    "  select ctid from ops.job_run" +
+                    "  where started_at < now() - ?::interval" +
+                    "  limit 10000)",
+                    interval);
+                totalRunDeleted += deleted;
+            } while (deleted >= 10000);
+
+            if (totalRunDeleted > 0 || totalInstDeleted > 0) {
+                log.info("Job run cleanup: {} job_run + {} job_run_instance silindi (>{} gün)",
+                    totalRunDeleted, totalInstDeleted, retentionDays);
+            }
+        } catch (Exception e) {
+            log.warn("Job run cleanup hatasi: {}", e.getMessage());
+        }
+    }
 }

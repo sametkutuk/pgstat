@@ -441,6 +441,11 @@ public class JobOrchestrator {
                 }
             }
 
+            // 3c. Job run history cleanup — UTC saat 2'de gunde 1 kez
+            if (currentUtcHour == 2) {
+                purgeEvaluator.purgeJobRunHistory();
+            }
+
             // 4. Alert kurallarini degerlendir
             alertRuleEvaluator.evaluate();
 

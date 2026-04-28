@@ -210,8 +210,16 @@ public class AlertRuleEvaluator {
     // =========================================================================
 
     private void evaluateAdaptive(Map<String, Object> rule) {
-        long ruleId = toLong(rule.get("rule_id"));
         String metricType = (String) rule.get("metric_type");
+
+        // Granular tip (statement/table/index) ise per-record adaptive eval'a dallan
+        // Her sorgu/tablo/index icin ayri baseline karsilastirmasi yapar
+        if (isGranularMetricType(metricType)) {
+            evaluateAdaptivePerRecord(rule);
+            return;
+        }
+
+        long ruleId = toLong(rule.get("rule_id"));
         String metricName = (String) rule.get("metric_name");
         String aggregation = (String) rule.get("aggregation");
         int windowMinutes = toInt(rule.get("evaluation_window_minutes"));
@@ -401,6 +409,272 @@ public class AlertRuleEvaluator {
             log.warn("Baseline okuma hatasi instance={} metric={} hour={}: {}", instancePk, metricKey, hour, e.getMessage());
             return null;
         }
+    }
+
+    // =========================================================================
+    // adaptive per-record: statement/table/index icin sorgu bazli anomaly
+    // =========================================================================
+
+    /**
+     * Granular adaptive: her queryid/tablo/index icin 4 haftalik saatlik baseline
+     * hesaplar, avg + k*stddev esigini asan record'lar icin alert olusturur.
+     * Hangi sorgu/tablo anormal net belli olur.
+     */
+    private void evaluateAdaptivePerRecord(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        int windowMinutes = toInt(rule.get("evaluation_window_minutes"));
+        String sensitivity = rule.get("sensitivity") != null ? (String) rule.get("sensitivity") : "medium";
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        String ruleName = (String) rule.get("rule_name");
+
+        BigDecimal kMultiplier = switch (sensitivity) {
+            case "low"  -> new BigDecimal("3.0");
+            case "high" -> new BigDecimal("1.5");
+            default     -> new BigDecimal("2.0");
+        };
+
+        int currentHour = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour();
+
+        List<Map<String, Object>> targets = loadTargetInstances(rule);
+        if (targets.isEmpty()) return;
+
+        for (Map<String, Object> target : targets) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+
+            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) continue;
+
+            // Per-record anomaly tespiti: baseline asan record'lari bul
+            List<Map<String, Object>> anomalies = findAnomalousRecords(
+                instancePk, metricType, metricName, windowMinutes, currentHour, kMultiplier);
+
+            String prevSeverity = getPrevSeverity(ruleId, instancePk);
+
+            if (anomalies.isEmpty()) {
+                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                continue;
+            }
+
+            Map<String, Object> top = anomalies.get(0);
+            BigDecimal currentVal = toBDSafe(top.get("current_val"));
+            BigDecimal baselineAvg = toBDSafe(top.get("baseline_avg"));
+            BigDecimal upperWarning = toBDSafe(top.get("upper_warning"));
+            BigDecimal upperCritical = toBDSafe(top.get("upper_critical"));
+
+            if (currentVal == null || upperWarning == null) {
+                updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                continue;
+            }
+
+            String severity = (upperCritical != null && currentVal.compareTo(upperCritical) > 0)
+                ? "critical" : "warning";
+
+            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+            ctx.put("value", currentVal);
+            ctx.put("current_value", currentVal);
+            ctx.put("baseline_avg", baselineAvg);
+            ctx.put("upper_warning", upperWarning);
+            ctx.put("upper_critical", upperCritical);
+            ctx.put("threshold", "critical".equals(severity) ? upperCritical : upperWarning);
+            ctx.put("baseline_hour", currentHour);
+            ctx.put("sensitivity", sensitivity);
+            ctx.put("window", windowMinutes);
+            populateRecordCtx(ctx, top, metricType);
+            ctx.put("top_queries_summary", buildTopSummaryText(anomalies, metricType));
+
+            String fallbackMsg = buildPerRecordAdaptiveMessage(metricType, metricName, top,
+                currentVal, baselineAvg, severity, currentHour);
+            String detailsJson = buildPerRecordsJson(anomalies, metricType, windowMinutes,
+                "sensitivity=" + sensitivity + " k=" + kMultiplier, "adaptive_anomaly");
+
+            String code = templateCodeForType(metricType, "spike");
+            String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, code);
+
+            alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
+                instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
+            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+
+            updateLastEval(ruleId, instancePk, currentVal, severity);
+        }
+    }
+
+    /**
+     * Per-record anomaly tespiti: her queryid/tablo/index icin
+     * son N dk degeri vs 4 haftalik ayni saat baseline (avg + k*stddev).
+     * Esigi asanlari doner.
+     */
+    private List<Map<String, Object>> findAnomalousRecords(long instancePk,
+                                                            String metricType, String metricName,
+                                                            int windowMinutes, int currentHour,
+                                                            BigDecimal kMultiplier) {
+        try {
+            String col = toFactColumn(metricName, metricType);
+            return switch (metricType) {
+                case "statement_metric" -> jdbc.queryForList(
+                    "with current_window as (" +
+                    "  select ss.queryid, ss.dbid, ss.userid," +
+                    "         sum(d." + col + ")::numeric as current_val," +
+                    "         left(coalesce(qt.query_text, '?'), 300) as query_text," +
+                    "         dbr.datname, rr.rolname" +
+                    "  from fact.pgss_delta d" +
+                    "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                    "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+                    "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
+                    "  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid" +
+                    "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+                    "  group by ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
+                    "), historical as (" +
+                    "  select ss.queryid, ss.dbid, ss.userid," +
+                    "         avg(window_sum) as baseline_avg," +
+                    "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
+                    "  from (" +
+                    "    select ss.queryid, ss.dbid, ss.userid," +
+                    "           date_trunc('hour', d.sample_ts) as hour_bucket," +
+                    "           sum(d." + col + ")::numeric as window_sum" +
+                    "    from fact.pgss_delta d" +
+                    "    join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+                    "    where d.instance_pk = ?" +
+                    "      and d.sample_ts > now() - interval '28 days'" +
+                    "      and d.sample_ts <= now() - ?::interval" +
+                    "      and extract(hour from d.sample_ts) = ?" +
+                    "    group by ss.queryid, ss.dbid, ss.userid, date_trunc('hour', d.sample_ts)" +
+                    "  ) sub" +
+                    "  group by queryid, dbid, userid" +
+                    "  having count(*) >= 3" +  // en az 3 veri noktasi olsun (anlamli stddev icin)
+                    ")" +
+                    "select c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
+                    "       h.baseline_avg, h.baseline_stddev," +
+                    "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
+                    "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
+                    "  from current_window c" +
+                    "  join historical h on h.queryid = c.queryid and h.dbid = c.dbid and h.userid = c.userid" +
+                    "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
+                    "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
+                    "  limit 10",
+                    instancePk, windowMinutes + " minutes",
+                    instancePk, windowMinutes + " minutes", currentHour,
+                    kMultiplier, kMultiplier, kMultiplier);
+
+                case "table_metric" -> {
+                    String tCol = toFactColumn(metricName, "table_metric");
+                    yield jdbc.queryForList(
+                        "with current_window as (" +
+                        "  select t.schemaname, t.relname, t.dbid," +
+                        "         sum(t." + tCol + ")::numeric as current_val," +
+                        "         max(t.n_dead_tup_estimate) as dead_tup," +
+                        "         max(t.n_live_tup_estimate) as live_tup," +
+                        "         dbr.datname" +
+                        "  from fact.pg_table_stat_delta t" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+                        "  group by t.schemaname, t.relname, t.dbid, dbr.datname" +
+                        "), historical as (" +
+                        "  select schemaname, relname, dbid," +
+                        "         avg(window_sum) as baseline_avg," +
+                        "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
+                        "  from (" +
+                        "    select t.schemaname, t.relname, t.dbid," +
+                        "           date_trunc('hour', t.sample_ts) as hour_bucket," +
+                        "           sum(t." + tCol + ")::numeric as window_sum" +
+                        "    from fact.pg_table_stat_delta t" +
+                        "    where t.instance_pk = ?" +
+                        "      and t.sample_ts > now() - interval '28 days'" +
+                        "      and t.sample_ts <= now() - ?::interval" +
+                        "      and extract(hour from t.sample_ts) = ?" +
+                        "    group by t.schemaname, t.relname, t.dbid, date_trunc('hour', t.sample_ts)" +
+                        "  ) sub" +
+                        "  group by schemaname, relname, dbid" +
+                        "  having count(*) >= 3" +
+                        ")" +
+                        "select c.schemaname, c.relname, c.dbid, c.current_val, c.datname," +
+                        "       c.dead_tup, c.live_tup," +
+                        "       h.baseline_avg, h.baseline_stddev," +
+                        "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
+                        "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
+                        "  from current_window c" +
+                        "  join historical h on h.schemaname = c.schemaname and h.relname = c.relname and h.dbid = c.dbid" +
+                        "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
+                        "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
+                        "  limit 10",
+                        instancePk, windowMinutes + " minutes",
+                        instancePk, windowMinutes + " minutes", currentHour,
+                        kMultiplier, kMultiplier, kMultiplier);
+                }
+
+                case "index_metric" -> {
+                    String iCol = toFactColumn(metricName, "index_metric");
+                    yield jdbc.queryForList(
+                        "with current_window as (" +
+                        "  select i.schemaname, i.indexrelname, i.table_relname, i.dbid," +
+                        "         sum(i." + iCol + ")::numeric as current_val, dbr.datname" +
+                        "  from fact.pg_index_stat_delta i" +
+                        "  left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid" +
+                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
+                        "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid, dbr.datname" +
+                        "), historical as (" +
+                        "  select schemaname, indexrelname, dbid," +
+                        "         avg(window_sum) as baseline_avg," +
+                        "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
+                        "  from (" +
+                        "    select i.schemaname, i.indexrelname, i.dbid," +
+                        "           date_trunc('hour', i.sample_ts) as hour_bucket," +
+                        "           sum(i." + iCol + ")::numeric as window_sum" +
+                        "    from fact.pg_index_stat_delta i" +
+                        "    where i.instance_pk = ?" +
+                        "      and i.sample_ts > now() - interval '28 days'" +
+                        "      and i.sample_ts <= now() - ?::interval" +
+                        "      and extract(hour from i.sample_ts) = ?" +
+                        "    group by i.schemaname, i.indexrelname, i.dbid, date_trunc('hour', i.sample_ts)" +
+                        "  ) sub" +
+                        "  group by schemaname, indexrelname, dbid" +
+                        "  having count(*) >= 3" +
+                        ")" +
+                        "select c.schemaname, c.indexrelname, c.table_relname, c.dbid, c.current_val, c.datname," +
+                        "       h.baseline_avg, h.baseline_stddev," +
+                        "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
+                        "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
+                        "  from current_window c" +
+                        "  join historical h on h.schemaname = c.schemaname and h.indexrelname = c.indexrelname and h.dbid = c.dbid" +
+                        "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
+                        "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
+                        "  limit 10",
+                        instancePk, windowMinutes + " minutes",
+                        instancePk, windowMinutes + " minutes", currentHour,
+                        kMultiplier, kMultiplier, kMultiplier);
+                }
+
+                default -> java.util.Collections.emptyList();
+            };
+        } catch (Exception e) {
+            log.warn("findAnomalousRecords hatasi {}/{} instance={}: {}",
+                metricType, metricName, instancePk, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
+    }
+
+    /** Per-record adaptive anomaly mesaji */
+    private String buildPerRecordAdaptiveMessage(String metricType, String metricName,
+                                                  Map<String, Object> rec, BigDecimal current,
+                                                  BigDecimal baseline, String severity, int hour) {
+        return switch (metricType) {
+            case "statement_metric" -> String.format(
+                "Sorgu anomali: %s = %s (saat %02d:00 baseline avg=%s, %s). DB=%s User=%s Q=%s",
+                metricName, current, hour, baseline, severity,
+                rec.get("datname"), rec.get("rolname"),
+                trimText((String) rec.get("query_text"), 80));
+            case "table_metric" -> String.format(
+                "Tablo anomali: %s = %s (saat %02d:00 baseline avg=%s). Tablo=%s.%s",
+                metricName, current, hour, baseline, rec.get("schemaname"), rec.get("relname"));
+            case "index_metric" -> String.format(
+                "Index anomali: %s = %s (saat %02d:00 baseline avg=%s). Index=%s.%s",
+                metricName, current, hour, baseline, rec.get("schemaname"), rec.get("indexrelname"));
+            default -> "Anomali tespit edildi";
+        };
     }
 
     // =========================================================================

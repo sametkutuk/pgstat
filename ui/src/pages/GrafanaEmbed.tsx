@@ -1,4 +1,4 @@
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
 
 // =========================================================================
@@ -98,13 +98,14 @@ const DASHBOARDS: DashboardEntry[] = [
 ];
 
 const CATEGORY_LABELS: Record<DashboardEntry['category'], { label: string; description: string }> = {
-    fleet:  { label: '🌍 Fleet — Genel Görünüm',         description: 'Tüm sistemin sağlık panosu' },
-    topic:  { label: '🎯 Konular — Cross-Instance',       description: 'Konu seç, tüm instance\'ları karşılaştır, bir satıra tıklayınca instance detayına git' },
-    detail: { label: '🔬 Detay — Tek Instance / Sorgu',   description: 'Drill-down hedefleri (genelde otomatik açılır)' },
+    fleet: { label: '🌍 Fleet — Genel Görünüm', description: 'Tüm sistemin sağlık panosu' },
+    topic: { label: '🎯 Konular — Cross-Instance', description: 'Konu seç, tüm instance\'ları karşılaştır, bir satıra tıklayınca instance detayına git' },
+    detail: { label: '🔬 Detay — Tek Instance / Sorgu', description: 'Drill-down hedefleri (genelde otomatik açılır)' },
 };
 
 export default function GrafanaEmbed() {
     const { uid } = useParams<{ uid?: string }>();
+    const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const [iframeKey, setIframeKey] = useState(0);
 
@@ -167,12 +168,20 @@ export default function GrafanaEmbed() {
 
     // Belirli dashboard — iframe ile göster
     const selected = DASHBOARDS.find(d => d.uid === uid);
-    // theme=light → açık tema (env'de de varsayılan light)
-    // kiosk parametresi YOK çünkü:
-    //   kiosk=tv → variable dropdown'lari da gizliyor (instance secimi yapilamaz)
-    //   kiosk=1  → bazi Grafana surumlerinde same effect
-    // Sadece sol Grafana sidebar'i (hamburger menu) acik kalir, kullanici onu zaten ignore eder
-    const grafanaUrl = `/grafana/d/${uid}/?orgId=1&theme=light`;
+
+    // pgstat UI'dan from/to ve var-* parametreleri geçirilebilir
+    // Örn: /grafana/pgstat-instance-detail?from=now-24h&to=now&var-instance=3
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
+    const variableParams = Array.from(searchParams.entries())
+        .filter(([k]) => k.startsWith('var-'))
+        .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+        .join('&');
+
+    let grafanaUrl = `/grafana/d/${uid}/?orgId=1&theme=light`;
+    if (from) grafanaUrl += `&from=${encodeURIComponent(from)}`;
+    if (to) grafanaUrl += `&to=${encodeURIComponent(to)}`;
+    if (variableParams) grafanaUrl += `&${variableParams}`;
 
     return (
         <div className="-m-6 flex flex-col" style={{ height: 'calc(100vh - 0px)' }}>
