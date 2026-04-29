@@ -486,6 +486,11 @@ public class JobOrchestrator {
                     }
                     log.info("Nightly snapshot tamamlandi: {} instance, {} satir",
                         readyInstances.size(), snapshotRows);
+
+                    // Snapshot toplandiktan hemen sonra gunluk alert'leri de degerlendir
+                    // (INDEX_SUSPECT_MISSING, INDEX_UNUSED — snapshot verisine bagli)
+                    actionableAlertEvaluator.evaluateAll();
+
                     if (nightlyTriggered) {
                         jdbc.update("update control.nightly_snapshot_trigger set status = 'done', finished_at = now(), rows_written = ? where status = 'running'", snapshotRows);
                     }
@@ -497,14 +502,9 @@ public class JobOrchestrator {
                 }
             }
 
-            // 3e. Aksiyon-odakli alert'ler — UTC saat 4'te (snapshot'tan 1 saat sonra)
-            if (currentUtcHour == 4) {
-                try {
-                    actionableAlertEvaluator.evaluateAll();
-                } catch (Exception e) {
-                    log.warn("Actionable alert evaluator hatasi: {}", e.getMessage());
-                }
-            }
+            // 3e. Aksiyon-odakli gunluk alert'ler (INDEX_SUSPECT, INDEX_UNUSED)
+            // Artik snapshot tamamlandiktan hemen sonra calisir (yukarida).
+            // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
 
             // 4. Alert kurallarini degerlendir
             alertRuleEvaluator.evaluate();
