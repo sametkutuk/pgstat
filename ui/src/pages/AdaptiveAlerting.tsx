@@ -218,6 +218,14 @@ function BaselinesPanel() {
         invalidateMut.mutate({ pk: selectedInstance, reason });
     };
 
+    const snapshotMut = useMutation({
+        mutationFn: () => apiPost('/adaptive-alerting/nightly-snapshot/trigger', {}),
+        onSuccess: () => {
+            toast.success('Snapshot toplama başlatıldı. 10-30 saniye içinde tamamlanacak.');
+        },
+        onError: (e: any) => toast.error(e?.message || 'Snapshot tetikleme başarısız'),
+    });
+
     return (
         <div className="space-y-4">
             <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-3 flex items-center gap-3">
@@ -228,6 +236,17 @@ function BaselinesPanel() {
                 <button onClick={() => triggerMut.mutate(null)} disabled={triggerMut.isPending}
                     className="px-4 py-2 bg-[#0284C7] text-white text-sm rounded hover:bg-[#0369A1] disabled:opacity-50 whitespace-nowrap">
                     {triggerMut.isPending ? 'Tetikleniyor...' : 'Tüm Instance\'lar İçin Hesapla'}
+                </button>
+            </div>
+
+            <div className="bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg p-3 flex items-center gap-3">
+                <span className="text-xl">📸</span>
+                <div className="flex-1 text-xs text-[#5B21B6]">
+                    PG parametreleri, tablo/index boyutları, sequence durumu ve XID age bilgisi normalde gece 03:00 UTC'de toplanır. Hemen toplamak için:
+                </div>
+                <button onClick={() => snapshotMut.mutate()} disabled={snapshotMut.isPending}
+                    className="px-4 py-2 bg-[#7C3AED] text-white text-sm rounded hover:bg-[#6D28D9] disabled:opacity-50 whitespace-nowrap">
+                    {snapshotMut.isPending ? 'Toplanıyor...' : 'Snapshot Topla'}
                 </button>
             </div>
 
