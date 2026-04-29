@@ -64,6 +64,10 @@ public class JobOrchestrator {
     private final com.pgstat.collector.service.PurgeEvaluator purgeEvaluator;
     private final com.pgstat.collector.service.PgssResetTracker resetTracker;
 
+    // Gece snapshot + aksiyon-odakli alert'ler
+    private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
+    private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
+
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
                            @Qualifier("collectorExecutor") Executor collectorExecutor,
@@ -81,7 +85,9 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.BaselineCalculator baselineCalculator,
                            com.pgstat.collector.service.PartitionManager partitionManager,
                            com.pgstat.collector.service.PurgeEvaluator purgeEvaluator,
-                           com.pgstat.collector.service.PgssResetTracker resetTracker) {
+                           com.pgstat.collector.service.PgssResetTracker resetTracker,
+                           com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
+                           com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -100,6 +106,8 @@ public class JobOrchestrator {
         this.partitionManager = partitionManager;
         this.purgeEvaluator = purgeEvaluator;
         this.resetTracker = resetTracker;
+        this.nightlySnapshotCollector = nightlySnapshotCollector;
+        this.actionableAlertEvaluator = actionableAlertEvaluator;
     }
 
     /**
@@ -444,6 +452,36 @@ public class JobOrchestrator {
             // 3c. Job run history cleanup — UTC saat 2'de gunde 1 kez
             if (currentUtcHour == 2) {
                 purgeEvaluator.purgeJobRunHistory();
+            }
+
+            // 3d. Nightly PG snapshot — UTC saat 3'te gunde 1 kez
+            // pg_settings, tablo/index boyutlari, sequence durumu, xid age toplar
+            if (currentUtcHour == 3) {
+                try {
+                    log.info("Nightly snapshot job basliyor...");
+                    List<com.pgstat.collector.model.InstanceInfo> readyInstances = inventoryRepo.findAllReady();
+                    long snapshotRows = 0;
+                    for (com.pgstat.collector.model.InstanceInfo inst : readyInstances) {
+                        try {
+                            snapshotRows += nightlySnapshotCollector.collectAll(inst);
+                        } catch (Exception e) {
+                            log.warn("Nightly snapshot hatasi {}: {}", inst.instanceId(), e.getMessage());
+                        }
+                    }
+                    log.info("Nightly snapshot tamamlandi: {} instance, {} satir",
+                        readyInstances.size(), snapshotRows);
+                } catch (Exception e) {
+                    log.warn("Nightly snapshot genel hatasi: {}", e.getMessage());
+                }
+            }
+
+            // 3e. Aksiyon-odakli alert'ler — UTC saat 4'te (snapshot'tan 1 saat sonra)
+            if (currentUtcHour == 4) {
+                try {
+                    actionableAlertEvaluator.evaluateAll();
+                } catch (Exception e) {
+                    log.warn("Actionable alert evaluator hatasi: {}", e.getMessage());
+                }
             }
 
             // 4. Alert kurallarini degerlendir
