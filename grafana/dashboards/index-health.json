@@ -1,0 +1,303 @@
+{
+    "uid": "pgstat-index-health",
+    "title": "pgstat — Index Health Overview",
+    "tags": [
+        "pgstat",
+        "index"
+    ],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "5m",
+    "time": {
+        "from": "now-24h",
+        "to": "now"
+    },
+    "templating": {
+        "list": [
+            {
+                "name": "service_group",
+                "type": "query",
+                "datasource": {
+                    "type": "postgres",
+                    "uid": "pgstat"
+                },
+                "query": "select distinct coalesce(service_group, '(none)') as __text, coalesce(service_group, '(none)') as __value from control.instance_inventory where is_active order by 1",
+                "refresh": 1,
+                "multi": true,
+                "includeAll": true,
+                "label": "Service Group"
+            }
+        ]
+    },
+    "panels": [
+        {
+            "id": 1,
+            "title": "Total Distinct Indexes",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 0,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "decimals": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "blue",
+                                "value": null
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "select count(distinct (ix.instance_pk, ix.dbid, ix.index_relid)) as \"Total Indexes\" from fact.pg_index_stat_delta ix join control.instance_inventory i on i.instance_pk = ix.instance_pk where ix.sample_ts >= now() - interval '1 hour' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 2,
+            "title": "Unused Indexes (30d, >100MB)",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 8,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "decimals": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 10
+                            },
+                            {
+                                "color": "red",
+                                "value": 50
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "with idx_usage as (select ix.instance_pk, ix.dbid, ix.index_relid, ix.schemaname, ix.index_relname, coalesce(sum(ix.idx_scan_delta), 0) as total_scans from fact.pg_index_stat_delta ix join control.instance_inventory i on i.instance_pk = ix.instance_pk where ix.sample_ts >= now() - interval '30 days' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by ix.instance_pk, ix.dbid, ix.index_relid, ix.schemaname, ix.index_relname having coalesce(sum(ix.idx_scan_delta), 0) = 0), idx_size as (select rs.instance_pk, rs.dbid, rs.schemaname, rs.relname, rs.index_size_bytes from fact.pg_relation_size_snapshot rs where rs.snapshot_ts = (select max(snapshot_ts) from fact.pg_relation_size_snapshot) and rs.relkind = 'i' and coalesce(rs.index_size_bytes, 0) > 104857600) select count(*) as \"Unused Indexes\" from idx_usage u join idx_size s on s.instance_pk = u.instance_pk and s.dbid = u.dbid and s.schemaname = u.schemaname and s.relname = u.index_relname",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 3,
+            "title": "Missing Index Suspects",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 16,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "decimals": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 5
+                            },
+                            {
+                                "color": "red",
+                                "value": 20
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "select count(*) as \"Missing Index Suspects\" from (select t.instance_pk, t.dbid, t.relid from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk where $__timeFilter(t.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by t.instance_pk, t.dbid, t.relid having coalesce(sum(t.seq_scan_delta), 0) > coalesce(nullif(sum(t.idx_scan_delta), 0), 1) * 100 and coalesce(sum(t.seq_tup_read_delta), 0) > 100000) sub",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 10,
+            "title": "Top 30 Missing Index Suspects",
+            "type": "table",
+            "gridPos": {
+                "h": 10,
+                "w": 24,
+                "x": 0,
+                "y": 4
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "links": [
+                        {
+                            "title": "Instance Detail'a git",
+                            "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"
+                        }
+                    ]
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "table_size_bytes"
+                        },
+                        "properties": [
+                            {
+                                "id": "unit",
+                                "value": "bytes"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "instance_pk"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "rawSql": "select t.instance_pk, i.display_name as instance, t.schemaname || '.' || t.relname as relation, coalesce(sum(t.seq_scan_delta), 0) as seq_scans, coalesce(sum(t.idx_scan_delta), 0) as idx_scans, case when coalesce(sum(t.idx_scan_delta), 0) = 0 then coalesce(sum(t.seq_scan_delta), 0) else round(coalesce(sum(t.seq_scan_delta), 0)::numeric / nullif(sum(t.idx_scan_delta), 0), 1) end as seq_idx_ratio, coalesce(sum(t.seq_tup_read_delta), 0) as seq_tup_read, coalesce(rs.table_size_bytes, 0) as table_size_bytes from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk left join lateral (select rs2.table_size_bytes from fact.pg_relation_size_snapshot rs2 where rs2.instance_pk = t.instance_pk and rs2.dbid = t.dbid and rs2.schemaname = t.schemaname and rs2.relname = t.relname and rs2.relkind = 'r' order by rs2.snapshot_ts desc limit 1) rs on true where $__timeFilter(t.sample_ts) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by t.instance_pk, i.display_name, t.schemaname, t.relname, t.dbid, rs.table_size_bytes having coalesce(sum(t.seq_scan_delta), 0) > coalesce(nullif(sum(t.idx_scan_delta), 0), 1) * 100 and coalesce(sum(t.seq_tup_read_delta), 0) > 100000 order by seq_scans desc limit 30",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 11,
+            "title": "Top 30 Unused Indexes",
+            "type": "table",
+            "gridPos": {
+                "h": 10,
+                "w": 24,
+                "x": 0,
+                "y": 14
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "links": [
+                        {
+                            "title": "Instance Detail'a git",
+                            "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"
+                        }
+                    ]
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "index_size_bytes"
+                        },
+                        "properties": [
+                            {
+                                "id": "unit",
+                                "value": "bytes"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "instance_pk"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "rawSql": "with idx_usage as (select ix.instance_pk, ix.dbid, ix.schemaname, ix.table_relname, ix.index_relname, coalesce(sum(ix.idx_scan_delta), 0) as total_scans_30d from fact.pg_index_stat_delta ix join control.instance_inventory i on i.instance_pk = ix.instance_pk where ix.sample_ts >= now() - interval '30 days' and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by ix.instance_pk, ix.dbid, ix.schemaname, ix.table_relname, ix.index_relname having coalesce(sum(ix.idx_scan_delta), 0) = 0) select u.instance_pk, i.display_name as instance, u.index_relname as index_name, u.table_relname as table_name, coalesce(rs.index_size_bytes, 0) as index_size_bytes, u.total_scans_30d from idx_usage u join control.instance_inventory i on i.instance_pk = u.instance_pk left join lateral (select rs2.index_size_bytes from fact.pg_relation_size_snapshot rs2 where rs2.instance_pk = u.instance_pk and rs2.dbid = u.dbid and rs2.schemaname = u.schemaname and rs2.relname = u.index_relname and rs2.relkind = 'i' order by rs2.snapshot_ts desc limit 1) rs on true where coalesce(rs.index_size_bytes, 0) > 104857600 order by index_size_bytes desc limit 30",
+                    "format": "table"
+                }
+            ]
+        }
+    ]
+}

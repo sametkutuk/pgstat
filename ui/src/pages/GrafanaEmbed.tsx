@@ -79,6 +79,34 @@ const DASHBOARDS: DashboardEntry[] = [
         icon: '📈',
         category: 'topic',
     },
+    {
+        uid: 'pgstat-index-health',
+        title: 'Index Health Overview',
+        description: 'Eksik index, kullanılmayan index, cache miss — fleet karşılaştırması',
+        icon: '🔧',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-memory-sort',
+        title: 'Memory & Sort Health',
+        description: 'Temp file üretimi, work_mem önerileri, en çok temp tüketen sorgular',
+        icon: '🧠',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-connection-lifecycle',
+        title: 'Connection Lifecycle',
+        description: 'Aktif/idle/idle_in_tx oranları, application bazlı bağlantı, pool sağlığı',
+        icon: '🔌',
+        category: 'topic',
+    },
+    {
+        uid: 'pgstat-wraparound',
+        title: 'Wraparound & Vacuum Freeze',
+        description: 'XID yaşı, wraparound riski, autovacuum freeze takibi',
+        icon: '⏰',
+        category: 'topic',
+    },
 
     // === DETAIL (genelde drill-down ile açılır, list'te de gösterilir) ===
     {
