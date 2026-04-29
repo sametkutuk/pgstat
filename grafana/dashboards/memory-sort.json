@@ -1,385 +1,385 @@
 {
-    "uid":  "pgstat-memory-sort",
-    "title":  "pgstat â€” Memory \u0026 Sort Health",
-    "tags":  [
-                 "pgstat",
-                 "memory"
-             ],
-    "timezone":  "browser",
-    "schemaVersion":  39,
-    "version":  1,
-    "refresh":  "5m",
-    "time":  {
-                 "from":  "now-24h",
-                 "to":  "now"
-             },
-    "templating":  {
-                       "list":  [
-                                    {
-                                        "query":  "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "service_group",
-                                        "type":  "query",
-                                        "label":  "Service Group",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    },
-                                    {
-                                        "query":  "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "instance",
-                                        "type":  "query",
-                                        "label":  "Instance",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    },
-                                    {
-                                        "query":  "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "database",
-                                        "type":  "query",
-                                        "label":  "Database",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    }
-                                ]
-                   },
-    "panels":  [
-                   {
-                       "id":  1,
-                       "title":  "Total Temp Files (24h)",
-                       "type":  "stat",
-                       "gridPos":  {
-                                       "h":  4,
-                                       "w":  8,
-                                       "x":  0,
-                                       "y":  0
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "short",
-                                                            "decimals":  0,
-                                                            "thresholds":  {
-                                                                               "mode":  "absolute",
-                                                                               "steps":  [
-                                                                                             {
-                                                                                                 "color":  "green",
-                                                                                                 "value":  null
-                                                                                             },
-                                                                                             {
-                                                                                                 "color":  "yellow",
-                                                                                                 "value":  100
-                                                                                             },
-                                                                                             {
-                                                                                                 "color":  "red",
-                                                                                                 "value":  1000
-                                                                                             }
-                                                                                         ]
-                                                                           }
-                                                        }
-                                       },
-                       "options":  {
-                                       "reduceOptions":  {
-                                                             "calcs":  [
-                                                                           "lastNotNull"
-                                                                       ]
-                                                         },
-                                       "textMode":  "value_and_name",
-                                       "colorMode":  "background",
-                                       "graphMode":  "none"
-                                   },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select coalesce(sum(d.temp_files_delta), 0) as \"Temp Files\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts \u003e= now() - interval \u002724 hours\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database))",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  2,
-                       "title":  "Total Temp Bytes (24h)",
-                       "type":  "stat",
-                       "gridPos":  {
-                                       "h":  4,
-                                       "w":  8,
-                                       "x":  8,
-                                       "y":  0
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "decbytes",
-                                                            "decimals":  1,
-                                                            "thresholds":  {
-                                                                               "mode":  "absolute",
-                                                                               "steps":  [
-                                                                                             {
-                                                                                                 "color":  "green",
-                                                                                                 "value":  null
-                                                                                             },
-                                                                                             {
-                                                                                                 "color":  "yellow",
-                                                                                                 "value":  1073741824
-                                                                                             },
-                                                                                             {
-                                                                                                 "color":  "red",
-                                                                                                 "value":  10737418240
-                                                                                             }
-                                                                                         ]
-                                                                           }
-                                                        }
-                                       },
-                       "options":  {
-                                       "reduceOptions":  {
-                                                             "calcs":  [
-                                                                           "lastNotNull"
-                                                                       ]
-                                                         },
-                                       "textMode":  "value_and_name",
-                                       "colorMode":  "background",
-                                       "graphMode":  "none"
-                                   },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select coalesce(sum(d.temp_bytes_delta), 0) as \"Temp Bytes\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts \u003e= now() - interval \u002724 hours\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database))",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  3,
-                       "title":  "Avg work_mem",
-                       "type":  "stat",
-                       "gridPos":  {
-                                       "h":  4,
-                                       "w":  8,
-                                       "x":  16,
-                                       "y":  0
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "string",
-                                                            "thresholds":  {
-                                                                               "mode":  "absolute",
-                                                                               "steps":  [
-                                                                                             {
-                                                                                                 "color":  "blue",
-                                                                                                 "value":  null
-                                                                                             }
-                                                                                         ]
-                                                                           }
-                                                        }
-                                       },
-                       "options":  {
-                                       "reduceOptions":  {
-                                                             "calcs":  [
-                                                                           "lastNotNull"
-                                                                       ]
-                                                         },
-                                       "textMode":  "value_and_name",
-                                       "colorMode":  "background",
-                                       "graphMode":  "none"
-                                   },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select coalesce(round(avg(nullif(s.setting_value, \u0027\u0027)::numeric)), 0)::text || \u0027 \u0027 || coalesce(max(s.unit), \u0027kB\u0027) as \"Avg work_mem\" from fact.pg_settings_snapshot s join control.instance_inventory i on i.instance_pk = s.instance_pk where s.setting_name = \u0027work_mem\u0027 and s.snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot where setting_name = \u0027work_mem\u0027) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  10,
-                       "title":  "Per-Instance Temp File Pattern",
-                       "type":  "table",
-                       "gridPos":  {
-                                       "h":  8,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  4
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "links":  [
-                                                                          {
-                                                                              "title":  "Instance Detail\u0027a git",
-                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
-                                                                          }
-                                                                      ]
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "temp_bytes"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "bytes"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "instance_pk"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.hidden",
-                                                                                        "value":  true
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select d.instance_pk, i.display_name as instance, d.datname, coalesce(sum(d.temp_files_delta), 0) as temp_files, coalesce(sum(d.temp_bytes_delta), 0) as temp_bytes, coalesce(max(wm.setting_value), \u00274096\u0027) as work_mem from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = d.instance_pk and s.setting_name = \u0027work_mem\u0027 order by s.snapshot_ts desc limit 1) wm on true where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database)) group by d.instance_pk, i.display_name, d.datname order by temp_bytes desc",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  11,
-                       "title":  "Top 30 Temp Producing Queries",
-                       "type":  "table",
-                       "gridPos":  {
-                                       "h":  10,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  12
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "links":  [
-                                                                          {
-                                                                              "title":  "Instance Detail\u0027a git",
-                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
-                                                                          }
-                                                                      ]
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "temp_bytes"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "bytes"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "instance_pk"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.hidden",
-                                                                                        "value":  true
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select p.instance_pk, i.display_name as instance, left(qt.query_text, 80) as query, coalesce(sum(p.temp_blks_written_delta), 0) * 8192 as temp_bytes from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk join dim.statement_series ss on ss.statement_series_id = p.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and coalesce(p.temp_blks_written_delta, 0) \u003e 0 group by p.instance_pk, i.display_name, left(qt.query_text, 80) order by temp_bytes desc limit 30",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  12,
-                       "title":  "work_mem Suggestion",
-                       "type":  "table",
-                       "gridPos":  {
-                                       "h":  8,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  22
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "links":  [
-                                                                          {
-                                                                              "title":  "Instance Detail\u0027a git",
-                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
-                                                                          }
-                                                                      ]
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "max_temp_per_query"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "bytes"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "instance_pk"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.hidden",
-                                                                                        "value":  true
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "with temp_per_instance as (select p.instance_pk, max(coalesce(p.temp_blks_written_delta, 0) * 8192) as max_temp_per_query from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by p.instance_pk) select t.instance_pk, i.display_name as instance, coalesce(wm.setting_value, \u00274096\u0027) as current_work_mem, t.max_temp_per_query, case when t.max_temp_per_query \u003e 0 then (t.max_temp_per_query / 1024)::text || \u0027kB\u0027 else coalesce(wm.setting_value, \u00274096\u0027) || \u0027kB (no change)\u0027 end as suggested_work_mem from temp_per_instance t join control.instance_inventory i on i.instance_pk = t.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = t.instance_pk and s.setting_name = \u0027work_mem\u0027 order by s.snapshot_ts desc limit 1) wm on true where t.max_temp_per_query \u003e 0 order by t.max_temp_per_query desc",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   }
-               ]
+    "uid": "pgstat-memory-sort",
+    "title": "pgstat â€” Memory \u0026 Sort Health",
+    "tags": [
+        "pgstat",
+        "memory"
+    ],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "version": 1,
+    "refresh": "5m",
+    "time": {
+        "from": "now-24h",
+        "to": "now"
+    },
+    "templating": {
+        "list": [
+            {
+                "query": "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
+                "datasource": {
+                    "type": "postgres",
+                    "uid": "pgstat"
+                },
+                "includeAll": true,
+                "name": "service_group",
+                "type": "query",
+                "label": "Service Group",
+                "multi": true,
+                "refresh": 1
+            },
+            {
+                "query": "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
+                "datasource": {
+                    "type": "postgres",
+                    "uid": "pgstat"
+                },
+                "includeAll": true,
+                "name": "instance",
+                "type": "query",
+                "label": "Instance",
+                "multi": true,
+                "refresh": 1
+            },
+            {
+                "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
+                "datasource": {
+                    "type": "postgres",
+                    "uid": "pgstat"
+                },
+                "includeAll": true,
+                "name": "database",
+                "type": "query",
+                "label": "Database",
+                "multi": true,
+                "refresh": 1
+            }
+        ]
+    },
+    "panels": [
+        {
+            "id": 1,
+            "title": "Total Temp Files (24h)",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 0,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "decimals": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 100
+                            },
+                            {
+                                "color": "red",
+                                "value": 1000
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "select coalesce(sum(d.temp_files_delta), 0) as \"Temp Files\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts \u003e= now() - interval \u002724 hours\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database))",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 2,
+            "title": "Total Temp Bytes (24h)",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 8,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "decbytes",
+                    "decimals": 1,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 1073741824
+                            },
+                            {
+                                "color": "red",
+                                "value": 10737418240
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "select coalesce(sum(d.temp_bytes_delta), 0) as \"Temp Bytes\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts \u003e= now() - interval \u002724 hours\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database))",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 3,
+            "title": "Avg work_mem",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 16,
+                "y": 0
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "string",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "blue",
+                                "value": null
+                            }
+                        ]
+                    }
+                }
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "textMode": "value_and_name",
+                "colorMode": "background",
+                "graphMode": "none"
+            },
+            "targets": [
+                {
+                    "rawSql": "select coalesce(round(avg(nullif(s.setting_value, \u0027\u0027)::numeric)), 0)::text || \u0027 \u0027 || coalesce(max(s.unit), \u0027kB\u0027) as \"Avg work_mem\" from fact.pg_settings_snapshot s join control.instance_inventory i on i.instance_pk = s.instance_pk where s.setting_name = \u0027work_mem\u0027 and s.snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot where setting_name = \u0027work_mem\u0027) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 10,
+            "title": "Per-Instance Temp File Pattern",
+            "type": "table",
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 4
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "links": [
+                        {
+                            "title": "Instance Detail\u0027a git",
+                            "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                        }
+                    ]
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "temp_bytes"
+                        },
+                        "properties": [
+                            {
+                                "id": "unit",
+                                "value": "bytes"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "instance_pk"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "rawSql": "select d.instance_pk, i.display_name as instance, d.datname, coalesce(sum(d.temp_files_delta), 0) as temp_files, coalesce(sum(d.temp_bytes_delta), 0) as temp_bytes, coalesce(max(wm.setting_value), \u00274096\u0027) as work_mem from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = d.instance_pk and s.setting_name = \u0027work_mem\u0027 order by s.snapshot_ts desc limit 1) wm on true where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or d.datname in ($database)) group by d.instance_pk, i.display_name, d.datname order by temp_bytes desc",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 11,
+            "title": "Top 30 Temp Producing Queries",
+            "type": "table",
+            "gridPos": {
+                "h": 10,
+                "w": 24,
+                "x": 0,
+                "y": 12
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "links": [
+                        {
+                            "title": "Instance Detail\u0027a git",
+                            "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                        }
+                    ]
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "temp_bytes"
+                        },
+                        "properties": [
+                            {
+                                "id": "unit",
+                                "value": "bytes"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "instance_pk"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "rawSql": "select p.instance_pk, i.display_name as instance, left(qt.query_text, 80) as query, dbr.datname as database, coalesce(sum(p.temp_blks_written_delta), 0) * 8192 as temp_bytes from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk join dim.statement_series ss on ss.statement_series_id = p.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or dbr.datname in ($database)) and coalesce(p.temp_blks_written_delta, 0) \u003e 0 group by p.instance_pk, i.display_name, left(qt.query_text, 80), dbr.datname order by temp_bytes desc limit 30",
+                    "format": "table"
+                }
+            ]
+        },
+        {
+            "id": 12,
+            "title": "work_mem Suggestion",
+            "type": "table",
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 22
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "links": [
+                        {
+                            "title": "Instance Detail\u0027a git",
+                            "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                        }
+                    ]
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "max_temp_per_query"
+                        },
+                        "properties": [
+                            {
+                                "id": "unit",
+                                "value": "bytes"
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "instance_pk"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "targets": [
+                {
+                    "rawSql": "with temp_per_instance as (select p.instance_pk, max(coalesce(p.temp_blks_written_delta, 0) * 8192) as max_temp_per_query from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by p.instance_pk) select t.instance_pk, i.display_name as instance, coalesce(wm.setting_value, \u00274096\u0027) as current_work_mem, t.max_temp_per_query, case when t.max_temp_per_query \u003e 0 then (t.max_temp_per_query / 1024)::text || \u0027kB\u0027 else coalesce(wm.setting_value, \u00274096\u0027) || \u0027kB (no change)\u0027 end as suggested_work_mem from temp_per_instance t join control.instance_inventory i on i.instance_pk = t.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = t.instance_pk and s.setting_name = \u0027work_mem\u0027 order by s.snapshot_ts desc limit 1) wm on true where t.max_temp_per_query \u003e 0 order by t.max_temp_per_query desc",
+                    "format": "table"
+                }
+            ]
+        }
+    ]
 }
