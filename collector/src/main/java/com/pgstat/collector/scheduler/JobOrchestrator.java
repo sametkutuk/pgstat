@@ -487,6 +487,10 @@ public class JobOrchestrator {
             // 4. Alert kurallarini degerlendir
             alertRuleEvaluator.evaluate();
 
+            // 4b. Anlik aksiyon-odakli alert'ler — her cycle'da
+            // (temp files, idle in tx, inactive slot gibi acil durumlar)
+            actionableAlertEvaluator.evaluateFrequent();
+
             // 5. Purge evaluator — retention temizligi
             purgeEvaluator.evaluate();
 

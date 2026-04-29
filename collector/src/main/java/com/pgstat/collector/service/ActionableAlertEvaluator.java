@@ -42,14 +42,26 @@ public class ActionableAlertEvaluator {
 
     /** Tum 5 alert'i degerlendir. Hata olursa diger alert'lere devam et. */
     public void evaluateAll() {
-        log.info("Aksiyon-odakli alert degerlendirmesi basliyor...");
+        log.info("Aksiyon-odakli alert degerlendirmesi basliyor (gunluk)...");
         int total = 0;
         total += safeEval("INDEX_SUSPECT_MISSING", this::checkIndexSuspectMissing);
         total += safeEval("INDEX_UNUSED", this::checkIndexUnused);
+        log.info("Gunluk aksiyon-odakli alert degerlendirmesi tamamlandi: {} alert", total);
+    }
+
+    /**
+     * Anlik sorunlar icin her rollup cycle'da (5 saniyede bir) calisir.
+     * HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
+     * — bunlar acil mudahale gerektiren durumlar, gunde 1 kez bakmak gec kalir.
+     */
+    public void evaluateFrequent() {
+        int total = 0;
         total += safeEval("HIGH_TEMP_FILES", this::checkHighTempFiles);
         total += safeEval("IDLE_IN_TX_TIME_HIGH", this::checkIdleInTxTimeHigh);
         total += safeEval("REPLICATION_SLOT_INACTIVE", this::checkReplicationSlotInactive);
-        log.info("Aksiyon-odakli alert degerlendirmesi tamamlandi: {} alert tetiklendi", total);
+        if (total > 0) {
+            log.info("Anlik aksiyon-odakli alert: {} yeni tetiklendi", total);
+        }
     }
 
     private int safeEval(String name, java.util.function.IntSupplier fn) {
