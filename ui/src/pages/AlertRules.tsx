@@ -270,7 +270,6 @@ const emptyForm = {
 // =========================================================================
 
 export default function AlertRules() {
-  const [tab, setTab] = useState<'smart' | 'custom' | 'templates'>('smart');
   const [tab, setTab] = useState<'smart' | 'custom' | 'templates' | 'system'>('smart');
   const [showForm, setShowForm] = useState(false);
   const [editRule, setEditRule] = useState<AlertRule | null>(null);
