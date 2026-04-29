@@ -1,338 +1,338 @@
 {
-  "uid": "pgstat-wraparound",
-  "title": "pgstat — Wraparound & Vacuum Freeze",
-  "tags": [
-    "pgstat",
-    "wraparound",
-    "vacuum"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
-  "refresh": "5m",
-  "time": {
-    "from": "now-24h",
-    "to": "now"
-  },
-  "templating": {
-    "list": [
-      {
-        "name": "instance",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active order by display_name",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Instance"
-      },
-      {
-        "name": "service_group",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select distinct coalesce(service_group, '(none)') as __text, coalesce(service_group, '(none)') as __value from control.instance_inventory where is_active order by 1",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Service Group"
-      },
-      {
-        "name": "database",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Database"
-      }
-    ]
-  },
-  "panels": [
-    {
-      "id": 1,
-      "title": "Max XID Age (Fleet)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 200000000
-              },
-              {
-                "color": "red",
-                "value": 500000000
-              }
-            ]
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(max(f.datfrozenxid_age), 0) as \"Max XID Age\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database))",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "DBs with Age > 200M",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "targets": [
-        {
-          "rawSql": "select count(*) as \"DBs > 200M\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and coalesce(f.datfrozenxid_age, 0) > 200000000 and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database))",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "autovacuum_freeze_max_age",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "blue",
-                "value": null
-              }
-            ]
-          }
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(max(nullif(s.setting_value, '')::bigint), 200000000) as \"freeze_max_age\" from fact.pg_settings_snapshot s join control.instance_inventory i on i.instance_pk = s.instance_pk where s.setting_name = 'autovacuum_freeze_max_age' and s.snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot where setting_name = 'autovacuum_freeze_max_age') and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "title": "Per-DB Wraparound Risk",
-      "type": "table",
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 4
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "links": [
-            {
-              "title": "Instance Detail'a git",
-              "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"
-            }
-          ]
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "instance_pk"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "datfrozenxid_age"
-            },
-            "properties": [
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 200000000
-                    },
-                    {
-                      "color": "red",
-                      "value": 500000000
-                    }
-                  ]
-                }
-              },
-              {
-                "id": "custom.displayMode",
-                "value": "color-background"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "rawSql": "select f.instance_pk, i.display_name as instance, f.datname, coalesce(f.datfrozenxid_age, 0) as datfrozenxid_age, coalesce(f.datminmxid_age, 0) as datminmxid_age, case when coalesce(f.datfrozenxid_age, 0) >= 500000000 then 'CRITICAL' when coalesce(f.datfrozenxid_age, 0) >= 200000000 then 'WARNING' else 'OK' end as risk_level from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database)) order by datfrozenxid_age desc",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "title": "Autovacuum Activity (7d)",
-      "type": "table",
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 14
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "links": [
-            {
-              "title": "Instance Detail'a git",
-              "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"
-            }
-          ]
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "instance_pk"
-            },
-            "properties": [
-              {
-                "id": "custom.hidden",
-                "value": true
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "rawSql": "select t.instance_pk, i.display_name as instance, coalesce(sum(t.autovacuum_count_delta), 0) as autovac_count, coalesce(sum(t.autoanalyze_count_delta), 0) as autoanalyze_count from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk where t.sample_ts >= now() - interval '7 days' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by t.instance_pk, i.display_name order by autovac_count desc",
-          "format": "table"
-        }
-      ]
-    }
-  ]
+    "uid":  "pgstat-wraparound",
+    "title":  "pgstat â€” Wraparound \u0026 Vacuum Freeze",
+    "tags":  [
+                 "pgstat",
+                 "wraparound",
+                 "vacuum"
+             ],
+    "timezone":  "browser",
+    "schemaVersion":  39,
+    "version":  1,
+    "refresh":  "5m",
+    "time":  {
+                 "from":  "now-24h",
+                 "to":  "now"
+             },
+    "templating":  {
+                       "list":  [
+                                    {
+                                        "query":  "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "service_group",
+                                        "type":  "query",
+                                        "label":  "Service Group",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    },
+                                    {
+                                        "query":  "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "instance",
+                                        "type":  "query",
+                                        "label":  "Instance",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    },
+                                    {
+                                        "query":  "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "database",
+                                        "type":  "query",
+                                        "label":  "Database",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    }
+                                ]
+                   },
+    "panels":  [
+                   {
+                       "id":  1,
+                       "title":  "Max XID Age (Fleet)",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  8,
+                                       "x":  0,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "decimals":  0,
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "yellow",
+                                                                                                 "value":  200000000
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "red",
+                                                                                                 "value":  500000000
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         },
+                                       "textMode":  "value_and_name",
+                                       "colorMode":  "background",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(max(f.datfrozenxid_age), 0) as \"Max XID Age\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or f.datname in ($database))",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  2,
+                       "title":  "DBs with Age \u003e 200M",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  8,
+                                       "x":  8,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "decimals":  0,
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "yellow",
+                                                                                                 "value":  1
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "red",
+                                                                                                 "value":  5
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         },
+                                       "textMode":  "value_and_name",
+                                       "colorMode":  "background",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select count(*) as \"DBs \u003e 200M\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and coalesce(f.datfrozenxid_age, 0) \u003e 200000000 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or f.datname in ($database))",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  3,
+                       "title":  "autovacuum_freeze_max_age",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  8,
+                                       "x":  16,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "decimals":  0,
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "blue",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         },
+                                       "textMode":  "value_and_name",
+                                       "colorMode":  "background",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(max(nullif(s.setting_value, \u0027\u0027)::bigint), 200000000) as \"freeze_max_age\" from fact.pg_settings_snapshot s join control.instance_inventory i on i.instance_pk = s.instance_pk where s.setting_name = \u0027autovacuum_freeze_max_age\u0027 and s.snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot where setting_name = \u0027autovacuum_freeze_max_age\u0027) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  10,
+                       "title":  "Per-DB Wraparound Risk",
+                       "type":  "table",
+                       "gridPos":  {
+                                       "h":  10,
+                                       "w":  24,
+                                       "x":  0,
+                                       "y":  4
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "links":  [
+                                                                          {
+                                                                              "title":  "Instance Detail\u0027a git",
+                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                                                                          }
+                                                                      ]
+                                                        },
+                                           "overrides":  [
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "instance_pk"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "custom.hidden",
+                                                                                        "value":  true
+                                                                                    }
+                                                                                ]
+                                                             },
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "datfrozenxid_age"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "thresholds",
+                                                                                        "value":  {
+                                                                                                      "mode":  "absolute",
+                                                                                                      "steps":  [
+                                                                                                                    {
+                                                                                                                        "color":  "green",
+                                                                                                                        "value":  null
+                                                                                                                    },
+                                                                                                                    {
+                                                                                                                        "color":  "yellow",
+                                                                                                                        "value":  200000000
+                                                                                                                    },
+                                                                                                                    {
+                                                                                                                        "color":  "red",
+                                                                                                                        "value":  500000000
+                                                                                                                    }
+                                                                                                                ]
+                                                                                                  }
+                                                                                    },
+                                                                                    {
+                                                                                        "id":  "custom.displayMode",
+                                                                                        "value":  "color-background"
+                                                                                    }
+                                                                                ]
+                                                             }
+                                                         ]
+                                       },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select f.instance_pk, i.display_name as instance, f.datname, coalesce(f.datfrozenxid_age, 0) as datfrozenxid_age, coalesce(f.datminmxid_age, 0) as datminmxid_age, case when coalesce(f.datfrozenxid_age, 0) \u003e= 500000000 then \u0027CRITICAL\u0027 when coalesce(f.datfrozenxid_age, 0) \u003e= 200000000 then \u0027WARNING\u0027 else \u0027OK\u0027 end as risk_level from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or f.datname in ($database)) order by datfrozenxid_age desc",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  11,
+                       "title":  "Autovacuum Activity (7d)",
+                       "type":  "table",
+                       "gridPos":  {
+                                       "h":  9,
+                                       "w":  24,
+                                       "x":  0,
+                                       "y":  14
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "links":  [
+                                                                          {
+                                                                              "title":  "Instance Detail\u0027a git",
+                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                                                                          }
+                                                                      ]
+                                                        },
+                                           "overrides":  [
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "instance_pk"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "custom.hidden",
+                                                                                        "value":  true
+                                                                                    }
+                                                                                ]
+                                                             }
+                                                         ]
+                                       },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select t.instance_pk, i.display_name as instance, coalesce(sum(t.autovacuum_count_delta), 0) as autovac_count, coalesce(sum(t.autoanalyze_count_delta), 0) as autoanalyze_count from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk where t.sample_ts \u003e= now() - interval \u00277 days\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by t.instance_pk, i.display_name order by autovac_count desc",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   }
+               ]
 }

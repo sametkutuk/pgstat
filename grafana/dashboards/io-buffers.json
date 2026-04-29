@@ -1,331 +1,331 @@
 {
-  "uid": "pgstat-io-buffers",
-  "title": "pgstat — I/O & Buffers Overview (PG16+)",
-  "description": "Fleet genelinde pg_stat_io kirilimi. Top read/write yapan instance'lar, backend_type bazli analiz. Click → Instance Detail.",
-  "tags": [
-    "pgstat",
-    "io",
-    "fleet"
-  ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 2,
-  "refresh": "30s",
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
-  "templating": {
-    "list": [
-      {
-        "name": "instance",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active order by display_name",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Instance"
-      },
-      {
-        "name": "service_group",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select distinct service_group from control.instance_inventory where service_group is not null order by 1",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Service Group"
-      },
-      {
-        "name": "database",
-        "type": "query",
-        "datasource": {
-          "type": "postgres",
-          "uid": "pgstat"
-        },
-        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
-        "refresh": 1,
-        "multi": true,
-        "includeAll": true,
-        "label": "Database"
-      }
-    ]
-  },
-  "panels": [
-    {
-      "id": 1,
-      "title": "Toplam Read (fleet)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 0,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(sum(d.reads_delta) * 8192, 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "title": "Toplam Write (fleet)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "decimals": 1
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(sum(d.writes_delta) * 8192, 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "title": "Toplam Eviction (fleet)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(sum(d.evictions_delta), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "title": "Toplam Fsync (fleet)",
-      "type": "stat",
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0
-        }
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select coalesce(sum(d.fsyncs_delta), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
-          "format": "table"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "title": "Read Hızı per Instance (zaman serisi)",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 4
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5
-          }
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.reads_delta * 8192)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
-          "format": "time_series"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "title": "Write Hızı per Instance",
-      "type": "timeseries",
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 4
-      },
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5
-          }
-        }
-      },
-      "targets": [
-        {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.writes_delta * 8192)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
-          "format": "time_series"
-        }
-      ]
-    },
-    {
-      "id": 20,
-      "title": "Top 30 Instance × backend_type × context (range içi)",
-      "type": "table",
-      "gridPos": {
-        "h": 14,
-        "w": 24,
-        "x": 0,
-        "y": 13
-      },
-      "description": "Hangi instance'da hangi backend_type/context en çok I/O üretmiş.",
-      "datasource": {
-        "type": "postgres",
-        "uid": "pgstat"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "links": [
-            {
-              "title": "Instance Detail'a git",
-              "url": "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}&from=${__from}&to=${__to}"
-            }
-          ]
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "reads_bytes"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "writes_bytes"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "extends_bytes"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "rawSql": "select i.instance_pk, i.display_name as instance, d.backend_type, d.context, sum(d.reads_delta) * 8192 as reads_bytes, sum(d.writes_delta) * 8192 as writes_bytes, sum(d.extends_delta) * 8192 as extends_bytes, sum(d.hits_delta) as hits, sum(d.evictions_delta) as evictions, sum(d.fsyncs_delta) as fsyncs from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by i.instance_pk, i.display_name, d.backend_type, d.context order by reads_bytes desc nulls last limit 30",
-          "format": "table"
-        }
-      ]
-    }
-  ]
+    "uid":  "pgstat-io-buffers",
+    "title":  "pgstat â€” I/O \u0026 Buffers Overview (PG16+)",
+    "description":  "Fleet genelinde pg_stat_io kirilimi. Top read/write yapan instance\u0027lar, backend_type bazli analiz. Click â†’ Instance Detail.",
+    "tags":  [
+                 "pgstat",
+                 "io",
+                 "fleet"
+             ],
+    "timezone":  "browser",
+    "schemaVersion":  39,
+    "version":  2,
+    "refresh":  "30s",
+    "time":  {
+                 "from":  "now-6h",
+                 "to":  "now"
+             },
+    "templating":  {
+                       "list":  [
+                                    {
+                                        "query":  "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "service_group",
+                                        "type":  "query",
+                                        "label":  "Service Group",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    },
+                                    {
+                                        "query":  "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "instance",
+                                        "type":  "query",
+                                        "label":  "Instance",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    },
+                                    {
+                                        "query":  "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
+                                        "datasource":  {
+                                                           "type":  "postgres",
+                                                           "uid":  "pgstat"
+                                                       },
+                                        "includeAll":  true,
+                                        "name":  "database",
+                                        "type":  "query",
+                                        "label":  "Database",
+                                        "multi":  true,
+                                        "refresh":  1
+                                    }
+                                ]
+                   },
+    "panels":  [
+                   {
+                       "id":  1,
+                       "title":  "Toplam Read (fleet)",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  6,
+                                       "x":  0,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "bytes",
+                                                            "decimals":  1
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         }
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(sum(d.reads_delta) * 8192, 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  2,
+                       "title":  "Toplam Write (fleet)",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  6,
+                                       "x":  6,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "bytes",
+                                                            "decimals":  1
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         }
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(sum(d.writes_delta) * 8192, 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  3,
+                       "title":  "Toplam Eviction (fleet)",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  6,
+                                       "x":  12,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "decimals":  0
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         }
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(sum(d.evictions_delta), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  4,
+                       "title":  "Toplam Fsync (fleet)",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "h":  4,
+                                       "w":  6,
+                                       "x":  18,
+                                       "y":  0
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "decimals":  0
+                                                        }
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ]
+                                                         }
+                                   },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select coalesce(sum(d.fsyncs_delta), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null)",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  10,
+                       "title":  "Read HÄ±zÄ± per Instance (zaman serisi)",
+                       "type":  "timeseries",
+                       "gridPos":  {
+                                       "h":  9,
+                                       "w":  12,
+                                       "x":  0,
+                                       "y":  4
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "Bps",
+                                                            "custom":  {
+                                                                           "drawStyle":  "line",
+                                                                           "lineWidth":  1,
+                                                                           "fillOpacity":  5
+                                                                       }
+                                                        }
+                                       },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.reads_delta * 8192)::float / nullif(extract(epoch from \u0027$__interval\u0027::interval), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
+                                           "format":  "time_series"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  11,
+                       "title":  "Write HÄ±zÄ± per Instance",
+                       "type":  "timeseries",
+                       "gridPos":  {
+                                       "h":  9,
+                                       "w":  12,
+                                       "x":  12,
+                                       "y":  4
+                                   },
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "Bps",
+                                                            "custom":  {
+                                                                           "drawStyle":  "line",
+                                                                           "lineWidth":  1,
+                                                                           "fillOpacity":  5
+                                                                       }
+                                                        }
+                                       },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.writes_delta * 8192)::float / nullif(extract(epoch from \u0027$__interval\u0027::interval), 0) as value from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
+                                           "format":  "time_series"
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  20,
+                       "title":  "Top 30 Instance Ã— backend_type Ã— context (range iÃ§i)",
+                       "type":  "table",
+                       "gridPos":  {
+                                       "h":  14,
+                                       "w":  24,
+                                       "x":  0,
+                                       "y":  13
+                                   },
+                       "description":  "Hangi instance\u0027da hangi backend_type/context en Ã§ok I/O Ã¼retmiÅŸ.",
+                       "datasource":  {
+                                          "type":  "postgres",
+                                          "uid":  "pgstat"
+                                      },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "links":  [
+                                                                          {
+                                                                              "title":  "Instance Detail\u0027a git",
+                                                                              "url":  "/grafana/d/pgstat-instance-detail?var-instance=${__data.fields.instance_pk}\u0026from=${__from}\u0026to=${__to}"
+                                                                          }
+                                                                      ]
+                                                        },
+                                           "overrides":  [
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "reads_bytes"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "unit",
+                                                                                        "value":  "bytes"
+                                                                                    }
+                                                                                ]
+                                                             },
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "writes_bytes"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "unit",
+                                                                                        "value":  "bytes"
+                                                                                    }
+                                                                                ]
+                                                             },
+                                                             {
+                                                                 "matcher":  {
+                                                                                 "id":  "byName",
+                                                                                 "options":  "extends_bytes"
+                                                                             },
+                                                                 "properties":  [
+                                                                                    {
+                                                                                        "id":  "unit",
+                                                                                        "value":  "bytes"
+                                                                                    }
+                                                                                ]
+                                                             }
+                                                         ]
+                                       },
+                       "targets":  [
+                                       {
+                                           "rawSql":  "select i.instance_pk, i.display_name as instance, d.backend_type, d.context, sum(d.reads_delta) * 8192 as reads_bytes, sum(d.writes_delta) * 8192 as writes_bytes, sum(d.extends_delta) * 8192 as extends_bytes, sum(d.hits_delta) as hits, sum(d.evictions_delta) as evictions, sum(d.fsyncs_delta) as fsyncs from fact.pg_io_stat_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by i.instance_pk, i.display_name, d.backend_type, d.context order by reads_bytes desc nulls last limit 30",
+                                           "format":  "table"
+                                       }
+                                   ]
+                   }
+               ]
 }
