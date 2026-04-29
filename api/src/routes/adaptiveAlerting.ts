@@ -309,7 +309,7 @@ router.put('/notification-channels/:channel_id', async (req, res, _next) => {
         if (!id) return res.status(400).json({ error: 'Geçersiz channel_id' });
 
         const { channel_name, channel_type, config, min_severity, instance_pks,
-                metric_categories, is_enabled } = req.body;
+            metric_categories, is_enabled } = req.body;
 
         // Dinamik kolon tespiti — eski DB'lerde bazı kolonlar olmayabilir
         const colsRes = await pool.query(
@@ -319,13 +319,13 @@ router.put('/notification-channels/:channel_id', async (req, res, _next) => {
         const existingCols = new Set<string>(colsRes.rows.map((r: any) => r.column_name));
 
         const cols: { name: string; val: any }[] = [];
-        if (channel_name      !== undefined) cols.push({ name: 'channel_name',      val: channel_name });
-        if (channel_type      !== undefined) cols.push({ name: 'channel_type',      val: channel_type });
-        if (config            !== undefined) cols.push({ name: 'config',            val: JSON.stringify(config) });
-        if (min_severity      !== undefined) cols.push({ name: 'min_severity',      val: min_severity });
-        if (instance_pks      !== undefined) cols.push({ name: 'instance_pks',      val: instance_pks });
+        if (channel_name !== undefined) cols.push({ name: 'channel_name', val: channel_name });
+        if (channel_type !== undefined) cols.push({ name: 'channel_type', val: channel_type });
+        if (config !== undefined) cols.push({ name: 'config', val: JSON.stringify(config) });
+        if (min_severity !== undefined) cols.push({ name: 'min_severity', val: min_severity });
+        if (instance_pks !== undefined) cols.push({ name: 'instance_pks', val: instance_pks });
         if (metric_categories !== undefined) cols.push({ name: 'metric_categories', val: metric_categories });
-        if (is_enabled        !== undefined) cols.push({ name: 'is_enabled',        val: is_enabled });
+        if (is_enabled !== undefined) cols.push({ name: 'is_enabled', val: is_enabled });
 
         const active = cols.filter(c => existingCols.has(c.name));
         if (active.length === 0) return res.status(400).json({ error: 'Güncellenecek alan yok' });
@@ -476,6 +476,36 @@ router.get('/baselines/triggers', async (_req, res, next) => {
              left join control.instance_inventory i on i.instance_pk = t.instance_pk
              order by t.requested_at desc
              limit 20`
+        );
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// POST /api/adaptive-alerting/nightly-snapshot/trigger
+// Manuel nightly snapshot tetikleme. Collector 5sn icinde baslar.
+router.post('/nightly-snapshot/trigger', async (_req, res, next) => {
+    try {
+        const result = await pool.query(
+            `insert into control.nightly_snapshot_trigger (status, requested_by)
+             values ('pending', 'admin')
+             returning trigger_id, status, requested_at`
+        );
+        res.json({
+            ...result.rows[0],
+            message: 'Nightly snapshot tetiklendi. Collector 5 saniye içinde başlayacak.',
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/adaptive-alerting/nightly-snapshot/triggers — son tetiklemeler
+router.get('/nightly-snapshot/triggers', async (_req, res, next) => {
+    try {
+        const result = await pool.query(
+            `select * from control.nightly_snapshot_trigger order by requested_at desc limit 10`
         );
         res.json(result.rows);
     } catch (err) {

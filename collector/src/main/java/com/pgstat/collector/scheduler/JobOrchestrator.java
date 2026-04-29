@@ -67,6 +67,7 @@ public class JobOrchestrator {
     // Gece snapshot + aksiyon-odakli alert'ler
     private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -87,7 +88,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.PurgeEvaluator purgeEvaluator,
                            com.pgstat.collector.service.PgssResetTracker resetTracker,
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
-                           com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator) {
+                           com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
+                           org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -108,6 +110,7 @@ public class JobOrchestrator {
         this.resetTracker = resetTracker;
         this.nightlySnapshotCollector = nightlySnapshotCollector;
         this.actionableAlertEvaluator = actionableAlertEvaluator;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -455,9 +458,22 @@ public class JobOrchestrator {
             }
 
             // 3d. Nightly PG snapshot — UTC saat 3'te gunde 1 kez
-            // pg_settings, tablo/index boyutlari, sequence durumu, xid age toplar
-            if (currentUtcHour == 3) {
+            // VEYA control.nightly_snapshot_trigger tablosunda pending kayit varsa hemen calistir
+            boolean nightlyTriggered = false;
+            try {
+                Integer pending = jdbc.queryForObject(
+                    "select count(*) from control.nightly_snapshot_trigger where status = 'pending'",
+                    Integer.class);
+                nightlyTriggered = (pending != null && pending > 0);
+            } catch (Exception ignore) {
+                // Tablo henuz yoksa (V041 uygulanmamis) sessizce gec
+            }
+
+            if (currentUtcHour == 3 || nightlyTriggered) {
                 try {
+                    if (nightlyTriggered) {
+                        jdbc.update("update control.nightly_snapshot_trigger set status = 'running', started_at = now() where status = 'pending'");
+                    }
                     log.info("Nightly snapshot job basliyor...");
                     List<com.pgstat.collector.model.InstanceInfo> readyInstances = inventoryRepo.findAllReady();
                     long snapshotRows = 0;
@@ -470,8 +486,14 @@ public class JobOrchestrator {
                     }
                     log.info("Nightly snapshot tamamlandi: {} instance, {} satir",
                         readyInstances.size(), snapshotRows);
+                    if (nightlyTriggered) {
+                        jdbc.update("update control.nightly_snapshot_trigger set status = 'done', finished_at = now(), rows_written = ? where status = 'running'", snapshotRows);
+                    }
                 } catch (Exception e) {
                     log.warn("Nightly snapshot genel hatasi: {}", e.getMessage());
+                    if (nightlyTriggered) {
+                        jdbc.update("update control.nightly_snapshot_trigger set status = 'failed', finished_at = now() where status = 'running'");
+                    }
                 }
             }
 
