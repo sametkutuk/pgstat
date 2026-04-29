@@ -49,7 +49,12 @@ public class PartitionManager {
         "fact.pg_subscription_snapshot",
         "fact.pg_recovery_prefetch_snapshot",
         "fact.pg_user_function_snapshot",
-        "fact.pg_sequence_io_snapshot"
+        "fact.pg_sequence_io_snapshot",
+        // V039: Gece snapshot tablolari
+        "fact.pg_settings_snapshot",
+        "fact.pg_relation_size_snapshot",
+        "fact.pg_sequence_state_snapshot",
+        "fact.pg_database_freeze_snapshot"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");

@@ -248,6 +248,45 @@ public class InventoryRepository {
     }
 
     // -------------------------------------------------------------------------
+    // Nightly snapshot — tüm ready instance'lar
+    // -------------------------------------------------------------------------
+
+    /** Aktif ve ready tüm instance'ları getirir (nightly snapshot job için). */
+    public List<InstanceInfo> findAllReady() {
+        return jdbc.query("""
+            select
+              i.instance_pk, i.instance_id, i.host, i.port,
+              i.admin_dbname, i.secret_ref, i.ssl_mode, i.bootstrap_state,
+              i.collector_username,
+              p.connect_timeout_seconds, p.statement_timeout_ms, p.lock_timeout_ms,
+              p.bootstrap_sql_text_batch, p.cluster_interval_seconds, p.statements_interval_seconds
+            from control.instance_inventory i
+            join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
+            where i.is_active and i.bootstrap_state = 'ready'
+            order by i.instance_pk
+            """,
+            (rs, rowNum) -> new InstanceInfo(
+                rs.getLong("instance_pk"),
+                rs.getString("instance_id"),
+                rs.getString("host"),
+                rs.getInt("port"),
+                rs.getString("admin_dbname"),
+                rs.getString("secret_ref"),
+                rs.getString("ssl_mode"),
+                rs.getString("bootstrap_state"),
+                rs.getString("collector_username"),
+                rs.getInt("connect_timeout_seconds"),
+                rs.getInt("statement_timeout_ms"),
+                rs.getInt("lock_timeout_ms"),
+                rs.getInt("bootstrap_sql_text_batch"),
+                rs.getInt("cluster_interval_seconds"),
+                rs.getInt("statements_interval_seconds"),
+                null, null
+            )
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // db_objects scheduler — due database'ler
     // -------------------------------------------------------------------------
 

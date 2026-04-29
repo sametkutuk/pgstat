@@ -144,17 +144,19 @@ router.get('/top-statements', async (req, res, next) => {
 });
 
 // GET /api/dashboard/wal-production — Top 5 WAL üretimi (byte/saat)
+// pg_wal_snapshot kolonlari: sample_ts, period_wal_size_byte (delta yok, period direct)
 router.get('/wal-production', async (_req, res, next) => {
   try {
     const result = await pool.query(`
       select
         w.instance_pk,
         i.display_name,
-        round(avg(w.wal_bytes_delta)::numeric * 3600 / nullif(extract(epoch from (max(w.snapshot_ts) - min(w.snapshot_ts))), 0)) as wal_bytes_per_hour
+        round(sum(w.period_wal_size_byte)::numeric * 3600
+              / nullif(extract(epoch from (max(w.sample_ts) - min(w.sample_ts))), 0)) as wal_bytes_per_hour
       from fact.pg_wal_snapshot w
       join control.instance_inventory i on i.instance_pk = w.instance_pk
-      where w.snapshot_ts >= now() - interval '1 hour'
-        and w.wal_bytes_delta is not null
+      where w.sample_ts >= now() - interval '1 hour'
+        and w.period_wal_size_byte is not null
         and i.is_active
       group by w.instance_pk, i.display_name
       having count(*) > 1
@@ -168,6 +170,7 @@ router.get('/wal-production', async (_req, res, next) => {
 });
 
 // GET /api/dashboard/archiver-failures — Failed archive count > 0
+// pg_archiver_snapshot kolonu: sample_ts (snapshot_ts degil)
 router.get('/archiver-failures', async (_req, res, next) => {
   try {
     const result = await pool.query(`
@@ -177,11 +180,11 @@ router.get('/archiver-failures', async (_req, res, next) => {
         a.failed_count,
         a.last_failed_wal,
         a.last_failed_time,
-        a.snapshot_ts
+        a.sample_ts as snapshot_ts
       from fact.pg_archiver_snapshot a
       join control.instance_inventory i on i.instance_pk = a.instance_pk and i.is_active
-      where a.snapshot_ts = (
-        select max(snapshot_ts) from fact.pg_archiver_snapshot where instance_pk = a.instance_pk
+      where a.sample_ts = (
+        select max(sample_ts) from fact.pg_archiver_snapshot where instance_pk = a.instance_pk
       )
         and a.failed_count > 0
       order by a.failed_count desc
@@ -192,23 +195,32 @@ router.get('/archiver-failures', async (_req, res, next) => {
   }
 });
 
-// GET /api/dashboard/slru-cache-miss — Top 5 SLRU blks_read
+// GET /api/dashboard/slru-cache-miss — Top 5 SLRU cache miss
+// pg_slru_snapshot kolonlari: sample_ts, blks_read, blks_hit (kumulatif — max-min ile delta hesapla)
 router.get('/slru-cache-miss', async (_req, res, next) => {
   try {
     const result = await pool.query(`
+      with delta as (
+        select
+          instance_pk, name,
+          (max(blks_read) - min(blks_read)) as read_delta,
+          (max(blks_hit)  - min(blks_hit))  as hit_delta
+        from fact.pg_slru_snapshot
+        where sample_ts >= now() - interval '1 hour'
+        group by instance_pk, name
+      )
       select
-        s.instance_pk,
+        d.instance_pk,
         i.display_name,
-        sum(s.blks_read_delta) as total_blks_read,
-        sum(s.blks_hit_delta) as total_blks_hit,
-        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
-          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+        sum(d.read_delta) as total_blks_read,
+        sum(d.hit_delta)  as total_blks_hit,
+        case when sum(d.read_delta) + sum(d.hit_delta) > 0
+          then round(100.0 * sum(d.hit_delta) / (sum(d.read_delta) + sum(d.hit_delta)), 1)
           else 100 end as hit_ratio
-      from fact.pg_slru_snapshot s
-      join control.instance_inventory i on i.instance_pk = s.instance_pk and i.is_active
-      where s.snapshot_ts >= now() - interval '1 hour'
-      group by s.instance_pk, i.display_name
-      having sum(s.blks_read_delta) > 0
+      from delta d
+      join control.instance_inventory i on i.instance_pk = d.instance_pk and i.is_active
+      group by d.instance_pk, i.display_name
+      having sum(d.read_delta) > 0
       order by total_blks_read desc
       limit 5
     `);
