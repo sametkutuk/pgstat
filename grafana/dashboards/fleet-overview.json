@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-fleet-overview",
-    "title":  "pgstat â€” Fleet Overview",
+    "title":  "pgstat — Fleet Overview",
     "description":  "Tüm instance\u0027larin tek ekranda saglik panosu. NOC/TV ekrani icin uygundur. Bir instance\u0027a tikla â†’ Instance Detail.",
     "tags":  [
                  "pgstat",
@@ -286,7 +286,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Instance Sağlık Tablosu â€” tıkla, detaya git",
+                       "title":  "Instance Sağlık Tablosu — tıkla, detaya git",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  12,
@@ -408,14 +408,14 @@
                                        },
                        "targets":  [
                                        {
-                                           "rawSql":  "with active_conn as (select instance_pk, count(*) as conn_count from fact.pg_activity_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 and state = \u0027active\u0027 group by instance_pk), tps as (select instance_pk, round(sum(xact_commit_delta + xact_rollback_delta)::numeric / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0), 1) as tps_val from fact.pg_database_delta where sample_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), wal as (select instance_pk, sum(period_wal_size_byte) as wal_bytes from fact.pg_wal_snapshot where sample_ts \u003e now() - interval \u00271 hour\u0027 group by instance_pk), cache as (select instance_pk, round(100.0 * sum(blks_hit_delta)::numeric / nullif(sum(blks_hit_delta + blks_read_delta), 0), 2) as cache_pct from fact.pg_database_delta where sample_ts \u003e now() - interval \u00271 hour\u0027 group by instance_pk), alerts as (select instance_pk, count(*) as alert_count from ops.alert where status = \u0027open\u0027 group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, \u0027â€”\u0027) as group_name, i.host, coalesce(c.conn_count, 0) as \"Aktif Bağlantı\", coalesce(t.tps_val, 0) as \"TPS (5dk)\", coalesce(w.wal_bytes, 0) as \"WAL (1h)\", coalesce(ca.cache_pct, 0) as \"Cache Hit %\", coalesce(a.alert_count, 0) as \"Açık Alert\" from control.instance_inventory i left join active_conn c on c.instance_pk = i.instance_pk left join tps t on t.instance_pk = i.instance_pk left join wal w on w.instance_pk = i.instance_pk left join cache ca on ca.instance_pk = i.instance_pk left join alerts a on a.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group)) and (i.instance_pk in ($instance_filter) or \u0027$__all\u0027 in ($instance_filter)) order by \"Açık Alert\" desc, i.display_name",
+                                           "rawSql":  "with active_conn as (select instance_pk, count(*) as conn_count from fact.pg_activity_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 and state = \u0027active\u0027 group by instance_pk), tps as (select instance_pk, round(sum(xact_commit_delta + xact_rollback_delta)::numeric / nullif(extract(epoch from (max(sample_ts) - min(sample_ts))), 0), 1) as tps_val from fact.pg_database_delta where sample_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), wal as (select instance_pk, sum(period_wal_size_byte) as wal_bytes from fact.pg_wal_snapshot where sample_ts \u003e now() - interval \u00271 hour\u0027 group by instance_pk), cache as (select instance_pk, round(100.0 * sum(blks_hit_delta)::numeric / nullif(sum(blks_hit_delta + blks_read_delta), 0), 2) as cache_pct from fact.pg_database_delta where sample_ts \u003e now() - interval \u00271 hour\u0027 group by instance_pk), alerts as (select instance_pk, count(*) as alert_count from ops.alert where status = \u0027open\u0027 group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, \u0027—\u0027) as group_name, i.host, coalesce(c.conn_count, 0) as \"Aktif Bağlantı\", coalesce(t.tps_val, 0) as \"TPS (5dk)\", coalesce(w.wal_bytes, 0) as \"WAL (1h)\", coalesce(ca.cache_pct, 0) as \"Cache Hit %\", coalesce(a.alert_count, 0) as \"Açık Alert\" from control.instance_inventory i left join active_conn c on c.instance_pk = i.instance_pk left join tps t on t.instance_pk = i.instance_pk left join wal w on w.instance_pk = i.instance_pk left join cache ca on ca.instance_pk = i.instance_pk left join alerts a on a.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group)) and (i.instance_pk in ($instance_filter) or \u0027$__all\u0027 in ($instance_filter)) order by \"Açık Alert\" desc, i.display_name",
                                            "format":  "table"
                                        }
                                    ]
                    },
                    {
                        "id":  20,
-                       "title":  "TPS â€” Per Instance (son time range)",
+                       "title":  "TPS — Per Instance (son time range)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -446,7 +446,7 @@
                    },
                    {
                        "id":  21,
-                       "title":  "Cache Hit Ratio â€” Per Instance",
+                       "title":  "Cache Hit Ratio — Per Instance",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,

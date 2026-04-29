@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-alerts-slo",
-    "title":  "pgstat â€” Alerts \u0026 SLO",
+    "title":  "pgstat — Alerts \u0026 SLO",
     "description":  "Alert hacmi, en gurultuluve alert kodlari, MTTA, MTTR, bildirim kanal basari orani.",
     "tags":  [
                  "pgstat"

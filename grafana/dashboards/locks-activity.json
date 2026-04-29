@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-locks-activity",
-    "title":  "pgstat â€” Locks \u0026 Activity Overview",
+    "title":  "pgstat — Locks \u0026 Activity Overview",
     "description":  "Fleet genelinde aktif sorgu, bekleme olaylari, blocking chains, vacuum durumu. Bir satira/instance\u0027a tikla â†’ Instance Detail.",
     "tags":  [
                  "pgstat",
@@ -224,7 +224,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Instance Bazlı Aktivite Özet â€” tıkla, detaya git",
+                       "title":  "Instance Bazlı Aktivite Özet — tıkla, detaya git",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,
@@ -317,7 +317,7 @@
                                        },
                        "targets":  [
                                        {
-                                           "rawSql":  "with active as (select instance_pk, count(*) filter (where state=\u0027active\u0027) as active_cnt, count(*) filter (where state=\u0027idle\u0027) as idle_cnt, count(*) filter (where state=\u0027idle in transaction\u0027) as idle_tx_cnt, count(*) filter (where state=\u0027active\u0027 and wait_event_type is not null) as waiting_cnt from fact.pg_activity_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), locks as (select instance_pk, count(*) filter (where granted = false) as waiting_locks from fact.pg_lock_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), prog as (select instance_pk, count(*) as prog_cnt from fact.pg_progress_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, \u0027â€”\u0027) as group_name, coalesce(a.active_cnt, 0) as aktif, coalesce(a.idle_cnt, 0) as idle, coalesce(a.idle_tx_cnt, 0) as idle_tx, coalesce(a.waiting_cnt, 0) as wait_event, coalesce(l.waiting_locks, 0) as bekleyen_lock, coalesce(p.prog_cnt, 0) as vacuum_progress from control.instance_inventory i left join active a on a.instance_pk = i.instance_pk left join locks l on l.instance_pk = i.instance_pk left join prog p on p.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) order by idle_tx desc nulls last, bekleyen_lock desc nulls last, aktif desc",
+                                           "rawSql":  "with active as (select instance_pk, count(*) filter (where state=\u0027active\u0027) as active_cnt, count(*) filter (where state=\u0027idle\u0027) as idle_cnt, count(*) filter (where state=\u0027idle in transaction\u0027) as idle_tx_cnt, count(*) filter (where state=\u0027active\u0027 and wait_event_type is not null) as waiting_cnt from fact.pg_activity_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), locks as (select instance_pk, count(*) filter (where granted = false) as waiting_locks from fact.pg_lock_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk), prog as (select instance_pk, count(*) as prog_cnt from fact.pg_progress_snapshot where snapshot_ts \u003e now() - interval \u00275 minutes\u0027 group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, \u0027—\u0027) as group_name, coalesce(a.active_cnt, 0) as aktif, coalesce(a.idle_cnt, 0) as idle, coalesce(a.idle_tx_cnt, 0) as idle_tx, coalesce(a.waiting_cnt, 0) as wait_event, coalesce(l.waiting_locks, 0) as bekleyen_lock, coalesce(p.prog_cnt, 0) as vacuum_progress from control.instance_inventory i left join active a on a.instance_pk = i.instance_pk left join locks l on l.instance_pk = i.instance_pk left join prog p on p.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) order by idle_tx desc nulls last, bekleyen_lock desc nulls last, aktif desc",
                                            "format":  "table"
                                        }
                                    ]

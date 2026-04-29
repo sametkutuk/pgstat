@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-database-tables",
-    "title":  "pgstat â€” Database \u0026 Tables Overview",
+    "title":  "pgstat — Database \u0026 Tables Overview",
     "description":  "Fleet genelinde en aktif DB\u0027ler ve tablolar (cross-instance). En cok yazma/okuma yapan, deadlock/conflict yasayan instance+DB. Click â†’ Instance Detail.",
     "tags":  [
                  "pgstat",
@@ -316,7 +316,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "Top 50 Tablo â€” En Çok Yazma (cross-instance, range içi)",
+                       "title":  "Top 50 Tablo — En Çok Yazma (cross-instance, range içi)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,

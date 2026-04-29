@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-io-buffers",
-    "title":  "pgstat â€” I/O \u0026 Buffers Overview (PG16+)",
+    "title":  "pgstat — I/O \u0026 Buffers Overview (PG16+)",
     "description":  "Fleet genelinde pg_stat_io kirilimi. Top read/write yapan instance\u0027lar, backend_type bazli analiz. Click â†’ Instance Detail.",
     "tags":  [
                  "pgstat",

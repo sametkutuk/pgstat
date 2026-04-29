@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-replication-wal",
-    "title":  "pgstat â€” Replication \u0026 WAL Overview",
+    "title":  "pgstat — Replication \u0026 WAL Overview",
     "description":  "Fleet genelinde replikasyon lag, slot durumu, WAL uretimi, archiver. Bir satira tikla â†’ Instance Detail.",
     "tags":  [
                  "pgstat",
@@ -210,7 +210,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Replikasyon Lag â€” Per Primary (zaman serisi)",
+                       "title":  "Replikasyon Lag — Per Primary (zaman serisi)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -258,7 +258,7 @@
                    },
                    {
                        "id":  11,
-                       "title":  "WAL Üretimi (bayt/sn) â€” Per Instance",
+                       "title":  "WAL Üretimi (bayt/sn) — Per Instance",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -290,7 +290,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "Anlık Replication Lag â€” Per Primary/Standby (sıralı)",
+                       "title":  "Anlık Replication Lag — Per Primary/Standby (sıralı)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -354,14 +354,14 @@
                                        },
                        "targets":  [
                                        {
-                                           "rawSql":  "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_replication_snapshot group by instance_pk) select i.instance_pk, i.display_name as primary_instance, coalesce(r.application_name, r.client_addr::text, \u0027â€”\u0027) as standby, r.state, r.sync_state, r.replay_lag_bytes as lag_bytes, r.replay_lag::text as replay_lag_interval from fact.pg_replication_snapshot r join latest l on l.instance_pk = r.instance_pk and l.ts = r.snapshot_ts join control.instance_inventory i on i.instance_pk = r.instance_pk where (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) order by lag_bytes desc nulls last",
+                                           "rawSql":  "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_replication_snapshot group by instance_pk) select i.instance_pk, i.display_name as primary_instance, coalesce(r.application_name, r.client_addr::text, \u0027—\u0027) as standby, r.state, r.sync_state, r.replay_lag_bytes as lag_bytes, r.replay_lag::text as replay_lag_interval from fact.pg_replication_snapshot r join latest l on l.instance_pk = r.instance_pk and l.ts = r.snapshot_ts join control.instance_inventory i on i.instance_pk = r.instance_pk where (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) order by lag_bytes desc nulls last",
                                            "format":  "table"
                                        }
                                    ]
                    },
                    {
                        "id":  21,
-                       "title":  "Replication Slot Durumu â€” Tüm Instance\u0027lar",
+                       "title":  "Replication Slot Durumu — Tüm Instance\u0027lar",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -418,7 +418,7 @@
                    },
                    {
                        "id":  22,
-                       "title":  "Archiver Durumu â€” Tüm Instance\u0027lar",
+                       "title":  "Archiver Durumu — Tüm Instance\u0027lar",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  8,

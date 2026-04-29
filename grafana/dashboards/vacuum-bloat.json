@@ -1,7 +1,7 @@
 {
     "uid":  "pgstat-vacuum-bloat",
-    "title":  "pgstat â€” Vacuum \u0026 Bloat Overview",
-    "description":  "Fleet genelinde dead tuple orani sirali. Hangi instance\u0027in hangi tablosu vacuum gerektiriyor â€” tek bakista. Click â†’ Instance Detail.",
+    "title":  "pgstat — Vacuum \u0026 Bloat Overview",
+    "description":  "Fleet genelinde dead tuple orani sirali. Hangi instance\u0027in hangi tablosu vacuum gerektiriyor — tek bakista. Click â†’ Instance Detail.",
     "tags":  [
                  "pgstat",
                  "fleet"
@@ -209,7 +209,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Top 50 Tablo â€” Dead Tuple Oranı (cross-instance)",
+                       "title":  "Top 50 Tablo — Dead Tuple Oranı (cross-instance)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  16,
@@ -217,7 +217,7 @@
                                        "x":  0,
                                        "y":  4
                                    },
-                       "description":  "Fleet\u0027teki en fazla bloat\u0027lı tablolar â€” instance + tablo bazında. Click â†’ Instance Detail.",
+                       "description":  "Fleet\u0027teki en fazla bloat\u0027lı tablolar — instance + tablo bazında. Click â†’ Instance Detail.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
