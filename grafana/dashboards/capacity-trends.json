@@ -53,6 +53,17 @@
         "label": "Database",
         "multi": true,
         "refresh": 1
+      },
+      {
+        "name": "bucket",
+        "type": "interval",
+        "label": "Bucket",
+        "query": "5m,15m,30m,1h,3h,6h,1d",
+        "current": {
+          "text": "1h",
+          "value": "1h"
+        },
+        "auto": false
       }
     ]
   },
@@ -96,7 +107,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(w.sample_ts, $bucket), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
