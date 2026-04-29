@@ -43,6 +43,19 @@
         "label": "Service Group"
       },
       {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
+      },
+      {
         "name": "instance_filter",
         "type": "query",
         "datasource": {
@@ -221,7 +234,7 @@
       },
       "targets": [
         {
-          "rawSql": "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / nullif(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 0), 1) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts > now() - interval '5 minutes' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter))",
+          "rawSql": "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / nullif(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 0), 1) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts > now() - interval '5 minutes' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and ('All' in ($database) or d.datname in ($database)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter))",
           "format": "table"
         }
       ]
@@ -448,7 +461,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.xact_commit_delta + d.xact_rollback_delta)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, sum(d.xact_commit_delta + d.xact_rollback_delta)::float / nullif(extract(epoch from '$__interval'::interval), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and ('All' in ($database) or d.datname in ($database)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]
@@ -481,7 +494,7 @@
       },
       "targets": [
         {
-          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, 100.0 * sum(d.blks_hit_delta) / nullif(sum(d.blks_hit_delta + d.blks_read_delta), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1",
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, 100.0 * sum(d.blks_hit_delta) / nullif(sum(d.blks_hit_delta + d.blks_read_delta), 0) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group)) and ('All' in ($database) or d.datname in ($database)) and (i.instance_pk in ($instance_filter) or '$__all' in ($instance_filter)) group by 1, i.display_name order by 1",
           "format": "time_series"
         }
       ]

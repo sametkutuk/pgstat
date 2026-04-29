@@ -40,6 +40,19 @@
         "multi": true,
         "includeAll": true,
         "label": "Service Group"
+      },
+      {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
       }
     ]
   },
@@ -93,7 +106,7 @@
       },
       "targets": [
         {
-          "rawSql": "select coalesce(sum(d.temp_files_delta), 0) as \"Temp Files\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '24 hours' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+          "rawSql": "select coalesce(sum(d.temp_files_delta), 0) as \"Temp Files\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '24 hours' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or d.datname in ($database))",
           "format": "table"
         }
       ]
@@ -147,7 +160,7 @@
       },
       "targets": [
         {
-          "rawSql": "select coalesce(sum(d.temp_bytes_delta), 0) as \"Temp Bytes\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '24 hours' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+          "rawSql": "select coalesce(sum(d.temp_bytes_delta), 0) as \"Temp Bytes\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '24 hours' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or d.datname in ($database))",
           "format": "table"
         }
       ]
@@ -249,7 +262,7 @@
       },
       "targets": [
         {
-          "rawSql": "select d.instance_pk, i.display_name as instance, d.datname, coalesce(sum(d.temp_files_delta), 0) as temp_files, coalesce(sum(d.temp_bytes_delta), 0) as temp_bytes, coalesce(max(wm.setting_value), '4096') as work_mem from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = d.instance_pk and s.setting_name = 'work_mem' order by s.snapshot_ts desc limit 1) wm on true where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) group by d.instance_pk, i.display_name, d.datname order by temp_bytes desc",
+          "rawSql": "select d.instance_pk, i.display_name as instance, d.datname, coalesce(sum(d.temp_files_delta), 0) as temp_files, coalesce(sum(d.temp_bytes_delta), 0) as temp_bytes, coalesce(max(wm.setting_value), '4096') as work_mem from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk left join lateral (select s.setting_value from fact.pg_settings_snapshot s where s.instance_pk = d.instance_pk and s.setting_name = 'work_mem' order by s.snapshot_ts desc limit 1) wm on true where $__timeFilter(d.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or d.datname in ($database)) group by d.instance_pk, i.display_name, d.datname order by temp_bytes desc",
           "format": "table"
         }
       ]
@@ -306,7 +319,7 @@
       },
       "targets": [
         {
-          "rawSql": "select p.instance_pk, i.display_name as instance, left(ss.query_text, 80) as query, coalesce(sum(p.temp_blks_written_delta), 0) * 8192 as temp_bytes from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk join dim.statement_series ss on ss.statement_series_id = p.statement_series_id where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and coalesce(p.temp_blks_written_delta, 0) > 0 group by p.instance_pk, i.display_name, left(ss.query_text, 80) order by temp_bytes desc limit 30",
+          "rawSql": "select p.instance_pk, i.display_name as instance, left(qt.query_text, 80) as query, coalesce(sum(p.temp_blks_written_delta), 0) * 8192 as temp_bytes from fact.pgss_delta p join control.instance_inventory i on i.instance_pk = p.instance_pk join dim.statement_series ss on ss.statement_series_id = p.statement_series_id left join dim.query_text qt on qt.query_text_id = ss.query_text_id where $__timeFilter(p.sample_ts) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and coalesce(p.temp_blks_written_delta, 0) > 0 group by p.instance_pk, i.display_name, left(qt.query_text, 80) order by temp_bytes desc limit 30",
           "format": "table"
         }
       ]

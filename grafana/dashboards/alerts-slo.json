@@ -42,6 +42,19 @@
         "label": "Service Group"
       },
       {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
+      },
+      {
         "name": "instance_filter",
         "type": "query",
         "datasource": {

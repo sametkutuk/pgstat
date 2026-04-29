@@ -41,6 +41,19 @@
         "multi": true,
         "includeAll": true,
         "label": "Service Group"
+      },
+      {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
       }
     ]
   },
@@ -94,7 +107,7 @@
       },
       "targets": [
         {
-          "rawSql": "select coalesce(max(f.datfrozenxid_age), 0) as \"Max XID Age\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+          "rawSql": "select coalesce(max(f.datfrozenxid_age), 0) as \"Max XID Age\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database))",
           "format": "table"
         }
       ]
@@ -148,7 +161,7 @@
       },
       "targets": [
         {
-          "rawSql": "select count(*) as \"DBs > 200M\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and coalesce(f.datfrozenxid_age, 0) > 200000000 and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+          "rawSql": "select count(*) as \"DBs > 200M\" from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and coalesce(f.datfrozenxid_age, 0) > 200000000 and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database))",
           "format": "table"
         }
       ]
@@ -271,7 +284,7 @@
       },
       "targets": [
         {
-          "rawSql": "select f.instance_pk, i.display_name as instance, f.datname, coalesce(f.datfrozenxid_age, 0) as datfrozenxid_age, coalesce(f.datminmxid_age, 0) as datminmxid_age, case when coalesce(f.datfrozenxid_age, 0) >= 500000000 then 'CRITICAL' when coalesce(f.datfrozenxid_age, 0) >= 200000000 then 'WARNING' else 'OK' end as risk_level from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by datfrozenxid_age desc",
+          "rawSql": "select f.instance_pk, i.display_name as instance, f.datname, coalesce(f.datfrozenxid_age, 0) as datfrozenxid_age, coalesce(f.datminmxid_age, 0) as datminmxid_age, case when coalesce(f.datfrozenxid_age, 0) >= 500000000 then 'CRITICAL' when coalesce(f.datfrozenxid_age, 0) >= 200000000 then 'WARNING' else 'OK' end as risk_level from fact.pg_database_freeze_snapshot f join control.instance_inventory i on i.instance_pk = f.instance_pk where f.snapshot_ts = (select max(snapshot_ts) from fact.pg_database_freeze_snapshot) and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or f.datname in ($database)) order by datfrozenxid_age desc",
           "format": "table"
         }
       ]

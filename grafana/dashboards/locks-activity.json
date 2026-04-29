@@ -41,6 +41,19 @@
         "multi": true,
         "includeAll": true,
         "label": "Service Group"
+      },
+      {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
       }
     ]
   },
@@ -349,7 +362,7 @@
       },
       "targets": [
         {
-          "rawSql": "select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"süre_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'active' and a.query_start is not null and (a.snapshot_ts - a.query_start) > interval '1 minute' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by a.query_start asc limit 100",
+          "rawSql": "select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"süre_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'active' and a.query_start is not null and (a.snapshot_ts - a.query_start) > interval '1 minute' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or a.datname in ($database)) order by a.query_start asc limit 100",
           "format": "table"
         }
       ]

@@ -40,6 +40,19 @@
         "multi": true,
         "includeAll": true,
         "label": "Service Group"
+      },
+      {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
       }
     ]
   },
@@ -201,7 +214,7 @@
       },
       "targets": [
         {
-          "rawSql": "select case when coalesce(sum(d.session_time_ms_delta), 0) = 0 then 0 else round(coalesce(sum(d.idle_in_transaction_time_ms_delta), 0) / nullif(sum(d.session_time_ms_delta), 0) * 100, 1) end as \"Idle Tx %\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '1 hour' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)",
+          "rawSql": "select case when coalesce(sum(d.session_time_ms_delta), 0) = 0 then 0 else round((coalesce(sum(d.idle_in_transaction_time_ms_delta), 0)::numeric / nullif(sum(d.session_time_ms_delta), 0) * 100)::numeric, 1) end as \"Idle Tx %\" from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where d.sample_ts >= now() - interval '1 hour' and (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or d.datname in ($database))",
           "format": "table"
         }
       ]

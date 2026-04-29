@@ -41,6 +41,19 @@
         "multi": true,
         "includeAll": true,
         "label": "Service Group"
+      },
+      {
+        "name": "database",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template order by datname",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "label": "Database"
       }
     ]
   },
@@ -306,7 +319,7 @@
       },
       "targets": [
         {
-          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_progress_snapshot where snapshot_ts > now() - interval '5 minutes' group by instance_pk) select i.instance_pk, i.display_name as instance, p.command, p.datname, p.relname, p.phase, p.blocks_total, p.blocks_done, p.progress_pct from fact.pg_progress_snapshot p join latest l on l.instance_pk = p.instance_pk and l.ts = p.snapshot_ts join control.instance_inventory i on i.instance_pk = p.instance_pk where (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) order by p.command, p.relname",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_progress_snapshot where snapshot_ts > now() - interval '5 minutes' group by instance_pk) select i.instance_pk, i.display_name as instance, p.command, p.datname, p.relname, p.phase, p.blocks_total, p.blocks_done, p.progress_pct from fact.pg_progress_snapshot p join latest l on l.instance_pk = p.instance_pk and l.ts = p.snapshot_ts join control.instance_inventory i on i.instance_pk = p.instance_pk where (i.instance_pk::text in ($instance) or 'All' in ($instance)) and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null) and ('All' in ($database) or p.datname in ($database)) order by p.command, p.relname",
           "format": "table"
         }
       ]
