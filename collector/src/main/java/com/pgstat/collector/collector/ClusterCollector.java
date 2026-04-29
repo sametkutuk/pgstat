@@ -58,6 +58,7 @@ public class ClusterCollector {
     private final AlertRepository alertRepo;
     private final DeltaCalculator deltaCalc;
     private final AlertMessageRenderer renderer;
+    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
 
     /** In-memory delta cache: instancePk → onceki cluster metric sample */
     private final ConcurrentHashMap<Long, ClusterMetricSample> previousSamples = new ConcurrentHashMap<>();
@@ -74,7 +75,8 @@ public class ClusterCollector {
                             CapabilityRepository capabilityRepo,
                             AlertRepository alertRepo,
                             DeltaCalculator deltaCalc,
-                            AlertMessageRenderer renderer) {
+                            AlertMessageRenderer renderer,
+                            com.pgstat.collector.service.SystemAlertConfigCache configCache) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.factRepo = factRepo;
@@ -82,6 +84,7 @@ public class ClusterCollector {
         this.alertRepo = alertRepo;
         this.deltaCalc = deltaCalc;
         this.renderer = renderer;
+        this.configCache = configCache;
     }
 
     /**
@@ -91,6 +94,9 @@ public class ClusterCollector {
     private void raiseTemplated(String alertKey, AlertCode code, long instancePk,
                                  java.util.Map<String, Object> ctx,
                                  String fallbackTitle, String fallbackMsg) {
+        // Config check: bu instance için bu alert aktif mi?
+        if (!configCache.isEnabled(code.getCode(), instancePk)) return;
+
         String title = fallbackTitle, message = fallbackMsg;
         try {
             String[] rendered = renderer.renderForCode(code.getCode(), ctx,

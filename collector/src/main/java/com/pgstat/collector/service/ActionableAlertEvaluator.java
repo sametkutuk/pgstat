@@ -32,12 +32,15 @@ public class ActionableAlertEvaluator {
     private final JdbcTemplate jdbc;
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
+    private final SystemAlertConfigCache configCache;
 
     public ActionableAlertEvaluator(JdbcTemplate jdbc, AlertRepository alertRepo,
-                                     AlertMessageRenderer renderer) {
+                                     AlertMessageRenderer renderer,
+                                     SystemAlertConfigCache configCache) {
         this.jdbc = jdbc;
         this.alertRepo = alertRepo;
         this.renderer = renderer;
+        this.configCache = configCache;
     }
 
     /** Tum 5 alert'i degerlendir. Hata olursa diger alert'lere devam et. */
@@ -117,6 +120,10 @@ public class ActionableAlertEvaluator {
 
         int count = 0;
         for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            // Config check: bu instance için alert aktif mi?
+            if (!configCache.isEnabled("index_suspect_missing", instancePk)) continue;
+
             String alertKey = "actionable:index_suspect_missing:" +
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
                 r.get("schemaname") + "." + r.get("relname");
@@ -178,6 +185,9 @@ public class ActionableAlertEvaluator {
 
         int count = 0;
         for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("index_unused", instancePk)) continue;
+
             String alertKey = "actionable:index_unused:" +
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
                 r.get("schemaname") + "." + r.get("indexrelname");
@@ -222,6 +232,8 @@ public class ActionableAlertEvaluator {
         int count = 0;
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("high_temp_files", instancePk)) continue;
+
             String alertKey = "actionable:high_temp_files:" + instancePk + ":" + r.get("dbid");
 
             // work_mem degerini snapshot'tan oku
@@ -287,6 +299,9 @@ public class ActionableAlertEvaluator {
 
         int count = 0;
         for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("idle_in_tx_time_high", instancePk)) continue;
+
             String alertKey = "actionable:idle_in_tx:" + r.get("instance_pk") + ":" + r.get("dbid");
 
             Map<String, Object> ctx = new java.util.HashMap<>();
@@ -338,6 +353,9 @@ public class ActionableAlertEvaluator {
 
         int count = 0;
         for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("replication_slot_inactive", instancePk)) continue;
+
             String alertKey = "actionable:slot_inactive:" + r.get("instance_pk") + ":" + r.get("slot_name");
 
             Map<String, Object> ctx = new java.util.HashMap<>();

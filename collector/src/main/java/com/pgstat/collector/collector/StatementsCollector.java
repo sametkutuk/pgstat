@@ -56,6 +56,7 @@ public class StatementsCollector {
     private final AlertRepository alertRepo;
     private final PgssResetTracker resetTracker;
     private final AlertMessageRenderer renderer;
+    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
 
     /**
      * In-memory delta cache.
@@ -75,7 +76,8 @@ public class StatementsCollector {
                                EpochManager epochManager,
                                AlertRepository alertRepo,
                                PgssResetTracker resetTracker,
-                               AlertMessageRenderer renderer) {
+                               AlertMessageRenderer renderer,
+                               com.pgstat.collector.service.SystemAlertConfigCache configCache) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -87,6 +89,7 @@ public class StatementsCollector {
         this.alertRepo = alertRepo;
         this.resetTracker = resetTracker;
         this.renderer = renderer;
+        this.configCache = configCache;
     }
 
     /**
@@ -207,18 +210,21 @@ public class StatementsCollector {
                     ctx.put("loss_window", lossWindow);
                     ctx.put("reset_at", java.time.Instant.now().toString());
                     ctx.put("severity", "info");
-                    String[] rendered = new String[]{"pg_stat_statements Reset", alertMessage};
-                    try {
-                        rendered = renderer.renderForCode(AlertCode.STATS_RESET_DETECTED.getCode(),
-                                ctx, "pg_stat_statements Reset", alertMessage);
-                    } catch (Exception ignore) {}
-                    alertRepo.upsert(
-                        "pgss_reset:instance:" + instancePk,
-                        AlertCode.STATS_RESET_DETECTED,
-                        instancePk, null, systemIdentifier,
-                        rendered[0],
-                        rendered[1], null
-                    );
+                    // Config check: stats_reset_detected aktif mi?
+                    if (configCache.isEnabled("stats_reset_detected", instancePk)) {
+                        String[] rendered = new String[]{"pg_stat_statements Reset", alertMessage};
+                        try {
+                            rendered = renderer.renderForCode(AlertCode.STATS_RESET_DETECTED.getCode(),
+                                    ctx, "pg_stat_statements Reset", alertMessage);
+                        } catch (Exception ignore) {}
+                        alertRepo.upsert(
+                            "pgss_reset:instance:" + instancePk,
+                            AlertCode.STATS_RESET_DETECTED,
+                            instancePk, null, systemIdentifier,
+                            rendered[0],
+                            rendered[1], null
+                        );
+                    }
                     
                     log.warn("pg_stat_statements reset: instance={}, {} sorgu, {} calls, kayip penceresi={}",
                         instancePk, queryCount, totalCalls, lossWindow);

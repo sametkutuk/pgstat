@@ -24,10 +24,13 @@ public class AlertService {
 
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
+    private final SystemAlertConfigCache configCache;
 
-    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer) {
+    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer,
+                        SystemAlertConfigCache configCache) {
         this.alertRepo = alertRepo;
         this.renderer = renderer;
+        this.configCache = configCache;
     }
 
     /**
@@ -78,6 +81,9 @@ public class AlertService {
     public void raiseInstanceAlert(AlertCode code, long instancePk,
                                    String serviceGroup, Long systemIdentifier,
                                    String title, String message, String detailsJson) {
+        // Config check: bu instance için bu alert aktif mi?
+        if (!configCache.isEnabled(code.getCode(), instancePk)) return;
+
         String alertKey = buildInstanceAlertKey(code, instancePk);
         try {
             alertRepo.upsert(alertKey, code, instancePk,
@@ -123,6 +129,9 @@ public class AlertService {
      */
     public void raiseJobAlert(AlertCode code, Map<String, Object> ctx,
                               String fallbackTitle, String fallbackMessage) {
+        // Config check: job alert global olarak aktif mi? (instance_pk = null)
+        if (!configCache.isEnabled(code.getCode(), null)) return;
+
         String alertKey = code.getCode() + ":" + code.getSourceComponent() + ":global";
         String[] rendered = renderTemplate(code, ctx, fallbackTitle, fallbackMessage);
         try {

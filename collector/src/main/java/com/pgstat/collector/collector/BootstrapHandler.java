@@ -38,17 +38,20 @@ public class BootstrapHandler {
     private final AlertRepository alertRepo;
     private final StateRepository stateRepo;
     private final AlertMessageRenderer renderer;
+    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
 
     public BootstrapHandler(DiscoveryCollector discoveryCollector,
                             InventoryRepository inventoryRepo,
                             AlertRepository alertRepo,
                             StateRepository stateRepo,
-                            AlertMessageRenderer renderer) {
+                            AlertMessageRenderer renderer,
+                            com.pgstat.collector.service.SystemAlertConfigCache configCache) {
         this.discoveryCollector = discoveryCollector;
         this.inventoryRepo = inventoryRepo;
         this.alertRepo = alertRepo;
         this.stateRepo = stateRepo;
         this.renderer = renderer;
+        this.configCache = configCache;
     }
 
     /**
@@ -174,6 +177,9 @@ public class BootstrapHandler {
     private void raiseAlert(InstanceInfo instance, AlertCode code,
                             Map<String, Object> ctx,
                             String fallbackTitle, String fallbackMessage) {
+        // Config check: bu instance için bu alert aktif mi?
+        if (!configCache.isEnabled(code.getCode(), instance.instancePk())) return;
+
         String alertKey = code.getCode() + ":" + code.getSourceComponent()
                 + ":" + instance.instancePk();
         String title = fallbackTitle;
