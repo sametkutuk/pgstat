@@ -1,6 +1,6 @@
 {
     "uid":  "pgstat-wraparound",
-    "title":  "pgstat â€” Wraparound \u0026 Vacuum Freeze",
+    "title":  "pgstat \u2014 Wraparound \u0026 Vacuum Freeze",
     "tags":  [
                  "pgstat",
                  "wraparound",

@@ -220,7 +220,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Top 30 Database (cross-instance, range iÃ§i)",
+                       "title":  "Top 30 Database (cross-instance, range içi)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,
@@ -228,7 +228,7 @@
                                        "x":  0,
                                        "y":  4
                                    },
-                       "description":  "Fleet\u0027teki en aktif DB\u0027ler. Hangi instance\u0027da hangi DB\u0027de ne kadar yÃ¼k var.",
+                       "description":  "Fleet\u0027teki en aktif DB\u0027ler. Hangi instance\u0027da hangi DB\u0027de ne kadar yük var.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
@@ -316,7 +316,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "Top 50 Tablo â€” En Ã‡ok Yazma (cross-instance, range iÃ§i)",
+                       "title":  "Top 50 Tablo â€” En Çok Yazma (cross-instance, range içi)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,
@@ -324,7 +324,7 @@
                                        "x":  0,
                                        "y":  18
                                    },
-                       "description":  "Fleet\u0027teki en aktif yazÄ±lan tablolar. instance Ã— tablo kombinasyonu.",
+                       "description":  "Fleet\u0027teki en aktif yazılan tablolar. instance Ã— tablo kombinasyonu.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"

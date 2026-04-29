@@ -59,7 +59,7 @@
     "panels":  [
                    {
                        "id":  1,
-                       "title":  "Åu An AÃ§Ä±k Alert",
+                       "title":  "Åu An Açık Alert",
                        "type":  "stat",
                        "gridPos":  {
                                        "h":  4,
@@ -92,7 +92,7 @@
                    },
                    {
                        "id":  2,
-                       "title":  "Range Ä°Ã§inde Tetiklenen",
+                       "title":  "Range İçinde Tetiklenen",
                        "type":  "stat",
                        "gridPos":  {
                                        "h":  4,
@@ -193,7 +193,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Alert Tetikleme HÄ±zÄ± (severity bazlÄ±)",
+                       "title":  "Alert Tetikleme Hızı (severity bazlı)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -227,7 +227,7 @@
                    },
                    {
                        "id":  11,
-                       "title":  "En GÃ¼rÃ¼ltÃ¼lÃ¼ 10 Alert Kodu",
+                       "title":  "En Gürültülü 10 Alert Kodu",
                        "type":  "barchart",
                        "gridPos":  {
                                        "h":  9,
@@ -259,7 +259,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "AÃ§Ä±k Alert\u0027ler (severity sÄ±ralÄ±)",
+                       "title":  "Açık Alert\u0027ler (severity sıralı)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -290,7 +290,7 @@
                    },
                    {
                        "id":  30,
-                       "title":  "Bildirim Kanal BaÅŸarÄ± OranÄ±",
+                       "title":  "Bildirim Kanal Başarı Oranı",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  8,
@@ -353,7 +353,7 @@
                    },
                    {
                        "id":  31,
-                       "title":  "Son 50 Bildirim KaydÄ±",
+                       "title":  "Son 50 Bildirim Kaydı",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  8,

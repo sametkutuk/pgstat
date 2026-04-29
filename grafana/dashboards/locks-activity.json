@@ -60,7 +60,7 @@
     "panels":  [
                    {
                        "id":  1,
-                       "title":  "Toplam Aktif BaÄŸlantÄ±",
+                       "title":  "Toplam Aktif Bağlantı",
                        "type":  "stat",
                        "gridPos":  {
                                        "h":  4,
@@ -224,7 +224,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Instance BazlÄ± Aktivite Ã–zet â€” tÄ±kla, detaya git",
+                       "title":  "Instance Bazlı Aktivite Özet â€” tıkla, detaya git",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,
@@ -232,7 +232,7 @@
                                        "x":  0,
                                        "y":  4
                                    },
-                       "description":  "Her instance iÃ§in anlÄ±k aktivite/idle/lock/vacuum sayÄ±larÄ±. Bir satÄ±ra tÄ±klayÄ±nca Instance Detail aÃ§Ä±lÄ±r.",
+                       "description":  "Her instance için anlık aktivite/idle/lock/vacuum sayıları. Bir satıra tıklayınca Instance Detail açılır.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
@@ -324,7 +324,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "Cross-Instance Uzun SÃ¼reli Sorgular (\u003e1 dk)",
+                       "title":  "Cross-Instance Uzun Süreli Sorgular (\u003e1 dk)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  12,
@@ -349,7 +349,7 @@
                                                              {
                                                                  "matcher":  {
                                                                                  "id":  "byName",
-                                                                                 "options":  "sÃ¼re_sn"
+                                                                                 "options":  "süre_sn"
                                                                              },
                                                                  "properties":  [
                                                                                     {
@@ -362,7 +362,7 @@
                                        },
                        "targets":  [
                                        {
-                                           "rawSql":  "select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"sÃ¼re_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts \u003e now() - interval \u00275 minutes\u0027 and a.state = \u0027active\u0027 and a.query_start is not null and (a.snapshot_ts - a.query_start) \u003e interval \u00271 minute\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or a.datname in ($database)) order by a.query_start asc limit 100",
+                                           "rawSql":  "select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"süre_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts \u003e now() - interval \u00275 minutes\u0027 and a.state = \u0027active\u0027 and a.query_start is not null and (a.snapshot_ts - a.query_start) \u003e interval \u00271 minute\u0027 and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) and (\u0027All\u0027 in ($database) or a.datname in ($database)) order by a.query_start asc limit 100",
                                            "format":  "table"
                                        }
                                    ]

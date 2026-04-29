@@ -59,7 +59,7 @@
     "panels":  [
                    {
                        "id":  2,
-                       "title":  "Saatlik WAL Ãœretimi",
+                       "title":  "Saatlik WAL Üretimi",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  10,
@@ -67,7 +67,7 @@
                                        "x":  0,
                                        "y":  0
                                    },
-                       "description":  "Saatlik WAL Ã¼retimi. Spike\u0027lar yoÄŸun yazma dÃ¶nemlerini gÃ¶sterir.",
+                       "description":  "Saatlik WAL üretimi. Spike\u0027lar yoğun yazma dönemlerini gösterir.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
@@ -103,7 +103,7 @@
                    },
                    {
                        "id":  3,
-                       "title":  "GÃ¼nlÃ¼k WAL Ã–zeti",
+                       "title":  "Günlük WAL Özeti",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  7,
@@ -199,7 +199,7 @@
                    },
                    {
                        "id":  1,
-                       "title":  "BaÄŸlantÄ± Trendi (P95)",
+                       "title":  "Bağlantı Trendi (P95)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -293,7 +293,7 @@
                    },
                    {
                        "id":  11,
-                       "title":  "Toplam Exec SÃ¼resi (ms/saat)",
+                       "title":  "Toplam Exec Süresi (ms/saat)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -324,7 +324,7 @@
                    },
                    {
                        "id":  31,
-                       "title":  "GÃ¼nlÃ¼k TPS Tablosu",
+                       "title":  "Günlük TPS Tablosu",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  8,
@@ -436,7 +436,7 @@
                    },
                    {
                        "id":  40,
-                       "title":  "BugÃ¼nkÃ¼ Kapasite Ã–zeti",
+                       "title":  "Bugünkü Kapasite Özeti",
                        "type":  "stat",
                        "gridPos":  {
                                        "h":  5,
@@ -468,7 +468,7 @@
                                                              {
                                                                  "matcher":  {
                                                                                  "id":  "byName",
-                                                                                 "options":  "Max BaÄŸlantÄ±"
+                                                                                 "options":  "Max Bağlantı"
                                                                              },
                                                                  "properties":  [
                                                                                     {
@@ -480,7 +480,7 @@
                                                              {
                                                                  "matcher":  {
                                                                                  "id":  "byName",
-                                                                                 "options":  "WAL Ãœretimi"
+                                                                                 "options":  "WAL Üretimi"
                                                                              },
                                                                  "properties":  [
                                                                                     {
@@ -509,12 +509,12 @@
                                        },
                                        {
                                            "refId":  "B",
-                                           "rawSql":  "select max(d.numbackends) as \"Max BaÄŸlantÄ±\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
+                                           "rawSql":  "select max(d.numbackends) as \"Max Bağlantı\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
                                            "format":  "table"
                                        },
                                        {
                                            "refId":  "C",
-                                           "rawSql":  "select sum(w.period_wal_size_byte) as \"WAL Ãœretimi\" from fact.pg_wal_snapshot w where w.sample_ts \u003e= current_date and (w.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
+                                           "rawSql":  "select sum(w.period_wal_size_byte) as \"WAL Üretimi\" from fact.pg_wal_snapshot w where w.sample_ts \u003e= current_date and (w.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
                                            "format":  "table"
                                        }
                                    ]

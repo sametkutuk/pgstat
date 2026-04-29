@@ -209,7 +209,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Top 50 Tablo â€” Dead Tuple OranÄ± (cross-instance)",
+                       "title":  "Top 50 Tablo â€” Dead Tuple Oranı (cross-instance)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  16,
@@ -217,7 +217,7 @@
                                        "x":  0,
                                        "y":  4
                                    },
-                       "description":  "Fleet\u0027teki en fazla bloat\u0027lÄ± tablolar â€” instance + tablo bazÄ±nda. Click â†’ Instance Detail.",
+                       "description":  "Fleet\u0027teki en fazla bloat\u0027lı tablolar â€” instance + tablo bazında. Click â†’ Instance Detail.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
@@ -326,7 +326,7 @@
                    },
                    {
                        "id":  21,
-                       "title":  "Range Ä°Ã§i Vacuum/Analyze SayÄ±sÄ± (per instance)",
+                       "title":  "Range İçi Vacuum/Analyze Sayısı (per instance)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -334,7 +334,7 @@
                                        "x":  0,
                                        "y":  30
                                    },
-                       "description":  "SeÃ§ili zaman aralÄ±ÄŸÄ±nda her instance kaÃ§ autovacuum/autoanalyze Ã§alÄ±ÅŸtÄ±rmÄ±ÅŸ.",
+                       "description":  "Seçili zaman aralığında her instance kaç autovacuum/autoanalyze çalıştırmış.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"

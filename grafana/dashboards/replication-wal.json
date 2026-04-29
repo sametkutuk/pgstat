@@ -176,7 +176,7 @@
                    },
                    {
                        "id":  4,
-                       "title":  "WAL Ãœretimi (son 1h, fleet)",
+                       "title":  "WAL Üretimi (son 1h, fleet)",
                        "type":  "stat",
                        "gridPos":  {
                                        "h":  4,
@@ -218,7 +218,7 @@
                                        "x":  0,
                                        "y":  4
                                    },
-                       "description":  "TÃ¼m primary\u0027lerin replay lag\u0027i. En yÃ¼ksek olanlar dikkat gerektirir.",
+                       "description":  "Tüm primary\u0027lerin replay lag\u0027i. En yüksek olanlar dikkat gerektirir.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
@@ -258,7 +258,7 @@
                    },
                    {
                        "id":  11,
-                       "title":  "WAL Ãœretimi (bayt/sn) â€” Per Instance",
+                       "title":  "WAL Üretimi (bayt/sn) â€” Per Instance",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -290,7 +290,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "AnlÄ±k Replication Lag â€” Per Primary/Standby (sÄ±ralÄ±)",
+                       "title":  "Anlık Replication Lag â€” Per Primary/Standby (sıralı)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -361,7 +361,7 @@
                    },
                    {
                        "id":  21,
-                       "title":  "Replication Slot Durumu â€” TÃ¼m Instance\u0027lar",
+                       "title":  "Replication Slot Durumu â€” Tüm Instance\u0027lar",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  10,
@@ -418,7 +418,7 @@
                    },
                    {
                        "id":  22,
-                       "title":  "Archiver Durumu â€” TÃ¼m Instance\u0027lar",
+                       "title":  "Archiver Durumu â€” Tüm Instance\u0027lar",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  8,

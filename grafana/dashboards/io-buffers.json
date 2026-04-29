@@ -197,7 +197,7 @@
                    },
                    {
                        "id":  10,
-                       "title":  "Read HÄ±zÄ± per Instance (zaman serisi)",
+                       "title":  "Read Hızı per Instance (zaman serisi)",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -228,7 +228,7 @@
                    },
                    {
                        "id":  11,
-                       "title":  "Write HÄ±zÄ± per Instance",
+                       "title":  "Write Hızı per Instance",
                        "type":  "timeseries",
                        "gridPos":  {
                                        "h":  9,
@@ -259,7 +259,7 @@
                    },
                    {
                        "id":  20,
-                       "title":  "Top 30 Instance Ã— backend_type Ã— context (range iÃ§i)",
+                       "title":  "Top 30 Instance Ã— backend_type Ã— context (range içi)",
                        "type":  "table",
                        "gridPos":  {
                                        "h":  14,
@@ -267,7 +267,7 @@
                                        "x":  0,
                                        "y":  13
                                    },
-                       "description":  "Hangi instance\u0027da hangi backend_type/context en Ã§ok I/O Ã¼retmiÅŸ.",
+                       "description":  "Hangi instance\u0027da hangi backend_type/context en çok I/O üretmiş.",
                        "datasource":  {
                                           "type":  "postgres",
                                           "uid":  "pgstat"
