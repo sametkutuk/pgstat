@@ -1,523 +1,519 @@
 {
-    "uid":  "pgstat-capacity-trends",
-    "title":  "pgstat — Capacity \u0026 Trends",
-    "tags":  [
-                 "pgstat",
-                 "capacity"
-             ],
-    "timezone":  "browser",
-    "schemaVersion":  39,
-    "version":  1,
-    "refresh":  "5m",
-    "time":  {
-                 "from":  "now-7d",
-                 "to":  "now"
-             },
-    "templating":  {
-                       "list":  [
-                                    {
-                                        "query":  "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "service_group",
-                                        "type":  "query",
-                                        "label":  "Service Group",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    },
-                                    {
-                                        "query":  "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "instance",
-                                        "type":  "query",
-                                        "label":  "Instance",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    },
-                                    {
-                                        "query":  "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
-                                        "datasource":  {
-                                                           "type":  "postgres",
-                                                           "uid":  "pgstat"
-                                                       },
-                                        "includeAll":  true,
-                                        "name":  "database",
-                                        "type":  "query",
-                                        "label":  "Database",
-                                        "multi":  true,
-                                        "refresh":  1
-                                    }
-                                ]
-                   },
-    "panels":  [
-                   {
-                       "id":  2,
-                       "title":  "Saatlik WAL Üretimi",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  10,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  0
-                                   },
-                       "description":  "Saatlik WAL üretimi. Spike\u0027lar yoğun yazma dönemlerini gösterir.",
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "decbytes",
-                                                            "decimals":  2,
-                                                            "custom":  {
-                                                                           "drawStyle":  "bars",
-                                                                           "lineWidth":  1,
-                                                                           "fillOpacity":  80,
-                                                                           "axisSoftMin":  0,
-                                                                           "showPoints":  "never"
-                                                                       }
-                                                        }
-                                       },
-                       "options":  {
-                                       "legend":  {
-                                                      "displayMode":  "list",
-                                                      "placement":  "bottom"
-                                                  },
-                                       "tooltip":  {
-                                                       "mode":  "single"
-                                                   }
-                                   },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select $__timeGroupAlias(w.sample_ts, \u00271h\u0027), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  3,
-                       "title":  "Günlük WAL Özeti",
-                       "type":  "table",
-                       "gridPos":  {
-                                       "h":  7,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  10
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "daily_wal"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "decbytes"
-                                                                                    },
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "wal_dir_max"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "decbytes"
-                                                                                    },
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "files_max"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "archived"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "failed"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select date_trunc(\u0027day\u0027, w.sample_ts)::date as day, i.display_name as instance, sum(w.period_wal_size_byte) as daily_wal, max(w.wal_directory_size_byte) as wal_dir_max, max(w.wal_file_count) as files_max, max(a.archived_count) as archived, max(a.failed_count) as failed from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk left join fact.pg_archiver_snapshot a on a.instance_pk = w.instance_pk and date_trunc(\u0027day\u0027, a.sample_ts) = date_trunc(\u0027day\u0027, w.sample_ts) where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1 desc",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  1,
-                       "title":  "Bağlantı Trendi (P95)",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  9,
-                                       "w":  12,
-                                       "x":  0,
-                                       "y":  17
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "short",
-                                                            "custom":  {
-                                                                           "drawStyle":  "line",
-                                                                           "lineWidth":  2,
-                                                                           "fillOpacity":  5
-                                                                       }
-                                                        }
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  10,
-                       "title":  "Sorgu Hacmi (calls/saat)",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  9,
-                                       "w":  12,
-                                       "x":  12,
-                                       "y":  17
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "short",
-                                                            "custom":  {
-                                                                           "drawStyle":  "line",
-                                                                           "lineWidth":  2,
-                                                                           "fillOpacity":  10
-                                                                       }
-                                                        }
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select bucket_start as time, i.display_name as metric, sum(h.calls_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  30,
-                       "title":  "TPS Trendi (instance toplam)",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  9,
-                                       "w":  12,
-                                       "x":  0,
-                                       "y":  26
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "short",
-                                                            "decimals":  0,
-                                                            "custom":  {
-                                                                           "drawStyle":  "line",
-                                                                           "lineWidth":  2,
-                                                                           "fillOpacity":  15
-                                                                       }
-                                                        }
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from \u0027$__interval\u0027::interval), 1)) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  11,
-                       "title":  "Toplam Exec Süresi (ms/saat)",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  9,
-                                       "w":  12,
-                                       "x":  12,
-                                       "y":  26
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "ms",
-                                                            "custom":  {
-                                                                           "drawStyle":  "line",
-                                                                           "lineWidth":  2,
-                                                                           "fillOpacity":  10
-                                                                       }
-                                                        }
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select bucket_start as time, i.display_name as metric, sum(h.exec_time_ms_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  31,
-                       "title":  "Günlük TPS Tablosu",
-                       "type":  "table",
-                       "gridPos":  {
-                                       "h":  8,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  35
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "avg_tps"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    },
-                                                                                    {
-                                                                                        "id":  "decimals",
-                                                                                        "value":  0
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "commits"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "rollbacks"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "total_xact"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "custom.align",
-                                                                                        "value":  "right"
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "select date_trunc(\u0027day\u0027, d.sample_ts)::date as day, i.display_name as instance, sum(d.xact_commit_delta) as commits, sum(d.xact_rollback_delta) as rollbacks, sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1 desc, i.display_name",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  20,
-                       "title":  "Database Boyut Trendi (live tuple)",
-                       "type":  "timeseries",
-                       "gridPos":  {
-                                       "h":  9,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  43
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "unit":  "locale",
-                                                            "decimals":  0,
-                                                            "custom":  {
-                                                                           "drawStyle":  "line",
-                                                                           "lineWidth":  2,
-                                                                           "fillOpacity":  5
-                                                                       }
-                                                        }
-                                       },
-                       "targets":  [
-                                       {
-                                           "rawSql":  "with daily as (select date_trunc(\u0027day\u0027, t.sample_ts)::date as day, i.display_name || \u0027 / \u0027 || coalesce(dbr.datname, \u0027?\u0027) as series, max(t.n_live_tup_estimate) as live from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where $__timeFilter(t.sample_ts) and (t.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name, dbr.datname) select day::timestamptz as time, series as metric, sum(live) as value from daily group by 1, series order by 1",
-                                           "format":  "time_series"
-                                       }
-                                   ]
-                   },
-                   {
-                       "id":  40,
-                       "title":  "Bugünkü Kapasite Özeti",
-                       "type":  "stat",
-                       "gridPos":  {
-                                       "h":  5,
-                                       "w":  24,
-                                       "x":  0,
-                                       "y":  52
-                                   },
-                       "datasource":  {
-                                          "type":  "postgres",
-                                          "uid":  "pgstat"
-                                      },
-                       "fieldConfig":  {
-                                           "defaults":  {
-                                                            "decimals":  0
-                                                        },
-                                           "overrides":  [
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "Ort. TPS"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "short"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "Max Bağlantı"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "short"
-                                                                                    }
-                                                                                ]
-                                                             },
-                                                             {
-                                                                 "matcher":  {
-                                                                                 "id":  "byName",
-                                                                                 "options":  "WAL Üretimi"
-                                                                             },
-                                                                 "properties":  [
-                                                                                    {
-                                                                                        "id":  "unit",
-                                                                                        "value":  "decbytes"
-                                                                                    }
-                                                                                ]
-                                                             }
-                                                         ]
-                                       },
-                       "options":  {
-                                       "reduceOptions":  {
-                                                             "calcs":  [
-                                                                           "lastNotNull"
-                                                                       ]
-                                                         },
-                                       "textMode":  "value_and_name",
-                                       "colorMode":  "background",
-                                       "graphMode":  "none"
-                                   },
-                       "targets":  [
-                                       {
-                                           "refId":  "A",
-                                           "rawSql":  "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 1)) as \"Ort. TPS\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
-                                           "format":  "table"
-                                       },
-                                       {
-                                           "refId":  "B",
-                                           "rawSql":  "select max(d.numbackends) as \"Max Bağlantı\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
-                                           "format":  "table"
-                                       },
-                                       {
-                                           "refId":  "C",
-                                           "rawSql":  "select sum(w.period_wal_size_byte) as \"WAL Üretimi\" from fact.pg_wal_snapshot w where w.sample_ts \u003e= current_date and (w.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
-                                           "format":  "table"
-                                       }
-                                   ]
-                   }
-               ]
+  "uid": "pgstat-capacity-trends",
+  "title": "pgstat — Capacity \u0026 Trends",
+  "tags": [
+    "pgstat",
+    "capacity"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "query": "select distinct coalesce(service_group, \u0027(none)\u0027) from control.instance_inventory where is_active order by 1",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "includeAll": true,
+        "name": "service_group",
+        "type": "query",
+        "label": "Service Group",
+        "multi": true,
+        "refresh": 1
+      },
+      {
+        "query": "select display_name as __text, instance_pk::text as __value from control.instance_inventory where is_active and (service_group in ($service_group) or \u0027All\u0027 in ($service_group) or service_group is null) order by display_name",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "includeAll": true,
+        "name": "instance",
+        "type": "query",
+        "label": "Instance",
+        "multi": true,
+        "refresh": 1
+      },
+      {
+        "query": "select distinct datname as __text, datname as __value from dim.database_ref where not is_template and (instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) order by datname",
+        "datasource": {
+          "type": "postgres",
+          "uid": "pgstat"
+        },
+        "includeAll": true,
+        "name": "database",
+        "type": "query",
+        "label": "Database",
+        "multi": true,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 2,
+      "title": "Saatlik WAL Üretimi",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "description": "Saatlik WAL üretimi. Spike\u0027lar yoğun yazma dönemlerini gösterir.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "axisSoftMin": 0,
+            "showPoints": "never"
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Günlük WAL Özeti",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "daily_wal"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wal_dir_max"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              },
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files_max"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "archived"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "select date_trunc(\u0027day\u0027, w.sample_ts)::date as day, i.display_name as instance, sum(w.period_wal_size_byte) as daily_wal, max(w.wal_directory_size_byte) as wal_dir_max, max(w.wal_file_count) as files_max, max(a.archived_count) as archived, max(a.failed_count) as failed from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk left join fact.pg_archiver_snapshot a on a.instance_pk = w.instance_pk and date_trunc(\u0027day\u0027, a.sample_ts) = date_trunc(\u0027day\u0027, w.sample_ts) where $__timeFilter(w.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1 desc",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "title": "Bağlantı Trendi (P95)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, percentile_cont(0.95) within group (order by d.numbackends) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Sorgu Hacmi (calls/saat)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.calls_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "title": "TPS Trendi (instance toplam)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select $__timeGroupAlias(d.sample_ts, $__interval), i.display_name as metric, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from \u0027$__interval\u0027::interval), 1)) as value from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Toplam Exec Süresi (ms/saat)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "select bucket_start as time, i.display_name as metric, sum(h.exec_time_ms_sum) as value from agg.pgss_hourly h join control.instance_inventory i on i.instance_pk = h.instance_pk where $__timeFilter(h.bucket_start) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Günlük TPS Tablosu",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "avg_tps"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commits"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rollbacks"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "total_xact"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "select date_trunc(\u0027day\u0027, d.sample_ts)::date as day, i.display_name as instance, sum(d.xact_commit_delta) as commits, sum(d.xact_rollback_delta) as rollbacks, sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact, round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps from fact.pg_database_delta d join control.instance_inventory i on i.instance_pk = d.instance_pk where $__timeFilter(d.sample_ts) and (i.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name order by 1 desc, i.display_name",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "title": "Database Boyut Trendi (live tuple)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "with daily as (select date_trunc(\u0027day\u0027, t.sample_ts)::date as day, i.display_name || \u0027 / \u0027 || coalesce(dbr.datname, \u0027?\u0027) as series, max(t.n_live_tup_estimate) as live from fact.pg_table_stat_delta t join control.instance_inventory i on i.instance_pk = t.instance_pk left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid where $__timeFilter(t.sample_ts) and (t.instance_pk in ($instance) or \u0027All\u0027 in ($instance)) group by 1, i.display_name, dbr.datname) select day::timestamptz as time, series as metric, sum(live) as value from daily group by 1, series order by 1",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "title": "Bugünkü Kapasite Özeti",
+      "type": "stat",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "pgstat"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ort. TPS"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max Bağlantı"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "WAL Üretimi"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "rawSql": "select round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / greatest(extract(epoch from (max(d.sample_ts) - min(d.sample_ts))), 1)) as \"Ort. TPS\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "rawSql": "select max(d.numbackends) as \"Max Bağlantı\" from fact.pg_database_delta d where d.sample_ts \u003e= current_date and (d.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "rawSql": "select sum(w.period_wal_size_byte) as \"WAL Üretimi\" from fact.pg_wal_snapshot w where w.sample_ts \u003e= current_date and (w.instance_pk in ($instance) or \u0027All\u0027 in ($instance))",
+          "format": "table"
+        }
+      ]
+    }
+  ]
 }

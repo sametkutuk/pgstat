@@ -282,7 +282,7 @@
             },
             "targets": [
                 {
-                    "rawSql": "select $__timeGroupAlias(w.sample_ts, \u00271h\u0027), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
+                    "rawSql": "select $__timeGroupAlias(w.sample_ts, $__interval), i.display_name as metric, sum(w.period_wal_size_byte) as value from fact.pg_wal_snapshot w join control.instance_inventory i on i.instance_pk = w.instance_pk where $__timeFilter(w.sample_ts) and (i.instance_pk::text in ($instance) or \u0027All\u0027 in ($instance)) and (i.service_group in ($service_group) or \u0027All\u0027 in ($service_group) or i.service_group is null) group by 1, i.display_name order by 1",
                     "format": "time_series"
                 }
             ]
