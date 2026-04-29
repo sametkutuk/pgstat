@@ -287,8 +287,21 @@
                     "custom": {
                         "drawStyle": "bars",
                         "lineWidth": 1,
-                        "fillOpacity": 80
+                        "fillOpacity": 80,
+                        "barAlignment": 0,
+                        "showPoints": "never",
+                        "axisSoftMin": 0
                     }
+                }
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
                 }
             },
             "targets": [
