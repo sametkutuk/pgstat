@@ -118,6 +118,15 @@ export default function InstanceForm({ initial, onSubmit, onCancel, isEdit }: Pr
                 <Field label="Kullanıcı Adı *" value={form.collector_username}
                     onChange={(v) => set('collector_username', v)} placeholder="pgstats_collector"
                     hint="Kaynak PG'ye bağlanacak kullanıcı" />
+                {!isEdit && (
+                    <div className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        <span className="font-semibold">pg_stat_statements notu:</span>{' '}
+                        Extension seçilen Admin Database içinde kurulu olmalı. Extension public dışında bir schema'daysa
+                        collector kullanıcısına o schema için <code className="font-mono">USAGE</code> ve
+                        <code className="font-mono"> pg_stat_statements</code> objeleri için erişim verilmeli;
+                        <code className="font-mono"> pg_monitor</code> custom schema yetkisini tek başına vermez.
+                    </div>
+                )}
 
                 {/* Kimlik doğrulama bölümü */}
                 <div className="md:col-span-2 border border-[#E2E8F0] rounded-lg p-4">
@@ -258,8 +267,20 @@ SHOW shared_preload_libraries;
 -- Ardından PostgreSQL'i yeniden başlat, sonra:
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
--- Doğrulama:
-SELECT count(*) FROM pg_stat_statements;`;
+-- Extension hangi schema'da?
+SELECT n.nspname AS extension_schema
+FROM pg_extension e
+JOIN pg_namespace n ON n.oid = e.extnamespace
+WHERE e.extname = 'pg_stat_statements';
+
+-- Extension public dışında bir schema'daysa collector kullanıcısına yetki ver:
+-- GRANT USAGE ON SCHEMA <extension_schema> TO ${username};
+-- GRANT SELECT ON <extension_schema>.pg_stat_statements_info TO ${username};
+-- GRANT EXECUTE ON FUNCTION <extension_schema>.pg_stat_statements(boolean) TO ${username};
+
+-- Doğrulama (<extension_schema> değerini yukarıdaki sorgudan al):
+SELECT count(*) FROM <extension_schema>.pg_stat_statements(false);
+SELECT count(*) FROM <extension_schema>.pg_stat_statements_info;`;
 
     const sql3 = `-- 3. İzlenecek her veritabanı için CONNECT yetkisi ver
 GRANT CONNECT ON DATABASE postgres TO ${username};
@@ -317,7 +338,7 @@ GRANT CONNECT ON DATABASE postgres TO ${username};
                     <div className="bg-white border border-amber-200 rounded p-3 text-xs text-[#64748B] space-y-1">
                         <div className="font-semibold text-[#1E293B] mb-1">Bağlantı testi</div>
                         <code className="block bg-[#F8FAFC] px-2 py-1 rounded font-mono">
-                            psql -h &lt;host&gt; -U {username} -d postgres -c "SELECT count(*) FROM pg_stat_statements;"
+                            psql -h &lt;host&gt; -U {username} -d postgres -c "SELECT count(*) FROM &lt;extension_schema&gt;.pg_stat_statements(false);"
                         </code>
                         <div>Sonuç bir sayı ise kayıt yapmaya hazırsın.</div>
                     </div>
