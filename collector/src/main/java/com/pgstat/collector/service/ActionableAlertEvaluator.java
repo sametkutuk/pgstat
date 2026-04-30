@@ -128,18 +128,22 @@ public class ActionableAlertEvaluator {
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
                 r.get("schemaname") + "." + r.get("relname");
 
-            Map<String, Object> ctx = Map.of(
-                "instance", r.get("display_name"),
-                "instance_pk", r.get("instance_pk"),
-                "database", r.get("datname") != null ? r.get("datname") : "?",
-                "table", r.get("schemaname") + "." + r.get("relname"),
-                "relname", r.get("relname"),
-                "table_size_human", humanBytes(toLong(r.get("total_size_bytes"))),
-                "seq_scans", r.get("seq_scans"),
-                "idx_scans", r.get("idx_scans"),
-                "seq_idx_ratio", r.get("ratio"),
-                "seq_tup_read", r.get("seq_tup_read")
-            );
+            // Bu tabloya erişen top sorguları bul (query_text ILIKE '%tablename%')
+            String relname = (String) r.get("relname");
+            String topQueriesText = findQueriesForTable(instancePk, relname);
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", r.get("instance_pk"));
+            ctx.put("database", r.get("datname") != null ? r.get("datname") : "?");
+            ctx.put("table", r.get("schemaname") + "." + r.get("relname"));
+            ctx.put("relname", relname);
+            ctx.put("table_size_human", humanBytes(toLong(r.get("total_size_bytes"))));
+            ctx.put("seq_scans", r.get("seq_scans"));
+            ctx.put("idx_scans", r.get("idx_scans"));
+            ctx.put("seq_idx_ratio", r.get("ratio"));
+            ctx.put("seq_tup_read", r.get("seq_tup_read"));
+            ctx.put("top_queries", topQueriesText);
 
             String[] rendered = renderer.renderForCode("index_suspect_missing", ctx,
                 "Index gerekiyor: " + r.get("schemaname") + "." + r.get("relname"),
@@ -380,6 +384,39 @@ public class ActionableAlertEvaluator {
     // =========================================================================
     // Yardimci
     // =========================================================================
+
+    /**
+     * Belirli bir tabloya erişen top 5 sorguyu bulur.
+     * query_text içinde tablo adı geçen sorgular — calls ve exec_time bazında sıralı.
+     */
+    private String findQueriesForTable(long instancePk, String relname) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "select left(qt.query_text, 80) as query, " +
+                "       sum(d.calls_delta) as calls, " +
+                "       sum(d.total_exec_time_ms_delta) as exec_ms " +
+                "from fact.pgss_delta d " +
+                "join dim.statement_series ss on ss.statement_series_id = d.statement_series_id " +
+                "left join dim.query_text qt on qt.query_text_id = ss.query_text_id " +
+                "where d.instance_pk = ? and d.sample_ts > now() - interval '24 hours' " +
+                "  and qt.query_text ilike '%' || ? || '%' " +
+                "group by left(qt.query_text, 80) " +
+                "order by exec_ms desc limit 5",
+                instancePk, relname);
+
+            if (rows.isEmpty()) return "(bu tabloya erişen sorgu bulunamadı)";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < rows.size(); i++) {
+                if (i > 0) sb.append("\n");
+                sb.append(i + 1).append(". `").append(rows.get(i).get("query")).append("`");
+                sb.append(" — ").append(rows.get(i).get("calls")).append(" calls");
+                sb.append(", ").append(humanMs(toLong(rows.get(i).get("exec_ms")))).append(" exec");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "(sorgu bulunamadı)";
+        }
+    }
 
     private String buildTopTempQueries(long instancePk) {
         try {

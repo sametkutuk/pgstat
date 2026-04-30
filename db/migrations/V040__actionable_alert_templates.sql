@@ -18,10 +18,12 @@ insert into control.alert_message_template (alert_code, title_template, message_
  E'• Oran: {{seq_idx_ratio}}× (eşik: 100×)\n' ||
  E'• Seq tup read: {{seq_tup_read}} satır\n' ||
  E'\n' ||
+ E'**Bu tabloya erişen sorgular:**\n' ||
+ E'{{top_queries}}\n' ||
+ E'\n' ||
  E'**Aksiyon:**\n' ||
- E'1. Sorguları incele: pgstat Statements sayfasında tabloya filtrele\n' ||
- E'2. EXPLAIN (ANALYZE, BUFFERS) ile plan kontrol\n' ||
- E'3. Filtre/JOIN kolonlarına index ekle:\n' ||
+ E'1. EXPLAIN (ANALYZE, BUFFERS) ile plan kontrol\n' ||
+ E'2. Filtre/JOIN kolonlarına index ekle:\n' ||
  E'   `CREATE INDEX CONCURRENTLY ON {{table}} (kolon);`',
  'Tablo seq_scan/idx_scan oranı çok yüksek — index gerekiyor'),
 
