@@ -6,7 +6,7 @@ package com.pgstat.collector.sql;
  *
  * Farklar:
  * - pg11_12: toplevel yok, plans yok, wal/jit kolonu yok, waitstart yok
- * - pg13: toplevel, wal_records/bytes, jit_* eklenir
+ * - pg13: plans, total_plan_time, wal_records/bytes eklenir; toplevel ve jit_* yok
  * - pg14_16: plans, pg_stat_statements_info, waitstart (PG14), pg_stat_io (PG16)
  * - pg17_18: pg_stat_checkpointer ayri view olarak eklenir
  *

@@ -17,8 +17,10 @@ import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
+import java.util.Locale;
 
 /**
  * Kaynak PostgreSQL instance'inin yeteneklerini kesfeder.
@@ -224,13 +226,20 @@ public class DiscoveryCollector {
     }
 
     /** Exception'dan anlaşılır hata mesajı üretir. */
-    private String buildErrorDetail(Exception e) {
+    String buildErrorDetail(Exception e) {
         String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
         Throwable cause = e.getCause();
+        String causeMsg = cause != null && cause.getMessage() != null ? cause.getMessage() : null;
+        String fullMsg = causeMsg != null ? msg + " - " + causeMsg : msg;
+        String normalized = fullMsg.toLowerCase(Locale.ROOT);
+
+        if (isPgHbaError(normalized)) {
+            return "pg_hba.conf erisim hatasi - kaynak PostgreSQL bu host/kullanici/database/SSL kombinasyonuna izin vermiyor: "
+                    + fullMsg;
+        }
 
         // JDBC bağlantı hatalarının gerçek nedeni cause'da olur
-        if (cause != null && cause.getMessage() != null) {
-            String causeMsg = cause.getMessage();
+        if (causeMsg != null) {
             // Bilinen hata kalıpları → Türkçe açıklama
             if (causeMsg.contains("Connection refused") || causeMsg.contains("connect refused")) {
                 return "Bağlantı reddedildi — host/port yanlış veya PostgreSQL çalışmıyor (" + causeMsg + ")";
@@ -245,10 +254,13 @@ public class DiscoveryCollector {
         }
 
         // JDBC SQLState bazlı hatalar (pg_hba, şifre vb.)
-        if (e instanceof java.sql.SQLException se) {
+        if (e instanceof SQLException se) {
             String state = se.getSQLState();
-            if ("28P01".equals(state) || "28000".equals(state)) {
+            if ("28P01".equals(state)) {
                 return "Kimlik doğrulama hatası — kullanıcı adı veya şifre yanlış (SQLState: " + state + ")";
+            }
+            if ("28000".equals(state)) {
+                return "Kimlik dogrulama/pg_hba hatasi (SQLState: " + state + "): " + msg;
             }
             if ("3D000".equals(state)) {
                 return "Veritabanı bulunamadı — admin_dbname yanlış (SQLState: " + state + ")";
@@ -262,6 +274,12 @@ public class DiscoveryCollector {
         }
 
         return msg;
+    }
+
+    private boolean isPgHbaError(String normalizedMessage) {
+        return normalizedMessage.contains("pg_hba.conf")
+                || normalizedMessage.contains("no pg_hba")
+                || normalizedMessage.contains("no pg hba");
     }
 
     /**

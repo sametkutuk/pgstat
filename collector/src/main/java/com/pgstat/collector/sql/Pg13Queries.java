@@ -3,13 +3,13 @@ package com.pgstat.collector.sql;
 /**
  * PG13 icin kaynak sorgulari.
  * pg11_12 uzerine eklenenler:
- * - toplevel kolonu (pg_stat_statements)
+ * - plans / total_plan_time kolonlari (pg_stat_statements)
  * - wal_records, wal_fpi, wal_bytes (pg_stat_wal)
- * - jit_* kolonlari (pg_stat_statements)
  * - pg_stat_progress_analyze
  *
  * Hala yok:
- * - plans kolonu (PG14+)
+ * - toplevel kolonu (PG14+)
+ * - jit_* kolonlari (PG15+)
  * - pg_stat_statements_info (PG14+)
  * - pg_stat_io (PG16+)
  * - pg_stat_checkpointer (PG17+)
@@ -67,19 +67,19 @@ public class Pg13Queries extends Pg11_12Queries {
     }
 
     // =========================================================================
-    // Statements — toplevel ve jit eklendi
+    // Statements - plans ve wal eklendi
     // =========================================================================
 
     @Override
     public String pgssStatsQuery(String pgssFunction) {
-        // PG13: toplevel, wal, jit var; plans yok
+        // PG13: plans ve wal var; toplevel ve jit yok
         return """
             select
               userid, dbid, queryid,
-              toplevel,
+              null::boolean as toplevel,
               calls,
-              0::bigint as plans,
-              0::double precision as total_plan_time,
+              plans,
+              total_plan_time,
               total_exec_time,
               rows,
               shared_blks_hit, shared_blks_read,
@@ -89,10 +89,10 @@ public class Pg13Queries extends Pg11_12Queries {
               temp_blks_read, temp_blks_written,
               blk_read_time, blk_write_time,
               wal_records, wal_fpi, wal_bytes,
-              jit_generation_time,
-              jit_inlining_time,
-              jit_optimization_time,
-              jit_emission_time
+              0::double precision as jit_generation_time,
+              0::double precision as jit_inlining_time,
+              0::double precision as jit_optimization_time,
+              0::double precision as jit_emission_time
             from %s(false)
             """.formatted(pgssFunction);
     }
