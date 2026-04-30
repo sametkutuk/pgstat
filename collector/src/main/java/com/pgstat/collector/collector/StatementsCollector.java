@@ -11,6 +11,8 @@ import com.pgstat.collector.repository.StateRepository;
 import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.EpochManager;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver.PgStatStatementsExtension;
 import com.pgstat.collector.service.PgssResetTracker;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
@@ -57,6 +59,7 @@ public class StatementsCollector {
     private final PgssResetTracker resetTracker;
     private final AlertMessageRenderer renderer;
     private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
+    private final PgStatStatementsExtensionResolver pgssResolver;
 
     /**
      * In-memory delta cache.
@@ -77,7 +80,8 @@ public class StatementsCollector {
                                AlertRepository alertRepo,
                                PgssResetTracker resetTracker,
                                AlertMessageRenderer renderer,
-                               com.pgstat.collector.service.SystemAlertConfigCache configCache) {
+                               com.pgstat.collector.service.SystemAlertConfigCache configCache,
+                               PgStatStatementsExtensionResolver pgssResolver) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -90,6 +94,7 @@ public class StatementsCollector {
         this.resetTracker = resetTracker;
         this.renderer = renderer;
         this.configCache = configCache;
+        this.pgssResolver = pgssResolver;
     }
 
     /**
@@ -114,9 +119,15 @@ public class StatementsCollector {
         // Kaynak PG'den statement istatistiklerini oku
         Map<String, StatementSample> currentSamples = new HashMap<>();
 
-        try (Connection conn = connectionFactory.connect(instance);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(queries.pgssStatsQuery())) {
+        try (Connection conn = connectionFactory.connect(instance)) {
+            PgStatStatementsExtension pgssExtension = pgssResolver.resolve(conn);
+            if (pgssExtension == null) {
+                throw new IllegalStateException("pg_stat_statements extension admin DB'de bulunamadi: "
+                        + instance.adminDbname());
+            }
+
+            String pgssFunction = pgssExtension.qualify("pg_stat_statements");
+            String pgssInfoRelation = pgssExtension.qualify("pg_stat_statements_info");
 
             // Once role'leri yukle — pgss_delta'daki userid'leri rolname'e cevirebilmek icin
             // dim.role_ref tablosunun dolu olmasi gerek. Hafif sorgu, her cycle'da idempotent.
@@ -153,12 +164,15 @@ public class StatementsCollector {
                     postmasterStartAt = rs2.getObject("start_time", OffsetDateTime.class);
                 }
             }
-            if (queries.pgssInfoQuery() != null) {
+            if (queries.supportsPgssInfo()) {
                 try (Statement stmt2 = conn.createStatement();
-                     ResultSet rs2 = stmt2.executeQuery(queries.pgssInfoQuery())) {
+                     ResultSet rs2 = stmt2.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
                     if (rs2.next()) {
                         pgssResetAt = rs2.getObject("last_stats_reset", OffsetDateTime.class);
                     }
+                } catch (Exception e) {
+                    log.warn("pg_stat_statements_info okunamadi instance={}: {}",
+                            instancePk, e.getMessage());
                 }
             }
 
@@ -237,7 +251,9 @@ public class StatementsCollector {
             }
 
             // Statement satirlarini oku
-            while (rs.next()) {
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(queries.pgssStatsQuery(pgssFunction))) {
+                while (rs.next()) {
                 StatementSample sample = readSample(rs);
                 String seriesKey = buildSeriesKey(sample);
                 currentSamples.put(seriesKey, sample);
@@ -320,6 +336,7 @@ public class StatementsCollector {
                     // Cache'te onceki deger yok, epoch ayni → baseline al, delta yazma.
                     // Bir sonraki cycle'da delta yazilacak.
                     newSeriesCount++;
+                }
                 }
             }
 

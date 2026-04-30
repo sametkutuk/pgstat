@@ -197,7 +197,7 @@ public class Pg11_12Queries implements SourceQueries {
     // =========================================================================
 
     @Override
-    public String pgssStatsQuery() {
+    public String pgssStatsQuery(String pgssFunction) {
         // PG11-12: toplevel, plans, wal, jit yok
         return """
             select
@@ -221,16 +221,16 @@ public class Pg11_12Queries implements SourceQueries {
               0::double precision as jit_inlining_time,
               0::double precision as jit_optimization_time,
               0::double precision as jit_emission_time
-            from pg_stat_statements(false)
-            """;
+            from %s(false)
+            """.formatted(pgssFunction);
     }
 
     @Override
-    public String pgssTextQuery() {
+    public String pgssTextQuery(String pgssFunction) {
         return """
             select queryid, query
-            from pg_stat_statements(true)
-            """;
+            from %s(true)
+            """.formatted(pgssFunction);
     }
 
     // =========================================================================

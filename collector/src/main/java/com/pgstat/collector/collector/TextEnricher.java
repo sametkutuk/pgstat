@@ -3,6 +3,8 @@ package com.pgstat.collector.collector;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver.PgStatStatementsExtension;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
 import com.pgstat.collector.sql.SourceQueries;
@@ -40,15 +42,18 @@ public class TextEnricher {
     private final SqlFamilyResolver familyResolver;
     private final CapabilityRepository capabilityRepo;
     private final DimensionRepository dimensionRepo;
+    private final PgStatStatementsExtensionResolver pgssResolver;
 
     public TextEnricher(SourceConnectionFactory connectionFactory,
                         SqlFamilyResolver familyResolver,
                         CapabilityRepository capabilityRepo,
-                        DimensionRepository dimensionRepo) {
+                        DimensionRepository dimensionRepo,
+                        PgStatStatementsExtensionResolver pgssResolver) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
         this.dimensionRepo = dimensionRepo;
+        this.pgssResolver = pgssResolver;
     }
 
     /**
@@ -82,11 +87,18 @@ public class TextEnricher {
         SourceQueries queries = familyResolver.resolveByCode(sqlFamily);
         int enrichedCount = 0;
 
-        try (Connection conn = connectionFactory.connect(instance);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(queries.pgssTextQuery())) {
+        try (Connection conn = connectionFactory.connect(instance)) {
+            PgStatStatementsExtension pgssExtension = pgssResolver.resolve(conn);
+            if (pgssExtension == null) {
+                throw new IllegalStateException("pg_stat_statements extension admin DB'de bulunamadi: "
+                        + instance.adminDbname());
+            }
 
-            while (rs.next()) {
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(
+                         queries.pgssTextQuery(pgssExtension.qualify("pg_stat_statements")))) {
+
+                while (rs.next()) {
                 long queryid = rs.getLong("queryid");
                 String queryText = rs.getString("query");
 
@@ -108,6 +120,7 @@ public class TextEnricher {
 
                 enrichedCount++;
                 queryIdToSeriesId.remove(queryid); // Islendi, tekrar islenmesin
+                }
             }
         }
 

@@ -36,8 +36,11 @@ public interface SourceQueries {
     /** pg_postmaster_start_time() */
     String postmasterStartTimeQuery();
 
+    /** pg_stat_statements_info destegi (PG14+). */
+    default boolean supportsPgssInfo() { return false; }
+
     /** pg_stat_statements_info (PG14+; eski surumlerde null doner). */
-    default String pgssInfoQuery() { return null; }
+    default String pgssInfoQuery(String pgssInfoRelation) { return null; }
 
     // =========================================================================
     // Cluster metrikleri
@@ -250,10 +253,10 @@ public interface SourceQueries {
     // =========================================================================
 
     /** pg_stat_statements(false) — yalnizca sayisal kolonlar (text yok). */
-    String pgssStatsQuery();
+    String pgssStatsQuery(String pgssFunction);
 
     /** pg_stat_statements(true) — SQL text dahil (enrichment icin). */
-    String pgssTextQuery();
+    String pgssTextQuery(String pgssFunction);
 
     // =========================================================================
     // Per-database istatistikler

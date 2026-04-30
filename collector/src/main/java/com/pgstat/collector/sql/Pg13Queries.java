@@ -71,7 +71,7 @@ public class Pg13Queries extends Pg11_12Queries {
     // =========================================================================
 
     @Override
-    public String pgssStatsQuery() {
+    public String pgssStatsQuery(String pgssFunction) {
         // PG13: toplevel, wal, jit var; plans yok
         return """
             select
@@ -93,8 +93,8 @@ public class Pg13Queries extends Pg11_12Queries {
               jit_inlining_time,
               jit_optimization_time,
               jit_emission_time
-            from pg_stat_statements(false)
-            """;
+            from %s(false)
+            """.formatted(pgssFunction);
     }
 
     // =========================================================================

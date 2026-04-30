@@ -29,13 +29,18 @@ public class Pg14_16Queries extends Pg13Queries {
     }
 
     @Override
-    public String pgssInfoQuery() {
+    public boolean supportsPgssInfo() {
+        return true;
+    }
+
+    @Override
+    public String pgssInfoQuery(String pgssInfoRelation) {
         return """
             select
               dealloc as stats_reset_count,
               stats_reset as last_stats_reset
-            from pg_stat_statements_info
-            """;
+            from %s
+            """.formatted(pgssInfoRelation);
     }
 
     // =========================================================================
@@ -93,7 +98,7 @@ public class Pg14_16Queries extends Pg13Queries {
     // =========================================================================
 
     @Override
-    public String pgssStatsQuery() {
+    public String pgssStatsQuery(String pgssFunction) {
         // PG14+: plans, total_plan_time dahil
         return """
             select
@@ -115,8 +120,8 @@ public class Pg14_16Queries extends Pg13Queries {
               jit_inlining_time,
               jit_optimization_time,
               jit_emission_time
-            from pg_stat_statements(false)
-            """;
+            from %s(false)
+            """.formatted(pgssFunction);
     }
 
     // =========================================================================

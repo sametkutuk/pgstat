@@ -5,6 +5,8 @@ import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
 import com.pgstat.collector.repository.StateRepository;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver;
+import com.pgstat.collector.service.PgStatStatementsExtensionResolver.PgStatStatementsExtension;
 import com.pgstat.collector.service.SecretResolver;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
@@ -43,17 +45,20 @@ public class DiscoveryCollector {
     private final CapabilityRepository capabilityRepo;
     private final StateRepository stateRepo;
     private final DimensionRepository dimensionRepo;
+    private final PgStatStatementsExtensionResolver pgssResolver;
 
     public DiscoveryCollector(SourceConnectionFactory connectionFactory,
                               SqlFamilyResolver familyResolver,
                               CapabilityRepository capabilityRepo,
                               StateRepository stateRepo,
-                              DimensionRepository dimensionRepo) {
+                              DimensionRepository dimensionRepo,
+                              PgStatStatementsExtensionResolver pgssResolver) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
         this.stateRepo = stateRepo;
         this.dimensionRepo = dimensionRepo;
+        this.pgssResolver = pgssResolver;
     }
 
     /**
@@ -111,30 +116,22 @@ public class DiscoveryCollector {
                 log.debug("shared_preload_libraries okunamadi: {}", e.getMessage());
             }
 
-            // Adim 2: Admin DB'de extension var mi?
-            try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(queries.extensionCheckQuery())) {
-                while (rs.next()) {
-                    if ("pg_stat_statements".equals(rs.getString("extname"))) {
-                        hasPgss = true;
-                    }
-                }
-            }
+            // Adim 2: Admin DB'de extension var mi? Schema search_path'e bagli
+            // olmadigi icin pg_extension'dan okunur ve sorgular schema-qualified calisir.
+            PgStatStatementsExtension pgssExtension = pgssResolver.resolve(conn);
+            hasPgss = pgssExtension != null;
 
-            // Adim 3: Admin DB'de yok ama preload'da varsa → baska DB'de olabilir, yine de calisir
-            // pg_stat_statements view'i extension'in yuklendigi DB'de gorunur ama
-            // shared memory'deki veri tum DB'lerden toplanir.
-            // Collector statements job'unda admin DB'ye baglanir — view orada olmali.
-            // Ama preload'da varsa en azindan degraded yapma, uyari ver.
+            // Adim 3: Admin DB'de yok ama preload'da varsa baska DB'de olabilir.
+            // Collector statements job'unda admin DB'ye baglanir; extension objeleri
+            // admin DB'de queryable degilse ready kabul edilmemeli.
             if (!hasPgss && pgssInPreload) {
-                hasPgss = true; // preload'da var, baska DB'de yuklu — calisiyor
-                log.info("pg_stat_statements admin DB'de ({}) yok ama shared_preload_libraries'de var. " +
-                         "Extension baska bir DB'de yuklu olabilir. Statements toplama calisacak.",
+                log.warn("pg_stat_statements admin DB'de ({}) yok ama shared_preload_libraries'de var. " +
+                         "Collector admin DB'de extension objelerini sorgulayamadigi icin degraded olacak.",
                          instance.adminDbname());
             }
 
-            // PG14+ icin pg_stat_statements_info kontrolu
-            hasPgssInfo = queries.pgssInfoQuery() != null && hasPgss;
+            String pgssInfoRelation = pgssExtension != null
+                    ? pgssExtension.qualify("pg_stat_statements_info") : null;
 
             // PG16+ icin pg_stat_io kontrolu — view yalnizca PG16'da eklendi
             hasPgStatIo = pgMajor >= 16;
@@ -162,12 +159,18 @@ public class DiscoveryCollector {
 
             // 5. pgss stats reset zamani (PG14+)
             OffsetDateTime pgssStatsResetAt = null;
-            if (queries.pgssInfoQuery() != null && hasPgss) {
+            if (queries.supportsPgssInfo() && hasPgss) {
                 try (Statement stmt = conn.createStatement();
-                     ResultSet rs = stmt.executeQuery(queries.pgssInfoQuery())) {
+                     ResultSet rs = stmt.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
                     if (rs.next()) {
                         pgssStatsResetAt = rs.getObject("last_stats_reset", OffsetDateTime.class);
+                        hasPgssInfo = true;
                     }
+                } catch (Exception e) {
+                    log.warn("pg_stat_statements_info okunamadi: instance={}, schema={}, hata={}",
+                            instance.instanceId(),
+                            pgssExtension != null ? pgssExtension.schemaName() : null,
+                            e.getMessage());
                 }
             }
 
