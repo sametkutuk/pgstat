@@ -92,11 +92,26 @@ public class DiscoveryCollector {
                     !isInRecovery, sqlFamily);
 
             // 2. pg_stat_statements extension kontrolu
+            // Oncelik: shared_preload_libraries'de var mi? (herhangi bir DB'den sorgulanabilir)
+            // Extension farkli bir DB'de olabilir — admin_dbname'de olmasa bile calisiyor olabilir.
             boolean hasPgss = false;
             boolean hasPgssInfo = false;
             boolean hasPgStatIo = false;
             boolean hasPgStatCheckpointer = false;
 
+            // Adim 1: shared_preload_libraries kontrolu (en guvenilir)
+            boolean pgssInPreload = false;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("SHOW shared_preload_libraries")) {
+                if (rs.next()) {
+                    String libs = rs.getString(1);
+                    pgssInPreload = libs != null && libs.contains("pg_stat_statements");
+                }
+            } catch (Exception e) {
+                log.debug("shared_preload_libraries okunamadi: {}", e.getMessage());
+            }
+
+            // Adim 2: Admin DB'de extension var mi?
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(queries.extensionCheckQuery())) {
                 while (rs.next()) {
@@ -104,6 +119,18 @@ public class DiscoveryCollector {
                         hasPgss = true;
                     }
                 }
+            }
+
+            // Adim 3: Admin DB'de yok ama preload'da varsa → baska DB'de olabilir, yine de calisir
+            // pg_stat_statements view'i extension'in yuklendigi DB'de gorunur ama
+            // shared memory'deki veri tum DB'lerden toplanir.
+            // Collector statements job'unda admin DB'ye baglanir — view orada olmali.
+            // Ama preload'da varsa en azindan degraded yapma, uyari ver.
+            if (!hasPgss && pgssInPreload) {
+                hasPgss = true; // preload'da var, baska DB'de yuklu — calisiyor
+                log.info("pg_stat_statements admin DB'de ({}) yok ama shared_preload_libraries'de var. " +
+                         "Extension baska bir DB'de yuklu olabilir. Statements toplama calisacak.",
+                         instance.adminDbname());
             }
 
             // PG14+ icin pg_stat_statements_info kontrolu
