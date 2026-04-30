@@ -147,7 +147,12 @@ router.put('/:id', async (req, res, next) => {
     }
     const row = { ...result.rows[0], secret_ref: maskSecretRef(result.rows[0].secret_ref) };
     res.json(row);
-  } catch (err) {
+  } catch (err: any) {
+    // Unique constraint ihlali — anlamlı hata mesajı dön
+    if (err.code === '23505' && err.constraint === 'uq_instance_inventory_host_port_db') {
+      res.status(409).json({ error: `Bu host:port:dbname kombinasyonu zaten başka bir instance'ta kayıtlı (${err.detail})` });
+      return;
+    }
     next(err);
   }
 });
