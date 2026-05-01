@@ -30,6 +30,76 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
+router.get('/storage-summary', async (_req, res, next) => {
+  try {
+    const result = await pool.query(`
+      with storage_usage as (${collectorStorageUnionSql()})
+      select
+        i.instance_pk,
+        i.display_name,
+        coalesce(sum(u.row_count), 0)::bigint as collector_rows,
+        coalesce(sum(u.data_bytes), 0)::bigint as collector_bytes,
+        pg_database_size(current_database())::bigint as collector_db_bytes
+      from control.instance_inventory i
+      left join storage_usage u on u.instance_pk = i.instance_pk
+      group by i.instance_pk, i.display_name
+      order by collector_bytes desc nulls last
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/storage — Collector DB'de instance + database kirilimi
+router.get('/:id/storage', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      with storage_usage as (${collectorStorageUnionSql()}),
+      filtered as (
+        select * from storage_usage where instance_pk = $1
+      ),
+      total as (
+        select
+          coalesce(sum(row_count), 0)::bigint as total_rows,
+          coalesce(sum(data_bytes), 0)::bigint as total_bytes
+        from filtered
+      ),
+      dbs as (
+        select
+          dbid,
+          coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end) as datname,
+          sum(row_count)::bigint as row_count,
+          sum(data_bytes)::bigint as data_bytes
+        from filtered
+        group by dbid, coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end)
+      ),
+      tables as (
+        select
+          source_table,
+          coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end) as datname,
+          sum(row_count)::bigint as row_count,
+          sum(data_bytes)::bigint as data_bytes
+        from filtered
+        group by source_table, coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end)
+      )
+      select json_build_object(
+        'instance_pk', $1::bigint,
+        'collector_db_bytes', pg_database_size(current_database())::bigint,
+        'total_rows', (select total_rows from total),
+        'total_bytes', (select total_bytes from total),
+        'databases', coalesce((select json_agg(dbs order by data_bytes desc) from dbs), '[]'::json),
+        'tables', coalesce((select json_agg(tables order by data_bytes desc) from tables), '[]'::json)
+      ) as storage
+    `, [id]);
+    res.json(result.rows[0]?.storage ?? {});
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id — Instance detayı
 router.get('/:id', async (req, res, next) => {
   try {
@@ -645,6 +715,142 @@ router.get('/:id/slru', async (req, res, next) => {
     next(err);
   }
 });
+
+function collectorStorageUnionSql(): string {
+  return `
+    select 'pgss_delta' as source_table, d.instance_pk, ss.dbid::bigint as dbid, dbr.datname,
+           count(*)::bigint as row_count, coalesce(sum(pg_column_size(d)),0)::bigint as data_bytes
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+     group by d.instance_pk, ss.dbid, dbr.datname
+    union all
+    select 'statement_series', ss.instance_pk, ss.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(ss) + coalesce(pg_column_size(qt),0)),0)::bigint
+      from dim.statement_series ss
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+     group by ss.instance_pk, ss.dbid, dbr.datname
+    union all
+    select 'pg_database_delta', d.instance_pk, d.dbid::bigint, d.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(d)),0)::bigint
+      from fact.pg_database_delta d
+     group by d.instance_pk, d.dbid, d.datname
+    union all
+    select 'pg_table_stat_delta', t.instance_pk, t.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(t)),0)::bigint
+      from fact.pg_table_stat_delta t
+      left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
+     group by t.instance_pk, t.dbid, dbr.datname
+    union all
+    select 'pg_index_stat_delta', i.instance_pk, i.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(i)),0)::bigint
+      from fact.pg_index_stat_delta i
+      left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid
+     group by i.instance_pk, i.dbid, dbr.datname
+    union all
+    select 'pg_relation_size_snapshot', r.instance_pk, r.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(r)),0)::bigint
+      from fact.pg_relation_size_snapshot r
+      left join dim.database_ref dbr on dbr.instance_pk = r.instance_pk and dbr.dbid = r.dbid
+     group by r.instance_pk, r.dbid, dbr.datname
+    union all
+    select 'pg_sequence_io_snapshot', s.instance_pk, s.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(s)),0)::bigint
+      from fact.pg_sequence_io_snapshot s
+      left join dim.database_ref dbr on dbr.instance_pk = s.instance_pk and dbr.dbid = s.dbid
+     group by s.instance_pk, s.dbid, dbr.datname
+    union all
+    select 'pg_sequence_state_snapshot', s.instance_pk, s.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(s)),0)::bigint
+      from fact.pg_sequence_state_snapshot s
+      left join dim.database_ref dbr on dbr.instance_pk = s.instance_pk and dbr.dbid = s.dbid
+     group by s.instance_pk, s.dbid, dbr.datname
+    union all
+    select 'pg_database_freeze_snapshot', f.instance_pk, f.dbid::bigint, f.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(f)),0)::bigint
+      from fact.pg_database_freeze_snapshot f
+     group by f.instance_pk, f.dbid, f.datname
+    union all
+    select 'pg_cluster_delta', c.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(c)),0)::bigint
+      from fact.pg_cluster_delta c
+     group by c.instance_pk
+    union all
+    select 'pg_io_stat_delta', io.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(io)),0)::bigint
+      from fact.pg_io_stat_delta io
+     group by io.instance_pk
+    union all
+    select 'pg_activity_snapshot', a.instance_pk, dbr.dbid::bigint, a.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(a)),0)::bigint
+      from fact.pg_activity_snapshot a
+      left join dim.database_ref dbr on dbr.instance_pk = a.instance_pk and dbr.datname = a.datname
+     group by a.instance_pk, dbr.dbid, a.datname
+    union all
+    select 'pg_lock_snapshot', l.instance_pk, l.database_oid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(l)),0)::bigint
+      from fact.pg_lock_snapshot l
+      left join dim.database_ref dbr on dbr.instance_pk = l.instance_pk and dbr.dbid = l.database_oid
+     group by l.instance_pk, l.database_oid, dbr.datname
+    union all
+    select 'pg_progress_snapshot', p.instance_pk, dbr.dbid::bigint, p.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(p)),0)::bigint
+      from fact.pg_progress_snapshot p
+      left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.datname = p.datname
+     group by p.instance_pk, dbr.dbid, p.datname
+    union all
+    select 'pg_replication_snapshot', r.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(r)),0)::bigint
+      from fact.pg_replication_snapshot r
+     group by r.instance_pk
+    union all
+    select 'pg_wal_snapshot', w.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(w)),0)::bigint
+      from fact.pg_wal_snapshot w
+     group by w.instance_pk
+    union all
+    select 'pg_archiver_snapshot', a.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(a)),0)::bigint
+      from fact.pg_archiver_snapshot a
+     group by a.instance_pk
+    union all
+    select 'pg_slru_snapshot', s.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(s)),0)::bigint
+      from fact.pg_slru_snapshot s
+     group by s.instance_pk
+    union all
+    select 'pg_subscription_snapshot', s.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(s)),0)::bigint
+      from fact.pg_subscription_snapshot s
+     group by s.instance_pk
+    union all
+    select 'pg_recovery_prefetch_snapshot', p.instance_pk, null::bigint, null::text,
+           count(*)::bigint, coalesce(sum(pg_column_size(p)),0)::bigint
+      from fact.pg_recovery_prefetch_snapshot p
+     group by p.instance_pk
+    union all
+    select 'pg_user_function_snapshot', f.instance_pk, f.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(f)),0)::bigint
+      from fact.pg_user_function_snapshot f
+      left join dim.database_ref dbr on dbr.instance_pk = f.instance_pk and dbr.dbid = f.dbid
+     group by f.instance_pk, f.dbid, dbr.datname
+    union all
+    select 'pgss_hourly', h.instance_pk, ss.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(h)),0)::bigint
+      from agg.pgss_hourly h
+      join dim.statement_series ss on ss.statement_series_id = h.statement_series_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+     group by h.instance_pk, ss.dbid, dbr.datname
+    union all
+    select 'pgss_daily', d.instance_pk, ss.dbid::bigint, dbr.datname,
+           count(*)::bigint, coalesce(sum(pg_column_size(d)),0)::bigint
+      from agg.pgss_daily d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+     group by d.instance_pk, ss.dbid, dbr.datname
+  `;
+}
 
 export default router;
 

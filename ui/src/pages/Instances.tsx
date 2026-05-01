@@ -7,7 +7,7 @@ import TimeAgo from '../components/common/TimeAgo';
 import InstanceForm from '../components/forms/InstanceForm';
 import type { InstanceFormData } from '../components/forms/InstanceForm';
 import { useToast } from '../components/common/Toast';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 interface Instance {
     instance_pk: number; instance_id: string; display_name: string;
@@ -22,6 +22,13 @@ interface Instance {
     last_error: string | null; last_error_at: string | null;
 }
 
+interface StorageSummary {
+    instance_pk: number;
+    collector_rows: number | string;
+    collector_bytes: number | string;
+    collector_db_bytes: number | string;
+}
+
 export default function Instances() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -33,6 +40,15 @@ export default function Instances() {
         queryKey: ['instances'],
         queryFn: () => apiGet<Instance[]>('/instances'),
     });
+    const storage = useQuery({
+        queryKey: ['instances-storage-summary'],
+        queryFn: () => apiGet<StorageSummary[]>('/instances/storage-summary'),
+    });
+    const storageMap = useMemo(() => {
+        const map = new Map<number, StorageSummary>();
+        (storage.data || []).forEach(s => map.set(Number(s.instance_pk), s));
+        return map;
+    }, [storage.data]);
 
     const addMutation = useMutation({
         mutationFn: (d: InstanceFormData) => apiPost('/instances', d),
@@ -84,6 +100,24 @@ export default function Instances() {
         { key: 'environment', header: 'Ortam', render: (r: Instance) => r.environment || '—' },
         { key: 'service_group', header: 'Servis Grubu', render: (r: Instance) => r.service_group || '—' },
         { key: 'last_cluster_collect_at', header: 'Son Cluster', render: (r: Instance) => <TimeAgo date={r.last_cluster_collect_at} /> },
+        {
+            key: 'collector_bytes', header: 'Collector DB', render: (r: Instance) => {
+                const s = storageMap.get(r.instance_pk);
+                if (!s) return storage.isLoading ? 'Yükleniyor...' : '—';
+                const bytes = Number(s.collector_bytes || 0);
+                const total = Number(s.collector_db_bytes || 0);
+                const pct = total > 0 ? Math.min(100, bytes * 100 / total) : 0;
+                return (
+                    <div className="min-w-[120px]">
+                        <div className="font-mono text-xs text-[#1E293B]">{fmtBytes(bytes)}</div>
+                        <div className="h-1.5 bg-[#E2E8F0] rounded mt-1 overflow-hidden">
+                            <div className="h-full bg-[#3B82F6]" style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="text-[10px] text-[#94A3B8]">{pct.toFixed(1)}% collector DB</div>
+                    </div>
+                );
+            }
+        },
         { key: 'consecutive_failures', header: 'Hatalar', render: (r: Instance) => r.consecutive_failures > 0 ? <span className="text-red-600 font-medium">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
         {
             key: 'actions', header: '', render: (r: Instance) => (
@@ -158,4 +192,12 @@ export default function Instances() {
             </div>
         </div>
     );
+}
+
+function fmtBytes(value: any): string {
+    const bytes = Number(value || 0);
+    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes.toLocaleString()} B`;
 }

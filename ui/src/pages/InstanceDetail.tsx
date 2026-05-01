@@ -8,7 +8,7 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import { useState } from 'react';
 
-type Tab = 'overview' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -24,6 +24,7 @@ export default function InstanceDetail() {
     const instance = useQuery({ queryKey: ['instance', id], queryFn: () => apiGet<any>(`/instances/${id}`) });
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
     const databases = useQuery({ queryKey: ['databases', id], queryFn: () => apiGet<any[]>(`/instances/${id}/databases`), enabled: tab === 'databases' });
+    const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
     const statements = useQuery({ queryKey: ['inst-stmts', id], queryFn: () => apiGet<any[]>(`/instances/${id}/statements?hours=1&limit=30`), enabled: tab === 'statements' });
     const activity = useQuery({ queryKey: ['activity', id], queryFn: () => apiGet<any[]>(`/instances/${id}/activity`), enabled: tab === 'activity' });
     const alerts = useQuery({ queryKey: ['inst-alerts', id], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}`), enabled: tab === 'alerts' });
@@ -42,6 +43,7 @@ export default function InstanceDetail() {
 
     const tabs: { key: Tab; label: string; tip?: string }[] = [
         { key: 'overview', label: 'Genel' },
+        { key: 'storage', label: 'Collector DB', tip: 'PgStat collector veritabanında bu instance için tutulan yaklaşık mantıksal veri boyutu ve database kırılımı.' },
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
@@ -89,6 +91,7 @@ export default function InstanceDetail() {
             </div>
 
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
+            {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
             {tab === 'statements' && <StatementsTab data={statements.data} loading={statements.isLoading} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} />}
             {tab === 'activity' && <ActivityTab data={activity.data} loading={activity.isLoading} />}
@@ -199,6 +202,70 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
         { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
     ];
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
+}
+
+function StorageTab({ data, loading }: { data: any; loading: boolean }) {
+    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    const databases = data?.databases || [];
+    const tables = data?.tables || [];
+    const totalBytes = Number(data?.total_bytes || 0);
+    const collectorDbBytes = Number(data?.collector_db_bytes || 0);
+    const pct = collectorDbBytes > 0 ? totalBytes * 100 / collectorDbBytes : 0;
+    const maxDbBytes = Math.max(...databases.map((d: any) => Number(d.data_bytes || 0)), 1);
+
+    const dbColumns = [
+        { key: 'datname', header: 'Database' },
+        { key: 'data_bytes', header: 'Boyut', render: (r: any) => fmtBytes(r.data_bytes) },
+        { key: 'row_count', header: 'Satır', render: (r: any) => Number(r.row_count || 0).toLocaleString() },
+        {
+            key: 'share', header: 'Pay', render: (r: any) => {
+                const share = totalBytes > 0 ? Number(r.data_bytes || 0) * 100 / totalBytes : 0;
+                return (
+                    <div className="min-w-[160px]">
+                        <div className="h-2 bg-[#E2E8F0] rounded overflow-hidden">
+                            <div className="h-full bg-[#10B981]" style={{ width: `${Math.max(1, Number(r.data_bytes || 0) * 100 / maxDbBytes)}%` }} />
+                        </div>
+                        <div className="text-[10px] text-[#64748B] mt-1">{share.toFixed(1)}%</div>
+                    </div>
+                );
+            }
+        },
+    ];
+    const tableColumns = [
+        { key: 'source_table', header: 'Collector Tablosu' },
+        { key: 'datname', header: 'Database' },
+        { key: 'data_bytes', header: 'Boyut', render: (r: any) => fmtBytes(r.data_bytes) },
+        { key: 'row_count', header: 'Satır', render: (r: any) => Number(r.row_count || 0).toLocaleString() },
+    ];
+
+    return (
+        <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <InfoCard label="Bu Instance" value={fmtBytes(totalBytes)} />
+                <InfoCard label="Satır" value={Number(data?.total_rows || 0).toLocaleString()} />
+                <InfoCard label="Collector DB Payı" value={`${pct.toFixed(1)}%`} />
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-[#64748B]">Database Kırılımı</h3>
+                    <span className="text-xs text-[#94A3B8]">Yaklaşık mantıksal boyut</span>
+                </div>
+                <DataTable columns={dbColumns} data={databases} />
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Collector Tablo Kırılımı</h3>
+                <DataTable columns={tableColumns} data={tables} />
+            </div>
+        </div>
+    );
+}
+
+function fmtBytes(value: any): string {
+    const bytes = Number(value || 0);
+    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes.toLocaleString()} B`;
 }
 
 function ActivityTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
