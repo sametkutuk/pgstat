@@ -319,6 +319,7 @@ function AlertDetails({ details }: { details: any }) {
                                         : (q.current_val ?? q.metric_value ?? q.total_calls ?? 0);
                                     const prevVal = q.prev_val ?? q.previous_value;
                                     const changePct = q.change_pct;
+                                    const hasFrequency = q.calls_window != null || q.calls_7d != null || q.calls_28d != null || q.active_days_28d != null;
                                     return (
                                         <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                             <td className="py-2 px-3 max-w-sm">
@@ -338,6 +339,14 @@ function AlertDetails({ details }: { details: any }) {
                                                         temp={fmtBytes(q.temp_bytes)}, calls={Number(q.calls_window || 0).toLocaleString()},
                                                         28g calls={Number(q.calls_28d || 0).toLocaleString()},
                                                         ort/call={fmtBytes(q.avg_temp_bytes_per_call)}
+                                                    </div>
+                                                )}
+                                                {!isTempFiles && hasFrequency && (
+                                                    <div className="text-[#64748B] mt-0.5">
+                                                        Siklik: pencere={Number(q.calls_window || 0).toLocaleString()},
+                                                        7g={Number(q.calls_7d || 0).toLocaleString()},
+                                                        28g={Number(q.calls_28d || 0).toLocaleString()},
+                                                        aktif gun={Number(q.active_days_28d || 0).toLocaleString()}
                                                     </div>
                                                 )}
                                             </td>

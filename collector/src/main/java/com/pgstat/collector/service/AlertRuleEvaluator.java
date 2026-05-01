@@ -646,6 +646,7 @@ public class AlertRuleEvaluator {
             // Per-record anomaly tespiti: baseline asan record'lari bul
             List<Map<String, Object>> anomalies = findAnomalousRecords(
                 instancePk, metricType, metricName, windowMinutes, currentHour, kMultiplier);
+            enrichStatementRecords(instancePk, anomalies, metricType, windowMinutes);
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
@@ -712,7 +713,7 @@ public class AlertRuleEvaluator {
             return switch (metricType) {
                 case "statement_metric" -> jdbc.queryForList(
                     "with current_window as (" +
-                    "  select ss.queryid, ss.dbid, ss.userid," +
+                    "  select ss.statement_series_id, ss.queryid, ss.dbid, ss.userid," +
                     "         sum(d." + col + ")::numeric as current_val," +
                     "         left(coalesce(qt.query_text, '?'), 300) as query_text," +
                     "         dbr.datname, rr.rolname" +
@@ -722,7 +723,7 @@ public class AlertRuleEvaluator {
                     "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
                     "  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid" +
                     "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
-                    "  group by ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
+                    "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
                     "), historical as (" +
                     "  select ss.queryid, ss.dbid, ss.userid," +
                     "         avg(window_sum) as baseline_avg," +
@@ -742,7 +743,7 @@ public class AlertRuleEvaluator {
                     "  group by queryid, dbid, userid" +
                     "  having count(*) >= 3" +  // en az 3 veri noktasi olsun (anlamli stddev icin)
                     ")" +
-                    "select c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
+                    "select c.statement_series_id, c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
                     "       h.baseline_avg, h.baseline_stddev," +
                     "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
                     "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
@@ -1453,7 +1454,7 @@ public class AlertRuleEvaluator {
                 case "statement_metric" -> {
                     String col = toFactColumn(metricName, "statement_metric");
                     // Mevcut pencere + önceki pencere karşılaştırması ile top contributor
-                    yield jdbc.queryForList(
+                    List<Map<String, Object>> rows = jdbc.queryForList(
                         "with curr as (" +
                         "  select ss.queryid, ss.dbid, ss.userid, ss.statement_series_id," +
                         "         sum(d." + col + ")::numeric as current_val" +
@@ -1469,7 +1470,7 @@ public class AlertRuleEvaluator {
                         "    and d.sample_ts <= now() - ?::interval" +
                         "  group by ss.statement_series_id" +
                         ")" +
-                        " select c.queryid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
+                        " select c.statement_series_id, c.queryid, c.dbid, c.userid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
                         "   case when coalesce(p.prev_val,0) = 0 and c.current_val > 0 then 9999.0" +
                         "        when coalesce(p.prev_val,0) = 0 then 0.0" +
                         "        else round(((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0))::numeric, 1)" +
@@ -1487,6 +1488,8 @@ public class AlertRuleEvaluator {
                         instancePk, windowMinutes + " minutes",
                         instancePk, (windowMinutes * 2) + " minutes", windowMinutes + " minutes",
                         instancePk, instancePk);
+                    enrichStatementRecords(instancePk, rows, metricType, windowMinutes);
+                    yield rows;
                 }
                 case "table_metric" -> {
                     String col = toFactColumn(metricName, "table_metric");
@@ -1631,7 +1634,7 @@ public class AlertRuleEvaluator {
                 "    and d.sample_ts <= now() - ?::interval" +
                 "  group by ss.statement_series_id" +
                 ")" +
-                "select c.queryid, c.dbid, c.userid," +
+                "select c.statement_series_id, c.queryid, c.dbid, c.userid," +
                 "       coalesce(c.current_val, 0)::numeric as current_val," +
                 "       coalesce(p.prev_val, 0)::numeric as prev_val," +
                 "       case when coalesce(p.prev_val,0) = 0 and coalesce(c.current_val,0) > 0 then 9999.0" +
@@ -1654,12 +1657,14 @@ public class AlertRuleEvaluator {
                 "  order by change_pct desc nulls last" +
                 "  limit 10";
 
-            return jdbc.queryForList(sql,
+            List<Map<String, Object>> rows = jdbc.queryForList(sql,
                 instancePk, windowMinutes + " minutes",         // current_window
                 instancePk, (windowMinutes * 2) + " minutes",   // prev_window from
                             windowMinutes + " minutes",         // prev_window to
                 instancePk, instancePk,                         // refs
                 thresholdPct);
+            enrichStatementRecords(instancePk, rows, "statement_metric", windowMinutes);
+            return rows;
         } catch (Exception e) {
             log.warn("findTopSpikingStatements hatasi instance={}: {}", instancePk, e.getMessage());
             return java.util.Collections.emptyList();
@@ -1716,6 +1721,7 @@ public class AlertRuleEvaluator {
 
             List<Map<String, Object>> exceeding = findRecordsExceedingThreshold(
                 instancePk, metricType, metricName, windowMinutes, operator, probeThreshold);
+            enrichStatementRecords(instancePk, exceeding, metricType, windowMinutes);
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
@@ -1792,6 +1798,12 @@ public class AlertRuleEvaluator {
         switch (metricType) {
             case "statement_metric" -> {
                 ctx.put("queryid", rec.get("queryid"));
+                ctx.put("statement_series_id", rec.get("statement_series_id"));
+                ctx.put("statement_detail_url", rec.get("detail_url"));
+                ctx.put("calls_window", rec.get("calls_window"));
+                ctx.put("calls_7d", rec.get("calls_7d"));
+                ctx.put("calls_28d", rec.get("calls_28d"));
+                ctx.put("active_days_28d", rec.get("active_days_28d"));
                 ctx.put("spiking_query", trimText((String) rec.get("query_text"), 200));
                 ctx.put("query_text",   trimText((String) rec.get("query_text"), 200));
                 ctx.put("database", rec.get("datname"));
@@ -1812,6 +1824,41 @@ public class AlertRuleEvaluator {
                 ctx.put("table",    rec.get("schemaname") + "." + rec.get("table_relname"));
                 ctx.put("schema",   rec.get("schemaname"));
                 ctx.put("database", rec.get("datname"));
+            }
+        }
+    }
+
+    private void enrichStatementRecords(long instancePk, List<Map<String, Object>> records,
+                                        String metricType, int windowMinutes) {
+        if (!"statement_metric".equals(metricType) || records == null || records.isEmpty()) {
+            return;
+        }
+
+        for (Map<String, Object> record : records) {
+            Object seriesIdObj = record.get("statement_series_id");
+            if (!(seriesIdObj instanceof Number)) {
+                continue;
+            }
+
+            long statementSeriesId = ((Number) seriesIdObj).longValue();
+            record.put("detail_url", "/statements/" + statementSeriesId);
+
+            try {
+                Map<String, Object> stats = jdbc.queryForMap(
+                    "select " +
+                    "  coalesce(sum(d.calls_delta) filter (where d.sample_ts > now() - ?::interval), 0)::bigint as calls_window," +
+                    "  coalesce(sum(d.total_exec_time_ms_delta) filter (where d.sample_ts > now() - ?::interval), 0)::numeric as exec_ms_window," +
+                    "  coalesce(sum(d.calls_delta) filter (where d.sample_ts > now() - interval '7 days'), 0)::bigint as calls_7d," +
+                    "  coalesce(sum(d.calls_delta) filter (where d.sample_ts > now() - interval '28 days'), 0)::bigint as calls_28d," +
+                    "  count(distinct date_trunc('day', d.sample_ts)) filter (where d.sample_ts > now() - interval '28 days') as active_days_28d," +
+                    "  max(d.sample_ts) as last_seen_at" +
+                    " from fact.pgss_delta d" +
+                    " where d.instance_pk = ? and d.statement_series_id = ?" +
+                    "   and d.sample_ts > now() - interval '28 days'",
+                    windowMinutes + " minutes", windowMinutes + " minutes", instancePk, statementSeriesId);
+                record.putAll(stats);
+            } catch (Exception e) {
+                log.debug("statement alert enrichment skipped statement_series_id={}: {}", statementSeriesId, e.getMessage());
             }
         }
     }
@@ -1925,6 +1972,22 @@ public class AlertRuleEvaluator {
             Object currentVal = r.get("current_val");
             Object prevVal = r.get("prev_val");
             Object changePct = r.get("change_pct");
+            if ("statement_metric".equals(metricType)) {
+                Object seriesId = r.get("statement_series_id");
+                if (seriesId != null) {
+                    sb.append(" | detay: `/statements/").append(seriesId).append("`");
+                }
+                Object callsWindow = r.get("calls_window");
+                Object calls28d = r.get("calls_28d");
+                Object activeDays28d = r.get("active_days_28d");
+                if (callsWindow != null || calls28d != null) {
+                    sb.append(" | siklik: pencere=").append(formatNumOrZero(callsWindow))
+                      .append(", 28g=").append(formatNumOrZero(calls28d));
+                    if (activeDays28d != null) {
+                        sb.append(", aktif gun=").append(formatNumOrZero(activeDays28d));
+                    }
+                }
+            }
 
             if (currentVal != null) {
                 sb.append(" → **").append(formatNum(currentVal)).append("**");
@@ -1944,6 +2007,11 @@ public class AlertRuleEvaluator {
         return sb.toString();
     }
 
+    private static String formatNumOrZero(Object val) {
+        if (!(val instanceof Number)) return "0";
+        return formatNum(val);
+    }
+
     private static String formatNum(Object val) {
         if (val == null) return "0";
         double d = ((Number) val).doubleValue();
@@ -1961,7 +2029,7 @@ public class AlertRuleEvaluator {
         try {
             return switch (metricType) {
                 case "statement_metric" -> jdbc.queryForList(
-                    "select ss.queryid, ss.dbid, ss.userid," +
+                    "select ss.statement_series_id, ss.queryid, ss.dbid, ss.userid," +
                     "       sum(d." + toFactColumn(metricName, "statement_metric") + ")::numeric as current_val," +
                     "       left(coalesce(qt.query_text, '?'), 300) as query_text," +
                     "       dbr.datname, rr.rolname" +
@@ -1971,7 +2039,7 @@ public class AlertRuleEvaluator {
                     "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
                     "  left join dim.role_ref    rr  on rr.instance_pk  = ss.instance_pk and rr.userid  = ss.userid" +
                     "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
-                    "  group by ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
+                    "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
                     "  having sum(d." + toFactColumn(metricName, "statement_metric") + ")::numeric " + op + " ?" +
                     "  order by current_val desc limit 10",
                     instancePk, windowMinutes + " minutes", threshold);
