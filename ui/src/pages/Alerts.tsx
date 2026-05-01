@@ -7,6 +7,7 @@ import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
 import { useToast } from '../components/common/Toast';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 
 interface Alert {
     alert_id: number; alert_key: string; alert_code: string; severity: string;
@@ -234,9 +235,24 @@ function AlertDetails({ details }: { details: any }) {
     const hasRecords = records.length > 0;
     const reason = details.reason || '';
     const isSpike = reason.includes('spike') || details.spiking_queries;
+    const isTempFiles = details.kind === 'temp_files';
 
     return (
         <div className="space-y-3 mt-2">
+            {isTempFiles && (
+                <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#92400E] mb-2">Temp File Kok Neden</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <Metric label="Mevcut work_mem" value={details.work_mem || '-'} />
+                        <Metric label="Oneri" value={details.suggested_work_mem || '-'} strong />
+                        <Metric label="Maks temp/call" value={fmtBytes(details.max_temp_bytes_per_call)} />
+                        <Metric label="Top temp" value={fmtBytes(details.total_temp_bytes_top_queries)} />
+                    </div>
+                    <p className="mt-2 text-[11px] text-[#92400E]">
+                        work_mem her connection ve her sort/hash node icin ayri tuketilir; oneriyi global uygulamadan once sorgu plani da incelenmeli.
+                    </p>
+                </div>
+            )}
             {/* Baseline bilgisi */}
             {details.baseline_avg != null && (
                 <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-3">
@@ -298,7 +314,9 @@ function AlertDetails({ details }: { details: any }) {
                             </thead>
                             <tbody>
                                 {records.map((q: any, i: number) => {
-                                    const currentVal = q.current_val ?? q.metric_value ?? q.total_calls ?? 0;
+                                    const currentVal = isTempFiles
+                                        ? (q.temp_bytes ?? q.metric_value ?? 0)
+                                        : (q.current_val ?? q.metric_value ?? q.total_calls ?? 0);
                                     const prevVal = q.prev_val ?? q.previous_value;
                                     const changePct = q.change_pct;
                                     return (
@@ -307,14 +325,28 @@ function AlertDetails({ details }: { details: any }) {
                                                 <div className="truncate font-mono text-[#1E293B] text-[11px]" title={q.query_text}>
                                                     {q.query_text || '—'}
                                                 </div>
-                                                <div className="text-[#94A3B8] mt-0.5">qid: {q.queryid}</div>
+                                                <div className="text-[#94A3B8] mt-0.5">
+                                                    qid: {q.queryid}
+                                                    {q.statement_series_id && (
+                                                        <Link to={`/statements/${q.statement_series_id}`} className="ml-2 text-[#2563EB] hover:underline">
+                                                            Detay
+                                                        </Link>
+                                                    )}
+                                                </div>
+                                                {isTempFiles && (
+                                                    <div className="text-[#B45309] mt-0.5">
+                                                        temp={fmtBytes(q.temp_bytes)}, calls={Number(q.calls_window || 0).toLocaleString()},
+                                                        28g calls={Number(q.calls_28d || 0).toLocaleString()},
+                                                        ort/call={fmtBytes(q.avg_temp_bytes_per_call)}
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="py-2 px-3 text-[#64748B] whitespace-nowrap">
                                                 <div>{q.datname || '—'}</div>
                                                 <div className="text-[#94A3B8]">{q.rolname || '—'}</div>
                                             </td>
                                             <td className="py-2 px-3 text-right font-mono font-semibold text-[#1E293B]">
-                                                {Number(currentVal).toLocaleString()}
+                                                {isTempFiles ? fmtBytes(currentVal) : Number(currentVal).toLocaleString()}
                                             </td>
                                             {hasPrevVal(records) && (
                                                 <td className="py-2 px-3 text-right font-mono text-[#64748B]">
@@ -350,6 +382,24 @@ function AlertDetails({ details }: { details: any }) {
 }
 
 /** Records listesinde prev_val alanı var mı? */
+function Metric({ label, value, strong, warn, danger }: { label: string; value: any; strong?: boolean; warn?: boolean; danger?: boolean }) {
+    const color = danger ? 'text-[#DC2626]' : warn ? 'text-[#D97706]' : strong ? 'text-[#B45309]' : 'text-[#1E293B]';
+    return (
+        <div>
+            <span className="text-[#64748B]">{label}: </span>
+            <span className={`font-mono ${strong ? 'font-semibold' : ''} ${color}`}>{value}</span>
+        </div>
+    );
+}
+
+function fmtBytes(value: any): string {
+    const bytes = Number(value || 0);
+    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes.toLocaleString()} B`;
+}
+
 function hasPrevVal(records: any[]): boolean {
     return records.some(r => r.prev_val != null || r.previous_value != null);
 }

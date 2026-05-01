@@ -109,13 +109,20 @@ public class AlertRepository {
     public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
                                    Long instancePk, String serviceGroup,
                                    String title, String message, Long ruleId) {
+        return upsertWithSeverity(alertKey, alertCode, severity, instancePk, serviceGroup,
+            title, message, ruleId, null);
+    }
+
+    public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
+                                   Long instancePk, String serviceGroup,
+                                   String title, String message, Long ruleId, String detailsJson) {
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key, alert_code, severity, status, source_component,
               instance_pk, service_group, first_seen_at, last_seen_at,
-              occurrence_count, title, message, rule_id
+              occurrence_count, title, message, rule_id, details_json
             )
-            values (?, ?, ?, 'open', ?, ?, ?, now(), now(), 1, ?, ?, ?)
+            values (?, ?, ?, 'open', ?, ?, ?, now(), now(), 1, ?, ?, ?, ?::jsonb)
             on conflict (alert_key) do update
             set severity = excluded.severity,
                 status = case
@@ -128,13 +135,14 @@ public class AlertRepository {
                 title = excluded.title,
                 message = excluded.message,
                 rule_id = coalesce(excluded.rule_id, ops.alert.rule_id),
+                details_json = excluded.details_json,
                 occurrence_count = ops.alert.occurrence_count + 1,
                 resolved_at = null
             returning alert_id
             """,
             Long.class,
             alertKey, alertCode.getCode(), severity, alertCode.getSourceComponent(),
-            instancePk, serviceGroup, title, message, ruleId
+            instancePk, serviceGroup, title, message, ruleId, detailsJson
         );
 
         // Bildirim gönder

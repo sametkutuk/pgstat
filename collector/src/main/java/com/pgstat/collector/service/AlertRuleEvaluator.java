@@ -32,7 +32,6 @@ public class AlertRuleEvaluator {
 
     // Baseline haftalik guncelleme periyodu (7 gun)
     private static final int BASELINE_UPDATE_DAYS = 7;
-
     private final JdbcTemplate jdbc;
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
@@ -43,6 +42,14 @@ public class AlertRuleEvaluator {
         this.alertRepo = alertRepo;
         this.renderer = renderer;
     }
+
+    private record TempRuleDetails(
+        String detailsJson,
+        String messageSuffix,
+        String workMem,
+        String suggestedWorkMem,
+        String topQueriesText
+    ) {}
 
     /**
      * Kural için title + message üretir. Kuralda template tanımlıysa onu render eder,
@@ -299,9 +306,16 @@ public class AlertRuleEvaluator {
 
                 // Statement metrikleri için top query bilgisi ekle
                 String detailsJson = null;
+                TempRuleDetails tempDetails = null;
                 if ("statement_metric".equals(metricType)) {
                     detailsJson = buildTopQueryDetails(instancePk, metricName, windowMinutes,
                         avg, upperWarning, upperCritical, currentHour, sensitivity);
+                } else if (isDatabaseTempFilesRule(metricType, metricName)) {
+                    tempDetails = buildTempFileRuleDetails(instancePk, windowMinutes,
+                        avg, upperWarning, upperCritical, currentHour, sensitivity);
+                    if (tempDetails != null) {
+                        detailsJson = tempDetails.detailsJson();
+                    }
                 }
 
                 // Şablon render — kuralda template varsa onu kullan
@@ -313,13 +327,20 @@ public class AlertRuleEvaluator {
                 ctx.put("upper_critical", upperCritical);
                 ctx.put("threshold", "critical".equals(severity) ? upperCritical : upperWarning);
                 ctx.put("sensitivity", sensitivity);
+                if (tempDetails != null) {
+                    ctx.put("work_mem", tempDetails.workMem());
+                    ctx.put("suggested_work_mem", tempDetails.suggestedWorkMem());
+                    ctx.put("top_temp_queries", tempDetails.topQueriesText());
+                }
                 String[] rendered = buildAlertText(rule, ruleName, message, ctx);
+                if (tempDetails != null && !tempDetails.messageSuffix().isBlank()) {
+                    rendered[1] = rendered[1] + "\n\n" + tempDetails.messageSuffix();
+                }
 
                 if (detailsJson != null) {
-                    alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
-                        instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                    // severity'yi ayrıca güncelle
-                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                    alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                        severity, instancePk, serviceGroup, rendered[0], rendered[1],
+                        ruleId, detailsJson);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                         severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
@@ -389,6 +410,180 @@ public class AlertRuleEvaluator {
             log.debug("Top query detay hatasi: {}", e.getMessage());
             return null;
         }
+    }
+
+    private boolean isDatabaseTempFilesRule(String metricType, String metricName) {
+        return "database_metric".equals(metricType) && "temp_files".equals(metricName);
+    }
+
+    private TempRuleDetails buildTempFileRuleDetails(long instancePk, int windowMinutes,
+                                                      BigDecimal baselineAvg,
+                                                      BigDecimal warningThreshold,
+                                                      BigDecimal criticalThreshold,
+                                                      int hour, String sensitivity) {
+        try {
+            Map<String, Object> workMemRow = null;
+            try {
+                List<Map<String, Object>> rows = jdbc.queryForList("""
+                    select setting_value, unit
+                    from fact.pg_settings_snapshot
+                    where instance_pk = ? and setting_name = 'work_mem'
+                    order by snapshot_ts desc
+                    limit 1
+                    """, instancePk);
+                if (!rows.isEmpty()) {
+                    workMemRow = rows.get(0);
+                }
+            } catch (Exception ignore) {}
+
+            long currentWorkMemBytes = parseSettingBytes(
+                workMemRow != null ? workMemRow.get("setting_value") : null,
+                workMemRow != null ? workMemRow.get("unit") : null,
+                4L * 1024L * 1024L);
+            String workMem = formatSetting(
+                workMemRow != null ? workMemRow.get("setting_value") : null,
+                workMemRow != null ? workMemRow.get("unit") : null,
+                humanBytes(currentWorkMemBytes));
+
+            List<Map<String, Object>> topQueries = jdbc.queryForList("""
+                with top_window as (
+                  select
+                    d.statement_series_id,
+                    ss.queryid,
+                    left(qt.query_text, 300) as query_text,
+                    dbr.datname,
+                    rr.rolname,
+                    sum(coalesce(d.temp_blks_written_delta, 0)) as temp_blks,
+                    sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 as temp_bytes,
+                    sum(coalesce(d.calls_delta, 0)) as calls_window,
+                    sum(coalesce(d.total_exec_time_ms_delta, 0)) as exec_ms_window
+                  from fact.pgss_delta d
+                  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+                  left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+                  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+                  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+                  where d.instance_pk = ?
+                    and d.sample_ts >= now() - ?::interval
+                    and coalesce(d.temp_blks_written_delta, 0) > 0
+                  group by d.statement_series_id, ss.queryid, qt.query_text, dbr.datname, rr.rolname
+                  order by sum(coalesce(d.temp_blks_written_delta, 0)) desc
+                  limit 5
+                )
+                select
+                  t.*,
+                  round(t.temp_bytes::numeric / nullif(t.calls_window, 0), 0) as avg_temp_bytes_per_call,
+                  h.calls_7d,
+                  h.calls_28d,
+                  h.active_days_28d,
+                  h.last_seen_at
+                from top_window t
+                left join lateral (
+                  select
+                    coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '7 days'), 0) as calls_7d,
+                    coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '28 days'), 0) as calls_28d,
+                    count(distinct date_trunc('day', d.sample_ts)) filter (where d.sample_ts >= now() - interval '28 days') as active_days_28d,
+                    max(d.sample_ts) as last_seen_at
+                  from fact.pgss_delta d
+                  where d.statement_series_id = t.statement_series_id
+                    and d.sample_ts >= now() - interval '28 days'
+                ) h on true
+                order by t.temp_bytes desc
+                """, instancePk, windowMinutes + " minutes");
+
+            long totalTempBytes = 0;
+            long totalTempBlks = 0;
+            long totalCalls = 0;
+            long maxTempBytesPerCall = 0;
+            for (Map<String, Object> q : topQueries) {
+                totalTempBytes += toLong(q.get("temp_bytes"));
+                totalTempBlks += toLong(q.get("temp_blks"));
+                totalCalls += toLong(q.get("calls_window"));
+                maxTempBytesPerCall = Math.max(maxTempBytesPerCall, toLong(q.get("avg_temp_bytes_per_call")));
+            }
+
+            String suggestedWorkMem = suggestWorkMem(currentWorkMemBytes, maxTempBytesPerCall);
+            long suggestedWorkMemBytes = parseWorkMemText(suggestedWorkMem, currentWorkMemBytes);
+
+            StringBuilder summary = new StringBuilder();
+            summary.append("🔎 **Temp üreten sorgular (son ").append(windowMinutes).append(" dk)**\n");
+            if (topQueries.isEmpty()) {
+                summary.append("• Sorgu bazlı temp blok verisi bulunamadı. `pg_stat_statements` temp blok metrikleri henüz dolmamış olabilir.\n");
+            } else {
+                for (int i = 0; i < Math.min(3, topQueries.size()); i++) {
+                    Map<String, Object> q = topQueries.get(i);
+                    summary.append(i + 1).append(". `")
+                        .append(trimText((String) q.get("query_text"), 120)).append("`")
+                        .append(" → ").append(humanBytes(toLong(q.get("temp_bytes"))))
+                        .append(", calls=").append(q.get("calls_window"))
+                        .append(", 28g calls=").append(q.get("calls_28d"))
+                        .append(", detay=/statements/").append(q.get("statement_series_id"))
+                        .append("\n");
+                }
+            }
+            summary.append("🧠 Mevcut `work_mem`: **").append(workMem).append("**\n");
+            summary.append("🎯 Öneri: **").append(suggestedWorkMem).append("**");
+            summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
+            summary.append("work_mem connection ve sort/hash node başına ayrılır; global artırmadan önce sorgu planı da incelenmeli.");
+
+            StringBuilder json = new StringBuilder();
+            json.append("{\"kind\":\"temp_files\"");
+            json.append(",\"baseline_hour\":").append(hour);
+            json.append(",\"baseline_avg\":").append(baselineAvg);
+            json.append(",\"warning_threshold\":").append(warningThreshold);
+            json.append(",\"critical_threshold\":").append(criticalThreshold);
+            json.append(",\"sensitivity\":\"").append(sensitivity).append("\"");
+            json.append(",\"window_minutes\":").append(windowMinutes);
+            json.append(",\"work_mem\":\"").append(escapeJson(workMem)).append("\"");
+            json.append(",\"work_mem_bytes\":").append(currentWorkMemBytes);
+            json.append(",\"suggested_work_mem\":\"").append(escapeJson(suggestedWorkMem)).append("\"");
+            json.append(",\"suggested_work_mem_bytes\":").append(suggestedWorkMemBytes);
+            json.append(",\"max_temp_bytes_per_call\":").append(maxTempBytesPerCall);
+            json.append(",\"total_temp_bytes_top_queries\":").append(totalTempBytes);
+            json.append(",\"total_temp_blks_top_queries\":").append(totalTempBlks);
+            json.append(",\"total_calls_top_queries\":").append(totalCalls);
+            json.append(",\"top_queries\":[");
+            for (int i = 0; i < topQueries.size(); i++) {
+                Map<String, Object> q = topQueries.get(i);
+                if (i > 0) json.append(",");
+                json.append("{\"statement_series_id\":").append(q.get("statement_series_id"));
+                json.append(",\"queryid\":").append(q.get("queryid"));
+                json.append(",\"query_text\":\"").append(escapeJson(q.get("query_text"))).append("\"");
+                json.append(",\"datname\":\"").append(escapeJson(q.get("datname"))).append("\"");
+                json.append(",\"rolname\":\"").append(escapeJson(q.get("rolname"))).append("\"");
+                json.append(",\"temp_blks\":").append(q.get("temp_blks"));
+                json.append(",\"temp_bytes\":").append(q.get("temp_bytes"));
+                json.append(",\"avg_temp_bytes_per_call\":").append(nullToZero(q.get("avg_temp_bytes_per_call")));
+                json.append(",\"calls_window\":").append(q.get("calls_window"));
+                json.append(",\"exec_ms_window\":").append(q.get("exec_ms_window"));
+                json.append(",\"calls_7d\":").append(q.get("calls_7d"));
+                json.append(",\"calls_28d\":").append(q.get("calls_28d"));
+                json.append(",\"active_days_28d\":").append(q.get("active_days_28d"));
+                json.append(",\"last_seen_at\":\"").append(escapeJson(q.get("last_seen_at"))).append("\"");
+                json.append(",\"detail_url\":\"/statements/").append(q.get("statement_series_id")).append("\"");
+                json.append("}");
+            }
+            json.append("]}");
+
+            return new TempRuleDetails(json.toString(), summary.toString(), workMem,
+                suggestedWorkMem, topQueriesText(topQueries));
+        } catch (Exception e) {
+            log.debug("Temp file detay hatasi instance={}: {}", instancePk, e.getMessage());
+            return null;
+        }
+    }
+
+    private String topQueriesText(List<Map<String, Object>> topQueries) {
+        if (topQueries.isEmpty()) return "(sorgu bazli temp veri yok)";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(3, topQueries.size()); i++) {
+            if (i > 0) sb.append("\n");
+            Map<String, Object> q = topQueries.get(i);
+            sb.append(i + 1).append(". `")
+                .append(trimText((String) q.get("query_text"), 100)).append("`")
+                .append(" - ").append(humanBytes(toLong(q.get("temp_bytes"))))
+                .append(", calls=").append(q.get("calls_window"));
+        }
+        return sb.toString();
     }
 
     private String escapeJson(Object val) {
@@ -734,9 +929,24 @@ public class AlertRuleEvaluator {
                 Map<String, Object> ctx = baseContext(rule, instancePk, severity);
                 ctx.put("value", value);
                 ctx.put("threshold", threshold);
+                String detailsJson = null;
+                TempRuleDetails tempDetails = null;
+                if (isDatabaseTempFilesRule(metricType, metricName)) {
+                    tempDetails = buildTempFileRuleDetails(instancePk, windowMinutes,
+                        BigDecimal.ZERO, warningThreshold, criticalThreshold, -1, "threshold");
+                    if (tempDetails != null) {
+                        detailsJson = tempDetails.detailsJson();
+                        ctx.put("work_mem", tempDetails.workMem());
+                        ctx.put("suggested_work_mem", tempDetails.suggestedWorkMem());
+                        ctx.put("top_temp_queries", tempDetails.topQueriesText());
+                    }
+                }
                 String[] rendered = buildAlertText(rule, ruleName, message, ctx);
+                if (tempDetails != null && !tempDetails.messageSuffix().isBlank()) {
+                    rendered[1] = rendered[1] + "\n\n" + tempDetails.messageSuffix();
+                }
                 alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId, detailsJson);
                 updateLastEval(ruleId, instancePk, value, severity);
             } else if (prevSeverity != null && autoResolve) {
                 alertRepo.resolve(alertKey);
@@ -1604,6 +1814,82 @@ public class AlertRuleEvaluator {
                 ctx.put("database", rec.get("datname"));
             }
         }
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes >= 1_073_741_824L) return String.format("%.1f GB", bytes / 1_073_741_824.0);
+        if (bytes >= 1_048_576L) return String.format("%.1f MB", bytes / 1_048_576.0);
+        if (bytes >= 1_024L) return String.format("%.1f KB", bytes / 1_024.0);
+        return bytes + " B";
+    }
+
+    private static Object nullToZero(Object value) {
+        return value != null ? value : 0;
+    }
+
+    private static String formatSetting(Object value, Object unit, String fallback) {
+        if (value == null) return fallback;
+        String val = value.toString();
+        String u = unit != null ? unit.toString() : "";
+        return u.isBlank() ? val : val + u;
+    }
+
+    private static long parseSettingBytes(Object value, Object unit, long fallbackBytes) {
+        if (value == null) return fallbackBytes;
+        try {
+            BigDecimal n = new BigDecimal(value.toString());
+            String u = unit != null ? unit.toString().trim().toLowerCase() : "kb";
+            BigDecimal multiplier = switch (u) {
+                case "b", "byte", "bytes" -> BigDecimal.ONE;
+                case "8kb" -> new BigDecimal(8192);
+                case "mb" -> new BigDecimal(1_048_576);
+                case "gb" -> new BigDecimal(1_073_741_824);
+                default -> new BigDecimal(1024);
+            };
+            return n.multiply(multiplier).longValue();
+        } catch (Exception e) {
+            return fallbackBytes;
+        }
+    }
+
+    private static String suggestWorkMem(long currentWorkMemBytes, long maxTempBytesPerCall) {
+        if (maxTempBytesPerCall <= 0) {
+            return humanWorkMem(currentWorkMemBytes);
+        }
+        long target = Math.max(currentWorkMemBytes, Math.round(maxTempBytesPerCall * 1.25));
+        long mb = Math.max(16, (target + 1_048_575L) / 1_048_576L);
+        long roundedMb;
+        if (mb <= 16) roundedMb = 16;
+        else if (mb <= 32) roundedMb = 32;
+        else if (mb <= 64) roundedMb = 64;
+        else if (mb <= 128) roundedMb = 128;
+        else if (mb <= 256) roundedMb = 256;
+        else roundedMb = 512;
+        return roundedMb + "MB";
+    }
+
+    private static long parseWorkMemText(String text, long fallbackBytes) {
+        if (text == null || text.isBlank()) return fallbackBytes;
+        try {
+            String normalized = text.trim().toUpperCase();
+            long value = Long.parseLong(normalized.replaceAll("[^0-9]", ""));
+            if (normalized.endsWith("GB")) return value * 1_073_741_824L;
+            if (normalized.endsWith("MB")) return value * 1_048_576L;
+            if (normalized.endsWith("KB")) return value * 1024L;
+            return value;
+        } catch (Exception e) {
+            return fallbackBytes;
+        }
+    }
+
+    private static String humanWorkMem(long bytes) {
+        if (bytes % 1_073_741_824L == 0 && bytes >= 1_073_741_824L) {
+            return (bytes / 1_073_741_824L) + "GB";
+        }
+        if (bytes % 1_048_576L == 0 && bytes >= 1_048_576L) {
+            return (bytes / 1_048_576L) + "MB";
+        }
+        return Math.max(1, bytes / 1024L) + "kB";
     }
 
     private static String trimText(String s, int max) {
