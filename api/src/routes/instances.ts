@@ -34,14 +34,21 @@ router.get('/', async (req, res, next) => {
 router.get('/storage-summary', async (_req, res, next) => {
   try {
     const result = await pool.query(`
-      with storage_usage as (${collectorStorageUnionSql()})
+      with storage_usage as (${collectorStorageUnionSql()}),
+      per_instance as (
+        select
+          instance_pk,
+          sum(row_count)::bigint as collector_rows,
+          sum(data_bytes)::bigint as collector_bytes
+        from storage_usage
+        group by instance_pk
+      )
       select
         instance_pk,
-        sum(row_count)::bigint as collector_rows,
-        sum(data_bytes)::bigint as collector_bytes,
-        pg_database_size(current_database())::bigint as collector_db_bytes
-      from storage_usage
-      group by instance_pk
+        collector_rows,
+        collector_bytes,
+        (select sum(collector_bytes) from per_instance)::bigint as collector_db_bytes
+      from per_instance
     `);
     res.json(result.rows);
   } catch (err: any) {
