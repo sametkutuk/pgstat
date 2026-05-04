@@ -632,12 +632,24 @@ router.get('/:id/health-report', async (req, res, next) => {
         and sample_ts > now() - make_interval(days => $2)
         group by 1 order by 1`, [id, days]),
 
-      // Günlük WAL üretimi (MB cinsinden)
-      safeQuery(`select date_trunc('day', sample_ts)::date as day,
-        round(sum(period_wal_size_byte)::numeric / 1048576, 1) as wal_mb
+      // Günlük WAL üretimi (MB cinsinden, eksik günler 0 olarak doldurulur)
+      safeQuery(`with days_series as (
+        select generate_series(
+          (now() - make_interval(days => $2))::date,
+          current_date,
+          '1 day'::interval
+        )::date as day
+      ),
+      wal_agg as (
+        select date_trunc('day', sample_ts)::date as day,
+          sum(period_wal_size_byte) as wal_bytes
         from fact.pg_wal_snapshot where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
-        group by 1 order by 1`, [id, days]),
+        group by 1
+      )
+      select d.day, coalesce(round(w.wal_bytes::numeric / 1048576, 1), 0) as wal_mb
+      from days_series d left join wal_agg w on w.day = d.day
+      order by d.day`, [id, days]),
 
       // CPU proxy: active_time / session_time (PG14+, graceful null for older)
       safeQuery(`select date_trunc('day', sample_ts)::date as day,
