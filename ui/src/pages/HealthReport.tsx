@@ -182,7 +182,7 @@ export default function HealthReport() {
                             }))}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                                 <XAxis dataKey="day" tick={{ fontSize: 10 }} />
-                                <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} unit="%" />
+                                <YAxis tick={{ fontSize: 10 }} unit="%" />
                                 <Tooltip formatter={(v: number) => [`${v}%`, 'Active %']} />
                                 <Line type="monotone" dataKey="pct" stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} />
                             </LineChart>
