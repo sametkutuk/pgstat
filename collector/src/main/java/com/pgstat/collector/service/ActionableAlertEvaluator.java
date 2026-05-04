@@ -130,7 +130,7 @@ public class ActionableAlertEvaluator {
 
             // Bu tabloya erişen top sorguları bul (query_text ILIKE '%tablename%')
             String relname = (String) r.get("relname");
-            String topQueriesText = findQueriesForTable(instancePk, relname);
+            List<Map<String, Object>> relatedQueries = findQueriesForTable(instancePk, relname);
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -143,15 +143,16 @@ public class ActionableAlertEvaluator {
             ctx.put("idx_scans", r.get("idx_scans"));
             ctx.put("seq_idx_ratio", r.get("ratio"));
             ctx.put("seq_tup_read", r.get("seq_tup_read"));
-            ctx.put("top_queries", topQueriesText);
+            ctx.put("top_queries", formatQueriesForMessage(relatedQueries));
 
             String[] rendered = renderer.renderForCode("index_suspect_missing", ctx,
                 "Index gerekiyor: " + r.get("schemaname") + "." + r.get("relname"),
                 "seq_scan/idx_scan oranı çok yüksek");
 
+            String detailsJson = buildDetailsJson(relatedQueries);
             alertRepo.upsert(alertKey, AlertCode.INDEX_SUSPECT_MISSING,
                 toLong(r.get("instance_pk")), null, null,
-                rendered[0], rendered[1], null);
+                rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
@@ -251,7 +252,7 @@ public class ActionableAlertEvaluator {
             } catch (Exception ignore) {}
 
             // Top 3 temp ureten sorgu
-            String topQueries = buildTopTempQueries(instancePk);
+            List<Map<String, Object>> topTempQueries = getTopTempQueries(instancePk);
 
             // Onerilen work_mem hesabi (basit: max temp_bytes / 1M, en yakin guzel deger)
             long tempBytes = toLong(r.get("temp_bytes"));
@@ -264,15 +265,16 @@ public class ActionableAlertEvaluator {
             ctx.put("temp_files", r.get("temp_files"));
             ctx.put("temp_bytes_human", humanBytes(tempBytes));
             ctx.put("work_mem", workMem);
-            ctx.put("top_temp_queries", topQueries);
+            ctx.put("top_temp_queries", formatTopTempQueriesToText(topTempQueries));
             ctx.put("suggested_work_mem", suggested);
 
             String[] rendered = renderer.renderForCode("high_temp_files", ctx,
                 "Yüksek temp file: " + r.get("datname"),
                 "temp_files > 100/saat, work_mem=" + workMem);
 
+            String detailsJson = buildDetailsJsonForTempQueries(topTempQueries);
             alertRepo.upsert(alertKey, AlertCode.HIGH_TEMP_FILES,
-                instancePk, null, null, rendered[0], rendered[1], null);
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
@@ -386,63 +388,164 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     /**
-     * Belirli bir tabloya erişen top 5 sorguyu bulur.
-     * query_text içinde tablo adı geçen sorgular — calls ve exec_time bazında sıralı.
+     * Alert message template'i için sorguları text formatına çevir.
      */
-    private String findQueriesForTable(long instancePk, String relname) {
+    private String formatQueriesForMessage(List<Map<String, Object>> queries) {
+        if (queries.isEmpty()) return "(bu tabloya erişen sorgu bulunamadı)";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < queries.size(); i++) {
+            if (i > 0) sb.append("\n");
+            Map<String, Object> q = queries.get(i);
+            String queryText = (String) q.get("query_text");
+            // Query uzunsa kısalt (message template'te göstermek için)
+            if (queryText != null && queryText.length() > 80) {
+                queryText = queryText.substring(0, 80) + "...";
+            }
+            sb.append(i + 1).append(". `").append(queryText).append("`");
+            sb.append(" — ").append(q.get("datname")).append(" ");
+            sb.append(q.get("calls")).append(" calls, ");
+            sb.append(humanMs(toLong(q.get("exec_ms")))).append(" exec");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Alert detail'da göstermek için details_json string'i oluştur (genel sorgu sonuçları).
+     * queries: statement_series_id, queryid, query_text, datname, calls, exec_ms içeren map'ler
+     */
+    private String buildDetailsJson(List<Map<String, Object>> queries) {
+        if (queries.isEmpty()) return null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"records\":[");
+        for (int i = 0; i < queries.size(); i++) {
+            if (i > 0) sb.append(",");
+            Map<String, Object> q = queries.get(i);
+            sb.append("{");
+            sb.append("\"statement_series_id\":").append(q.get("statement_series_id"));
+            sb.append(",\"queryid\":").append(q.get("queryid"));
+            sb.append(",\"query_text\":").append(escapeJson((String) q.get("query_text")));
+            sb.append(",\"datname\":").append(escapeJson((String) q.get("datname")));
+            sb.append(",\"current_val\":").append(toLong(q.get("exec_ms")));
+            sb.append(",\"prev_val\":null");
+            sb.append(",\"change_pct\":null");
+            sb.append(",\"label\":\"exec_ms\"");
+            sb.append("}");
+        }
+        sb.append("]}");
+        return sb.toString();
+    }
+
+    /**
+     * Temp file alert için details_json (temp_bytes etiketi ile)
+     */
+    private String buildDetailsJsonForTempQueries(List<Map<String, Object>> queries) {
+        if (queries.isEmpty()) return null;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"records\":[");
+        for (int i = 0; i < queries.size(); i++) {
+            if (i > 0) sb.append(",");
+            Map<String, Object> q = queries.get(i);
+            sb.append("{");
+            sb.append("\"statement_series_id\":").append(q.get("statement_series_id"));
+            sb.append(",\"queryid\":").append(q.get("queryid"));
+            sb.append(",\"query_text\":").append(escapeJson((String) q.get("query_text")));
+            sb.append(",\"current_val\":").append(toLong(q.get("temp_bytes")));
+            sb.append(",\"prev_val\":null");
+            sb.append(",\"change_pct\":null");
+            sb.append(",\"label\":\"temp_bytes\"");
+            sb.append("}");
+        }
+        sb.append("]}");
+        return sb.toString();
+    }
+
+    /** JSON string içine güvenli escape */
+    private static String escapeJson(String s) {
+        if (s == null) return "null";
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 32) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        sb.append("\"");
+        return sb.toString();
+    }
+
+    /**
+     * Belirli bir tabloya erişen top 5 sorguyu bulur.
+     * Structured records döner: statement_series_id, queryid, query_text, datname, calls, exec_ms
+     * UI'da Link to /statements/:id oluşturmak için statement_series_id gerekli.
+     */
+    private List<Map<String, Object>> findQueriesForTable(long instancePk, String relname) {
         try {
-            List<Map<String, Object>> rows = jdbc.queryForList(
-                "select left(qt.query_text, 80) as query, " +
+            return jdbc.queryForList(
+                "select ss.statement_series_id, ss.queryid, " +
+                "       coalesce(dbr.datname, '?') as datname, " +
+                "       qt.query_text, " +
                 "       sum(d.calls_delta) as calls, " +
                 "       sum(d.total_exec_time_ms_delta) as exec_ms " +
                 "from fact.pgss_delta d " +
                 "join dim.statement_series ss on ss.statement_series_id = d.statement_series_id " +
                 "left join dim.query_text qt on qt.query_text_id = ss.query_text_id " +
+                "left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid " +
                 "where d.instance_pk = ? and d.sample_ts > now() - interval '24 hours' " +
                 "  and qt.query_text ilike '%' || ? || '%' " +
-                "group by left(qt.query_text, 80) " +
+                "group by ss.statement_series_id, ss.queryid, dbr.datname, qt.query_text " +
                 "order by exec_ms desc limit 5",
                 instancePk, relname);
-
-            if (rows.isEmpty()) return "(bu tabloya erişen sorgu bulunamadı)";
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < rows.size(); i++) {
-                if (i > 0) sb.append("\n");
-                sb.append(i + 1).append(". `").append(rows.get(i).get("query")).append("`");
-                sb.append(" — ").append(rows.get(i).get("calls")).append(" calls");
-                sb.append(", ").append(humanMs(toLong(rows.get(i).get("exec_ms")))).append(" exec");
-            }
-            return sb.toString();
         } catch (Exception e) {
-            return "(sorgu bulunamadı)";
+            return java.util.Collections.emptyList();
         }
     }
 
-    private String buildTopTempQueries(long instancePk) {
+    /** Top temp kullanıcısı sorguları — structured records */
+    private List<Map<String, Object>> getTopTempQueries(long instancePk) {
         try {
-            List<Map<String, Object>> rows = jdbc.queryForList("""
-                select left(qt.query_text, 80) as query,
-                       sum(d.temp_blks_written_delta) * 8192 as bytes
+            return jdbc.queryForList("""
+                select ss.statement_series_id,
+                       ss.queryid,
+                       qt.query_text,
+                       sum(d.temp_blks_written_delta) * 8192 as temp_bytes
                 from fact.pgss_delta d
                 join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
                 left join dim.query_text qt on qt.query_text_id = ss.query_text_id
                 where d.instance_pk = ? and d.sample_ts > now() - interval '1 hour'
                   and d.temp_blks_written_delta > 0
-                group by qt.query_text
-                order by bytes desc limit 3
+                group by ss.statement_series_id, ss.queryid, qt.query_text
+                order by temp_bytes desc limit 3
                 """, instancePk);
-
-            if (rows.isEmpty()) return "(veri yok)";
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < rows.size(); i++) {
-                if (i > 0) sb.append("\n");
-                sb.append(i + 1).append(". `").append(rows.get(i).get("query"))
-                  .append("` → ").append(humanBytes(toLong(rows.get(i).get("bytes"))));
-            }
-            return sb.toString();
         } catch (Exception e) {
-            return "(hesaplanamadı)";
+            return java.util.Collections.emptyList();
         }
+    }
+
+    private String formatTopTempQueriesToText(List<Map<String, Object>> queries) {
+        if (queries.isEmpty()) return "(veri yok)";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < queries.size(); i++) {
+            if (i > 0) sb.append("\n");
+            String queryText = (String) queries.get(i).get("query_text");
+            if (queryText != null && queryText.length() > 80) {
+                queryText = queryText.substring(0, 80) + "...";
+            }
+            sb.append(i + 1).append(". `").append(queryText)
+              .append("` → ").append(humanBytes(toLong(queries.get(i).get("temp_bytes"))));
+        }
+        return sb.toString();
+    }
+
+    private String buildTopTempQueries(long instancePk) {
+        return formatTopTempQueriesToText(getTopTempQueries(instancePk));
     }
 
     /** Onerilen work_mem: temp_bytes'a gore en yakin guzel deger */
