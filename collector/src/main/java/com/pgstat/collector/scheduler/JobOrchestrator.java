@@ -514,7 +514,11 @@ public class JobOrchestrator {
             // 4. Alert kurallarini degerlendir (user-defined rules — her cycle)
             alertRuleEvaluator.evaluate();
 
-            // 4b. Rolling alert'ler — 15 dakikada bir
+            // 4b. Acute alert'ler — her cycle'da (5s)
+            // LONG_RUNNING_QUERY, HIGH_CONNECTION_USAGE, STALE_DATA
+            actionableAlertEvaluator.evaluateAcute();
+
+            // 4c. Rolling alert'ler — 15 dakikada bir
             // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
             // Her 5s'de calistirmak gereksiz (1h pencere kullaniyorlar), 15dk yeterli.
             long now = System.currentTimeMillis();

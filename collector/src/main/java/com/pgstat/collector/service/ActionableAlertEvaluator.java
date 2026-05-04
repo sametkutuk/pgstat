@@ -49,13 +49,13 @@ public class ActionableAlertEvaluator {
         int total = 0;
         total += safeEval("INDEX_SUSPECT_MISSING", this::checkIndexSuspectMissing);
         total += safeEval("INDEX_UNUSED", this::checkIndexUnused);
+        total += safeEval("HIGH_BLOAT_RATIO", this::checkHighBloatRatio);
         log.info("Gunluk aksiyon-odakli alert degerlendirmesi tamamlandi: {} alert", total);
     }
 
     /**
-     * Anlik sorunlar icin her rollup cycle'da (5 saniyede bir) calisir.
+     * Rolling alert'ler — 15 dakikada bir.
      * HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
-     * — bunlar acil mudahale gerektiren durumlar, gunde 1 kez bakmak gec kalir.
      */
     public void evaluateFrequent() {
         int total = 0;
@@ -63,7 +63,22 @@ public class ActionableAlertEvaluator {
         total += safeEval("IDLE_IN_TX_TIME_HIGH", this::checkIdleInTxTimeHigh);
         total += safeEval("REPLICATION_SLOT_INACTIVE", this::checkReplicationSlotInactive);
         if (total > 0) {
-            log.info("Anlik aksiyon-odakli alert: {} yeni tetiklendi", total);
+            log.info("Rolling aksiyon-odakli alert: {} yeni tetiklendi", total);
+        }
+    }
+
+    /**
+     * Acute alert'ler — her rollup cycle'da (5 saniyede bir).
+     * LONG_RUNNING_QUERY, HIGH_CONNECTION_USAGE, STALE_DATA
+     * — anlik tespit gerektiren, hizli mudahale edilmesi gereken durumlar.
+     */
+    public void evaluateAcute() {
+        int total = 0;
+        total += safeEval("LONG_RUNNING_QUERY", this::checkLongRunningQuery);
+        total += safeEval("HIGH_CONNECTION_USAGE", this::checkHighConnectionUsage);
+        total += safeEval("STALE_DATA", this::checkStaleData);
+        if (total > 0) {
+            log.info("Acute aksiyon-odakli alert: {} yeni tetiklendi", total);
         }
     }
 
@@ -420,6 +435,263 @@ public class ActionableAlertEvaluator {
             alertRepo.upsert(alertKey, AlertCode.REPLICATION_SLOT_INACTIVE,
                 toLong(r.get("instance_pk")), null, null,
                 rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 6. LONG_RUNNING_QUERY — 5dk+ calisan sorgular (acute)
+    // =========================================================================
+
+    private int checkLongRunningQuery() {
+        // pg_activity_snapshot'tan son snapshot'taki 5dk+ calisan sorgulari bul
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            with latest as (select max(snapshot_ts) as ts from fact.pg_activity_snapshot)
+            select a.instance_pk, i.display_name, a.pid, a.datname, a.usename,
+                   a.application_name, a.state,
+                   extract(epoch from (l.ts - a.query_start))::bigint as duration_seconds,
+                   left(a.query, 200) as query_text
+            from fact.pg_activity_snapshot a
+            join control.instance_inventory i on i.instance_pk = a.instance_pk
+            cross join latest l
+            where a.snapshot_ts = l.ts
+              and a.state = 'active'
+              and a.query_start is not null
+              and extract(epoch from (l.ts - a.query_start)) > 300
+              and a.backend_type = 'client backend'
+            order by duration_seconds desc
+            limit 20
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("long_running_query", instancePk)) continue;
+
+            String alertKey = "actionable:long_running_query:" + instancePk + ":" + r.get("pid");
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("database", r.get("datname"));
+            ctx.put("pid", r.get("pid"));
+            ctx.put("username", r.get("usename"));
+            ctx.put("duration_seconds", r.get("duration_seconds"));
+            ctx.put("query_snippet", r.get("query_text"));
+
+            String[] rendered = renderer.renderForCode("long_running_query", ctx,
+                "Uzun sorgu: PID " + r.get("pid"),
+                "Sorgu " + r.get("duration_seconds") + " saniyedir çalışıyor");
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("connection_diag")
+                .addContext("pid", r.get("pid"))
+                .addContext("database", r.get("datname"))
+                .addContext("user", r.get("usename"))
+                .addContext("application", r.get("application_name"))
+                .addContext("duration_seconds", r.get("duration_seconds"))
+                .addContext("query", r.get("query_text"))
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.LONG_RUNNING_QUERY,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 7. HIGH_CONNECTION_USAGE — numbackends / max_connections > %80 (acute)
+    // =========================================================================
+
+    private int checkHighConnectionUsage() {
+        // Son snapshot'taki backend sayisi vs max_connections
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            with latest as (
+              select instance_pk, max(sample_ts) as ts
+              from fact.pg_database_delta
+              where sample_ts > now() - interval '5 minutes'
+              group by instance_pk
+            ),
+            conn_count as (
+              select d.instance_pk, sum(d.numbackends) as total_backends
+              from fact.pg_database_delta d
+              join latest l on l.instance_pk = d.instance_pk and l.ts = d.sample_ts
+              group by d.instance_pk
+            ),
+            max_conn as (
+              select instance_pk,
+                     nullif(setting_value, '')::integer as max_connections
+              from fact.pg_settings_snapshot
+              where setting_name = 'max_connections'
+                and snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot
+                                   where setting_name = 'max_connections')
+            )
+            select c.instance_pk, i.display_name, c.total_backends,
+                   coalesce(m.max_connections, 100) as max_connections,
+                   round(100.0 * c.total_backends / nullif(coalesce(m.max_connections, 100), 0), 1) as usage_pct
+            from conn_count c
+            join control.instance_inventory i on i.instance_pk = c.instance_pk
+            left join max_conn m on m.instance_pk = c.instance_pk
+            where c.total_backends > coalesce(m.max_connections, 100) * 0.8
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("high_connection_usage", instancePk)) continue;
+
+            String alertKey = "actionable:high_connection_usage:" + instancePk;
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("value", r.get("total_backends"));
+            ctx.put("max_value", r.get("max_connections"));
+            ctx.put("usage_pct", r.get("usage_pct"));
+
+            String[] rendered = renderer.renderForCode("high_connection_usage", ctx,
+                "Bağlantı doluyor: " + r.get("display_name"),
+                r.get("total_backends") + "/" + r.get("max_connections") + " bağlantı");
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("connection_diag")
+                .addContext("total_backends", r.get("total_backends"))
+                .addContext("max_connections", r.get("max_connections"))
+                .addContext("usage_pct", r.get("usage_pct"))
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.HIGH_CONNECTION_USAGE,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 8. STALE_DATA — 10dk+ veri toplanamayan instance (acute)
+    // =========================================================================
+
+    private int checkStaleData() {
+        // instance_state'ten son basarili toplama zamani 10dk'dan eski olanlar
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            select i.instance_pk, i.display_name, i.bootstrap_state,
+                   s.last_cluster_collect_at,
+                   s.consecutive_failures,
+                   s.last_error,
+                   extract(epoch from (now() - s.last_cluster_collect_at))::bigint as stale_seconds
+            from control.instance_inventory i
+            join control.instance_state s on s.instance_pk = i.instance_pk
+            where i.is_active
+              and i.bootstrap_state = 'ready'
+              and s.last_cluster_collect_at is not null
+              and s.last_cluster_collect_at < now() - interval '10 minutes'
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("stale_data", instancePk)) continue;
+
+            String alertKey = "actionable:stale_data:" + instancePk;
+
+            long staleSec = toLong(r.get("stale_seconds"));
+            String staleHuman = staleSec >= 3600 ? (staleSec / 3600) + " saat"
+                : staleSec >= 60 ? (staleSec / 60) + " dk" : staleSec + " sn";
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("minutes", staleSec / 60);
+            ctx.put("last_successful_at", r.get("last_cluster_collect_at"));
+
+            String[] rendered = renderer.renderForCode("stale_data", ctx,
+                "Veri toplama durdu: " + r.get("display_name"),
+                staleHuman + " süredir veri toplanamıyor");
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("data_quality")
+                .addContext("last_success", r.get("last_cluster_collect_at"))
+                .addContext("stale_duration", staleHuman)
+                .addContext("consecutive_failures", r.get("consecutive_failures"))
+                .addContext("last_error", r.get("last_error"))
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.STALE_DATA,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 9. HIGH_BLOAT_RATIO — dead tuple > %20, tablo > 10MB (daily)
+    // =========================================================================
+
+    private int checkHighBloatRatio() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            with latest as (
+              select instance_pk, max(sample_ts) as ts
+              from fact.pg_table_stat_delta
+              group by instance_pk
+            )
+            select t.instance_pk, i.display_name, t.schemaname, t.relname,
+                   t.n_live_tup_estimate as live_tup,
+                   t.n_dead_tup_estimate as dead_tup,
+                   round(100.0 * t.n_dead_tup_estimate::numeric /
+                         nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0), 1) as dead_pct,
+                   coalesce(rs.total_size_bytes, 0) as table_size_bytes,
+                   dbr.datname
+            from fact.pg_table_stat_delta t
+            join latest l on l.instance_pk = t.instance_pk and l.ts = t.sample_ts
+            join control.instance_inventory i on i.instance_pk = t.instance_pk
+            left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
+            left join lateral (
+              select total_size_bytes from fact.pg_relation_size_snapshot rs
+              where rs.instance_pk = t.instance_pk and rs.dbid = t.dbid
+                and rs.schemaname = t.schemaname and rs.relname = t.relname
+              order by snapshot_ts desc limit 1
+            ) rs on true
+            where (t.n_live_tup_estimate + t.n_dead_tup_estimate) > 1000
+              and t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) > 0.20
+              and coalesce(rs.total_size_bytes, 0) > 10485760
+            order by dead_pct desc
+            limit 20
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("high_bloat_ratio", instancePk)) continue;
+
+            String relation = r.get("schemaname") + "." + r.get("relname");
+            String alertKey = "actionable:high_bloat:" + instancePk + ":" + relation;
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("relation", relation);
+            ctx.put("database", r.get("datname") != null ? r.get("datname") : "?");
+            ctx.put("bloat_pct", r.get("dead_pct"));
+            ctx.put("total_size", humanBytes(toLong(r.get("table_size_bytes"))));
+
+            String[] rendered = renderer.renderForCode("high_bloat_ratio", ctx,
+                "Bloat yüksek: " + relation,
+                "Dead tuple oranı %" + r.get("dead_pct"));
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("usage_summary")
+                .addContext("relation", relation)
+                .addContext("database", r.get("datname"))
+                .addContext("live_tup", r.get("live_tup"))
+                .addContext("dead_tup", r.get("dead_tup"))
+                .addContext("dead_pct", r.get("dead_pct"))
+                .addContext("table_size", humanBytes(toLong(r.get("table_size_bytes"))))
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.HIGH_BLOAT_RATIO,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
