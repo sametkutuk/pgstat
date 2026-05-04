@@ -617,20 +617,44 @@ router.get('/:id/health-report', async (req, res, next) => {
         where instance_pk = $1 and status = 'open'
         group by severity`, [id]),
 
-      // Günlük TPS trendi (son N gün)
-      safeQuery(`select date_trunc('day', sample_ts)::date as day,
-        sum(xact_commit_delta + xact_rollback_delta) as total_xact,
-        round(sum(xact_commit_delta + xact_rollback_delta)::numeric / 86400) as avg_tps
+      // Günlük TPS trendi (son N gün, eksik günler 0 olarak doldurulur)
+      safeQuery(`with days_series as (
+        select generate_series(
+          (now() - make_interval(days => $2))::date,
+          current_date,
+          '1 day'::interval
+        )::date as day
+      ),
+      tps_agg as (
+        select date_trunc('day', sample_ts)::date as day,
+          sum(xact_commit_delta + xact_rollback_delta) as total_xact,
+          round(sum(xact_commit_delta + xact_rollback_delta)::numeric / 86400) as avg_tps
         from fact.pg_database_delta where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
-        group by 1 order by 1`, [id, days]),
+        group by 1
+      )
+      select d.day, coalesce(t.total_xact, 0) as total_xact, coalesce(t.avg_tps, 0) as avg_tps
+      from days_series d left join tps_agg t on t.day = d.day
+      order by d.day`, [id, days]),
 
-      // Günlük max bağlantı trendi
-      safeQuery(`select date_trunc('day', sample_ts)::date as day,
-        max(numbackends) as max_connections
+      // Günlük max bağlantı trendi (eksik günler 0)
+      safeQuery(`with days_series as (
+        select generate_series(
+          (now() - make_interval(days => $2))::date,
+          current_date,
+          '1 day'::interval
+        )::date as day
+      ),
+      conn_agg as (
+        select date_trunc('day', sample_ts)::date as day,
+          max(numbackends) as max_connections
         from fact.pg_database_delta where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
-        group by 1 order by 1`, [id, days]),
+        group by 1
+      )
+      select d.day, coalesce(c.max_connections, 0) as max_connections
+      from days_series d left join conn_agg c on c.day = d.day
+      order by d.day`, [id, days]),
 
       // Günlük WAL üretimi (MB cinsinden, eksik günler 0 olarak doldurulur)
       safeQuery(`with days_series as (
