@@ -651,12 +651,14 @@ router.get('/:id/health-report', async (req, res, next) => {
       from days_series d left join wal_agg w on w.day = d.day
       order by d.day`, [id, days]),
 
-      // CPU proxy: active_time / session_time (PG14+, graceful null for older)
+      // CPU proxy: active_time / session_time (PG14+, session_time > 0 olan günler)
       safeQuery(`select date_trunc('day', sample_ts)::date as day,
         round(100.0 * sum(active_time_ms_delta)::numeric / nullif(sum(session_time_ms_delta), 0), 1) as active_pct
         from fact.pg_database_delta where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
-        group by 1 order by 1`, [id, days]),
+        group by 1
+        having sum(session_time_ms_delta) > 0
+        order by 1`, [id, days]),
 
       // Top bloat tabloları
       pool.query(`with latest as (select max(sample_ts) as ts from fact.pg_table_stat_delta where instance_pk = $1)
