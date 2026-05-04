@@ -33,19 +33,17 @@ router.get('/', async (req, res, next) => {
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
   try {
-    // Strateji: fact schema'daki tüm tabloların disk boyutunu al,
-    // sonra pg_database_delta'daki instance_pk dağılımına göre oranla.
-    // count(*) yerine son 1 günlük veriyle oran hesapla (hızlı).
+    // Strateji: partitioned parent tabloların pg_total_relation_size (partition'lar dahil)
+    // + son 2 günlük pg_database_delta'dan instance oranı
     const result = await pool.query(`
       with fact_total as (
         select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as total_bytes
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname in ('fact', 'agg', 'dim') and c.relkind in ('r', 'p')
-          and c.relispartition = false
+        where n.nspname in ('fact', 'agg', 'dim')
+          and c.relkind = 'p'
       ),
       recent_distribution as (
-        -- Son 2 günlük veriden instance dağılımı (hızlı, partition pruning)
         select instance_pk, count(*) as sample_rows
         from fact.pg_database_delta
         where sample_ts > now() - interval '2 days'
