@@ -33,17 +33,47 @@ router.get('/', async (req, res, next) => {
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
   try {
+    // Hafif sorgu: ana fact tablolarından satır sayısı + ortalama satır boyutu ile tahmini boyut
     const result = await pool.query(`
-      with storage_usage as (${collectorStorageUnionSql()})
+      with instance_rows as (
+        select instance_pk,
+          sum(row_count)::bigint as total_rows,
+          sum(estimated_bytes)::bigint as total_bytes
+        from (
+          select instance_pk, count(*) as row_count, count(*) * 200 as estimated_bytes
+          from fact.pg_database_delta group by instance_pk
+          union all
+          select d.instance_pk, count(*), count(*) * 300
+          from fact.pgss_delta d group by d.instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 180
+          from fact.pg_table_stat_delta group by instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 150
+          from fact.pg_index_stat_delta group by instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 120
+          from fact.pg_cluster_delta group by instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 80
+          from fact.pg_wal_snapshot group by instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 250
+          from fact.pg_activity_snapshot group by instance_pk
+          union all
+          select instance_pk, count(*), count(*) * 100
+          from fact.pg_lock_snapshot group by instance_pk
+        ) sub
+        group by instance_pk
+      )
       select
         i.instance_pk,
         i.display_name,
-        coalesce(sum(u.row_count), 0)::bigint as collector_rows,
-        coalesce(sum(u.data_bytes), 0)::bigint as collector_bytes,
+        coalesce(ir.total_rows, 0)::bigint as collector_rows,
+        coalesce(ir.total_bytes, 0)::bigint as collector_bytes,
         pg_database_size(current_database())::bigint as collector_db_bytes
       from control.instance_inventory i
-      left join storage_usage u on u.instance_pk = i.instance_pk
-      group by i.instance_pk, i.display_name
+      left join instance_rows ir on ir.instance_pk = i.instance_pk
       order by collector_bytes desc nulls last
     `);
     res.json(result.rows);
