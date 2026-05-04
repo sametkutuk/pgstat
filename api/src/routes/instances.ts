@@ -568,7 +568,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     // Yardımcı: sorgu hatası olursa boş sonuç dön (500 yerine graceful)
     const safeQuery = async (sql: string, params: any[] = []) => {
       try { return await pool.query(sql, params); }
-      catch (e) { return { rows: [] }; }
+      catch (e: any) { console.error('[health-report] safeQuery error:', e.message, sql.slice(0, 80)); return { rows: [] }; }
     };
 
     // Paralel sorgular — tüm metrikleri aynı anda çek
