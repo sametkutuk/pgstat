@@ -231,12 +231,22 @@ public class StatementsCollector {
                             rendered = renderer.renderForCode(AlertCode.STATS_RESET_DETECTED.getCode(),
                                     ctx, "pg_stat_statements Reset", alertMessage);
                         } catch (Exception ignore) {}
+                        // details_json: reset bilgileri
+                        String resetDetails = new com.pgstat.collector.service.AlertDetailsBuilder()
+                            .setKind("data_quality")
+                            .addContext("query_count", queryCount)
+                            .addContext("total_calls", totalCalls)
+                            .addContext("loss_window", lossWindow)
+                            .addContext("previous_epoch", currentEpochKey)
+                            .addContext("new_epoch", newEpochKey)
+                            .build();
+
                         alertRepo.upsert(
                             "pgss_reset:instance:" + instancePk,
                             AlertCode.STATS_RESET_DETECTED,
                             instancePk, null, systemIdentifier,
                             rendered[0],
-                            rendered[1], null
+                            rendered[1], resetDetails
                         );
                     }
                     

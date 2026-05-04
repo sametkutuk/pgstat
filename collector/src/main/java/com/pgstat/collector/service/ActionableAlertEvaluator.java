@@ -209,9 +209,18 @@ public class ActionableAlertEvaluator {
                 "Kullanılmayan index: " + r.get("schemaname") + "." + r.get("indexrelname"),
                 "30 gündür idx_scan = 0");
 
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("usage_summary")
+                .addContext("index", r.get("schemaname") + "." + r.get("indexrelname"))
+                .addContext("table", r.get("table_relname"))
+                .addContext("index_size_bytes", toLong(r.get("total_size_bytes")))
+                .addContext("index_size_human", humanBytes(toLong(r.get("total_size_bytes"))))
+                .addContext("total_scans_30d", 0)
+                .build();
+
             alertRepo.upsert(alertKey, AlertCode.INDEX_UNUSED,
                 toLong(r.get("instance_pk")), null, null,
-                rendered[0], rendered[1], null);
+                rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
@@ -272,9 +281,24 @@ public class ActionableAlertEvaluator {
                 "Yüksek temp file: " + r.get("datname"),
                 "temp_files > 100/saat, work_mem=" + workMem);
 
-            String detailsJson = buildDetailsJsonForTempQueries(topTempQueries);
+            // AlertDetailsBuilder ile zengin details_json
+            AlertDetailsBuilder details = new AlertDetailsBuilder()
+                .setKind("temp_files")
+                .addContext("work_mem", workMem)
+                .addContext("suggested_work_mem", suggested)
+                .addContext("temp_files", r.get("temp_files"))
+                .addContext("temp_bytes", tempBytes)
+                .addContext("database", r.get("datname"));
+            for (Map<String, Object> q : topTempQueries) {
+                details.addRecord(Map.of(
+                    "query_text", q.get("query_text") != null ? q.get("query_text") : "?",
+                    "current_val", toLong(q.get("temp_bytes")),
+                    "label", "temp_bytes"
+                ));
+            }
+
             alertRepo.upsert(alertKey, AlertCode.HIGH_TEMP_FILES,
-                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+                instancePk, null, null, rendered[0], rendered[1], details.build());
             count++;
         }
         return count;
@@ -322,9 +346,18 @@ public class ActionableAlertEvaluator {
                 "Idle in tx yüksek: " + r.get("datname"),
                 "idle_in_tx / session > 30%");
 
+            // Connection diagnostics details
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("connection_diag")
+                .addContext("database", r.get("datname"))
+                .addContext("idle_in_tx_ms", toLong(r.get("idle_ms")))
+                .addContext("session_ms", toLong(r.get("session_ms")))
+                .addContext("idle_pct", r.get("idle_pct"))
+                .build();
+
             alertRepo.upsert(alertKey, AlertCode.IDLE_IN_TX_TIME_HIGH,
                 toLong(r.get("instance_pk")), null, null,
-                rendered[0], rendered[1], null);
+                rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
@@ -375,9 +408,18 @@ public class ActionableAlertEvaluator {
                 "Inactive slot: " + r.get("slot_name"),
                 "1h inactive, lag > 1GB");
 
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("usage_summary")
+                .addContext("slot_name", r.get("slot_name"))
+                .addContext("slot_type", r.get("slot_type"))
+                .addContext("slot_lag_bytes", toLong(r.get("slot_lag_bytes")))
+                .addContext("slot_lag_human", humanBytes(toLong(r.get("slot_lag_bytes"))))
+                .addContext("wal_status", r.get("wal_status"))
+                .build();
+
             alertRepo.upsert(alertKey, AlertCode.REPLICATION_SLOT_INACTIVE,
                 toLong(r.get("instance_pk")), null, null,
-                rendered[0], rendered[1], null);
+                rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;

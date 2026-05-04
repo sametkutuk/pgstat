@@ -72,7 +72,18 @@ public class AlertService {
                                    Map<String, Object> ctx,
                                    String fallbackTitle, String fallbackMessage) {
         String[] rendered = renderTemplate(code, ctx, fallbackTitle, fallbackMessage);
-        raiseInstanceAlert(code, instancePk, null, null, rendered[0], rendered[1], null);
+
+        // details_json: context bilgilerini kaydet (UI'da gösterilir)
+        String detailsJson = null;
+        if (ctx != null && !ctx.isEmpty()) {
+            AlertDetailsBuilder details = new AlertDetailsBuilder().setKind("usage_summary");
+            ctx.forEach((k, v) -> {
+                if (v != null && !"severity".equals(k)) details.addContext(k, v);
+            });
+            detailsJson = details.build();
+        }
+
+        raiseInstanceAlert(code, instancePk, null, null, rendered[0], rendered[1], detailsJson);
     }
 
     /**
@@ -134,8 +145,19 @@ public class AlertService {
 
         String alertKey = code.getCode() + ":" + code.getSourceComponent() + ":global";
         String[] rendered = renderTemplate(code, ctx, fallbackTitle, fallbackMessage);
+
+        // details_json: job context bilgilerini kaydet
+        String detailsJson = null;
+        if (ctx != null && !ctx.isEmpty()) {
+            AlertDetailsBuilder details = new AlertDetailsBuilder().setKind("usage_summary");
+            ctx.forEach((k, v) -> {
+                if (v != null && !"severity".equals(k)) details.addContext(k, v);
+            });
+            detailsJson = details.build();
+        }
+
         try {
-            alertRepo.upsert(alertKey, code, null, null, null, rendered[0], rendered[1], null);
+            alertRepo.upsert(alertKey, code, null, null, null, rendered[0], rendered[1], detailsJson);
             log.debug("Job alert olusturuldu: {} — {}", alertKey, rendered[0]);
         } catch (Exception e) {
             log.error("Job alert yazma hatasi: {} — {}", alertKey, e.getMessage());

@@ -192,8 +192,18 @@ public class BootstrapHandler {
         } catch (Exception e) {
             log.debug("Alert template render hatasi code={}: {}", code.getCode(), e.getMessage());
         }
+
+        // details_json: hata bilgisi ve instance context'i
+        String detailsJson = new com.pgstat.collector.service.AlertDetailsBuilder()
+            .setKind("data_quality")
+            .addContext("instance_id", instance.instanceId())
+            .addContext("host", instance.host() + ":" + instance.port())
+            .addContext("bootstrap_state", instance.bootstrapState())
+            .addContext("error", ctx.get("error_message"))
+            .build();
+
         alertRepo.upsert(alertKey, code, instance.instancePk(),
-                null, null, title, message, null);
+                null, null, title, message, detailsJson);
     }
 
     /** Tum alert'ler icin ortak instance context'i. */

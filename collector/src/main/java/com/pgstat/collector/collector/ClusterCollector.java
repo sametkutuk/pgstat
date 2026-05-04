@@ -104,7 +104,18 @@ public class ClusterCollector {
             title = rendered[0];
             message = rendered[1];
         } catch (Exception ignore) {}
-        alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, null);
+
+        // details_json: context bilgilerini kaydet (UI'da gösterilir)
+        com.pgstat.collector.service.AlertDetailsBuilder details =
+            new com.pgstat.collector.service.AlertDetailsBuilder()
+                .setKind("usage_summary");
+        if (ctx != null) {
+            ctx.forEach((k, v) -> {
+                if (v != null && !"severity".equals(k)) details.addContext(k, v);
+            });
+        }
+
+        alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, details.build());
     }
 
     /**
