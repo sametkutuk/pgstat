@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 /**
  * Instance Sağlık Raporu sayfası.
@@ -124,6 +124,68 @@ export default function HealthReport() {
                             <Tooltip formatter={(v: number) => [v.toLocaleString(), 'TPS']} />
                             <Bar dataKey="tps" fill="#3B82F6" radius={[3, 3, 0, 0]} />
                         </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+
+            {/* Günlük Max Bağlantı Trendi */}
+            {report.trends?.connection_daily?.length > 0 && (
+                <div className="bg-white border border-[#E2E8F0] rounded-lg p-5 mb-5">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük Max Bağlantı</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                        <LineChart data={report.trends.connection_daily.map((d: any) => ({
+                            day: new Date(d.day).toLocaleDateString('tr-TR', { month: '2-digit', day: '2-digit' }),
+                            conn: Number(d.max_connections),
+                        }))}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 11 }} />
+                            <Tooltip formatter={(v: number) => [v.toLocaleString(), 'Max Bağlantı']} />
+                            <Line type="monotone" dataKey="conn" stroke="#8B5CF6" strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+
+            {/* Günlük WAL Üretimi */}
+            {report.trends?.wal_daily?.length > 0 && (
+                <div className="bg-white border border-[#E2E8F0] rounded-lg p-5 mb-5">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük WAL Üretimi</h3>
+                    <ResponsiveContainer width="100%" height={200}>
+                        <BarChart data={report.trends.wal_daily.map((d: any) => {
+                            const mb = Number(d.wal_mb);
+                            return {
+                                day: new Date(d.day).toLocaleDateString('tr-TR', { month: '2-digit', day: '2-digit' }),
+                                wal: mb >= 1024 ? +(mb / 1024).toFixed(2) : mb,
+                                unit: mb >= 1024 ? 'GB' : 'MB',
+                            };
+                        })}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 11 }} />
+                            <Tooltip formatter={(v: number, _: any, entry: any) => [`${v} ${entry.payload.unit}`, 'WAL']} />
+                            <Bar dataKey="wal" fill="#F59E0B" radius={[3, 3, 0, 0]} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            )}
+
+            {/* CPU Proxy (Active Time / Session Time) */}
+            {report.trends?.cpu_proxy_daily?.length > 0 && (
+                <div className="bg-white border border-[#E2E8F0] rounded-lg p-5 mb-5">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">CPU Proxy — Active Time %</h3>
+                    <p className="text-xs text-[#94A3B8] mb-2">active_time / session_time oranı (PG14+)</p>
+                    <ResponsiveContainer width="100%" height={200}>
+                        <LineChart data={report.trends.cpu_proxy_daily.map((d: any) => ({
+                            day: new Date(d.day).toLocaleDateString('tr-TR', { month: '2-digit', day: '2-digit' }),
+                            pct: Number(d.active_pct) || 0,
+                        }))}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 11 }} domain={[0, 100]} unit="%" />
+                            <Tooltip formatter={(v: number) => [`${v}%`, 'Active %']} />
+                            <Line type="monotone" dataKey="pct" stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
                     </ResponsiveContainer>
                 </div>
             )}

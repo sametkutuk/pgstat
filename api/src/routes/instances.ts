@@ -574,7 +574,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     // Paralel sorgular — tüm metrikleri aynı anda çek
     const [
       instanceInfo, cacheHit, connections, tempFiles, deadlocks,
-      walProduction, openAlerts, tpsDaily, bloatTop, indexSuspect,
+      walProduction, openAlerts, tpsDaily, connectionDaily, walDaily, cpuProxyDaily, bloatTop, indexSuspect,
       unusedIndex, settings
     ] = await Promise.all([
       // Instance bilgisi
@@ -618,9 +618,30 @@ router.get('/:id/health-report', async (req, res, next) => {
         group by severity`, [id]),
 
       // Günlük TPS trendi (son N gün)
-      pool.query(`select date_trunc('day', sample_ts)::date as day,
+      safeQuery(`select date_trunc('day', sample_ts)::date as day,
         sum(xact_commit_delta + xact_rollback_delta) as total_xact,
         round(sum(xact_commit_delta + xact_rollback_delta)::numeric / 86400) as avg_tps
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - make_interval(days => $2)
+        group by 1 order by 1`, [id, days]),
+
+      // Günlük max bağlantı trendi
+      safeQuery(`select date_trunc('day', sample_ts)::date as day,
+        max(numbackends) as max_connections
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - make_interval(days => $2)
+        group by 1 order by 1`, [id, days]),
+
+      // Günlük WAL üretimi (MB cinsinden)
+      safeQuery(`select date_trunc('day', sample_ts)::date as day,
+        round(sum(period_wal_size_byte)::numeric / 1048576, 1) as wal_mb
+        from fact.pg_wal_snapshot where instance_pk = $1
+        and sample_ts > now() - make_interval(days => $2)
+        group by 1 order by 1`, [id, days]),
+
+      // CPU proxy: active_time / session_time (PG14+, graceful null for older)
+      safeQuery(`select date_trunc('day', sample_ts)::date as day,
+        round(100.0 * sum(active_time_ms_delta)::numeric / nullif(sum(session_time_ms_delta), 0), 1) as active_pct
         from fact.pg_database_delta where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
         group by 1 order by 1`, [id, days]),
@@ -716,6 +737,9 @@ router.get('/:id/health-report', async (req, res, next) => {
       checks,
       trends: {
         tps_daily: tpsDaily.rows,
+        connection_daily: connectionDaily.rows,
+        wal_daily: walDaily.rows,
+        cpu_proxy_daily: cpuProxyDaily.rows,
         bloat_top: bloatTop.rows,
       },
       settings: settings.rows,
