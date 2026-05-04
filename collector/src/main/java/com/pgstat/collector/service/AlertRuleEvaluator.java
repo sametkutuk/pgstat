@@ -445,50 +445,25 @@ public class AlertRuleEvaluator {
                 workMemRow != null ? workMemRow.get("unit") : null,
                 humanBytes(currentWorkMemBytes));
 
-            List<Map<String, Object>> topQueries = jdbc.queryForList("""
-                with top_window as (
-                  select
-                    d.statement_series_id,
-                    ss.queryid,
-                    left(qt.query_text, 300) as query_text,
-                    dbr.datname,
-                    rr.rolname,
-                    sum(coalesce(d.temp_blks_written_delta, 0)) as temp_blks,
-                    sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 as temp_bytes,
-                    sum(coalesce(d.calls_delta, 0)) as calls_window,
-                    sum(coalesce(d.total_exec_time_ms_delta, 0)) as exec_ms_window
-                  from fact.pgss_delta d
-                  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
-                  left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-                  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
-                  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
-                  where d.instance_pk = ?
-                    and d.sample_ts >= now() - ?::interval
-                    and coalesce(d.temp_blks_written_delta, 0) > 0
-                  group by d.statement_series_id, ss.queryid, qt.query_text, dbr.datname, rr.rolname
-                  order by sum(coalesce(d.temp_blks_written_delta, 0)) desc
-                  limit 5
-                )
-                select
-                  t.*,
-                  round(t.temp_bytes::numeric / nullif(t.calls_window, 0), 0) as avg_temp_bytes_per_call,
-                  h.calls_7d,
-                  h.calls_28d,
-                  h.active_days_28d,
-                  h.last_seen_at
-                from top_window t
-                left join lateral (
-                  select
-                    coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '7 days'), 0) as calls_7d,
-                    coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '28 days'), 0) as calls_28d,
-                    count(distinct date_trunc('day', d.sample_ts)) filter (where d.sample_ts >= now() - interval '28 days') as active_days_28d,
-                    max(d.sample_ts) as last_seen_at
-                  from fact.pgss_delta d
-                  where d.statement_series_id = t.statement_series_id
-                    and d.sample_ts >= now() - interval '28 days'
-                ) h on true
-                order by t.temp_bytes desc
-                """, instancePk, windowMinutes + " minutes");
+            // Fallback pencere: 15 dk'da boşsa 60 dk, sonra 1440 dk dene.
+            // Sebep: pgss collection ~5 dk frekansta, statement-level temp attribution
+            // gecikmeli/kayıp olabilir (FETCH/cursor, ilk sample baseline). Database-level
+            // temp_files alert tetiklendi ama statement detayı henüz pgss_delta'ya gelmemiş
+            // olabilir — bu durumda kullanıcıya hiç sorgu göstermemek yerine genişletilmiş
+            // pencereden top 5 sorguyu göstermek daha aksiyon-odaklı.
+            int actualWindow = windowMinutes;
+            boolean windowExtended = false;
+            List<Map<String, Object>> topQueries = fetchTopTempQueries(instancePk, actualWindow);
+            if (topQueries.isEmpty() && windowMinutes < 60) {
+                actualWindow = 60;
+                topQueries = fetchTopTempQueries(instancePk, actualWindow);
+                windowExtended = !topQueries.isEmpty();
+            }
+            if (topQueries.isEmpty() && actualWindow < 1440) {
+                actualWindow = 1440;
+                topQueries = fetchTopTempQueries(instancePk, actualWindow);
+                windowExtended = !topQueries.isEmpty();
+            }
 
             long totalTempBytes = 0;
             long totalTempBlks = 0;
@@ -505,9 +480,15 @@ public class AlertRuleEvaluator {
             long suggestedWorkMemBytes = parseWorkMemText(suggestedWorkMem, currentWorkMemBytes);
 
             StringBuilder summary = new StringBuilder();
-            summary.append("🔎 **Temp üreten sorgular (son ").append(windowMinutes).append(" dk)**\n");
+            // Pencere genişletildi mi belirt — kullanıcı ana pencerede neden boş geldiğini bilsin
+            if (windowExtended) {
+                summary.append("🔎 **Temp üreten sorgular (son ").append(actualWindow).append(" dk — ana pencere ")
+                    .append(windowMinutes).append(" dk'da statement-level veri yoktu, genişletildi)**\n");
+            } else {
+                summary.append("🔎 **Temp üreten sorgular (son ").append(actualWindow).append(" dk)**\n");
+            }
             if (topQueries.isEmpty()) {
-                summary.append("• Sorgu bazlı temp blok verisi bulunamadı. `pg_stat_statements` temp blok metrikleri henüz dolmamış olabilir.\n");
+                summary.append("• Sorgu bazlı temp blok verisi bulunamadı (24 saat içinde de yok). `pg_stat_statements.temp_blks_written` toplaması yapılmamış veya FETCH/cursor gibi attribution-suz işlemler olabilir.\n");
             } else {
                 for (int i = 0; i < Math.min(3, topQueries.size()); i++) {
                     Map<String, Object> q = topQueries.get(i);
@@ -533,6 +514,8 @@ public class AlertRuleEvaluator {
             json.append(",\"critical_threshold\":").append(criticalThreshold);
             json.append(",\"sensitivity\":\"").append(sensitivity).append("\"");
             json.append(",\"window_minutes\":").append(windowMinutes);
+            json.append(",\"actual_window_minutes\":").append(actualWindow);
+            json.append(",\"window_extended\":").append(windowExtended);
             json.append(",\"work_mem\":\"").append(escapeJson(workMem)).append("\"");
             json.append(",\"work_mem_bytes\":").append(currentWorkMemBytes);
             json.append(",\"suggested_work_mem\":\"").append(escapeJson(suggestedWorkMem)).append("\"");
@@ -570,6 +553,59 @@ public class AlertRuleEvaluator {
             log.debug("Temp file detay hatasi instance={}: {}", instancePk, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Belirtilen pencerede temp_blks_written > 0 olan top 5 sorguyu döner.
+     * 28 günlük frekans bilgisi (calls_7d/28d/active_days) ile birlikte zenginleştirilir.
+     * Boş list dönerse pencere o aralıkta statement-level temp veri yok demektir —
+     * çağıran fallback pencere ile yeniden deneyebilir.
+     */
+    private List<Map<String, Object>> fetchTopTempQueries(long instancePk, int windowMinutes) {
+        return jdbc.queryForList("""
+            with top_window as (
+              select
+                d.statement_series_id,
+                ss.queryid,
+                left(qt.query_text, 300) as query_text,
+                dbr.datname,
+                rr.rolname,
+                sum(coalesce(d.temp_blks_written_delta, 0)) as temp_blks,
+                sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 as temp_bytes,
+                sum(coalesce(d.calls_delta, 0)) as calls_window,
+                sum(coalesce(d.total_exec_time_ms_delta, 0)) as exec_ms_window
+              from fact.pgss_delta d
+              join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+              left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+              left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+              left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+              where d.instance_pk = ?
+                and d.sample_ts >= now() - ((? || ' minutes')::interval)
+                and coalesce(d.temp_blks_written_delta, 0) > 0
+              group by d.statement_series_id, ss.queryid, qt.query_text, dbr.datname, rr.rolname
+              order by sum(coalesce(d.temp_blks_written_delta, 0)) desc
+              limit 5
+            )
+            select
+              t.*,
+              round(t.temp_bytes::numeric / nullif(t.calls_window, 0), 0) as avg_temp_bytes_per_call,
+              h.calls_7d,
+              h.calls_28d,
+              h.active_days_28d,
+              h.last_seen_at
+            from top_window t
+            left join lateral (
+              select
+                coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '7 days'), 0) as calls_7d,
+                coalesce(sum(d.calls_delta) filter (where d.sample_ts >= now() - interval '28 days'), 0) as calls_28d,
+                count(distinct date_trunc('day', d.sample_ts)) filter (where d.sample_ts >= now() - interval '28 days') as active_days_28d,
+                max(d.sample_ts) as last_seen_at
+              from fact.pgss_delta d
+              where d.statement_series_id = t.statement_series_id
+                and d.sample_ts >= now() - interval '28 days'
+            ) h on true
+            order by t.temp_bytes desc
+            """, instancePk, String.valueOf(windowMinutes));
     }
 
     private String topQueriesText(List<Map<String, Object>> topQueries) {
