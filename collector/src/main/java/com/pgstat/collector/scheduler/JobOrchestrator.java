@@ -68,6 +68,7 @@ public class JobOrchestrator {
     private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final com.pgstat.collector.service.ReportGenerator reportGenerator;
 
     // Rolling alert evaluation — 15 dakikada bir (temp files, idle in tx, inactive slot)
     // Her 5 saniyede calistirmak gereksiz yuk, 15dk yeterli.
@@ -94,7 +95,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.PgssResetTracker resetTracker,
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
                            com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
-                           org.springframework.jdbc.core.JdbcTemplate jdbc) {
+                           org.springframework.jdbc.core.JdbcTemplate jdbc,
+                           com.pgstat.collector.service.ReportGenerator reportGenerator) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -116,6 +118,7 @@ public class JobOrchestrator {
         this.nightlySnapshotCollector = nightlySnapshotCollector;
         this.actionableAlertEvaluator = actionableAlertEvaluator;
         this.jdbc = jdbc;
+        this.reportGenerator = reportGenerator;
     }
 
     /**
@@ -510,6 +513,19 @@ public class JobOrchestrator {
             // 3e. Aksiyon-odakli gunluk alert'ler (INDEX_SUSPECT, INDEX_UNUSED)
             // Artik snapshot tamamlandiktan hemen sonra calisir (yukarida).
             // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
+
+            // 3f. Gunluk rapor — UTC 06:00 (TR 09:00), is gunu basinda
+            if (currentUtcHour == 6) {
+                try {
+                    reportGenerator.generateAndSendDailyReport();
+                    // Pazartesi ise haftalik rapor da gonder
+                    if (java.time.LocalDate.now(java.time.ZoneOffset.UTC).getDayOfWeek() == java.time.DayOfWeek.MONDAY) {
+                        reportGenerator.generateAndSendWeeklyReport();
+                    }
+                } catch (Exception e) {
+                    log.warn("Rapor gonderim hatasi: {}", e.getMessage());
+                }
+            }
 
             // 4. Alert kurallarini degerlendir (user-defined rules — her cycle)
             alertRuleEvaluator.evaluate();

@@ -385,6 +385,24 @@ public class NotificationService {
     // =========================================================================
     // Yardımcı metodlar
     // =========================================================================
+    // Rapor gonderimi (gunluk/haftalik)
+    // =========================================================================
+
+    /**
+     * Rapor metnini belirtilen kanal tipine gonderir.
+     * Alert bildiriminden farkli: severity yok, sadece baslik + body.
+     */
+    public void sendReport(String channelType, String configJson, String title, String body) {
+        switch (channelType) {
+            case "email"    -> sendEmail(configJson, title, body, "info");
+            case "teams"    -> sendTeams(configJson, title, body, "info");
+            case "telegram" -> sendTelegram(configJson, title, body, "info");
+            case "webhook"  -> sendWebhook(configJson, 0, "info", null, title, body);
+            default -> log.debug("Rapor gonderimi desteklenmeyen kanal: {}", channelType);
+        }
+    }
+
+    // =========================================================================
 
     private void postWebhook(String url, String jsonPayload) {
         try {
