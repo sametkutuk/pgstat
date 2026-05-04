@@ -653,7 +653,7 @@ router.get('/:id/health-report', async (req, res, next) => {
 
       // CPU proxy: active_time / session_time (PG14+, session_time > 0 olan günler)
       safeQuery(`select date_trunc('day', sample_ts)::date as day,
-        round(100.0 * sum(active_time_ms_delta)::numeric / nullif(sum(session_time_ms_delta), 0), 1) as active_pct
+        round((100.0 * sum(active_time_ms_delta) / nullif(sum(session_time_ms_delta), 0))::numeric, 1) as active_pct
         from fact.pg_database_delta where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
         group by 1
