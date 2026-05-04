@@ -565,6 +565,12 @@ router.get('/:id/health-report', async (req, res, next) => {
     const { id } = req.params;
     const days = parseInt(req.query.days as string) || 7;
 
+    // Yardımcı: sorgu hatası olursa boş sonuç dön (500 yerine graceful)
+    const safeQuery = async (sql: string, params: any[] = []) => {
+      try { return await pool.query(sql, params); }
+      catch (e) { return { rows: [] }; }
+    };
+
     // Paralel sorgular — tüm metrikleri aynı anda çek
     const [
       instanceInfo, cacheHit, connections, tempFiles, deadlocks,
@@ -572,7 +578,7 @@ router.get('/:id/health-report', async (req, res, next) => {
       unusedIndex, settings
     ] = await Promise.all([
       // Instance bilgisi
-      pool.query(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
+      safeQuery(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
         from control.instance_inventory i
         left join control.instance_capability c on c.instance_pk = i.instance_pk
         left join control.instance_state s on s.instance_pk = i.instance_pk
