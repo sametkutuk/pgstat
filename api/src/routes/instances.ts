@@ -30,66 +30,38 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// GET /api/instances/storage-summary — Collector DB'de instance bazli gerçek disk kullanimi
+// GET /api/instances/storage-summary — Her instance için gerçek disk kullanımı
 router.get('/storage-summary', async (_req, res, next) => {
   try {
-    // Her ana fact tablosu için: pg_total_relation_size * (instance satır sayısı / toplam satır)
-    // Bu index + TOAST + overhead dahil gerçek disk kullanımını verir
-    const result = await pool.query(`
-      with table_stats as (
-        -- Her tablo için toplam disk boyutu ve instance bazlı satır dağılımı
-        select instance_pk, sum(disk_bytes) as total_bytes, sum(row_count) as total_rows
-        from (
-          select d.instance_pk, count(*) as row_count,
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_database_delta'::regclass))::bigint as disk_bytes
-          from fact.pg_database_delta d group by d.instance_pk
-          union all
-          select d.instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pgss_delta'::regclass))::bigint
-          from fact.pgss_delta d group by d.instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_table_stat_delta'::regclass))::bigint
-          from fact.pg_table_stat_delta group by instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_index_stat_delta'::regclass))::bigint
-          from fact.pg_index_stat_delta group by instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_cluster_delta'::regclass))::bigint
-          from fact.pg_cluster_delta group by instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_activity_snapshot'::regclass))::bigint
-          from fact.pg_activity_snapshot group by instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_wal_snapshot'::regclass))::bigint
-          from fact.pg_wal_snapshot group by instance_pk
-          union all
-          select instance_pk, count(*),
-            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
-              * pg_total_relation_size('fact.pg_lock_snapshot'::regclass))::bigint
-          from fact.pg_lock_snapshot group by instance_pk
-        ) sub
-        group by instance_pk
-      )
-      select
-        instance_pk,
-        total_rows as collector_rows,
-        total_bytes as collector_bytes,
-        pg_database_size(current_database())::bigint as collector_db_bytes
-      from table_stats
-    `);
-    res.json(result.rows);
+    // Tüm instance'ları al
+    const instances = await pool.query('select instance_pk from control.instance_inventory');
+
+    // Her instance için aynı detay sorgusunu çalıştır (paralel)
+    const results = await Promise.all(
+      instances.rows.map(async (inst: any) => {
+        try {
+          const r = await pool.query(`
+            with storage_usage as (${collectorStorageUnionSql()}),
+            filtered as (select * from storage_usage where instance_pk = $1)
+            select
+              coalesce(sum(row_count), 0)::bigint as collector_rows,
+              coalesce(sum(data_bytes), 0)::bigint as collector_bytes
+            from filtered
+          `, [inst.instance_pk]);
+          return {
+            instance_pk: inst.instance_pk,
+            collector_rows: r.rows[0]?.collector_rows || '0',
+            collector_bytes: r.rows[0]?.collector_bytes || '0',
+          };
+        } catch { return { instance_pk: inst.instance_pk, collector_rows: '0', collector_bytes: '0' }; }
+      })
+    );
+
+    // Toplam DB boyutu
+    const dbSize = await pool.query('select pg_database_size(current_database())::bigint as db_bytes');
+    const collector_db_bytes = dbSize.rows[0]?.db_bytes || '0';
+
+    res.json(results.map(r => ({ ...r, collector_db_bytes })));
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
     res.json([]);
