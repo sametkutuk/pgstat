@@ -30,25 +30,64 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// GET /api/instances/storage-summary — Collector DB'de instance bazli gerçek veri kullanimi
+// GET /api/instances/storage-summary — Collector DB'de instance bazli gerçek disk kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
   try {
+    // Her ana fact tablosu için: pg_total_relation_size * (instance satır sayısı / toplam satır)
+    // Bu index + TOAST + overhead dahil gerçek disk kullanımını verir
     const result = await pool.query(`
-      with storage_usage as (${collectorStorageUnionSql()}),
-      per_instance as (
-        select
-          instance_pk,
-          sum(row_count)::bigint as collector_rows,
-          sum(data_bytes)::bigint as collector_bytes
-        from storage_usage
+      with table_stats as (
+        -- Her tablo için toplam disk boyutu ve instance bazlı satır dağılımı
+        select instance_pk, sum(disk_bytes) as total_bytes, sum(row_count) as total_rows
+        from (
+          select d.instance_pk, count(*) as row_count,
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_database_delta'::regclass))::bigint as disk_bytes
+          from fact.pg_database_delta d group by d.instance_pk
+          union all
+          select d.instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pgss_delta'::regclass))::bigint
+          from fact.pgss_delta d group by d.instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_table_stat_delta'::regclass))::bigint
+          from fact.pg_table_stat_delta group by instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_index_stat_delta'::regclass))::bigint
+          from fact.pg_index_stat_delta group by instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_cluster_delta'::regclass))::bigint
+          from fact.pg_cluster_delta group by instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_activity_snapshot'::regclass))::bigint
+          from fact.pg_activity_snapshot group by instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_wal_snapshot'::regclass))::bigint
+          from fact.pg_wal_snapshot group by instance_pk
+          union all
+          select instance_pk, count(*),
+            (count(*)::double precision / nullif(sum(count(*)) over(), 0)
+              * pg_total_relation_size('fact.pg_lock_snapshot'::regclass))::bigint
+          from fact.pg_lock_snapshot group by instance_pk
+        ) sub
         group by instance_pk
       )
       select
         instance_pk,
-        collector_rows,
-        collector_bytes,
-        (select sum(collector_bytes) from per_instance)::bigint as collector_db_bytes
-      from per_instance
+        total_rows as collector_rows,
+        total_bytes as collector_bytes,
+        pg_database_size(current_database())::bigint as collector_db_bytes
+      from table_stats
     `);
     res.json(result.rows);
   } catch (err: any) {
