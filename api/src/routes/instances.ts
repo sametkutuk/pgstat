@@ -33,46 +33,37 @@ router.get('/', async (req, res, next) => {
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
   try {
-    // Hafif sorgu: ana fact tablolarından satır sayısı + ortalama satır boyutu ile tahmini boyut
+    // Yaklaşık boyut: pg_class istatistiklerinden partition boyutları + instance_pk bazlı dağılım
+    // Önce toplam DB boyutunu ve instance başına oranı hesapla
     const result = await pool.query(`
-      with instance_rows as (
-        select instance_pk,
-          sum(row_count)::bigint as total_rows,
-          sum(estimated_bytes)::bigint as total_bytes
-        from (
-          select instance_pk, count(*) as row_count, count(*) * 200 as estimated_bytes
-          from fact.pg_database_delta group by instance_pk
-          union all
-          select d.instance_pk, count(*), count(*) * 300
-          from fact.pgss_delta d group by d.instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 180
-          from fact.pg_table_stat_delta group by instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 150
-          from fact.pg_index_stat_delta group by instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 120
-          from fact.pg_cluster_delta group by instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 80
-          from fact.pg_wal_snapshot group by instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 250
-          from fact.pg_activity_snapshot group by instance_pk
-          union all
-          select instance_pk, count(*), count(*) * 100
-          from fact.pg_lock_snapshot group by instance_pk
-        ) sub
-        group by instance_pk
+      with fact_sizes as (
+        -- Tüm fact.* tablolarının (partition dahil) toplam boyutu
+        select
+          sum(pg_total_relation_size(c.oid))::bigint as total_fact_bytes
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'fact' and c.relkind = 'r'
+      ),
+      instance_rows as (
+        -- Ana 3 tablodan instance bazlı satır sayısı (hızlı count)
+        select instance_pk, count(*) as rcount
+        from fact.pg_database_delta group by instance_pk
+      ),
+      total_rows as (
+        select coalesce(sum(rcount), 1) as total from instance_rows
       )
       select
         i.instance_pk,
         i.display_name,
-        coalesce(ir.total_rows, 0)::bigint as collector_rows,
-        coalesce(ir.total_bytes, 0)::bigint as collector_bytes,
+        coalesce(ir.rcount, 0)::bigint as collector_rows,
+        coalesce(
+          (ir.rcount::double precision / tr.total * fs.total_fact_bytes)::bigint,
+          0
+        ) as collector_bytes,
         pg_database_size(current_database())::bigint as collector_db_bytes
       from control.instance_inventory i
+      cross join fact_sizes fs
+      cross join total_rows tr
       left join instance_rows ir on ir.instance_pk = i.instance_pk
       order by collector_bytes desc nulls last
     `);
