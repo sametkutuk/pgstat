@@ -43,6 +43,7 @@ router.get('/storage-summary', async (_req, res, next) => {
       from storage_usage
       group by instance_pk
     `);
+    console.log('[storage-summary] rows:', result.rows.length, result.rows.slice(0, 2));
     res.json(result.rows);
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
