@@ -235,22 +235,66 @@ function AlertDetails({ details }: { details: any }) {
     const hasRecords = records.length > 0;
     const reason = details.reason || '';
     const isSpike = reason.includes('spike') || details.spiking_queries;
-    const isTempFiles = details.kind === 'temp_files';
+    const kind = details.kind || '';
+    const ctx = details.context || {};
 
     return (
         <div className="space-y-3 mt-2">
-            {isTempFiles && (
+            {/* Kind-based context panelleri */}
+            {kind === 'temp_files' && (
                 <div className="bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-3">
-                    <div className="text-xs font-semibold text-[#92400E] mb-2">Temp File Kok Neden</div>
+                    <div className="text-xs font-semibold text-[#92400E] mb-2">Temp File Kök Neden</div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                        <Metric label="Mevcut work_mem" value={details.work_mem || '-'} />
-                        <Metric label="Oneri" value={details.suggested_work_mem || '-'} strong />
-                        <Metric label="Maks temp/call" value={fmtBytes(details.max_temp_bytes_per_call)} />
-                        <Metric label="Top temp" value={fmtBytes(details.total_temp_bytes_top_queries)} />
+                        <Metric label="Mevcut work_mem" value={ctx.work_mem || details.work_mem || '-'} />
+                        <Metric label="Öneri" value={ctx.suggested_work_mem || details.suggested_work_mem || '-'} strong />
+                        <Metric label="Temp files/saat" value={ctx.temp_files || '-'} />
+                        <Metric label="Temp bytes" value={fmtBytes(ctx.temp_bytes || details.total_temp_bytes_top_queries)} />
                     </div>
-                    <p className="mt-2 text-[11px] text-[#92400E]">
-                        work_mem her connection ve her sort/hash node icin ayri tuketilir; oneriyi global uygulamadan once sorgu plani da incelenmeli.
-                    </p>
+                </div>
+            )}
+            {kind === 'connection_diag' && (
+                <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#1E40AF] mb-2">Bağlantı Teşhisi</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <Metric label="Aktif" value={ctx.active_count || '-'} />
+                        <Metric label="Idle" value={ctx.idle_count || '-'} />
+                        <Metric label="Idle in Tx" value={ctx.idle_in_tx_count || '-'} />
+                        <Metric label="Max Connections" value={ctx.max_connections || '-'} />
+                        <Metric label="Kullanım %" value={ctx.usage_pct ? ctx.usage_pct + '%' : '-'} strong />
+                        <Metric label="En uzun sorgu" value={ctx.longest_query_seconds ? ctx.longest_query_seconds + 's' : '-'} />
+                    </div>
+                </div>
+            )}
+            {kind === 'usage_summary' && (
+                <div className="bg-[#F0FDF4] border border-[#BBF7D0] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#166534] mb-2">Kullanım Özeti</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        {Object.entries(ctx).map(([k, v]) => (
+                            <Metric key={k} label={k.replace(/_/g, ' ')} value={String(v ?? '-')} />
+                        ))}
+                    </div>
+                </div>
+            )}
+            {kind === 'data_quality' && (
+                <div className="bg-[#FEF2F2] border border-[#FECACA] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#991B1B] mb-2">Veri Kalitesi</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <Metric label="Son başarılı toplama" value={ctx.last_success || '-'} />
+                        <Metric label="Gecikme" value={ctx.stale_duration || '-'} strong />
+                        <Metric label="Ardışık hata" value={ctx.consecutive_failures || '-'} />
+                        <Metric label="Son hata" value={ctx.last_error || '-'} />
+                    </div>
+                </div>
+            )}
+            {/* Genel context (kind tanımlı ama özel panel yoksa) */}
+            {kind && !['temp_files', 'connection_diag', 'usage_summary', 'data_quality'].includes(kind) && Object.keys(ctx).length > 0 && (
+                <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3">
+                    <div className="text-xs font-semibold text-[#475569] mb-2">Detay</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        {Object.entries(ctx).map(([k, v]) => (
+                            <Metric key={k} label={k.replace(/_/g, ' ')} value={String(v ?? '-')} />
+                        ))}
+                    </div>
                 </div>
             )}
             {/* Baseline bilgisi */}
@@ -416,4 +460,25 @@ function hasPrevVal(records: any[]): boolean {
 /** Records listesinde change_pct alanı var mı? */
 function hasChangePct(records: any[]): boolean {
     return records.some(r => r.change_pct != null);
+}
+
+/** Küçük metrik kartı — AlertDetails kind panellerinde kullanılır */
+function Metric({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+    return (
+        <div>
+            <span className="text-[#64748B]">{label}: </span>
+            <span className={`font-mono ${strong ? 'font-semibold text-[#1E293B]' : 'text-[#1E293B]'}`}>{value}</span>
+        </div>
+    );
+}
+
+/** Byte değerini okunabilir formata çevirir */
+function fmtBytes(val: any): string {
+    if (val == null || val === 0) return '-';
+    const n = Number(val);
+    if (isNaN(n)) return String(val);
+    if (n >= 1_073_741_824) return (n / 1_073_741_824).toFixed(1) + ' GB';
+    if (n >= 1_048_576) return (n / 1_048_576).toFixed(1) + ' MB';
+    if (n >= 1_024) return (n / 1_024).toFixed(1) + ' KB';
+    return n + ' B';
 }

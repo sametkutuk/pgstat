@@ -69,6 +69,11 @@ public class JobOrchestrator {
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
+    // Rolling alert evaluation — 15 dakikada bir (temp files, idle in tx, inactive slot)
+    // Her 5 saniyede calistirmak gereksiz yuk, 15dk yeterli.
+    private volatile long lastRollingEvalMs = 0;
+    private static final long ROLLING_EVAL_INTERVAL_MS = 15 * 60 * 1000; // 15 dakika
+
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
                            @Qualifier("collectorExecutor") Executor collectorExecutor,
@@ -506,12 +511,17 @@ public class JobOrchestrator {
             // Artik snapshot tamamlandiktan hemen sonra calisir (yukarida).
             // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
 
-            // 4. Alert kurallarini degerlendir
+            // 4. Alert kurallarini degerlendir (user-defined rules — her cycle)
             alertRuleEvaluator.evaluate();
 
-            // 4b. Anlik aksiyon-odakli alert'ler — her cycle'da
-            // (temp files, idle in tx, inactive slot gibi acil durumlar)
-            actionableAlertEvaluator.evaluateFrequent();
+            // 4b. Rolling alert'ler — 15 dakikada bir
+            // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
+            // Her 5s'de calistirmak gereksiz (1h pencere kullaniyorlar), 15dk yeterli.
+            long now = System.currentTimeMillis();
+            if (now - lastRollingEvalMs >= ROLLING_EVAL_INTERVAL_MS) {
+                lastRollingEvalMs = now;
+                actionableAlertEvaluator.evaluateFrequent();
+            }
 
             // 5. Purge evaluator — retention temizligi
             purgeEvaluator.evaluate();
