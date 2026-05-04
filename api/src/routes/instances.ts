@@ -30,38 +30,32 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-// GET /api/instances/storage-summary — Her instance için gerçek disk kullanımı
+// GET /api/instances/storage-summary — Instance bazlı disk kullanımı (oransal)
 router.get('/storage-summary', async (_req, res, next) => {
   try {
-    // Tüm instance'ları al
-    const instances = await pool.query('select instance_pk from control.instance_inventory');
-
-    // Her instance için aynı detay sorgusunu çalıştır (paralel)
-    const results = await Promise.all(
-      instances.rows.map(async (inst: any) => {
-        try {
-          const r = await pool.query(`
-            with storage_usage as (${collectorStorageUnionSql()}),
-            filtered as (select * from storage_usage where instance_pk = $1)
-            select
-              coalesce(sum(row_count), 0)::bigint as collector_rows,
-              coalesce(sum(data_bytes), 0)::bigint as collector_bytes
-            from filtered
-          `, [inst.instance_pk]);
-          return {
-            instance_pk: inst.instance_pk,
-            collector_rows: r.rows[0]?.collector_rows || '0',
-            collector_bytes: r.rows[0]?.collector_bytes || '0',
-          };
-        } catch { return { instance_pk: inst.instance_pk, collector_rows: '0', collector_bytes: '0' }; }
-      })
-    );
-
-    // Toplam DB boyutu
-    const dbSize = await pool.query('select pg_database_size(current_database())::bigint as db_bytes');
-    const collector_db_bytes = dbSize.rows[0]?.db_bytes || '0';
-
-    res.json(results.map(r => ({ ...r, collector_db_bytes })));
+    // pg_database_size * (instance satır oranı) — index+TOAST+overhead dahil
+    const result = await pool.query(`
+      with instance_rows as (
+        select instance_pk, count(*) as rcount
+        from fact.pg_database_delta
+        group by instance_pk
+      ),
+      total as (
+        select coalesce(nullif(sum(rcount), 0), 1) as total_rows from instance_rows
+      ),
+      db as (
+        select pg_database_size(current_database())::bigint as db_bytes
+      )
+      select
+        ir.instance_pk,
+        ir.rcount::bigint as collector_rows,
+        (ir.rcount::double precision / t.total_rows * d.db_bytes)::bigint as collector_bytes,
+        d.db_bytes as collector_db_bytes
+      from instance_rows ir
+      cross join total t
+      cross join db d
+    `);
+    res.json(result.rows);
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
     res.json([]);
