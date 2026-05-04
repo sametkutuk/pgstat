@@ -32,44 +32,26 @@ router.get('/', async (req, res, next) => {
 
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
+  const client = await pool.connect();
   try {
-    // Strateji: partitioned parent tabloların pg_total_relation_size (partition'lar dahil)
-    // + son 2 günlük pg_database_delta'dan instance oranı
-    const result = await pool.query(`
-      with fact_total as (
-        select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as total_bytes
-        from pg_class c
-        join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname in ('fact', 'agg', 'dim')
-          and c.relkind = 'p'
-      ),
-      recent_distribution as (
-        select instance_pk, count(*) as sample_rows
-        from fact.pg_database_delta
-        where sample_ts > now() - interval '2 days'
-        group by instance_pk
-      ),
-      total_sample as (
-        select coalesce(nullif(sum(sample_rows), 0), 1) as total from recent_distribution
-      )
+    await client.query("SET statement_timeout = '30s'");
+    const result = await client.query(`
+      with storage_usage as (${collectorStorageUnionSql()})
       select
-        i.instance_pk,
-        i.display_name,
-        coalesce(rd.sample_rows, 0)::bigint as collector_rows,
-        coalesce(
-          (rd.sample_rows::double precision / ts.total * ft.total_bytes)::bigint,
-          0
-        ) as collector_bytes,
-        ft.total_bytes as collector_db_bytes
-      from control.instance_inventory i
-      cross join fact_total ft
-      cross join total_sample ts
-      left join recent_distribution rd on rd.instance_pk = i.instance_pk
-      order by collector_bytes desc nulls last
+        instance_pk,
+        sum(row_count)::bigint as collector_rows,
+        sum(data_bytes)::bigint as collector_bytes,
+        pg_database_size(current_database())::bigint as collector_db_bytes
+      from storage_usage
+      group by instance_pk
     `);
     res.json(result.rows);
-  } catch (err) {
-    next(err);
+  } catch (err: any) {
+    console.error('[storage-summary] error:', err.message);
+    res.json([]);
+  } finally {
+    await client.query("RESET statement_timeout");
+    client.release();
   }
 });
 
