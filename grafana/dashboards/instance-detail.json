@@ -300,6 +300,29 @@
       "datasource": {"type": "postgres", "uid": "pgstat"},
       "fieldConfig": {"defaults": {"links": [{"title": "pgstat UI'da aç", "url": "/alerts/${__data.fields.alert_id}", "targetBlank": false}]}},
       "targets": [{"rawSql": "select alert_id, severity, alert_code, status, first_seen_at, last_seen_at, acknowledged_at, occurrence_count, left(title, 100) as title, left(message, 200) as message from ops.alert where instance_pk = $instance and status = 'open' order by severity, first_seen_at desc limit 50", "format": "table"}]
+    },
+    {
+      "id": 30,
+      "title": "CPU Proxy — Active Time % (PG14+, bugün vs dün vs geçen hafta vs geçen ay)",
+      "type": "timeseries",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 72},
+      "description": "active_time_ms_delta / session_time_ms_delta yüzdesi. Backend'lerin oturumda 'çalışır' durumda geçirdiği oranı verir — gerçek host CPU'su değil ama PostgreSQL iş yükünün proxy göstergesi. Sadece PG14+ instance'larda doludur (session_time alanı PG14'te eklendi).",
+      "datasource": {"type": "postgres", "uid": "pgstat"},
+      "fieldConfig": {
+        "defaults": {"unit": "percent", "min": 0, "max": 100, "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Bugün"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}, {"id": "custom.lineWidth", "value": 3}]},
+          {"matcher": {"id": "byName", "options": "Dün"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "orange"}}, {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10,10]}}]},
+          {"matcher": {"id": "byName", "options": "Geçen hafta"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}, {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [4,4]}}]},
+          {"matcher": {"id": "byName", "options": "Geçen ay"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "purple"}}, {"id": "custom.lineStyle", "value": {"fill": "dot", "dash": [2,4]}}]}
+        ]
+      },
+      "targets": [
+        {"refId": "A", "rawSql": "select $__timeGroup(sample_ts, $interval) as time, (100.0 * sum(active_time_ms_delta) / nullif(sum(session_time_ms_delta), 0))::numeric(5,2) as \"Bugün\" from fact.pg_database_delta where instance_pk = $instance and $__timeFilter(sample_ts) group by 1 having sum(session_time_ms_delta) > 0 order by 1", "format": "time_series"},
+        {"refId": "B", "rawSql": "select $__timeGroup(sample_ts + interval '1 day', $interval) as time, (100.0 * sum(active_time_ms_delta) / nullif(sum(session_time_ms_delta), 0))::numeric(5,2) as \"Dün\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '1 day' and $__timeTo()::timestamptz - interval '1 day' group by 1 having sum(session_time_ms_delta) > 0 order by 1", "format": "time_series"},
+        {"refId": "C", "rawSql": "select $__timeGroup(sample_ts + interval '7 days', $interval) as time, (100.0 * sum(active_time_ms_delta) / nullif(sum(session_time_ms_delta), 0))::numeric(5,2) as \"Geçen hafta\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '7 days' and $__timeTo()::timestamptz - interval '7 days' group by 1 having sum(session_time_ms_delta) > 0 order by 1", "format": "time_series"},
+        {"refId": "D", "rawSql": "select $__timeGroup(sample_ts + interval '30 days', $interval) as time, (100.0 * sum(active_time_ms_delta) / nullif(sum(session_time_ms_delta), 0))::numeric(5,2) as \"Geçen ay\" from fact.pg_database_delta where instance_pk = $instance and sample_ts between $__timeFrom()::timestamptz - interval '30 days' and $__timeTo()::timestamptz - interval '30 days' group by 1 having sum(session_time_ms_delta) > 0 order by 1", "format": "time_series"}
+      ]
     }
   ]
 }
