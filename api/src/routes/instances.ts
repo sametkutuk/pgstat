@@ -651,11 +651,16 @@ router.get('/:id/health-report', async (req, res, next) => {
         having coalesce(sum(idx_scan_delta), 0) = 0
       ) sub`, [id]),
 
-      // PG settings (son snapshot)
-      pool.query(`select setting_name, setting_value, unit from fact.pg_settings_snapshot
-        where instance_pk = $1 and snapshot_ts = (
+      // PG settings (son snapshot — sadece onemli parametreler)
+      safeQuery(`select setting_name, setting_value, unit from fact.pg_settings_snapshot
+        where instance_pk = $1
+        and setting_name in ('shared_buffers', 'effective_cache_size', 'work_mem', 'maintenance_work_mem',
+          'max_connections', 'max_wal_size', 'checkpoint_timeout', 'checkpoint_completion_target',
+          'autovacuum_max_workers', 'autovacuum_vacuum_scale_factor', 'random_page_cost')
+        and snapshot_ts = (
           select max(snapshot_ts) from fact.pg_settings_snapshot where instance_pk = $1
-        )`, [id]),
+        )
+        order by setting_name`, [id]),
     ]);
 
     const inst = instanceInfo.rows[0];
@@ -690,9 +695,9 @@ router.get('/:id/health-report', async (req, res, next) => {
       { section: 'Genel Durum', name: 'Bootstrap State', status: inst.bootstrap_state === 'ready' ? 'ok' : 'critical', value: inst.bootstrap_state },
       { section: 'Genel Durum', name: 'Cache Hit Ratio', status: cacheHitPct >= 99 ? 'ok' : cacheHitPct >= 95 ? 'warning' : 'critical', value: cacheHitPct + '%', threshold: '> 95%' },
       { section: 'Genel Durum', name: 'Bağlantı Kullanımı', status: connPct < 80 ? 'ok' : connPct < 90 ? 'warning' : 'critical', value: `${totalBackends}/${maxConnections} (${connPct}%)`, threshold: '< 80%' },
-      { section: 'Performans', name: 'Temp Files (24h)', status: tempFilesCount === 0 ? 'ok' : tempFilesCount < 100 ? 'warning' : 'critical', value: `${tempFilesCount} dosya` },
-      { section: 'Performans', name: 'Deadlock (24h)', status: deadlocksCount === 0 ? 'ok' : 'warning', value: String(deadlocksCount) },
-      { section: 'Depolama', name: 'WAL Üretimi (24h)', status: walBytes < 5_000_000_000 ? 'ok' : 'warning', value: formatBytes(walBytes) },
+      { section: 'Performans', name: 'Temp Files (son 24 saat)', status: tempFilesCount === 0 ? 'ok' : tempFilesCount < 100 ? 'warning' : 'critical', value: `${tempFilesCount} dosya` },
+      { section: 'Performans', name: 'Deadlock (son 24 saat)', status: deadlocksCount === 0 ? 'ok' : 'warning', value: String(deadlocksCount) },
+      { section: 'Depolama', name: 'WAL Üretimi (son 24 saat)', status: walBytes < 5_000_000_000 ? 'ok' : 'warning', value: formatBytes(walBytes) },
       { section: 'Index Sağlığı', name: 'Missing Index Suspect', status: missingIndexCount === 0 ? 'ok' : 'warning', value: `${missingIndexCount} tablo` },
       { section: 'Index Sağlığı', name: 'Unused Index', status: unusedIndexCount === 0 ? 'ok' : 'info', value: `${unusedIndexCount} index` },
       { section: 'Alert', name: 'Açık Alert', status: totalAlerts === 0 ? 'ok' : alertCounts.critical ? 'critical' : 'warning', value: `${totalAlerts} alert` },

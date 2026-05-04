@@ -521,20 +521,21 @@ public class ActionableAlertEvaluator {
               group by d.instance_pk
             ),
             max_conn as (
-              select instance_pk,
+              select distinct on (instance_pk)
+                     instance_pk,
                      nullif(setting_value, '')::integer as max_connections
               from fact.pg_settings_snapshot
               where setting_name = 'max_connections'
-                and snapshot_ts = (select max(snapshot_ts) from fact.pg_settings_snapshot
-                                   where setting_name = 'max_connections')
+              order by instance_pk, snapshot_ts desc
             )
             select c.instance_pk, i.display_name, c.total_backends,
-                   coalesce(m.max_connections, 100) as max_connections,
-                   round(100.0 * c.total_backends / nullif(coalesce(m.max_connections, 100), 0), 1) as usage_pct
+                   m.max_connections,
+                   round(100.0 * c.total_backends / nullif(m.max_connections, 0), 1) as usage_pct
             from conn_count c
             join control.instance_inventory i on i.instance_pk = c.instance_pk
-            left join max_conn m on m.instance_pk = c.instance_pk
-            where c.total_backends > coalesce(m.max_connections, 100) * 0.8
+            join max_conn m on m.instance_pk = c.instance_pk
+            where m.max_connections is not null
+              and c.total_backends > m.max_connections * 0.8
             """);
 
         int count = 0;
