@@ -102,7 +102,7 @@ export default function Instances() {
         { key: 'last_cluster_collect_at', header: 'Son Cluster', render: (r: Instance) => <TimeAgo date={r.last_cluster_collect_at} /> },
         {
             key: 'collector_bytes', header: 'Collector DB', render: (r: Instance) => {
-                const s = storageMap.get(r.instance_pk);
+                const s = storageMap.get(Number(r.instance_pk));
                 if (!s) return storage.isLoading ? 'Yükleniyor...' : '—';
                 const bytes = Number(s.collector_bytes || 0);
                 const total = Number(s.collector_db_bytes || 0);
