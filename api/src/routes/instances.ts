@@ -558,6 +558,163 @@ router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/:id/health-report — Anlık sağlık raporu
+// Tüm metrikleri tek seferde kontrol eder, checklist + trend verisi döner
+router.get('/:id/health-report', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const days = parseInt(req.query.days as string) || 7;
+
+    // Paralel sorgular — tüm metrikleri aynı anda çek
+    const [
+      instanceInfo, cacheHit, connections, tempFiles, deadlocks,
+      walProduction, openAlerts, tpsDaily, bloatTop, indexSuspect,
+      unusedIndex, settings
+    ] = await Promise.all([
+      // Instance bilgisi
+      pool.query(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
+        from control.instance_inventory i
+        left join control.instance_capability c on c.instance_pk = i.instance_pk
+        left join control.instance_state s on s.instance_pk = i.instance_pk
+        where i.instance_pk = $1`, [id]),
+
+      // Cache hit ratio (son 24h)
+      pool.query(`select round(100.0 * sum(blks_hit_delta)::numeric /
+        nullif(sum(blks_hit_delta + blks_read_delta), 0), 2) as cache_hit_pct
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - interval '24 hours'`, [id]),
+
+      // Bağlantı kullanımı (son snapshot)
+      pool.query(`select coalesce(sum(numbackends), 0) as total_backends
+        from fact.pg_database_delta d
+        where d.instance_pk = $1
+        and d.sample_ts = (select max(sample_ts) from fact.pg_database_delta where instance_pk = $1)`, [id]),
+
+      // Temp files (son 24h)
+      pool.query(`select coalesce(sum(temp_files_delta), 0) as temp_files,
+        coalesce(sum(temp_bytes_delta), 0) as temp_bytes
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - interval '24 hours'`, [id]),
+
+      // Deadlocks (son 24h)
+      pool.query(`select coalesce(sum(deadlocks_delta), 0) as deadlocks
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - interval '24 hours'`, [id]),
+
+      // WAL üretimi (son 24h)
+      pool.query(`select coalesce(sum(period_wal_size_byte), 0) as wal_bytes
+        from fact.pg_wal_snapshot where instance_pk = $1
+        and sample_ts > now() - interval '24 hours'`, [id]),
+
+      // Açık alert'ler
+      pool.query(`select severity, count(*) as cnt from ops.alert
+        where instance_pk = $1 and status = 'open'
+        group by severity`, [id]),
+
+      // Günlük TPS trendi (son N gün)
+      pool.query(`select date_trunc('day', sample_ts)::date as day,
+        sum(xact_commit_delta + xact_rollback_delta) as total_xact,
+        round(sum(xact_commit_delta + xact_rollback_delta)::numeric / 86400) as avg_tps
+        from fact.pg_database_delta where instance_pk = $1
+        and sample_ts > now() - make_interval(days => $2)
+        group by 1 order by 1`, [id, days]),
+
+      // Top bloat tabloları
+      pool.query(`with latest as (select max(sample_ts) as ts from fact.pg_table_stat_delta where instance_pk = $1)
+        select schemaname || '.' || relname as relation,
+        n_dead_tup_estimate as dead_tup, n_live_tup_estimate as live_tup,
+        round(100.0 * n_dead_tup_estimate::numeric / nullif(n_live_tup_estimate + n_dead_tup_estimate, 0), 1) as dead_pct
+        from fact.pg_table_stat_delta t join latest l on l.ts = t.sample_ts
+        where t.instance_pk = $1 and (n_live_tup_estimate + n_dead_tup_estimate) > 1000
+        order by dead_pct desc nulls last limit 5`, [id]),
+
+      // Missing index suspect sayısı
+      pool.query(`select count(*) as cnt from (
+        select 1 from fact.pg_table_stat_delta t
+        where t.instance_pk = $1 and t.sample_ts > now() - interval '24 hours'
+        group by t.schemaname, t.relname
+        having coalesce(sum(seq_scan_delta), 0) > coalesce(nullif(sum(idx_scan_delta), 0), 1) * 100
+        and coalesce(sum(seq_tup_read_delta), 0) > 100000
+      ) sub`, [id]),
+
+      // Unused index sayısı
+      pool.query(`select count(*) as cnt from (
+        select 1 from fact.pg_index_stat_delta i
+        where i.instance_pk = $1 and i.sample_ts > now() - interval '30 days'
+        group by i.schemaname, i.indexrelname
+        having coalesce(sum(idx_scan_delta), 0) = 0
+      ) sub`, [id]),
+
+      // PG settings (son snapshot)
+      pool.query(`select setting_name, setting_value, unit from fact.pg_settings_snapshot
+        where instance_pk = $1 and snapshot_ts = (
+          select max(snapshot_ts) from fact.pg_settings_snapshot where instance_pk = $1
+        )`, [id]),
+    ]);
+
+    const inst = instanceInfo.rows[0];
+    if (!inst) return res.status(404).json({ error: 'Instance bulunamadı' });
+
+    // max_connections settings'ten
+    const maxConn = settings.rows.find((s: any) => s.setting_name === 'max_connections');
+    const maxConnections = maxConn ? parseInt(maxConn.setting_value) : 200;
+    const totalBackends = parseInt(connections.rows[0]?.total_backends || '0');
+    const connPct = Math.round(100 * totalBackends / maxConnections);
+
+    const cacheHitPct = parseFloat(cacheHit.rows[0]?.cache_hit_pct || '0');
+    const tempFilesCount = parseInt(tempFiles.rows[0]?.temp_files || '0');
+    const tempBytesTotal = parseInt(tempFiles.rows[0]?.temp_bytes || '0');
+    const deadlocksCount = parseInt(deadlocks.rows[0]?.deadlocks || '0');
+    const walBytes = parseInt(walProduction.rows[0]?.wal_bytes || '0');
+    const missingIndexCount = parseInt(indexSuspect.rows[0]?.cnt || '0');
+    const unusedIndexCount = parseInt(unusedIndex.rows[0]?.cnt || '0');
+
+    // Alert sayıları
+    const alertCounts: Record<string, number> = {};
+    openAlerts.rows.forEach((r: any) => { alertCounts[r.severity] = parseInt(r.cnt); });
+    const totalAlerts = Object.values(alertCounts).reduce((a, b) => a + b, 0);
+
+    // Overall status
+    let overallStatus = 'healthy';
+    if (alertCounts.critical > 0 || connPct > 90) overallStatus = 'critical';
+    else if (alertCounts.warning > 0 || cacheHitPct < 95 || tempFilesCount > 100 || connPct > 80) overallStatus = 'warning';
+
+    // Checks
+    const checks = [
+      { section: 'Genel Durum', name: 'Bootstrap State', status: inst.bootstrap_state === 'ready' ? 'ok' : 'critical', value: inst.bootstrap_state },
+      { section: 'Genel Durum', name: 'Cache Hit Ratio', status: cacheHitPct >= 99 ? 'ok' : cacheHitPct >= 95 ? 'warning' : 'critical', value: cacheHitPct + '%', threshold: '> 95%' },
+      { section: 'Genel Durum', name: 'Bağlantı Kullanımı', status: connPct < 80 ? 'ok' : connPct < 90 ? 'warning' : 'critical', value: `${totalBackends}/${maxConnections} (${connPct}%)`, threshold: '< 80%' },
+      { section: 'Performans', name: 'Temp Files (24h)', status: tempFilesCount === 0 ? 'ok' : tempFilesCount < 100 ? 'warning' : 'critical', value: `${tempFilesCount} dosya` },
+      { section: 'Performans', name: 'Deadlock (24h)', status: deadlocksCount === 0 ? 'ok' : 'warning', value: String(deadlocksCount) },
+      { section: 'Depolama', name: 'WAL Üretimi (24h)', status: walBytes < 5_000_000_000 ? 'ok' : 'warning', value: formatBytes(walBytes) },
+      { section: 'Index Sağlığı', name: 'Missing Index Suspect', status: missingIndexCount === 0 ? 'ok' : 'warning', value: `${missingIndexCount} tablo` },
+      { section: 'Index Sağlığı', name: 'Unused Index', status: unusedIndexCount === 0 ? 'ok' : 'info', value: `${unusedIndexCount} index` },
+      { section: 'Alert', name: 'Açık Alert', status: totalAlerts === 0 ? 'ok' : alertCounts.critical ? 'critical' : 'warning', value: `${totalAlerts} alert` },
+    ];
+
+    res.json({
+      instance_pk: parseInt(id as string),
+      display_name: inst.display_name,
+      host: inst.host,
+      port: inst.port,
+      pg_major: inst.pg_major,
+      is_primary: inst.is_primary,
+      generated_at: new Date().toISOString(),
+      period_days: days,
+      overall_status: overallStatus,
+      checks,
+      trends: {
+        tps_daily: tpsDaily.rows,
+        bloat_top: bloatTop.rows,
+      },
+      settings: settings.rows,
+      alert_counts: alertCounts,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/tps — Günlük ve saatlik TPS tablosu
 router.get('/:id/tps', async (req, res, next) => {
   try {
@@ -861,4 +1018,12 @@ function maskSecretRef(ref: string | null): string {
   if (ref.startsWith('env:')) return 'env:' + ref.substring(4);
   if (ref.startsWith('vault:')) return 'vault:●●●●●●';
   return '●●●●●●';
+}
+
+/** Byte değerini okunabilir formata çevirir */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(1) + ' GB';
+  if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(1) + ' MB';
+  if (bytes >= 1_024) return (bytes / 1_024).toFixed(1) + ' KB';
+  return bytes + ' B';
 }

@@ -70,6 +70,10 @@ export default function InstanceDetail() {
                         {retryMutation.isPending ? 'Bekleniyor...' : '↺ Yeniden Dene'}
                     </button>
                 )}
+                <Link to={`/cluster/${id}/health-report`}
+                    className="px-3 py-1 text-xs rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200">
+                    📋 Sağlık Raporu
+                </Link>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
@@ -102,7 +106,7 @@ export default function InstanceDetail() {
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
-        </div>
+        </div >
     );
 }
 

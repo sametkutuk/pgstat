@@ -13,6 +13,7 @@ import Settings from './pages/Settings';
 import AlertRules from './pages/AlertRules';
 import AdaptiveAlerting from './pages/AdaptiveAlerting';
 import ClusterDetail from './pages/ClusterDetail';
+import HealthReport from './pages/HealthReport';
 import GrafanaEmbed from './pages/GrafanaEmbed';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -54,6 +55,7 @@ function App() {
               <Route path="/settings/adaptive-alerting" element={<AdaptiveAlerting />} />
               <Route path="/cluster-detail" element={<ClusterDetail />} />
               <Route path="/cluster/:id" element={<ClusterDetail />} />
+              <Route path="/cluster/:id/health-report" element={<HealthReport />} />
               <Route path="/grafana/:uid" element={<GrafanaEmbed />} />
               <Route path="/grafana" element={<GrafanaEmbed />} />
             </Route>
