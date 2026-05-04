@@ -647,7 +647,7 @@ router.get('/:id/health-report', async (req, res, next) => {
       pool.query(`select count(*) as cnt from (
         select 1 from fact.pg_index_stat_delta i
         where i.instance_pk = $1 and i.sample_ts > now() - interval '30 days'
-        group by i.schemaname, i.indexrelname
+        group by i.schemaname, i.index_relname
         having coalesce(sum(idx_scan_delta), 0) = 0
       ) sub`, [id]),
 
