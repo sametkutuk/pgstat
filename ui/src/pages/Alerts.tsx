@@ -461,24 +461,3 @@ function hasPrevVal(records: any[]): boolean {
 function hasChangePct(records: any[]): boolean {
     return records.some(r => r.change_pct != null);
 }
-
-/** Küçük metrik kartı — AlertDetails kind panellerinde kullanılır */
-function Metric({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
-    return (
-        <div>
-            <span className="text-[#64748B]">{label}: </span>
-            <span className={`font-mono ${strong ? 'font-semibold text-[#1E293B]' : 'text-[#1E293B]'}`}>{value}</span>
-        </div>
-    );
-}
-
-/** Byte değerini okunabilir formata çevirir */
-function fmtBytes(val: any): string {
-    if (val == null || val === 0) return '-';
-    const n = Number(val);
-    if (isNaN(n)) return String(val);
-    if (n >= 1_073_741_824) return (n / 1_073_741_824).toFixed(1) + ' GB';
-    if (n >= 1_048_576) return (n / 1_048_576).toFixed(1) + ' MB';
-    if (n >= 1_024) return (n / 1_024).toFixed(1) + ' KB';
-    return n + ' B';
-}
