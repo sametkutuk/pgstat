@@ -34,16 +34,30 @@ router.get('/', async (req, res, next) => {
 router.get('/storage-summary', async (_req, res, next) => {
   try {
     const result = await pool.query(`
-      with storage_usage as (${collectorStorageUnionSql()})
+      with storage_usage as (${collectorStorageUnionSql()}),
+      per_instance as (
+        select
+          instance_pk,
+          sum(row_count)::bigint as collector_rows,
+          sum(data_bytes)::bigint as raw_bytes
+        from storage_usage
+        group by instance_pk
+      ),
+      totals as (
+        select
+          coalesce(nullif(sum(raw_bytes), 0), 1) as total_raw,
+          pg_database_size(current_database())::bigint as db_bytes
+        from per_instance
+      )
       select
-        instance_pk,
-        sum(row_count)::bigint as collector_rows,
-        sum(data_bytes)::bigint as collector_bytes,
-        pg_database_size(current_database())::bigint as collector_db_bytes
-      from storage_usage
-      group by instance_pk
+        p.instance_pk,
+        p.collector_rows,
+        (p.raw_bytes::double precision / t.total_raw * t.db_bytes)::bigint as collector_bytes,
+        t.db_bytes as collector_db_bytes
+      from per_instance p
+      cross join totals t
     `);
-    console.log('[storage-summary] rows:', result.rows.length, result.rows.slice(0, 2));
+    console.log('[storage-summary] rows:', result.rows.length);
     res.json(result.rows);
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
