@@ -32,10 +32,8 @@ router.get('/', async (req, res, next) => {
 
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
-  const client = await pool.connect();
   try {
-    await client.query("SET statement_timeout = '30s'");
-    const result = await client.query(`
+    const result = await pool.query(`
       with storage_usage as (${collectorStorageUnionSql()})
       select
         instance_pk,
@@ -49,9 +47,6 @@ router.get('/storage-summary', async (_req, res, next) => {
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
     res.json([]);
-  } finally {
-    await client.query("RESET statement_timeout");
-    client.release();
   }
 });
 
