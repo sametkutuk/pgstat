@@ -33,38 +33,40 @@ router.get('/', async (req, res, next) => {
 // GET /api/instances/storage-summary — Collector DB'de instance bazli yaklasik veri kullanimi
 router.get('/storage-summary', async (_req, res, next) => {
   try {
-    // Yaklaşık boyut: pg_class istatistiklerinden partition boyutları + instance_pk bazlı dağılım
-    // Önce toplam DB boyutunu ve instance başına oranı hesapla
+    // Strateji: fact schema'daki tüm tabloların disk boyutunu al,
+    // sonra pg_database_delta'daki instance_pk dağılımına göre oranla.
+    // count(*) yerine son 1 günlük veriyle oran hesapla (hızlı).
     const result = await pool.query(`
-      with fact_sizes as (
-        -- Tüm fact.* tablolarının (partition dahil) toplam boyutu
-        select
-          sum(pg_total_relation_size(c.oid))::bigint as total_fact_bytes
+      with fact_total as (
+        select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as total_bytes
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = 'fact' and c.relkind = 'r'
+        where n.nspname in ('fact', 'agg', 'dim') and c.relkind in ('r', 'p')
+          and c.relispartition = false
       ),
-      instance_rows as (
-        -- Ana 3 tablodan instance bazlı satır sayısı (hızlı count)
-        select instance_pk, count(*) as rcount
-        from fact.pg_database_delta group by instance_pk
+      recent_distribution as (
+        -- Son 2 günlük veriden instance dağılımı (hızlı, partition pruning)
+        select instance_pk, count(*) as sample_rows
+        from fact.pg_database_delta
+        where sample_ts > now() - interval '2 days'
+        group by instance_pk
       ),
-      total_rows as (
-        select coalesce(sum(rcount), 1) as total from instance_rows
+      total_sample as (
+        select coalesce(nullif(sum(sample_rows), 0), 1) as total from recent_distribution
       )
       select
         i.instance_pk,
         i.display_name,
-        coalesce(ir.rcount, 0)::bigint as collector_rows,
+        coalesce(rd.sample_rows, 0)::bigint as collector_rows,
         coalesce(
-          (ir.rcount::double precision / tr.total * fs.total_fact_bytes)::bigint,
+          (rd.sample_rows::double precision / ts.total * ft.total_bytes)::bigint,
           0
         ) as collector_bytes,
-        pg_database_size(current_database())::bigint as collector_db_bytes
+        ft.total_bytes as collector_db_bytes
       from control.instance_inventory i
-      cross join fact_sizes fs
-      cross join total_rows tr
-      left join instance_rows ir on ir.instance_pk = i.instance_pk
+      cross join fact_total ft
+      cross join total_sample ts
+      left join recent_distribution rd on rd.instance_pk = i.instance_pk
       order by collector_bytes desc nulls last
     `);
     res.json(result.rows);
