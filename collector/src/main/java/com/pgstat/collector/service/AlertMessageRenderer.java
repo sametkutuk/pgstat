@@ -177,8 +177,13 @@ public class AlertMessageRenderer {
         // duration_minutes — started_at varsa hesapla
         if (!out.containsKey("duration_minutes") && out.get("started_at") instanceof String s) {
             try {
+                // started_at UTC TS_FMT ile parse edilir (alert.first_seen_at UTC bazli).
+                // Karsilastirma da UTC olmali — LocalDateTime.now() container TZ'na bagli
+                // olur, yanlis duration verir.
                 LocalDateTime started = LocalDateTime.parse(s, TS_FMT);
-                long mins = Duration.between(started, LocalDateTime.now()).toMinutes();
+                LocalDateTime nowUtc = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC)
+                    .toLocalDateTime();
+                long mins = Duration.between(started, nowUtc).toMinutes();
                 out.put("duration_minutes", mins);
             } catch (Exception ignore) {
                 // başarısızsa atla

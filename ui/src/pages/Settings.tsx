@@ -4,7 +4,7 @@ import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useToast } from '../components/common/Toast';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 export default function Settings() {
@@ -59,11 +59,16 @@ function ReportsTab() {
     });
 
     const [form, setForm] = useState<Partial<ReportConfig>>({});
+    const [initialized, setInitialized] = useState(false);
 
-    // Data geldiğinde form'u doldur (sadece bir kez)
-    if (data && Object.keys(form).length === 0) {
-        setForm(data);
-    }
+    // Data geldiğinde form'u bir kez doldur. setState'i render içinde DEĞİL,
+    // useEffect içinde çağırmak gerekir (aksi halde infinite render riski).
+    useEffect(() => {
+        if (data && !initialized) {
+            setForm(data);
+            setInitialized(true);
+        }
+    }, [data, initialized]);
 
     const saveMut = useMutation({
         mutationFn: (d: Partial<ReportConfig>) => apiPatch('/reports/config', d),

@@ -250,7 +250,8 @@ public class AlertRuleEvaluator {
             default       -> new BigDecimal("2.0"); // medium
         };
 
-        int currentHour = java.time.LocalDateTime.now().getHour();
+        // UTC kullan — container TZ'na bağımlı olmasın (baseline'lar UTC saatte tutulur)
+        int currentHour = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour();
 
         for (Map<String, Object> target : targets) {
             long instancePk = toLong(target.get("instance_pk"));
