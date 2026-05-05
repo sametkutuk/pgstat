@@ -83,6 +83,9 @@ export default function InstanceDetail() {
                 <InfoCard label="SQL Family" value={cap?.collector_sql_family || '—'} />
             </div>
 
+            {/* Workload profili — her tab'da görünür, sayfa içeriğinden önce */}
+            <WorkloadProfile instancePk={id!} />
+
             <div className="flex gap-1 mb-4 border-b border-[#E2E8F0] overflow-x-auto">
                 {tabs.map((t) => (
                     <button key={t.key} onClick={() => setTab(t.key)}
@@ -196,11 +199,10 @@ function StatementsTab({ data, loading }: { data: any[] | undefined; loading: bo
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
 }
 
-function DatabasesTab({ data, loading, instanceId }: { data: any[] | undefined; loading: boolean; instanceId: string }) {
+function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boolean; instanceId?: string }) {
     if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
     return (
         <div className="bg-white rounded-lg shadow-sm p-4">
-            <WorkloadProfile instancePk={instanceId} />
             <DataTable columns={[
                 { key: 'datname', header: 'Database' },
                 { key: 'dbid', header: 'OID' },
