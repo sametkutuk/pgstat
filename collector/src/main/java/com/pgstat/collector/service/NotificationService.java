@@ -61,13 +61,15 @@ public class NotificationService {
                 if (previousNotifications != null && previousNotifications > 0) {
                     // Bu alert icin daha onceden bildirim gonderildi.
                     // Severity yukseldiyse tekrar gonder, yoksa atla.
+                    // KRITIK: Karsilastirma nl.severity (bildirim gonderildigi andaki
+                    // severity) uzerinden yapilir — ops.alert.severity her upsert'te
+                    // yeni severity'ye guncellenir, eski seviyeyi kaybeder.
                     Long higherSeverityNotifications = jdbc.queryForObject(
                         "select count(*) from ops.notification_log nl " +
-                        "join ops.alert a on a.alert_id = nl.alert_id " +
                         "where nl.alert_id = ? and nl.status = 'sent' " +
-                        "  and (case a.severity when 'info' then 0 when 'warning' then 1 " +
-                        "                       when 'error' then 2 when 'critical' then 3 " +
-                        "                       when 'emergency' then 4 else 0 end) >= " +
+                        "  and (case nl.severity when 'info' then 0 when 'warning' then 1 " +
+                        "                        when 'error' then 2 when 'critical' then 3 " +
+                        "                        when 'emergency' then 4 else 0 end) >= " +
                         "      (case ? when 'info' then 0 when 'warning' then 1 " +
                         "              when 'error' then 2 when 'critical' then 3 " +
                         "              when 'emergency' then 4 else 0 end)",
@@ -151,12 +153,14 @@ public class NotificationService {
             default -> log.warn("Desteklenmeyen kanal tipi: {}", type);
         }
 
-        // Gönderim logla
+        // Gönderim logla — severity de yazilir (escalation karsilastirmasi icin
+        // ops.alert.severity yerine bu kolon kullanilir; alert.severity upsert
+        // sonrasi yeni severity olur, escalation tespiti icin gecmis severity gerekli).
         try {
             jdbc.update(
-                "insert into ops.notification_log (alert_id, channel_id, channel_type, status, sent_at) " +
-                "values (?, ?, ?, 'sent', now())",
-                alertId, channel.get("channel_id"), type);
+                "insert into ops.notification_log (alert_id, channel_id, channel_type, status, severity, sent_at) " +
+                "values (?, ?, ?, 'sent', ?, now())",
+                alertId, channel.get("channel_id"), type, severity);
         } catch (Exception e) {
             log.debug("Notification log yazma hatası: {}", e.getMessage());
         }
