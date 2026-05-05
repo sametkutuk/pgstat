@@ -1,25 +1,45 @@
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * ⓘ butonu — hover veya tıklama ile bilgi baloncuğu gösterir.
- * Kullanım: <InfoTip text="Açıklama metni" />
+ * Popup body'e portal ile render edilir — parent overflow:hidden/auto
+ * olduğunda da görünür kalır (örn. tab container, modal'lar).
+ *
+ * Kullanım: <InfoTip text="Açıklama. \n Multi-line de destekli." />
  */
 export default function InfoTip({ text, className = '' }: { text: string; className?: string }) {
     const [open, setOpen] = useState(false);
-    const ref = useRef<HTMLDivElement>(null);
+    const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+    const btnRef = useRef<HTMLButtonElement>(null);
+
+    // Açıldığında butonun pozisyonuna göre popup koordinatlarını hesapla
+    useEffect(() => {
+        if (!open || !btnRef.current) {
+            setPos(null);
+            return;
+        }
+        const rect = btnRef.current.getBoundingClientRect();
+        // Popup'ı butonun üstünde, yatayda ortalı yerleştir
+        setPos({
+            left: rect.left + rect.width / 2,
+            top: rect.top, // popup top:absolute ile alttan açar
+        });
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
         const handler = (e: MouseEvent) => {
-            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+            if (btnRef.current && !btnRef.current.contains(e.target as Node)) setOpen(false);
         };
         document.addEventListener('mousedown', handler);
         return () => document.removeEventListener('mousedown', handler);
     }, [open]);
 
     return (
-        <div ref={ref} className={`relative inline-flex ${className}`}>
+        <span className={`relative inline-flex ${className}`}>
             <button
+                ref={btnRef}
                 type="button"
                 onClick={() => setOpen(o => !o)}
                 onMouseEnter={() => setOpen(true)}
@@ -29,12 +49,22 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
             >
                 i
             </button>
-            {open && (
-                <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 px-3 py-2 bg-[#1E293B] text-white text-xs rounded-lg shadow-lg leading-relaxed pointer-events-none">
+            {open && pos && createPortal(
+                <div
+                    className="fixed z-[9999] px-4 py-3 bg-[#1E293B] text-white text-xs rounded-lg shadow-2xl leading-relaxed pointer-events-none whitespace-pre-line"
+                    style={{
+                        left: pos.left,
+                        top: pos.top,
+                        transform: 'translate(-50%, calc(-100% - 8px))',
+                        minWidth: '280px',
+                        width: 'max-content',
+                        maxWidth: 'min(560px, calc(100vw - 32px))',
+                    }}
+                >
                     {text}
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[5px] border-l-transparent border-r-transparent border-t-[#1E293B]" />
-                </div>
+                </div>,
+                document.body
             )}
-        </div>
+        </span>
     );
 }
