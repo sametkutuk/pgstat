@@ -8,7 +8,7 @@ const WL_LABELS: Record<string, string> = {
 };
 const WL_COLORS: Record<string, string> = {
     oltp: '#3B82F6',         // mavi — normal işlem yükü
-    analytical: '#1E293B',   // siyah/lacivert — özel iş yükü
+    analytical: '#EAB308',   // sarı — analitik/raporlama yükü
     bulk: '#DC2626',         // kırmızı — peak/spike
     mixed: '#F97316',        // turuncu — karışık
     idle: '#10B981',         // yeşil — boşta, sorun yok

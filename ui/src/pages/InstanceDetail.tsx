@@ -293,7 +293,7 @@ const WL_LABEL_TR: Record<string, string> = {
 };
 const WL_COLOR: Record<string, string> = {
     oltp: '#3B82F6',         // mavi — en yaygın, normal işlem yükü
-    analytical: '#1E293B',   // siyah/lacivert — özel/koyu iş yükü
+    analytical: '#EAB308',   // sarı — analitik/raporlama yükü
     bulk: '#DC2626',         // kırmızı — peak/spike, dikkat
     mixed: '#F97316',        // turuncu — birden fazla profil karışık
     idle: '#10B981',         // yeşil — sorun yok, boşta
