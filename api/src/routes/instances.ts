@@ -897,30 +897,55 @@ router.get('/:id/sequences', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/wal — WAL + Archiver istatistikleri
+//
+// pg_wal_snapshot tablosu (V023) sample_ts kullanir, kolonlar:
+//   current_wal_lsn, current_wal_file, wal_directory_size_byte,
+//   wal_file_count, period_wal_size_byte
+// pg_stat_wal'dan gelen wal_records/wal_fpi/wal_bytes ise PG13+ icin
+// fact.pg_cluster_delta'da metric_family='pg_stat_wal' olarak tutulur.
 router.get('/:id/wal', async (req, res, next) => {
   try {
     const { id } = req.params;
     const hours = parseHours(req.query.hours, 1);
-    const [walResult, archiverResult] = await Promise.all([
+    const [walResult, statWalResult, archiverResult] = await Promise.all([
       pool.query(`
-        select snapshot_ts, wal_records_delta, wal_fpi_delta, wal_bytes_delta,
-               wal_buffers_full_delta, wal_write_delta, wal_sync_delta,
-               wal_write_time_delta, wal_sync_time_delta
+        select sample_ts,
+               current_wal_lsn,
+               current_wal_file,
+               wal_directory_size_byte,
+               wal_file_count,
+               period_wal_size_byte
         from fact.pg_wal_snapshot
         where instance_pk = $1
-          and snapshot_ts >= now() - make_interval(hours => $2)
-        order by snapshot_ts
+          and sample_ts >= now() - make_interval(hours => $2)
+        order by sample_ts
       `, [id, hours]),
       pool.query(`
-        select snapshot_ts, archived_count, last_archived_wal, last_archived_time,
+        select sample_ts,
+               max(case when metric_name = 'wal_records' then metric_value_num end) as wal_records,
+               max(case when metric_name = 'wal_fpi'     then metric_value_num end) as wal_fpi,
+               max(case when metric_name = 'wal_bytes'   then metric_value_num end) as wal_bytes
+        from fact.pg_cluster_delta
+        where instance_pk = $1
+          and metric_family = 'pg_stat_wal'
+          and sample_ts >= now() - make_interval(hours => $2)
+        group by sample_ts
+        order by sample_ts
+      `, [id, hours]),
+      pool.query(`
+        select sample_ts, archived_count, last_archived_wal, last_archived_time,
                failed_count, last_failed_wal, last_failed_time
         from fact.pg_archiver_snapshot
         where instance_pk = $1
-          and snapshot_ts >= now() - make_interval(hours => $2)
-        order by snapshot_ts
+          and sample_ts >= now() - make_interval(hours => $2)
+        order by sample_ts
       `, [id, hours]),
     ]);
-    res.json({ wal: walResult.rows, archiver: archiverResult.rows });
+    res.json({
+      wal: walResult.rows,
+      stat_wal: statWalResult.rows,
+      archiver: archiverResult.rows,
+    });
   } catch (err) {
     next(err);
   }

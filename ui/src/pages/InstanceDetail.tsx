@@ -510,33 +510,48 @@ function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boo
 function WalArchiveTab({ data, loading }: { data: any | undefined; loading: boolean }) {
     if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
     const wal = data?.wal || [];
+    const statWal = data?.stat_wal || [];
     const archiver = data?.archiver || [];
 
     return (
         <div className="space-y-5">
             <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">WAL Üretimi</h3>
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">WAL Pozisyonu ve Disk</h3>
                 {wal.length === 0 ? (
                     <div className="text-sm text-[#94A3B8] py-4 text-center">WAL verisi yok</div>
                 ) : (
                     <DataTable columns={[
-                        { key: 'snapshot_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.snapshot_ts} /> },
-                        { key: 'wal_records_delta', header: 'Records', render: (r: any) => Number(r.wal_records_delta || 0).toLocaleString(), className: 'text-right' },
-                        { key: 'wal_bytes_delta', header: 'Bytes', render: (r: any) => formatBytesCompact(Number(r.wal_bytes_delta || 0)), className: 'text-right' },
-                        { key: 'wal_fpi_delta', header: 'FPI', render: (r: any) => Number(r.wal_fpi_delta || 0).toLocaleString(), className: 'text-right' },
-                        { key: 'wal_buffers_full_delta', header: 'Buf Full', render: (r: any) => Number(r.wal_buffers_full_delta || 0).toLocaleString(), className: 'text-right' },
-                        { key: 'wal_write_time_delta', header: 'Write (ms)', render: (r: any) => Number(r.wal_write_time_delta || 0).toFixed(1), className: 'text-right' },
-                        { key: 'wal_sync_time_delta', header: 'Sync (ms)', render: (r: any) => Number(r.wal_sync_time_delta || 0).toFixed(1), className: 'text-right' },
+                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
+                        { key: 'current_wal_lsn', header: 'LSN', render: (r: any) => <span className="font-mono text-xs">{r.current_wal_lsn || '—'}</span> },
+                        { key: 'current_wal_file', header: 'WAL Dosyası', render: (r: any) => <span className="font-mono text-xs">{r.current_wal_file || '—'}</span> },
+                        { key: 'period_wal_size_byte', header: 'Üretilen', render: (r: any) => formatBytesCompact(Number(r.period_wal_size_byte || 0)), className: 'text-right' },
+                        { key: 'wal_directory_size_byte', header: 'pg_wal/ Boyut', render: (r: any) => formatBytesCompact(Number(r.wal_directory_size_byte || 0)), className: 'text-right' },
+                        { key: 'wal_file_count', header: 'Dosya', render: (r: any) => Number(r.wal_file_count || 0).toLocaleString(), className: 'text-right' },
                     ]} data={wal} />
                 )}
             </div>
+
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">pg_stat_wal (PG13+)</h3>
+                {statWal.length === 0 ? (
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">pg_stat_wal verisi yok (PG13 öncesi sürümlerde mevcut değildir)</div>
+                ) : (
+                    <DataTable columns={[
+                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
+                        { key: 'wal_records', header: 'Records', render: (r: any) => Number(r.wal_records || 0).toLocaleString(), className: 'text-right' },
+                        { key: 'wal_bytes', header: 'Bytes', render: (r: any) => formatBytesCompact(Number(r.wal_bytes || 0)), className: 'text-right' },
+                        { key: 'wal_fpi', header: 'FPI (Full Page)', render: (r: any) => Number(r.wal_fpi || 0).toLocaleString(), className: 'text-right' },
+                    ]} data={statWal} />
+                )}
+            </div>
+
             <div className="bg-white rounded-lg shadow-sm p-4">
                 <h3 className="text-sm font-semibold text-[#64748B] mb-3">Archiver Durumu</h3>
                 {archiver.length === 0 ? (
-                    <div className="text-sm text-[#94A3B8] py-4 text-center">Archiver verisi yok</div>
+                    <div className="text-sm text-[#94A3B8] py-4 text-center">Archiver verisi yok (archive_mode kapalı olabilir)</div>
                 ) : (
                     <DataTable columns={[
-                        { key: 'snapshot_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.snapshot_ts} /> },
+                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
                         { key: 'archived_count', header: 'Arşivlenen', render: (r: any) => Number(r.archived_count || 0).toLocaleString(), className: 'text-right' },
                         { key: 'last_archived_wal', header: 'Son Arşiv WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_archived_wal || '—'}</span> },
                         {
