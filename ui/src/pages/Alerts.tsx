@@ -6,7 +6,7 @@ import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
 import { useToast } from '../components/common/Toast';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 interface Alert {
@@ -191,7 +191,9 @@ export default function Alerts() {
                         </div>
                         <div className="text-sm">
                             <span className="text-[#64748B]">Mesaj:</span>
-                            <p className="mt-1 bg-[#F8FAFC] rounded px-3 py-2 text-[#334155]">{alert.message}</p>
+                            <div className="mt-1 bg-[#F8FAFC] rounded px-4 py-3 text-[#334155]">
+                                <FormattedMessage text={alert.message} />
+                            </div>
                         </div>
                         {alert.acknowledge_note && (
                             <div className="text-sm">
@@ -387,16 +389,14 @@ function AlertDetails({ details }: { details: any }) {
                                     const changePct = q.change_pct;
                                     const hasFrequency = q.calls_window != null || q.calls_7d != null || q.calls_28d != null || q.active_days_28d != null;
                                     return (
-                                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                                            <td className="py-2 px-3 max-w-sm">
-                                                <div className="truncate font-mono text-[#1E293B] text-[11px]" title={q.query_text}>
-                                                    {q.query_text || '—'}
-                                                </div>
-                                                <div className="text-[#94A3B8] mt-0.5">
+                                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] align-top">
+                                            <td className="py-2 px-3 max-w-md">
+                                                <SqlBlock sql={q.query_text || ''} />
+                                                <div className="text-[#94A3B8] mt-1 text-[10px]">
                                                     qid: {q.queryid}
                                                     {q.statement_series_id && (
                                                         <Link to={`/statements/${q.statement_series_id}`} className="ml-2 text-[#2563EB] hover:underline">
-                                                            Detay
+                                                            Detay →
                                                         </Link>
                                                     )}
                                                 </div>
@@ -482,4 +482,209 @@ function hasPrevVal(records: any[]): boolean {
 /** Records listesinde change_pct alanı var mı? */
 function hasChangePct(records: any[]): boolean {
     return records.some(r => r.change_pct != null);
+}
+
+// =========================================================================
+// Mesaj görüntüleyici — basit markdown desteği (bold, code, satır sonları,
+// liste markerları) — kütüphanesiz, alert mesajları için yeterli.
+// =========================================================================
+
+function FormattedMessage({ text }: { text: string }) {
+    if (!text) return <span className="text-[#94A3B8]">(mesaj yok)</span>;
+
+    // Satırlara böl, her satırı ayrı render et (boş satır = paragraf ayracı).
+    const lines = text.split('\n');
+
+    return (
+        <div className="space-y-1.5 text-[13px] leading-relaxed">
+            {lines.map((line, i) => {
+                const trimmed = line.trim();
+                if (!trimmed) return <div key={i} className="h-1" />;
+                // Madde işareti (• veya - ile başlayanlar)
+                if (/^[•\-*]\s/.test(trimmed)) {
+                    return (
+                        <div key={i} className="flex gap-2 pl-1">
+                            <span className="text-[#94A3B8] flex-shrink-0">•</span>
+                            <span className="flex-1">{renderInline(trimmed.replace(/^[•\-*]\s+/, ''))}</span>
+                        </div>
+                    );
+                }
+                return <div key={i}>{renderInline(line)}</div>;
+            })}
+        </div>
+    );
+}
+
+/**
+ * Inline markdown: **bold**, `code`, sayısal değerler vurgulu.
+ * Sıralı tarama: bold (önce, çünkü içinde code olabilir) → code → text.
+ */
+function renderInline(text: string): React.ReactNode[] {
+    const out: React.ReactNode[] = [];
+    let remaining = text;
+    let key = 0;
+
+    // Combined regex: ya **bold** ya `code`
+    const tokenRe = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+    let lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = tokenRe.exec(remaining)) !== null) {
+        if (m.index > lastIndex) {
+            out.push(<span key={`t${key++}`}>{remaining.slice(lastIndex, m.index)}</span>);
+        }
+        const token = m[0];
+        if (token.startsWith('**')) {
+            out.push(<strong key={`b${key++}`} className="font-semibold text-[#0F172A]">{token.slice(2, -2)}</strong>);
+        } else {
+            out.push(
+                <code key={`c${key++}`} className="px-1.5 py-0.5 mx-0.5 rounded bg-[#E2E8F0] text-[#0F172A] font-mono text-[12px]">
+                    {token.slice(1, -1)}
+                </code>
+            );
+        }
+        lastIndex = m.index + token.length;
+    }
+    if (lastIndex < remaining.length) {
+        out.push(<span key={`t${key++}`}>{remaining.slice(lastIndex)}</span>);
+    }
+    return out;
+}
+
+// =========================================================================
+// SQL gösterici — pretty-print + keyword highlight + kopyala + tam metin modal
+// =========================================================================
+
+const SQL_KEYWORDS = new Set([
+    'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'AS',
+    'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'ON', 'USING', 'CROSS',
+    'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'ALL',
+    'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'WITH',
+    'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+    'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'COALESCE', 'NULLIF',
+    'CREATE', 'TABLE', 'INDEX', 'VIEW', 'ALTER', 'DROP', 'TRUNCATE',
+    'EXISTS', 'BETWEEN', 'LIKE', 'ILIKE', 'ASC', 'DESC',
+    'BEGIN', 'COMMIT', 'ROLLBACK', 'TRANSACTION', 'RETURNING',
+]);
+
+/**
+ * Basit SQL pretty-print — major keyword'lerden önce yeni satır.
+ * Tek satırlık truncate sorgular için sınırlı bir formatleme yeter.
+ */
+function formatSql(sql: string): string {
+    if (!sql) return '';
+    // Hassas keyword'lerden önce satır sonu ekle (basitleştirilmiş)
+    return sql
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\s+(FROM|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|UNION ALL|UNION|LEFT JOIN|RIGHT JOIN|INNER JOIN|JOIN|RETURNING)\s+/gi,
+            '\n$1 ')
+        .replace(/\s+(AND|OR)\s+/gi, '\n  $1 ');
+}
+
+function highlightSqlTokens(sql: string): React.ReactNode[] {
+    const out: React.ReactNode[] = [];
+    // Token regex: kelime / string / sayı / sembol
+    const re = /('[^']*'|"[^"]*"|\b\d+(?:\.\d+)?\b|\b[a-zA-Z_][a-zA-Z0-9_]*\b|--[^\n]*|\s+|.)/g;
+    let m: RegExpExecArray | null;
+    let key = 0;
+    while ((m = re.exec(sql)) !== null) {
+        const t = m[0];
+        if (/^\s+$/.test(t)) {
+            out.push(t);
+        } else if (/^--/.test(t)) {
+            out.push(<span key={key++} className="text-[#94A3B8] italic">{t}</span>);
+        } else if (/^['"]/.test(t)) {
+            out.push(<span key={key++} className="text-[#16A34A]">{t}</span>);
+        } else if (/^\d/.test(t)) {
+            out.push(<span key={key++} className="text-[#D97706]">{t}</span>);
+        } else if (SQL_KEYWORDS.has(t.toUpperCase())) {
+            out.push(<span key={key++} className="text-[#2563EB] font-semibold">{t}</span>);
+        } else {
+            out.push(<span key={key++}>{t}</span>);
+        }
+    }
+    return out;
+}
+
+function SqlBlock({ sql }: { sql: string }) {
+    const [expanded, setExpanded] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const [showFull, setShowFull] = useState(false);
+
+    if (!sql) return <span className="text-[#94A3B8] text-[11px]">—</span>;
+
+    const formatted = formatSql(sql);
+    const isLong = sql.length > 120;
+
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(sql);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+        } catch { /* ignore */ }
+    };
+
+    return (
+        <div className="relative">
+            <pre
+                className={`font-mono text-[11px] text-[#1E293B] whitespace-pre-wrap break-words overflow-hidden ${expanded ? '' : 'max-h-[3.2em]'}`}
+                style={!expanded ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any } : undefined}
+                title={sql}
+            >
+                {highlightSqlTokens(formatted)}
+            </pre>
+            <div className="flex gap-2 mt-1 text-[10px]">
+                {isLong && (
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                        className="text-[#3B82F6] hover:underline"
+                    >
+                        {expanded ? '◀ Kapat' : '▶ Genişlet'}
+                    </button>
+                )}
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setShowFull(true); }}
+                    className="text-[#3B82F6] hover:underline"
+                >
+                    🔍 Tam görünüm
+                </button>
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); copy(); }}
+                    className="text-[#3B82F6] hover:underline"
+                >
+                    {copied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                </button>
+            </div>
+
+            {showFull && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+                    onClick={(e) => { e.stopPropagation(); setShowFull(false); }}
+                >
+                    <div
+                        className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-5 py-3 border-b border-[#E2E8F0] flex items-center justify-between">
+                            <h3 className="font-semibold text-[#1E293B]">SQL Sorgu</h3>
+                            <div className="flex gap-2">
+                                <button onClick={copy} className="px-3 py-1 text-xs bg-[#3B82F6] text-white rounded">
+                                    {copied ? '✓ Kopyalandı' : '📋 Kopyala'}
+                                </button>
+                                <button onClick={() => setShowFull(false)} className="px-3 py-1 text-xs text-[#475569]">
+                                    Kapat
+                                </button>
+                            </div>
+                        </div>
+                        <pre className="px-5 py-4 overflow-auto font-mono text-[12px] text-[#1E293B] whitespace-pre-wrap break-all flex-1">
+                            {highlightSqlTokens(formatted)}
+                        </pre>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
