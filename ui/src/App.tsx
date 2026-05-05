@@ -49,6 +49,7 @@ function App() {
               <Route path="/statements" element={<Statements />} />
               <Route path="/statements/:seriesId" element={<StatementDetail />} />
               <Route path="/alerts" element={<Alerts />} />
+              <Route path="/alerts/:id" element={<Alerts />} />
               <Route path="/jobs" element={<JobRuns />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/settings/alert-rules" element={<AlertRules />} />

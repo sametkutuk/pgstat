@@ -6,8 +6,8 @@ import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
 import { useToast } from '../components/common/Toast';
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useParams } from 'react-router-dom';
 
 interface Alert {
     alert_id: number; alert_key: string; alert_code: string; severity: string;
@@ -29,7 +29,13 @@ const EVAL_TYPE_LABELS: Record<string, string> = {
 };
 
 export default function Alerts() {
-    const [statusFilter, setStatusFilter] = useState('open');
+    // /alerts/:id route'undan gelen id (Grafana drill-down linkleri ve diğer
+    // dış referanslar için). Belirli bir alert'i auto-expand etmek üzere kullanılır.
+    const { id: routeAlertId } = useParams<{ id?: string }>();
+
+    // Tek bir alert'e direkt link verildiyse status filtresini geniş tut ki
+    // resolved/acknowledged alertlerde de görüntülenebilsin.
+    const [statusFilter, setStatusFilter] = useState(routeAlertId ? '' : 'open');
     const [severityFilter, setSeverityFilter] = useState('');
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -65,6 +71,19 @@ export default function Alerts() {
     });
 
     const [expandedId, setExpandedId] = useState<number | null>(null);
+
+    // /alerts/:id ile gelindiğinde data yüklendikten sonra ilgili row'u otomatik aç.
+    // Sadece bir kez tetiklenir; kullanıcı manuel kapatırsa aynı route'ta tekrar açma.
+    const [autoExpanded, setAutoExpanded] = useState(false);
+    useEffect(() => {
+        if (!autoExpanded && routeAlertId && data) {
+            const target = parseInt(routeAlertId, 10);
+            if (!Number.isNaN(target) && data.some(a => a.alert_id === target)) {
+                setExpandedId(target);
+                setAutoExpanded(true);
+            }
+        }
+    }, [routeAlertId, data, autoExpanded]);
 
     const columns = [
         { key: 'severity', header: 'Seviye', render: (r: Alert) => <Badge value={r.severity} /> },
