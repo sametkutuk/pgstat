@@ -198,14 +198,119 @@ function StatementsTab({ data, loading }: { data: any[] | undefined; loading: bo
 
 function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
     if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
-    const columns = [
-        { key: 'datname', header: 'Database' },
-        { key: 'dbid', header: 'OID' },
-        { key: 'last_db_objects_collect_at', header: 'Son Toplama', render: (r: any) => <TimeAgo date={r.last_db_objects_collect_at} /> },
-        { key: 'next_db_objects_collect_at', header: 'Sonraki', render: (r: any) => <TimeAgo date={r.next_db_objects_collect_at} /> },
-        { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
-    ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
+    return (
+        <div className="bg-white rounded-lg shadow-sm p-4">
+            <WorkloadProfile instancePk={(data?.[0]?.instance_pk) ?? null} />
+            <DataTable columns={[
+                { key: 'datname', header: 'Database' },
+                { key: 'dbid', header: 'OID' },
+                { key: 'last_db_objects_collect_at', header: 'Son Toplama', render: (r: any) => <TimeAgo date={r.last_db_objects_collect_at} /> },
+                { key: 'next_db_objects_collect_at', header: 'Sonraki', render: (r: any) => <TimeAgo date={r.next_db_objects_collect_at} /> },
+                { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
+            ]} data={data || []} />
+        </div>
+    );
+}
+
+const WL_LABEL_TR: Record<string, string> = {
+    oltp: 'OLTP',
+    analytical: 'Analitik',
+    bulk: 'Toplu Yük',
+    mixed: 'Karma (HTAP)',
+    idle: 'Boşta',
+};
+const WL_COLOR: Record<string, string> = {
+    oltp: '#3B82F6',         // mavi
+    analytical: '#8B5CF6',   // mor
+    bulk: '#F97316',         // turuncu
+    mixed: '#FACC15',        // sarı
+    idle: '#94A3B8',         // gri
+};
+
+function WorkloadProfile({ instancePk }: { instancePk: number | null }) {
+    const { data: rows } = useQuery({
+        queryKey: ['workload-instance', instancePk],
+        queryFn: () => apiGet<any[]>(`/workload/instance/${instancePk}`),
+        enabled: !!instancePk,
+        refetchInterval: 60_000,
+    });
+    if (!rows || rows.length === 0) return null;
+
+    return (
+        <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+                <h4 className="font-semibold text-[#1E293B]">DB Workload Profilleri</h4>
+                <span className="text-[11px] text-[#94A3B8]">
+                    24 saatlik pgss verisinden otomatik (saatte 1 sınıflandırılır)
+                </span>
+            </div>
+            <div className="space-y-2">
+                {rows.map((r: any) => {
+                    const scores = r.workload_scores || {};
+                    const oltp = Number(scores.oltp || 0);
+                    const analytical = Number(scores.analytical || 0);
+                    const bulk = Number(scores.bulk || 0);
+                    const total = oltp + analytical + bulk;
+                    const labelAuto = r.workload_label_auto || (total === 0 ? 'idle' : 'mixed');
+                    const labelManual = r.workload_label;
+                    const finalLabel = labelManual || labelAuto;
+
+                    return (
+                        <div key={r.dbid} className="flex items-center gap-3 text-xs">
+                            <div className="w-32 truncate font-mono" title={r.datname}>
+                                {r.datname || '?'}
+                            </div>
+                            <div
+                                className="px-2 py-0.5 rounded text-white text-[10px] font-medium flex-shrink-0"
+                                style={{ backgroundColor: WL_COLOR[finalLabel] || '#94A3B8' }}
+                                title={labelManual ? 'Manuel etiket' : 'Otomatik tespit'}
+                            >
+                                {WL_LABEL_TR[finalLabel] || finalLabel}
+                                {labelManual && <span className="ml-1">📌</span>}
+                            </div>
+                            {labelAuto !== 'idle' && total > 0 && (
+                                <div className="flex flex-1 h-4 rounded overflow-hidden border border-[#E2E8F0]"
+                                    title={`OLTP %${oltp}  ·  Analitik %${analytical}  ·  Toplu %${bulk}`}>
+                                    {oltp > 0 && (
+                                        <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp }}
+                                             className="text-white text-[9px] flex items-center justify-center">
+                                            {oltp >= 8 && `${oltp}%`}
+                                        </div>
+                                    )}
+                                    {analytical > 0 && (
+                                        <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical }}
+                                             className="text-white text-[9px] flex items-center justify-center">
+                                            {analytical >= 8 && `${analytical}%`}
+                                        </div>
+                                    )}
+                                    {bulk > 0 && (
+                                        <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk }}
+                                             className="text-white text-[9px] flex items-center justify-center">
+                                            {bulk >= 8 && `${bulk}%`}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {labelAuto === 'idle' && (
+                                <span className="text-[#94A3B8] flex-1">— düşük aktivite —</span>
+                            )}
+                            <div className="text-[10px] text-[#94A3B8] w-16 text-right">
+                                {r.workload_classified_at ? new Date(r.workload_classified_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            <div className="mt-3 pt-2 border-t border-[#E2E8F0] flex gap-3 text-[10px] text-[#64748B]">
+                <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.oltp }} /> OLTP</span>
+                <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.analytical }} /> Analitik</span>
+                <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.bulk }} /> Toplu Yük</span>
+                <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.mixed }} /> Karma</span>
+                <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.idle }} /> Boşta</span>
+                <span className="ml-auto">📌 = manuel etiket</span>
+            </div>
+        </div>
+    );
 }
 
 function StorageTab({ data, loading }: { data: any; loading: boolean }) {

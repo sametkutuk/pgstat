@@ -21,6 +21,7 @@ import alertRuleRoutes from './routes/alertRules';
 import adaptiveAlertingRoutes from './routes/adaptiveAlerting';
 import systemAlertRoutes from './routes/systemAlerts';
 import reportRoutes from './routes/reports';
+import workloadRoutes from './routes/workload';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
@@ -159,6 +160,7 @@ app.use('/api/schedule-profiles', requireAuth, scheduleRoutes);
 app.use('/api/statements', requireAuth, statementRoutes);
 app.use('/api/system-alerts', requireAuth, systemAlertRoutes);
 app.use('/api/reports', requireAuth, reportRoutes);
+app.use('/api/workload', requireAuth, workloadRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);
