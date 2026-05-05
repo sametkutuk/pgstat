@@ -1,17 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, apiPut, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates' | 'reports'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
         { key: 'templates' as const, label: 'Alert Mesaj Şablonları' },
+        { key: 'reports' as const, label: 'Raporlar' },
     ];
 
     return (
@@ -28,6 +30,174 @@ export default function Settings() {
             {tab === 'retention' && <RetentionTab />}
             {tab === 'schedule' && <ScheduleTab />}
             {tab === 'templates' && <MessageTemplatesTab />}
+            {tab === 'reports' && <ReportsTab />}
+        </div>
+    );
+}
+
+// =========================================================================
+// Raporlar — config (gunluk/haftalik enable, saat, retention) + history linki
+// =========================================================================
+
+interface ReportConfig {
+    daily_enabled: boolean;
+    daily_hour_utc: number;
+    daily_retention_days: number;
+    weekly_enabled: boolean;
+    weekly_hour_utc: number;
+    weekly_retention_days: number;
+    notification_log_retention_days: number;
+    updated_at: string | null;
+}
+
+function ReportsTab() {
+    const qc = useQueryClient();
+    const toast = useToast();
+    const { data, isLoading } = useQuery({
+        queryKey: ['report-config'],
+        queryFn: () => apiGet<ReportConfig>('/reports/config'),
+    });
+
+    const [form, setForm] = useState<Partial<ReportConfig>>({});
+
+    // Data geldiğinde form'u doldur (sadece bir kez)
+    if (data && Object.keys(form).length === 0) {
+        setForm(data);
+    }
+
+    const saveMut = useMutation({
+        mutationFn: (d: Partial<ReportConfig>) => apiPatch('/reports/config', d),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['report-config'] });
+            toast.success('Rapor ayarları güncellendi');
+        },
+        onError: () => toast.error('Kaydetme başarısız'),
+    });
+
+    if (isLoading) return <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>;
+
+    const trHour = (utc: number) => {
+        const tr = (utc + 3) % 24;
+        return `${String(tr).padStart(2, '0')}:00 TR`;
+    };
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm p-5 max-w-3xl">
+            <div className="mb-4">
+                <h3 className="font-semibold text-[#1E293B]">Otomatik Raporlar</h3>
+                <p className="text-xs text-[#64748B] mt-1">
+                    Günlük ve haftalık özet raporlar etkinleştirilen bildirim kanallarına
+                    (email/Teams/Telegram/webhook) otomatik gönderilir. Burada kapatabilir,
+                    saatini değiştirebilir veya kaç gün saklanacağını belirleyebilirsiniz.
+                </p>
+            </div>
+
+            {/* Günlük rapor */}
+            <div className="border border-[#E2E8F0] rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-[#1E293B]">📊 Günlük Özet Raporu</h4>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={!!form.daily_enabled}
+                            onChange={(e) => setForm({ ...form, daily_enabled: e.target.checked })}
+                            className="w-4 h-4 accent-[#3B82F6]" />
+                        <span className="font-medium">{form.daily_enabled ? 'Etkin' : 'Devre dışı'}</span>
+                    </label>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Gönderim Saati (UTC)</label>
+                        <select value={form.daily_hour_utc ?? 6}
+                            onChange={(e) => setForm({ ...form, daily_hour_utc: Number(e.target.value) })}
+                            className="w-full border border-[#CBD5E1] rounded px-3 py-2 text-sm">
+                            {Array.from({ length: 24 }, (_, h) => (
+                                <option key={h} value={h}>
+                                    {String(h).padStart(2, '0')}:00 UTC ({trHour(h)})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Saklama Süresi (gün)</label>
+                        <input type="number" min={1} max={3650}
+                            value={form.daily_retention_days ?? 30}
+                            onChange={(e) => setForm({ ...form, daily_retention_days: Number(e.target.value) })}
+                            className="w-full border border-[#CBD5E1] rounded px-3 py-2 text-sm" />
+                        <p className="text-[11px] text-[#94A3B8] mt-1">
+                            Bu süreden eski günlük raporlar tarihçeden otomatik silinir (UTC 02:00).
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Haftalık rapor */}
+            <div className="border border-[#E2E8F0] rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-[#1E293B]">📈 Haftalık Kapasite Raporu (Pazartesi)</h4>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={!!form.weekly_enabled}
+                            onChange={(e) => setForm({ ...form, weekly_enabled: e.target.checked })}
+                            className="w-4 h-4 accent-[#3B82F6]" />
+                        <span className="font-medium">{form.weekly_enabled ? 'Etkin' : 'Devre dışı'}</span>
+                    </label>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Gönderim Saati (UTC)</label>
+                        <select value={form.weekly_hour_utc ?? 6}
+                            onChange={(e) => setForm({ ...form, weekly_hour_utc: Number(e.target.value) })}
+                            className="w-full border border-[#CBD5E1] rounded px-3 py-2 text-sm">
+                            {Array.from({ length: 24 }, (_, h) => (
+                                <option key={h} value={h}>
+                                    {String(h).padStart(2, '0')}:00 UTC ({trHour(h)})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Saklama Süresi (gün)</label>
+                        <input type="number" min={1} max={3650}
+                            value={form.weekly_retention_days ?? 90}
+                            onChange={(e) => setForm({ ...form, weekly_retention_days: Number(e.target.value) })}
+                            className="w-full border border-[#CBD5E1] rounded px-3 py-2 text-sm" />
+                    </div>
+                </div>
+            </div>
+
+            {/* Notification log retention */}
+            <div className="border border-[#E2E8F0] rounded-lg p-4 mb-4">
+                <h4 className="font-medium text-[#1E293B] mb-3">🔔 Bildirim Logu Saklama Süresi</h4>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Süre (gün)</label>
+                        <input type="number" min={1} max={3650}
+                            value={form.notification_log_retention_days ?? 14}
+                            onChange={(e) => setForm({ ...form, notification_log_retention_days: Number(e.target.value) })}
+                            className="w-full border border-[#CBD5E1] rounded px-3 py-2 text-sm" />
+                        <p className="text-[11px] text-[#94A3B8] mt-1">
+                            <code>ops.notification_log</code> tablosundaki bu süreden eski kayıtlar otomatik silinir.
+                            Spam koruma severity-escalation kararı için son N günü kullanır.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="flex items-center justify-between mt-5 pt-4 border-t border-[#E2E8F0]">
+                <Link to="/reports/history" className="text-sm text-[#3B82F6] hover:underline">
+                    📜 Gönderilmiş raporları görüntüle →
+                </Link>
+                <button
+                    onClick={() => saveMut.mutate(form)}
+                    disabled={saveMut.isPending}
+                    className="px-5 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB] disabled:opacity-50">
+                    {saveMut.isPending ? 'Kaydediliyor...' : 'Kaydet'}
+                </button>
+            </div>
+
+            {data?.updated_at && (
+                <p className="text-[11px] text-[#94A3B8] mt-3">
+                    Son güncelleme: {new Date(data.updated_at).toLocaleString('tr-TR')}
+                </p>
+            )}
         </div>
     );
 }

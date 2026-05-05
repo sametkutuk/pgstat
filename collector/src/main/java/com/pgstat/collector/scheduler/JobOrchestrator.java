@@ -481,13 +481,15 @@ public class JobOrchestrator {
                 }
             }
 
-            // 3c. Job run history cleanup — UTC saat 2'de gunde 1 kez (idempotency guard)
+            // 3c. Daily cleanup — UTC saat 2'de gunde 1 kez (idempotency guard)
+            // job_run history + rapor history + notification_log retention
             if (currentUtcHour == 2 && !todayUtc.equals(lastJobPurgeDate)) {
                 lastJobPurgeDate = todayUtc;
                 try {
                     purgeEvaluator.purgeJobRunHistory();
+                    purgeEvaluator.purgeReportsAndNotifications();
                 } catch (Exception e) {
-                    log.warn("Job run history purge hatasi: {}", e.getMessage());
+                    log.warn("Daily cleanup hatasi: {}", e.getMessage());
                     lastJobPurgeDate = null;
                 }
             }
@@ -550,32 +552,30 @@ public class JobOrchestrator {
             // Artik snapshot tamamlandiktan hemen sonra calisir (yukarida).
             // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
 
-            // 3f. Gunluk rapor — UTC 06:00 (TR 09:00), is gunu basinda
-            // Idempotency: ayni gun ikinci kez tetiklemeyiz (UTC 06:00 saati 1 saat surer,
-            // her 5s'de tetiklemek yuzlerce tekrarli rapora yol acar).
-            if (currentUtcHour == 6) {
-                java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
-                if (!today.equals(lastDailyReportDate)) {
-                    lastDailyReportDate = today;
-                    try {
-                        reportGenerator.generateAndSendDailyReport();
-                        log.info("Gunluk rapor gonderildi: {}", today);
-                    } catch (Exception e) {
-                        log.warn("Gunluk rapor hatasi: {}", e.getMessage());
-                        lastDailyReportDate = null; // hata varsa bir sonraki cycle tekrar dene
-                    }
+            // 3f. Gunluk/haftalik rapor — saat config'den alinir (UI'da duzenlenebilir).
+            // Idempotency: gun bazinda tek tetik (saat 1 saat surdugu icin yuzlerce
+            // tekrarli rapor olusmasin diye gun bazinda guard).
+            int dailyHour = reportGenerator.dailyHourUtc();
+            int weeklyHour = reportGenerator.weeklyHourUtc();
+            if (currentUtcHour == dailyHour && !todayUtc.equals(lastDailyReportDate)) {
+                lastDailyReportDate = todayUtc;
+                try {
+                    reportGenerator.generateAndSendDailyReport();
+                } catch (Exception e) {
+                    log.warn("Gunluk rapor hatasi: {}", e.getMessage());
+                    lastDailyReportDate = null;
                 }
-                // Pazartesi ise haftalik rapor da gonder (ayni idempotency ile)
-                if (today.getDayOfWeek() == java.time.DayOfWeek.MONDAY
-                        && !today.equals(lastWeeklyReportDate)) {
-                    lastWeeklyReportDate = today;
-                    try {
-                        reportGenerator.generateAndSendWeeklyReport();
-                        log.info("Haftalik rapor gonderildi: {}", today);
-                    } catch (Exception e) {
-                        log.warn("Haftalik rapor hatasi: {}", e.getMessage());
-                        lastWeeklyReportDate = null;
-                    }
+            }
+            // Pazartesi haftalik rapor (ayri saat olabilir)
+            if (currentUtcHour == weeklyHour
+                    && todayUtc.getDayOfWeek() == java.time.DayOfWeek.MONDAY
+                    && !todayUtc.equals(lastWeeklyReportDate)) {
+                lastWeeklyReportDate = todayUtc;
+                try {
+                    reportGenerator.generateAndSendWeeklyReport();
+                } catch (Exception e) {
+                    log.warn("Haftalik rapor hatasi: {}", e.getMessage());
+                    lastWeeklyReportDate = null;
                 }
             }
 

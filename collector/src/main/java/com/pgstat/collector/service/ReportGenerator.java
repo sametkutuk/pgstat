@@ -2,6 +2,8 @@ package com.pgstat.collector.service;
 
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.InventoryRepository;
+import com.pgstat.collector.repository.ReportConfigRepository;
+import com.pgstat.collector.repository.ReportHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,6 +13,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -29,13 +32,45 @@ public class ReportGenerator {
     private final JdbcTemplate jdbc;
     private final InventoryRepository inventoryRepo;
     private final NotificationService notificationService;
+    private final ReportConfigRepository reportConfigRepo;
+    private final ReportHistoryRepository reportHistoryRepo;
 
     public ReportGenerator(JdbcTemplate jdbc, InventoryRepository inventoryRepo,
-                           NotificationService notificationService) {
+                           NotificationService notificationService,
+                           ReportConfigRepository reportConfigRepo,
+                           ReportHistoryRepository reportHistoryRepo) {
         this.jdbc = jdbc;
         this.inventoryRepo = inventoryRepo;
         this.notificationService = notificationService;
+        this.reportConfigRepo = reportConfigRepo;
+        this.reportHistoryRepo = reportHistoryRepo;
     }
+
+    /** Config'e gore: bu rapor tipi enabled mi? */
+    public boolean isDailyEnabled() {
+        Object v = reportConfigRepo.get().get("daily_enabled");
+        return v == null || Boolean.TRUE.equals(v);
+    }
+
+    public boolean isWeeklyEnabled() {
+        Object v = reportConfigRepo.get().get("weekly_enabled");
+        return v == null || Boolean.TRUE.equals(v);
+    }
+
+    /** Hangi UTC saatte gunluk rapor gonderilmeli (config'den). */
+    public int dailyHourUtc() {
+        Object v = reportConfigRepo.get().get("daily_hour_utc");
+        return v instanceof Number ? ((Number) v).intValue() : 6;
+    }
+
+    public int weeklyHourUtc() {
+        Object v = reportConfigRepo.get().get("weekly_hour_utc");
+        return v instanceof Number ? ((Number) v).intValue() : 6;
+    }
+
+    /** Rapor gonderim sonucu — DB history kaydi icin. */
+    private record SendResult(int channelsCount, String recipientsJson,
+                               String status, String errorMessage) {}
 
     // =========================================================================
     // Gunluk Ozet Rapor
@@ -46,13 +81,29 @@ public class ReportGenerator {
      * Her instance icin: TPS, baglanti, WAL, cache, temp, deadlock ozeti.
      */
     public void generateAndSendDailyReport() {
+        if (!isDailyEnabled()) {
+            log.info("Gunluk rapor devre disi (config), atlandi");
+            return;
+        }
         log.info("Gunluk rapor uretiliyor...");
+        String title = "📊 pgstat Günlük Özet — " + LocalDate.now(ZoneOffset.UTC);
         try {
-            String report = buildDailyReport();
-            if (report != null && !report.isBlank()) {
-                sendReportToChannels("📊 pgstat Günlük Özet", report);
-                log.info("Gunluk rapor gonderildi");
+            String body = buildDailyReport();
+            if (body == null || body.isBlank()) {
+                log.warn("Gunluk rapor bos uretildi, gonderim atlandi");
+                return;
             }
+            SendResult result = sendReportToChannels(title, body);
+            // History kaydi (basari/kismi/hata fark etmeksizin)
+            try {
+                reportHistoryRepo.insert("daily", title, body,
+                    result.recipientsJson(), result.status(),
+                    result.channelsCount(), result.errorMessage());
+            } catch (Exception e) {
+                log.warn("Rapor history kaydi yazilamadi: {}", e.getMessage());
+            }
+            log.info("Gunluk rapor gonderildi (status={}, channels={})",
+                result.status(), result.channelsCount());
         } catch (Exception e) {
             log.warn("Gunluk rapor hatasi: {}", e.getMessage());
         }
@@ -139,13 +190,28 @@ public class ReportGenerator {
      * Trend karsilastirmasi: bu hafta vs gecen hafta.
      */
     public void generateAndSendWeeklyReport() {
+        if (!isWeeklyEnabled()) {
+            log.info("Haftalik rapor devre disi (config), atlandi");
+            return;
+        }
         log.info("Haftalik rapor uretiliyor...");
+        String title = "📈 pgstat Haftalık Kapasite Raporu — " + LocalDate.now(ZoneOffset.UTC);
         try {
-            String report = buildWeeklyReport();
-            if (report != null && !report.isBlank()) {
-                sendReportToChannels("📈 pgstat Haftalık Kapasite Raporu", report);
-                log.info("Haftalik rapor gonderildi");
+            String body = buildWeeklyReport();
+            if (body == null || body.isBlank()) {
+                log.warn("Haftalik rapor bos uretildi, gonderim atlandi");
+                return;
             }
+            SendResult result = sendReportToChannels(title, body);
+            try {
+                reportHistoryRepo.insert("weekly", title, body,
+                    result.recipientsJson(), result.status(),
+                    result.channelsCount(), result.errorMessage());
+            } catch (Exception e) {
+                log.warn("Rapor history kaydi yazilamadi: {}", e.getMessage());
+            }
+            log.info("Haftalik rapor gonderildi (status={}, channels={})",
+                result.status(), result.channelsCount());
         } catch (Exception e) {
             log.warn("Haftalik rapor hatasi: {}", e.getMessage());
         }
@@ -234,29 +300,50 @@ public class ReportGenerator {
     // Bildirim gonderimi
     // =========================================================================
 
-    private void sendReportToChannels(String title, String body) {
-        // Tum aktif bildirim kanallarina gonder
-        // NotificationService'in mevcut altyapisini kullan
+    private SendResult sendReportToChannels(String title, String body) {
+        int successCount = 0;
+        int failCount = 0;
+        String firstError = null;
+        List<String> recipients = new ArrayList<>();
         try {
             List<Map<String, Object>> channels = jdbc.queryForList(
                 "select channel_id, channel_name, channel_type, config::text as config " +
                 "from control.notification_channel where is_enabled = true");
 
             for (Map<String, Object> channel : channels) {
+                String type = (String) channel.get("channel_type");
+                Object channelId = channel.get("channel_id");
                 try {
-                    String type = (String) channel.get("channel_type");
                     String config = (String) channel.get("config");
-                    // NotificationService'in sendTest metodunu reuse edebiliriz
-                    // ama daha temiz: dogrudan rapor gonder
                     notificationService.sendReport(type, config, title, body);
+                    successCount++;
+                    // Kanal kaydi (id + type) — UI'da liste gostermek icin
+                    recipients.add("{\"channel_id\":" + channelId
+                        + ",\"channel_type\":\"" + type + "\","
+                        + "\"status\":\"sent\"}");
                 } catch (Exception e) {
+                    failCount++;
+                    if (firstError == null) firstError = e.getMessage();
+                    recipients.add("{\"channel_id\":" + channelId
+                        + ",\"channel_type\":\"" + type + "\","
+                        + "\"status\":\"failed\"}");
                     log.debug("Rapor gonderim hatasi channel={}: {}",
                         channel.get("channel_name"), e.getMessage());
                 }
             }
         } catch (Exception e) {
             log.warn("Rapor kanal listesi alinamadi: {}", e.getMessage());
+            return new SendResult(0, "[]", "failed", e.getMessage());
         }
+
+        String status;
+        if (successCount == 0 && failCount == 0) status = "sent"; // hic kanal yok
+        else if (failCount == 0) status = "sent";
+        else if (successCount == 0) status = "failed";
+        else status = "partial";
+
+        String json = "[" + String.join(",", recipients) + "]";
+        return new SendResult(successCount, json, status, firstError);
     }
 
     // =========================================================================

@@ -394,4 +394,62 @@ public class PurgeEvaluator {
             log.warn("Job run cleanup hatasi: {}", e.getMessage());
         }
     }
+
+    /**
+     * Rapor tarihçesi ve eski notification_log kayıtlarını temizler.
+     * Retention süreleri control.report_config tablosundan okunur (UI'da duzenlenebilir):
+     *   - daily_retention_days
+     *   - weekly_retention_days
+     *   - notification_log_retention_days
+     * Günde 1 kez (UTC 02:00) JobOrchestrator tarafından çağrılır.
+     */
+    public void purgeReportsAndNotifications() {
+        // Config'i oku — yoksa safe defaults kullan
+        int dailyDays = 30;
+        int weeklyDays = 90;
+        int notifDays = 14;
+        try {
+            java.util.Map<String, Object> cfg = jdbc.queryForMap(
+                "select daily_retention_days, weekly_retention_days, " +
+                "       notification_log_retention_days " +
+                "from control.report_config where config_id = 1");
+            if (cfg.get("daily_retention_days") instanceof Number n) dailyDays = n.intValue();
+            if (cfg.get("weekly_retention_days") instanceof Number n) weeklyDays = n.intValue();
+            if (cfg.get("notification_log_retention_days") instanceof Number n) notifDays = n.intValue();
+        } catch (Exception ignore) {
+            // V045 henuz uygulanmamissa default kullan
+        }
+
+        // Daily report history
+        try {
+            int n = jdbc.update(
+                "delete from ops.report_history " +
+                "where report_type = 'daily' and generated_at < now() - make_interval(days => ?)",
+                dailyDays);
+            if (n > 0) log.info("Eski gunluk rapor temizlendi: {} satir (>{} gun)", n, dailyDays);
+        } catch (Exception e) {
+            log.debug("report_history daily purge atlandi: {}", e.getMessage());
+        }
+
+        // Weekly report history
+        try {
+            int n = jdbc.update(
+                "delete from ops.report_history " +
+                "where report_type = 'weekly' and generated_at < now() - make_interval(days => ?)",
+                weeklyDays);
+            if (n > 0) log.info("Eski haftalik rapor temizlendi: {} satir (>{} gun)", n, weeklyDays);
+        } catch (Exception e) {
+            log.debug("report_history weekly purge atlandi: {}", e.getMessage());
+        }
+
+        // Notification log
+        try {
+            int n = jdbc.update(
+                "delete from ops.notification_log where sent_at < now() - make_interval(days => ?)",
+                notifDays);
+            if (n > 0) log.info("Eski notification_log temizlendi: {} satir (>{} gun)", n, notifDays);
+        } catch (Exception e) {
+            log.debug("notification_log purge atlandi: {}", e.getMessage());
+        }
+    }
 }
