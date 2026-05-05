@@ -75,10 +75,17 @@ public class JobOrchestrator {
     private volatile long lastRollingEvalMs = 0;
     private static final long ROLLING_EVAL_INTERVAL_MS = 15 * 60 * 1000; // 15 dakika
 
-    // Gunluk/haftalik rapor idempotency — UTC 06:00 saati 1 saat surdugu icin
-    // her 5s'de tekrar tetiklenmesin diye gun bazinda guard tutuyoruz.
+    // Saat-bazli job idempotency — saat eslesmesi 1 saat surdugu icin her 5s'de
+    // tekrar tetiklenmesin diye gun bazinda guard tutuyoruz. UTC saatleri:
+    //   01:00 → daily rollup + baseline
+    //   02:00 → job_run history purge
+    //   03:00 → nightly PG snapshot
+    //   06:00 → daily report (Pazartesi haftalik da)
     // In-memory state — restart'ta resetlenir; o saat icinde restart olursa
-    // bir kerelik dup gonderim olabilir, bu kabul edilebilir.
+    // bir kerelik dup olabilir, bu kabul edilebilir.
+    private volatile java.time.LocalDate lastDailyRollupDate = null;
+    private volatile java.time.LocalDate lastJobPurgeDate = null;
+    private volatile java.time.LocalDate lastNightlySnapshotDate = null;
     private volatile java.time.LocalDate lastDailyReportDate = null;
     private volatile java.time.LocalDate lastWeeklyReportDate = null;
 
@@ -451,25 +458,38 @@ public class JobOrchestrator {
             totalRows += hourlyRows;
             log.info("Saatlik rollup tamamlandi: {} satir", hourlyRows);
 
-            // 3. Gunluk rollup — sadece UTC saat eslesirse
+            // 3. Gunluk rollup — sadece UTC saat eslesirse, gunde 1 kez (idempotency guard)
             int dailyRollupHour = 1; // default
             int currentUtcHour = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour();
-            if (currentUtcHour == dailyRollupHour) {
-                int dailyRows = aggRepo.rollupDaily();
-                totalRows += dailyRows;
-                log.info("Gunluk rollup tamamlandi: {} satir", dailyRows);
-
-                // 3b. Adaptive baseline — gunde 1 kez, daily rollup ile ayni pencerede
+            java.time.LocalDate todayUtc = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+            if (currentUtcHour == dailyRollupHour && !todayUtc.equals(lastDailyRollupDate)) {
+                lastDailyRollupDate = todayUtc;
                 try {
-                    baselineCalculator.calculateAll();
+                    int dailyRows = aggRepo.rollupDaily();
+                    totalRows += dailyRows;
+                    log.info("Gunluk rollup tamamlandi: {} satir", dailyRows);
+
+                    // 3b. Adaptive baseline — gunde 1 kez, daily rollup ile ayni pencerede
+                    try {
+                        baselineCalculator.calculateAll();
+                    } catch (Exception e) {
+                        log.warn("Baseline hesaplamasi hatasi: {}", e.getMessage());
+                    }
                 } catch (Exception e) {
-                    log.warn("Baseline hesaplamasi hatasi: {}", e.getMessage());
+                    log.warn("Gunluk rollup hatasi: {}", e.getMessage());
+                    lastDailyRollupDate = null; // hata varsa bir sonraki cycle tekrar dene
                 }
             }
 
-            // 3c. Job run history cleanup — UTC saat 2'de gunde 1 kez
-            if (currentUtcHour == 2) {
-                purgeEvaluator.purgeJobRunHistory();
+            // 3c. Job run history cleanup — UTC saat 2'de gunde 1 kez (idempotency guard)
+            if (currentUtcHour == 2 && !todayUtc.equals(lastJobPurgeDate)) {
+                lastJobPurgeDate = todayUtc;
+                try {
+                    purgeEvaluator.purgeJobRunHistory();
+                } catch (Exception e) {
+                    log.warn("Job run history purge hatasi: {}", e.getMessage());
+                    lastJobPurgeDate = null;
+                }
             }
 
             // 3d. Nightly PG snapshot — UTC saat 3'te gunde 1 kez
@@ -484,7 +504,13 @@ public class JobOrchestrator {
                 // Tablo henuz yoksa (V041 uygulanmamis) sessizce gec
             }
 
-            if (currentUtcHour == 3 || nightlyTriggered) {
+            // Saat-bazli tetik (currentUtcHour == 3) gunde 1 kez sinirlanir;
+            // manuel trigger (nightlyTriggered) zaten kendi status'unu yonettigi icin guard gerekmez.
+            boolean hourBasedNightly = (currentUtcHour == 3 && !todayUtc.equals(lastNightlySnapshotDate));
+            if (hourBasedNightly || nightlyTriggered) {
+                if (hourBasedNightly) {
+                    lastNightlySnapshotDate = todayUtc;
+                }
                 try {
                     if (nightlyTriggered) {
                         jdbc.update("update control.nightly_snapshot_trigger set status = 'running', started_at = now() where status = 'pending'");
@@ -513,6 +539,9 @@ public class JobOrchestrator {
                     log.warn("Nightly snapshot genel hatasi: {}", e.getMessage());
                     if (nightlyTriggered) {
                         jdbc.update("update control.nightly_snapshot_trigger set status = 'failed', finished_at = now() where status = 'running'");
+                    }
+                    if (hourBasedNightly) {
+                        lastNightlySnapshotDate = null; // hata varsa bir sonraki cycle tekrar dene
                     }
                 }
             }
