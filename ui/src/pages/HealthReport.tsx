@@ -7,8 +7,11 @@ const WL_LABELS: Record<string, string> = {
     mixed: 'Karma (HTAP)', idle: 'Boşta',
 };
 const WL_COLORS: Record<string, string> = {
-    oltp: '#3B82F6', analytical: '#8B5CF6', bulk: '#F97316',
-    mixed: '#FACC15', idle: '#94A3B8',
+    oltp: '#3B82F6',         // mavi — normal işlem yükü
+    analytical: '#1E293B',   // siyah/lacivert — özel iş yükü
+    bulk: '#DC2626',         // kırmızı — peak/spike
+    mixed: '#F97316',        // turuncu — karışık
+    idle: '#10B981',         // yeşil — boşta, sorun yok
 };
 
 function HealthScoreBar({ scores, label, dimmed }: { scores: any; label: string; dimmed?: boolean }) {

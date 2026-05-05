@@ -292,11 +292,11 @@ const WL_LABEL_TR: Record<string, string> = {
     idle: 'Boşta',
 };
 const WL_COLOR: Record<string, string> = {
-    oltp: '#3B82F6',         // mavi
-    analytical: '#8B5CF6',   // mor
-    bulk: '#F97316',         // turuncu
-    mixed: '#FACC15',        // sarı
-    idle: '#94A3B8',         // gri
+    oltp: '#3B82F6',         // mavi — en yaygın, normal işlem yükü
+    analytical: '#1E293B',   // siyah/lacivert — özel/koyu iş yükü
+    bulk: '#DC2626',         // kırmızı — peak/spike, dikkat
+    mixed: '#F97316',        // turuncu — birden fazla profil karışık
+    idle: '#10B981',         // yeşil — sorun yok, boşta
 };
 
 function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
@@ -404,7 +404,6 @@ tablosundan tunable. Sınıflandırma saatte bir collector tarafından yenilenir
                 <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.bulk }} /> Toplu Yük</span>
                 <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.mixed }} /> Karma</span>
                 <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLOR.idle }} /> Boşta</span>
-                <span className="ml-auto">📌 = manuel etiket</span>
             </div>
         </div>
     );
