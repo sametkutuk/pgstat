@@ -20,19 +20,16 @@ function HealthScoreBar({ scores, label, dimmed }: { scores: any; label: string;
     const bulk = Number(scores?.bulk || 0);
     const total = oltp + analytical + bulk;
     if (label === 'idle' || total === 0) return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
-    // Solid = anlık (24h), çizgili dashed = ortalama (90g)
-    const stripe = dimmed ? 'repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.35) 6px 8px)' : 'none';
     return (
         <div className="flex items-center gap-2">
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${
                 dimmed ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]' : 'bg-[#0F172A] text-white'
             }`}>{dimmed ? '90G' : '24S'}</span>
-            <div className={`flex flex-1 ${dimmed ? 'h-3' : 'h-5'} overflow-hidden border ${dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'}`}
-                title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}
-                style={{ backgroundImage: stripe, backgroundColor: 'white' }}>
-                {oltp > 0 && <div style={{ width: `${oltp}%`, backgroundColor: WL_COLORS.oltp, backgroundImage: stripe, backgroundBlendMode: 'overlay' }} className="text-white text-[9px] font-medium flex items-center justify-center">{oltp >= 10 && `${oltp}%`}</div>}
-                {analytical > 0 && <div style={{ width: `${analytical}%`, backgroundColor: WL_COLORS.analytical, backgroundImage: stripe, backgroundBlendMode: 'overlay' }} className="text-white text-[9px] font-medium flex items-center justify-center">{analytical >= 10 && `${analytical}%`}</div>}
-                {bulk > 0 && <div style={{ width: `${bulk}%`, backgroundColor: WL_COLORS.bulk, backgroundImage: stripe, backgroundBlendMode: 'overlay' }} className="text-white text-[9px] font-medium flex items-center justify-center">{bulk >= 10 && `${bulk}%`}</div>}
+            <div className={`flex flex-1 h-5 overflow-hidden border ${dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'}`}
+                title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}>
+                {oltp > 0 && <div style={{ width: `${oltp}%`, backgroundColor: WL_COLORS.oltp }} className="text-white text-[9px] font-medium flex items-center justify-center">{oltp >= 10 && `${oltp}%`}</div>}
+                {analytical > 0 && <div style={{ width: `${analytical}%`, backgroundColor: WL_COLORS.analytical }} className="text-white text-[9px] font-medium flex items-center justify-center">{analytical >= 10 && `${analytical}%`}</div>}
+                {bulk > 0 && <div style={{ width: `${bulk}%`, backgroundColor: WL_COLORS.bulk }} className="text-white text-[9px] font-medium flex items-center justify-center">{bulk >= 10 && `${bulk}%`}</div>}
             </div>
         </div>
     );

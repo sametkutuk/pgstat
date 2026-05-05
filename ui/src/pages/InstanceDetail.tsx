@@ -234,12 +234,6 @@ function ScoreBar({ scores, label, classifiedAt, dimmed }: {
         return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
     }
 
-    // Stripe pattern uzun-vade için — solid renk üzerine 45° diagonal beyaz
-    // çizgilerle "ortalama / arşiv" hissi. Anlık olandan görsel olarak ayırır.
-    const stripeOverlay = dimmed
-        ? 'repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.35) 6px 8px)'
-        : 'none';
-
     return (
         <div className="flex items-center gap-2">
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${
@@ -250,26 +244,25 @@ function ScoreBar({ scores, label, classifiedAt, dimmed }: {
                 {dimmed ? '90G' : '24S'}
             </span>
             <div
-                className={`flex flex-1 ${dimmed ? 'h-3' : 'h-5'} overflow-hidden border ${
+                className={`flex flex-1 h-5 overflow-hidden border ${
                     dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'
                 }`}
                 title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}
-                style={{ backgroundImage: stripeOverlay, backgroundColor: 'white' }}
             >
                 {oltp > 0 && (
-                    <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                    <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp }}
                         className="text-white text-[9px] font-medium flex items-center justify-center">
                         {oltp >= 10 && `${oltp}%`}
                     </div>
                 )}
                 {analytical > 0 && (
-                    <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                    <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical }}
                         className="text-white text-[9px] font-medium flex items-center justify-center">
                         {analytical >= 10 && `${analytical}%`}
                     </div>
                 )}
                 {bulk > 0 && (
-                    <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                    <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk }}
                         className="text-white text-[9px] font-medium flex items-center justify-center">
                         {bulk >= 10 && `${bulk}%`}
                     </div>
