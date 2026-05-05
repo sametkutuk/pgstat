@@ -214,6 +214,59 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
     );
 }
 
+/**
+ * Workload skor çubuğu — OLTP/Analitik/Toplu için renkli stacked bar.
+ * dimmed=true ise daha soluk (uzun-vade için)
+ */
+function ScoreBar({ scores, label, classifiedAt, dimmed }: {
+    scores: any; label: string; classifiedAt: string | null; dimmed?: boolean;
+}) {
+    const oltp = Number(scores?.oltp || 0);
+    const analytical = Number(scores?.analytical || 0);
+    const bulk = Number(scores?.bulk || 0);
+    const total = oltp + analytical + bulk;
+    const opacity = dimmed ? 0.65 : 1;
+
+    if (!classifiedAt) {
+        return <span className="text-[#CBD5E1] text-[10px]">— hesaplanmadı —</span>;
+    }
+    if (label === 'idle' || total === 0) {
+        return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
+    }
+
+    return (
+        <div className="flex items-center gap-2">
+            <div className="flex flex-1 h-4 rounded overflow-hidden border border-[#E2E8F0]"
+                style={{ opacity }}
+                title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}>
+                {oltp > 0 && (
+                    <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp }}
+                        className="text-white text-[9px] flex items-center justify-center">
+                        {oltp >= 8 && `${oltp}%`}
+                    </div>
+                )}
+                {analytical > 0 && (
+                    <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical }}
+                        className="text-white text-[9px] flex items-center justify-center">
+                        {analytical >= 8 && `${analytical}%`}
+                    </div>
+                )}
+                {bulk > 0 && (
+                    <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk }}
+                        className="text-white text-[9px] flex items-center justify-center">
+                        {bulk >= 8 && `${bulk}%`}
+                    </div>
+                )}
+            </div>
+            <div className="text-[9px] text-[#94A3B8] whitespace-nowrap w-16 text-right">
+                {new Date(classifiedAt).toLocaleString('tr-TR', dimmed
+                    ? { day: '2-digit', month: '2-digit' }
+                    : { hour: '2-digit', minute: '2-digit' })}
+            </div>
+        </div>
+    );
+}
+
 const WL_LABEL_TR: Record<string, string> = {
     oltp: 'OLTP',
     analytical: 'Analitik',
@@ -260,7 +313,12 @@ function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
             <div className="flex items-center gap-2 mb-3">
                 <h4 className="font-semibold text-[#1E293B]">DB Workload Profilleri</h4>
                 <InfoTip text={
-`Her DB için son 24 saatlik pg_stat_statements verisinden otomatik sınıflandırma.
+`Her DB için iki ayrı görünüm:
+• Son 24 saat (anlık) — saatte 1 hesaplanır, bugünkü davranışı gösterir
+• Genel (90 gün ortalaması) — günde 1 hesaplanır, DB'nin gerçek karakterini verir
+İkisi farklıysa → bugün anormal aktivite. Aynıysa → tipik gün.
+
+
 
 Hesaplanan metrikler (per-DB):
 • tps        = sum(calls) / 24h          → tx yoğunluğu
@@ -287,64 +345,40 @@ tablosundan tunable. Sınıflandırma saatte bir collector tarafından yenilenir
 📌 işaretli etiketler manuel override (otomatik tespit ezilir).`
                 } />
                 <span className="text-[11px] text-[#94A3B8] ml-auto">
-                    24h pgss · saatte 1 yenilenir
+                    24h saatte 1 · 90g günde 1
                 </span>
             </div>
-            <div className="space-y-2">
-                {rows.map((r: any) => {
-                    const scores = r.workload_scores || {};
-                    const oltp = Number(scores.oltp || 0);
-                    const analytical = Number(scores.analytical || 0);
-                    const bulk = Number(scores.bulk || 0);
-                    const total = oltp + analytical + bulk;
-                    const labelAuto = r.workload_label_auto || (total === 0 ? 'idle' : 'mixed');
-                    const labelManual = r.workload_label;
-                    const finalLabel = labelManual || labelAuto;
+            <div className="grid grid-cols-[max-content_max-content_1fr_1fr] gap-x-3 gap-y-2 text-xs items-center">
+                {/* Sütun başlıkları */}
+                <div className="text-[10px] uppercase tracking-wider text-[#94A3B8]">Database</div>
+                <div className="text-[10px] uppercase tracking-wider text-[#94A3B8]">Etiket</div>
+                <div className="text-[10px] uppercase tracking-wider text-[#94A3B8]">Son 24 saat (anlık)</div>
+                <div className="text-[10px] uppercase tracking-wider text-[#94A3B8]">Genel — 90 gün ortalaması</div>
 
-                    return (
-                        <div key={r.dbid} className="flex items-center gap-3 text-xs">
-                            <div className="w-32 truncate font-mono" title={r.datname}>
-                                {r.datname || '?'}
-                            </div>
-                            <div
-                                className="px-2 py-0.5 rounded text-white text-[10px] font-medium flex-shrink-0"
-                                style={{ backgroundColor: WL_COLOR[finalLabel] || '#94A3B8' }}
-                                title={labelManual ? 'Manuel etiket' : 'Otomatik tespit'}
-                            >
-                                {WL_LABEL_TR[finalLabel] || finalLabel}
-                                {labelManual && <span className="ml-1">📌</span>}
-                            </div>
-                            {labelAuto !== 'idle' && total > 0 && (
-                                <div className="flex flex-1 h-4 rounded overflow-hidden border border-[#E2E8F0]"
-                                    title={`OLTP %${oltp}  ·  Analitik %${analytical}  ·  Toplu %${bulk}`}>
-                                    {oltp > 0 && (
-                                        <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp }}
-                                             className="text-white text-[9px] flex items-center justify-center">
-                                            {oltp >= 8 && `${oltp}%`}
-                                        </div>
-                                    )}
-                                    {analytical > 0 && (
-                                        <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical }}
-                                             className="text-white text-[9px] flex items-center justify-center">
-                                            {analytical >= 8 && `${analytical}%`}
-                                        </div>
-                                    )}
-                                    {bulk > 0 && (
-                                        <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk }}
-                                             className="text-white text-[9px] flex items-center justify-center">
-                                            {bulk >= 8 && `${bulk}%`}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                            {labelAuto === 'idle' && (
-                                <span className="text-[#94A3B8] flex-1">— düşük aktivite —</span>
-                            )}
-                            <div className="text-[10px] text-[#94A3B8] w-16 text-right">
-                                {r.workload_classified_at ? new Date(r.workload_classified_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                            </div>
-                        </div>
-                    );
+                {rows.flatMap((r: any) => {
+                    const labelManual = r.workload_label;
+                    const labelShort = r.workload_label_auto || 'idle';
+                    const labelLong = r.workload_label_long || 'idle';
+                    const finalLabel = labelManual || labelShort;
+
+                    return [
+                        <div key={`${r.dbid}-name`} className="w-40 truncate font-mono" title={r.datname}>
+                            {r.datname || '?'}
+                        </div>,
+                        <div
+                            key={`${r.dbid}-tag`}
+                            className="px-2 py-0.5 rounded text-white text-[10px] font-medium w-max flex-shrink-0"
+                            style={{ backgroundColor: WL_COLOR[finalLabel] || '#94A3B8' }}
+                            title={labelManual ? 'Manuel etiket' : 'Otomatik (24h)'}
+                        >
+                            {WL_LABEL_TR[finalLabel] || finalLabel}
+                            {labelManual && <span className="ml-1">📌</span>}
+                        </div>,
+                        <ScoreBar key={`${r.dbid}-short`} scores={r.workload_scores} label={labelShort}
+                            classifiedAt={r.workload_classified_at} />,
+                        <ScoreBar key={`${r.dbid}-long`} scores={r.workload_scores_long} label={labelLong}
+                            classifiedAt={r.workload_classified_long_at} dimmed />,
+                    ];
                 })}
             </div>
             <div className="mt-3 pt-2 border-t border-[#E2E8F0] flex gap-3 text-[10px] text-[#64748B]">

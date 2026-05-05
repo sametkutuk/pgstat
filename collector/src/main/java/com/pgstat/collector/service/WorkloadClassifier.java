@@ -29,13 +29,36 @@ public class WorkloadClassifier {
         this.jdbc = jdbc;
     }
 
-    /** Saatte 1 kere — fixedDelay 1h. Startup'tan 1 dakika sonra ilk run. */
+    /** Kısa vade (24h) — saatte 1, anlık karakter. Startup'tan 1 dk sonra ilk run. */
     @Scheduled(fixedDelay = 3_600_000, initialDelay = 60_000)
+    public void classifyShortTerm() {
+        Map<String, Object> cfg = loadConfig();
+        int windowHours = ((Number) cfg.get("window_hours")).intValue();
+        runClassification(cfg, windowHours, false);
+    }
+
+    /** Uzun vade (90g) — 24 saatte 1, gerçek karakter (yön değişmez). */
+    @Scheduled(fixedDelay = 86_400_000, initialDelay = 5 * 60_000)
+    public void classifyLongTerm() {
+        Map<String, Object> cfg = loadConfig();
+        int days = 90;
+        Object v = cfg.get("long_window_days");
+        if (v instanceof Number n) days = n.intValue();
+        runClassification(cfg, days * 24, true);
+    }
+
+    /** Eski API uyumluluğu (varsa external çağrı için). */
     public void classifyAll() {
+        classifyShortTerm();
+    }
+
+    private void runClassification(Map<String, Object> cfg, int windowHours, boolean longTerm) {
         try {
-            Map<String, Object> cfg = loadConfig();
-            int windowHours = ((Number) cfg.get("window_hours")).intValue();
-            BigDecimal idleMaxCalls = new BigDecimal(cfg.get("idle_max_calls").toString());
+            String tag = longTerm ? "uzun-vade" : "kısa-vade";
+            // Idle eşiği pencere genişliğine orantılı olarak ölçeklenir.
+            // 24h pencerede 100 calls eşiği uygun; 90g pencerede aynı eşik anlamsız (her DB aktif).
+            BigDecimal idleMaxCalls = new BigDecimal(cfg.get("idle_max_calls").toString())
+                .multiply(BigDecimal.valueOf(Math.max(1, windowHours / 24.0)));
             BigDecimal oltpMinTps = (BigDecimal) cfg.get("oltp_min_tps");
             BigDecimal oltpMaxAvgMs = (BigDecimal) cfg.get("oltp_max_avg_ms");
             BigDecimal analyticMinAvgMs = (BigDecimal) cfg.get("analytic_min_avg_ms");
@@ -146,16 +169,26 @@ public class WorkloadClassifier {
                     "{\"oltp\":%d,\"analytical\":%d,\"bulk\":%d}",
                     oltp, analytical, bulk);
 
-                jdbc.update("""
-                    update dim.database_ref
-                       set workload_label_auto = ?,
-                           workload_scores = ?::jsonb,
-                           workload_classified_at = now()
-                     where instance_pk = ? and dbid = ?
-                    """, label, scoresJson, instancePk, dbid);
+                if (longTerm) {
+                    jdbc.update("""
+                        update dim.database_ref
+                           set workload_label_long = ?,
+                               workload_scores_long = ?::jsonb,
+                               workload_classified_long_at = now()
+                         where instance_pk = ? and dbid = ?
+                        """, label, scoresJson, instancePk, dbid);
+                } else {
+                    jdbc.update("""
+                        update dim.database_ref
+                           set workload_label_auto = ?,
+                               workload_scores = ?::jsonb,
+                               workload_classified_at = now()
+                         where instance_pk = ? and dbid = ?
+                        """, label, scoresJson, instancePk, dbid);
+                }
                 classified++;
             }
-            log.info("Workload classification: {} DB sınıflandırıldı", classified);
+            log.info("Workload classification ({}): {} DB sınıflandırıldı", tag, classified);
         } catch (Exception e) {
             log.warn("Workload classification hatası: {}", e.getMessage());
         }

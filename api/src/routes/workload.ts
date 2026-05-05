@@ -17,7 +17,9 @@ router.get('/instance/:id', async (req, res, next) => {
         const r = await pool.query(`
             select dbid, datname,
                    workload_label, workload_label_auto, workload_scores,
-                   workload_classified_at
+                   workload_classified_at,
+                   workload_label_long, workload_scores_long,
+                   workload_classified_long_at
             from dim.database_ref
             where instance_pk = $1
             order by datname
