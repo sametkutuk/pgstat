@@ -162,14 +162,33 @@ function OverviewTab({ inst, cap }: { inst: any; cap: any }) {
             {cap && (
                 <div className="bg-white rounded-lg p-5 shadow-sm md:col-span-2">
                     <h3 className="text-sm font-semibold text-[#64748B] mb-3">Capability</h3>
-                    <dl className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                        <Row label="pg_stat_statements" value={cap.has_pg_stat_statements ? '✅' : '❌'} />
-                        <Row label="pg_stat_statements_info" value={cap.has_pg_stat_statements_info ? '✅' : '❌'} />
-                        <Row label="pg_stat_io" value={cap.has_pg_stat_io ? '✅' : '❌'} />
-                        <Row label="pg_stat_checkpointer" value={cap.has_pg_stat_checkpointer ? '✅' : '❌'} />
-                        <Row label="compute_query_id" value={cap.compute_query_id_mode || '—'} />
-                        <Row label="Erişilebilir" value={cap.is_reachable === true ? '✅' : cap.is_reachable === false ? '❌' : '—'} />
-                    </dl>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <CapabilityCard
+                            name="pg_stat_statements"
+                            desc="Sorgu istatistikleri"
+                            available={cap.has_pg_stat_statements}
+                        />
+                        <CapabilityCard
+                            name="pg_stat_statements_info"
+                            desc="Reset zamanı, dealloc sayısı (PG14+)"
+                            available={cap.has_pg_stat_statements_info}
+                        />
+                        <CapabilityCard
+                            name="pg_stat_io"
+                            desc="Backend tipine göre I/O (PG16+)"
+                            available={cap.has_pg_stat_io}
+                        />
+                        <CapabilityCard
+                            name="pg_stat_checkpointer"
+                            desc="Checkpoint metrikleri (PG17+)"
+                            available={cap.has_pg_stat_checkpointer}
+                        />
+                        <CapabilityCard
+                            name="compute_query_id"
+                            desc="Sorgu kimlik üretimi"
+                            mode={cap.compute_query_id_mode}
+                        />
+                    </div>
                 </div>
             )}
         </div>
@@ -181,6 +200,43 @@ function Row({ label, value }: { label: string; value: any }) {
         <div className="flex justify-between">
             <dt className="text-[#64748B]">{label}</dt>
             <dd className="font-medium">{value}</dd>
+        </div>
+    );
+}
+
+/**
+ * Capability kartı — tek bir feature için durum gösterir.
+ * available=true/false ise Aktif/Yok rozetleri, mode varsa metin rozeti.
+ */
+function CapabilityCard({ name, desc, available, mode }: {
+    name: string; desc: string; available?: boolean; mode?: string | null;
+}) {
+    let badge: { text: string; cls: string };
+    if (mode !== undefined) {
+        const m = (mode || 'off').toLowerCase();
+        const cls =
+            m === 'on' || m === 'auto' || m === 'regress'
+                ? 'bg-green-100 text-green-700 border-green-200'
+                : m === 'off'
+                    ? 'bg-amber-100 text-amber-700 border-amber-200'
+                    : 'bg-gray-100 text-gray-600 border-gray-200';
+        badge = { text: m, cls };
+    } else if (available === true) {
+        badge = { text: '✓ Aktif', cls: 'bg-green-100 text-green-700 border-green-200' };
+    } else if (available === false) {
+        badge = { text: '✗ Yok', cls: 'bg-gray-100 text-gray-500 border-gray-200' };
+    } else {
+        badge = { text: '—', cls: 'bg-gray-50 text-gray-400 border-gray-200' };
+    }
+    return (
+        <div className="border border-[#E2E8F0] rounded-lg px-3 py-2 flex items-start justify-between gap-2 bg-[#F8FAFC]">
+            <div className="min-w-0 flex-1">
+                <div className="font-mono text-xs text-[#1E293B] truncate" title={name}>{name}</div>
+                <div className="text-[10px] text-[#94A3B8] truncate">{desc}</div>
+            </div>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap flex-shrink-0 ${badge.cls}`}>
+                {badge.text}
+            </span>
         </div>
     );
 }
