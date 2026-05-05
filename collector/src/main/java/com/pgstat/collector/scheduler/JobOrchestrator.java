@@ -75,6 +75,13 @@ public class JobOrchestrator {
     private volatile long lastRollingEvalMs = 0;
     private static final long ROLLING_EVAL_INTERVAL_MS = 15 * 60 * 1000; // 15 dakika
 
+    // Gunluk/haftalik rapor idempotency — UTC 06:00 saati 1 saat surdugu icin
+    // her 5s'de tekrar tetiklenmesin diye gun bazinda guard tutuyoruz.
+    // In-memory state — restart'ta resetlenir; o saat icinde restart olursa
+    // bir kerelik dup gonderim olabilir, bu kabul edilebilir.
+    private volatile java.time.LocalDate lastDailyReportDate = null;
+    private volatile java.time.LocalDate lastWeeklyReportDate = null;
+
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
                            @Qualifier("collectorExecutor") Executor collectorExecutor,
@@ -515,15 +522,31 @@ public class JobOrchestrator {
             // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
 
             // 3f. Gunluk rapor — UTC 06:00 (TR 09:00), is gunu basinda
+            // Idempotency: ayni gun ikinci kez tetiklemeyiz (UTC 06:00 saati 1 saat surer,
+            // her 5s'de tetiklemek yuzlerce tekrarli rapora yol acar).
             if (currentUtcHour == 6) {
-                try {
-                    reportGenerator.generateAndSendDailyReport();
-                    // Pazartesi ise haftalik rapor da gonder
-                    if (java.time.LocalDate.now(java.time.ZoneOffset.UTC).getDayOfWeek() == java.time.DayOfWeek.MONDAY) {
-                        reportGenerator.generateAndSendWeeklyReport();
+                java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+                if (!today.equals(lastDailyReportDate)) {
+                    lastDailyReportDate = today;
+                    try {
+                        reportGenerator.generateAndSendDailyReport();
+                        log.info("Gunluk rapor gonderildi: {}", today);
+                    } catch (Exception e) {
+                        log.warn("Gunluk rapor hatasi: {}", e.getMessage());
+                        lastDailyReportDate = null; // hata varsa bir sonraki cycle tekrar dene
                     }
-                } catch (Exception e) {
-                    log.warn("Rapor gonderim hatasi: {}", e.getMessage());
+                }
+                // Pazartesi ise haftalik rapor da gonder (ayni idempotency ile)
+                if (today.getDayOfWeek() == java.time.DayOfWeek.MONDAY
+                        && !today.equals(lastWeeklyReportDate)) {
+                    lastWeeklyReportDate = today;
+                    try {
+                        reportGenerator.generateAndSendWeeklyReport();
+                        log.info("Haftalik rapor gonderildi: {}", today);
+                    } catch (Exception e) {
+                        log.warn("Haftalik rapor hatasi: {}", e.getMessage());
+                        lastWeeklyReportDate = null;
+                    }
                 }
             }
 
