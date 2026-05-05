@@ -216,7 +216,8 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
 
 /**
  * Workload skor çubuğu — OLTP/Analitik/Toplu için renkli stacked bar.
- * dimmed=true ise daha soluk (uzun-vade için)
+ * dimmed=true (uzun-vade) → kesik kesik border + diagonal stripe pattern.
+ *  Solid bar = ANLIK (24h). Çizgili/dashed bar = ORTALAMA (90g).
  */
 function ScoreBar({ scores, label, classifiedAt, dimmed }: {
     scores: any; label: string; classifiedAt: string | null; dimmed?: boolean;
@@ -225,7 +226,6 @@ function ScoreBar({ scores, label, classifiedAt, dimmed }: {
     const analytical = Number(scores?.analytical || 0);
     const bulk = Number(scores?.bulk || 0);
     const total = oltp + analytical + bulk;
-    const opacity = dimmed ? 0.65 : 1;
 
     if (!classifiedAt) {
         return <span className="text-[#CBD5E1] text-[10px]">— hesaplanmadı —</span>;
@@ -234,27 +234,44 @@ function ScoreBar({ scores, label, classifiedAt, dimmed }: {
         return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
     }
 
+    // Stripe pattern uzun-vade için — solid renk üzerine 45° diagonal beyaz
+    // çizgilerle "ortalama / arşiv" hissi. Anlık olandan görsel olarak ayırır.
+    const stripeOverlay = dimmed
+        ? 'repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.35) 6px 8px)'
+        : 'none';
+
     return (
         <div className="flex items-center gap-2">
-            <div className="flex flex-1 h-4 rounded overflow-hidden border border-[#E2E8F0]"
-                style={{ opacity }}
-                title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}>
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${
+                dimmed
+                    ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]'
+                    : 'bg-[#0F172A] text-white'
+            }`} title={dimmed ? '90 gün ortalaması' : 'Son 24 saat'}>
+                {dimmed ? '90G' : '24S'}
+            </span>
+            <div
+                className={`flex flex-1 ${dimmed ? 'h-3' : 'h-5'} overflow-hidden border ${
+                    dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'
+                }`}
+                title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}
+                style={{ backgroundImage: stripeOverlay, backgroundColor: 'white' }}
+            >
                 {oltp > 0 && (
-                    <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp }}
-                        className="text-white text-[9px] flex items-center justify-center">
-                        {oltp >= 8 && `${oltp}%`}
+                    <div style={{ width: `${oltp}%`, backgroundColor: WL_COLOR.oltp, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                        className="text-white text-[9px] font-medium flex items-center justify-center">
+                        {oltp >= 10 && `${oltp}%`}
                     </div>
                 )}
                 {analytical > 0 && (
-                    <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical }}
-                        className="text-white text-[9px] flex items-center justify-center">
-                        {analytical >= 8 && `${analytical}%`}
+                    <div style={{ width: `${analytical}%`, backgroundColor: WL_COLOR.analytical, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                        className="text-white text-[9px] font-medium flex items-center justify-center">
+                        {analytical >= 10 && `${analytical}%`}
                     </div>
                 )}
                 {bulk > 0 && (
-                    <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk }}
-                        className="text-white text-[9px] flex items-center justify-center">
-                        {bulk >= 8 && `${bulk}%`}
+                    <div style={{ width: `${bulk}%`, backgroundColor: WL_COLOR.bulk, backgroundImage: stripeOverlay, backgroundBlendMode: 'overlay' }}
+                        className="text-white text-[9px] font-medium flex items-center justify-center">
+                        {bulk >= 10 && `${bulk}%`}
                     </div>
                 )}
             </div>
