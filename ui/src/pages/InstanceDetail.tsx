@@ -97,7 +97,7 @@ export default function InstanceDetail() {
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
             {tab === 'statements' && <StatementsTab data={statements.data} loading={statements.isLoading} />}
-            {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} />}
+            {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} />}
             {tab === 'activity' && <ActivityTab data={activity.data} loading={activity.isLoading} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
@@ -196,11 +196,11 @@ function StatementsTab({ data, loading }: { data: any[] | undefined; loading: bo
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
 }
 
-function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
+function DatabasesTab({ data, loading, instanceId }: { data: any[] | undefined; loading: boolean; instanceId: string }) {
     if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
     return (
         <div className="bg-white rounded-lg shadow-sm p-4">
-            <WorkloadProfile instancePk={(data?.[0]?.instance_pk) ?? null} />
+            <WorkloadProfile instancePk={instanceId} />
             <DataTable columns={[
                 { key: 'datname', header: 'Database' },
                 { key: 'dbid', header: 'OID' },
@@ -227,14 +227,31 @@ const WL_COLOR: Record<string, string> = {
     idle: '#94A3B8',         // gri
 };
 
-function WorkloadProfile({ instancePk }: { instancePk: number | null }) {
-    const { data: rows } = useQuery({
+function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
+    const { data: rows, isLoading, error } = useQuery({
         queryKey: ['workload-instance', instancePk],
         queryFn: () => apiGet<any[]>(`/workload/instance/${instancePk}`),
         enabled: !!instancePk,
         refetchInterval: 60_000,
     });
-    if (!rows || rows.length === 0) return null;
+
+    // Hata gizleme — V047 migration uygulanmadıysa veya endpoint yoksa sessizce atla
+    if (error) return null;
+    if (isLoading) {
+        return (
+            <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4 text-xs text-[#94A3B8]">
+                Workload profili yükleniyor...
+            </div>
+        );
+    }
+    if (!rows || rows.length === 0) {
+        return (
+            <div className="mb-5 border border-dashed border-[#E2E8F0] rounded-lg p-4 text-xs text-[#94A3B8]">
+                Workload profili henüz hesaplanmadı. Collector başlangıcından sonra ~1 dakika içinde
+                ilk sınıflandırma yapılır, sonra saatte bir güncellenir.
+            </div>
+        );
+    }
 
     return (
         <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4">
