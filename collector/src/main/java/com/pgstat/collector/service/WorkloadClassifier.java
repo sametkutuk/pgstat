@@ -83,31 +83,41 @@ public class WorkloadClassifier {
 
                 // Idle kontrol
                 String label;
-                int oltp = 0, analytical = 0, bulk = 0;
+                int oltp, analytical, bulk;
                 if (calls.compareTo(idleMaxCalls) < 0) {
                     label = "idle";
+                    oltp = analytical = bulk = 0;
                 } else {
-                    // OLTP skor: yüksek tps + düşük avg_ms
-                    if (tps.compareTo(oltpMinTps) > 0 && avgMs.compareTo(oltpMaxAvgMs) < 0) {
-                        // Min(tps/100, 1) * (1 - avg_ms/oltp_max_avg_ms) * 100
-                        double tpsScore = Math.min(tps.doubleValue() / 100.0, 1.0);
-                        double msScore = 1.0 - Math.min(avgMs.doubleValue() / oltpMaxAvgMs.doubleValue(), 1.0);
-                        oltp = (int) Math.round(tpsScore * msScore * 100);
-                    }
-                    // Analytical skor: yüksek avg_ms + yüksek rows/call
-                    if (avgMs.compareTo(analyticMinAvgMs) > 0 || rowsPerCall.compareTo(analyticMinRows) > 0) {
-                        double msScore = Math.min(avgMs.doubleValue() / 5000.0, 1.0);
-                        double rowsScore = Math.min(rowsPerCall.doubleValue() / 50000.0, 1.0);
-                        analytical = (int) Math.round(Math.max(msScore, rowsScore) * 100);
-                    }
-                    // Bulk skor: write/call yüksek (rows_per_call büyük + write işlem)
-                    if (rowsPerCall.compareTo(bulkMinRowsWrite) > 0) {
-                        bulk = (int) Math.round(Math.min(rowsPerCall.doubleValue() / 200000.0, 1.0) * 100);
-                    }
+                    // Gradient skor formülü — her metrik 0..1 arası skor üretir,
+                    // toplam normalize edilir. Eşikler "tipik referans değer";
+                    // metrik referansa eşitse 50, daha yüksekse 100'e doğru artar.
+                    double tpsRef = oltpMinTps.doubleValue() * 50.0;          // örn. 1.0 * 50 = 50 tps
+                    double avgMsRef = oltpMaxAvgMs.doubleValue();             // örn. 50ms
+                    double analyticMsRef = analyticMinAvgMs.doubleValue();    // örn. 500ms
+                    double analyticRowsRef = analyticMinRows.doubleValue();   // örn. 5000
+                    double bulkRowsRef = bulkMinRowsWrite.doubleValue();      // örn. 50000
+
+                    // OLTP: yüksek tps + düşük avg_ms (her ikisi de iyi olmalı)
+                    double oltpTps = Math.min(tps.doubleValue() / Math.max(tpsRef, 1.0), 1.0);
+                    double oltpMs = 1.0 / (1.0 + (avgMs.doubleValue() / Math.max(avgMsRef, 1.0)));
+                    double oltpScore = oltpTps * oltpMs;
+
+                    // Analytical: avg_ms VE rows/call yüksek (max alıyoruz, biri yetsin)
+                    double analyticMs = Math.min(avgMs.doubleValue() / Math.max(analyticMsRef, 1.0), 1.0);
+                    double analyticRows = Math.min(rowsPerCall.doubleValue() / Math.max(analyticRowsRef, 1.0), 1.0);
+                    double analyticalScore = Math.max(analyticMs, analyticRows);
+
+                    // Bulk: rows/call çok yüksek (analytical'dan ayrışmak için 4x referans)
+                    double bulkScore = Math.min(rowsPerCall.doubleValue() / (bulkRowsRef * 4.0), 1.0);
+                    if (rowsPerCall.doubleValue() < bulkRowsRef) bulkScore = 0; // bulk için min eşik şart
+
+                    oltp = (int) Math.round(oltpScore * 100);
+                    analytical = (int) Math.round(analyticalScore * 100);
+                    bulk = (int) Math.round(bulkScore * 100);
 
                     int total = oltp + analytical + bulk;
                     if (total == 0) {
-                        // Aktivite var ama hiçbir sınıfa yerleşmedi → düşük yoğunluklu OLTP varsay
+                        // Aktivite var ama hiçbir sınıfa yerleşmedi → düşük yoğunluklu OLTP
                         label = "oltp";
                         oltp = 100;
                     } else {
