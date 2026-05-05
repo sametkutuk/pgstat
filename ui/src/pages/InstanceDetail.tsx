@@ -259,8 +259,35 @@ function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
         <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4">
             <div className="flex items-center gap-2 mb-3">
                 <h4 className="font-semibold text-[#1E293B]">DB Workload Profilleri</h4>
-                <span className="text-[11px] text-[#94A3B8]">
-                    24 saatlik pgss verisinden otomatik (saatte 1 sınıflandırılır)
+                <InfoTip text={
+`Her DB için son 24 saatlik pg_stat_statements verisinden otomatik sınıflandırma.
+
+Hesaplanan metrikler (per-DB):
+• tps        = sum(calls) / 24h          → tx yoğunluğu
+• avg_ms     = avg(exec_time / calls)     → ortalama sorgu süresi
+• rows/call  = sum(rows) / sum(calls)     → sorgu başına dönen/etkilenen satır
+
+Skor formülü (gradient, her biri 0..100):
+• OLTP        = (tps / 50) × 1 / (1 + avg_ms / 50)
+                yüksek tps + düşük avg_ms birlikte gerek
+• Analitik   = max(avg_ms / 200, rows_call / 1000)
+                yavaş sorgu VEYA çok satır biri yetsin
+• Toplu Yük  = rows_call / 40000  (min 10000 row eşiği şart)
+
+Sonra 3 skor toplanıp oranlanır → yüzdeler.
+
+Etiket kuralı:
+• Hiçbir skor %60'ı geçmiyorsa → Karma (HTAP)
+• Pencere içinde 100'den az calls → Boşta
+• Aksi halde en yüksek skorlu sınıf
+
+Eşikler (50, 200, 1000, 10000 vb.) control.workload_classification_config
+tablosundan tunable. Sınıflandırma saatte bir collector tarafından yenilenir.
+
+📌 işaretli etiketler manuel override (otomatik tespit ezilir).`
+                } />
+                <span className="text-[11px] text-[#94A3B8] ml-auto">
+                    24h pgss · saatte 1 yenilenir
                 </span>
             </div>
             <div className="space-y-2">
