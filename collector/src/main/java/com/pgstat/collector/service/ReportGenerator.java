@@ -46,25 +46,46 @@ public class ReportGenerator {
         this.reportHistoryRepo = reportHistoryRepo;
     }
 
+    // Config cache — her 60 saniyede DB'den yenilenir. JobOrchestrator her 5s'de
+    // dailyHourUtc/weeklyHourUtc cagiriyordu, her biri ayri DB query ataniyordu.
+    // 60s TTL ile gunde 17k query yerine ~1.4k query → marjinal iyilestirme,
+    // UI'dan config degisikligi en fazla 60s'de yansir (kabul edilebilir gecikme).
+    private volatile java.util.Map<String, Object> cachedConfig = ReportConfigRepository.defaults();
+    private volatile long lastConfigLoadMs = 0;
+    private static final long CONFIG_CACHE_TTL_MS = 60_000;
+
+    private synchronized java.util.Map<String, Object> config() {
+        long now = System.currentTimeMillis();
+        if (now - lastConfigLoadMs > CONFIG_CACHE_TTL_MS) {
+            try {
+                cachedConfig = reportConfigRepo.get();
+            } catch (Exception e) {
+                log.debug("Config reload hatasi, eski cache kullaniliyor: {}", e.getMessage());
+            }
+            lastConfigLoadMs = now;
+        }
+        return cachedConfig;
+    }
+
     /** Config'e gore: bu rapor tipi enabled mi? */
     public boolean isDailyEnabled() {
-        Object v = reportConfigRepo.get().get("daily_enabled");
+        Object v = config().get("daily_enabled");
         return v == null || Boolean.TRUE.equals(v);
     }
 
     public boolean isWeeklyEnabled() {
-        Object v = reportConfigRepo.get().get("weekly_enabled");
+        Object v = config().get("weekly_enabled");
         return v == null || Boolean.TRUE.equals(v);
     }
 
     /** Hangi UTC saatte gunluk rapor gonderilmeli (config'den). */
     public int dailyHourUtc() {
-        Object v = reportConfigRepo.get().get("daily_hour_utc");
+        Object v = config().get("daily_hour_utc");
         return v instanceof Number ? ((Number) v).intValue() : 6;
     }
 
     public int weeklyHourUtc() {
-        Object v = reportConfigRepo.get().get("weekly_hour_utc");
+        Object v = config().get("weekly_hour_utc");
         return v instanceof Number ? ((Number) v).intValue() : 6;
     }
 
