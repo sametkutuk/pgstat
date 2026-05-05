@@ -256,6 +256,9 @@ function AlertDetails({ details }: { details: any }) {
     const isSpike = reason.includes('spike') || details.spiking_queries;
     const kind = details.kind || '';
     const ctx = details.context || {};
+    // records map'inde currentVal hesabı için kullanılır (temp_files'da temp_bytes,
+    // diğerlerinde current_val/metric_value). Eski kodda vardı, refactor'da düştü.
+    const isTempFiles = kind === 'temp_files';
 
     return (
         <div className="space-y-3 mt-2">
