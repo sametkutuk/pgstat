@@ -69,6 +69,7 @@ public class JobOrchestrator {
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
+    private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
 
     // Rolling alert evaluation — 15 dakikada bir (temp files, idle in tx, inactive slot)
     // Her 5 saniyede calistirmak gereksiz yuk, 15dk yeterli.
@@ -110,7 +111,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
                            com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
-                           com.pgstat.collector.service.ReportGenerator reportGenerator) {
+                           com.pgstat.collector.service.ReportGenerator reportGenerator,
+                           com.pgstat.collector.service.WorkloadClassifier workloadClassifier) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -133,6 +135,7 @@ public class JobOrchestrator {
         this.actionableAlertEvaluator = actionableAlertEvaluator;
         this.jdbc = jdbc;
         this.reportGenerator = reportGenerator;
+        this.workloadClassifier = workloadClassifier;
     }
 
     /**
@@ -533,6 +536,12 @@ public class JobOrchestrator {
                     // Snapshot toplandiktan hemen sonra gunluk alert'leri de degerlendir
                     // (INDEX_SUSPECT_MISSING, INDEX_UNUSED — snapshot verisine bagli)
                     actionableAlertEvaluator.evaluateAll();
+                    // Workload uzun-vade (90g) sınıflandırması — UTC 03:00 nightly ile aynı pencerede
+                    try {
+                        workloadClassifier.classifyLongTerm();
+                    } catch (Exception e) {
+                        log.warn("Workload uzun-vade sınıflandırma hatası: {}", e.getMessage());
+                    }
 
                     if (nightlyTriggered) {
                         jdbc.update("update control.nightly_snapshot_trigger set status = 'done', finished_at = now(), rows_written = ? where status = 'running'", snapshotRows);

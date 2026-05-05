@@ -1,6 +1,32 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+
+const WL_LABELS: Record<string, string> = {
+    oltp: 'OLTP', analytical: 'Analitik', bulk: 'Toplu Yük',
+    mixed: 'Karma (HTAP)', idle: 'Boşta',
+};
+const WL_COLORS: Record<string, string> = {
+    oltp: '#3B82F6', analytical: '#8B5CF6', bulk: '#F97316',
+    mixed: '#FACC15', idle: '#94A3B8',
+};
+
+function HealthScoreBar({ scores, label, dimmed }: { scores: any; label: string; dimmed?: boolean }) {
+    const oltp = Number(scores?.oltp || 0);
+    const analytical = Number(scores?.analytical || 0);
+    const bulk = Number(scores?.bulk || 0);
+    const total = oltp + analytical + bulk;
+    if (label === 'idle' || total === 0) return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
+    return (
+        <div className="flex h-4 rounded overflow-hidden border border-[#E2E8F0]"
+            style={{ opacity: dimmed ? 0.65 : 1 }}
+            title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}>
+            {oltp > 0 && <div style={{ width: `${oltp}%`, backgroundColor: WL_COLORS.oltp }} className="text-white text-[9px] flex items-center justify-center">{oltp >= 8 && `${oltp}%`}</div>}
+            {analytical > 0 && <div style={{ width: `${analytical}%`, backgroundColor: WL_COLORS.analytical }} className="text-white text-[9px] flex items-center justify-center">{analytical >= 8 && `${analytical}%`}</div>}
+            {bulk > 0 && <div style={{ width: `${bulk}%`, backgroundColor: WL_COLORS.bulk }} className="text-white text-[9px] flex items-center justify-center">{bulk >= 8 && `${bulk}%`}</div>}
+        </div>
+    );
+}
 import { apiGet } from '../api/client';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
@@ -190,6 +216,55 @@ export default function HealthReport() {
                     </div>
                 )}
             </div>
+
+            {/* Workload Profilleri */}
+            {report.workload && report.workload.length > 0 && (
+                <div className="bg-white border border-[#E2E8F0] rounded-lg p-5 mb-5">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-1">DB Workload Profilleri</h3>
+                    <p className="text-[11px] text-[#94A3B8] mb-3">
+                        Sol: son 24 saat (anlık) — Sağ: 90 gün ortalaması (DB'nin gerçek karakteri).
+                        İkisi farklıysa bugün anormal aktivite var.
+                    </p>
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-[#E2E8F0] text-[#64748B]">
+                                <th className="text-left py-2 w-44">Database</th>
+                                <th className="text-left py-2 w-28">Etiket</th>
+                                <th className="text-left py-2">24 saat (anlık)</th>
+                                <th className="text-left py-2">90 gün (genel)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {report.workload.map((r: any) => {
+                                const labelManual = r.workload_label;
+                                const labelShort = r.workload_label_auto || 'idle';
+                                const finalLabel = labelManual || labelShort;
+                                return (
+                                    <tr key={r.dbid} className="border-b border-[#F1F5F9]">
+                                        <td className="py-2 font-mono">{r.datname || '?'}</td>
+                                        <td className="py-2">
+                                            <span className="px-2 py-0.5 rounded text-white text-[10px] font-medium"
+                                                style={{ backgroundColor: WL_COLORS[finalLabel] || '#94A3B8' }}>
+                                                {WL_LABELS[finalLabel] || finalLabel}
+                                                {labelManual && <span className="ml-1">📌</span>}
+                                            </span>
+                                        </td>
+                                        <td className="py-2 pr-3"><HealthScoreBar scores={r.workload_scores} label={labelShort} /></td>
+                                        <td className="py-2"><HealthScoreBar scores={r.workload_scores_long} label={r.workload_label_long || 'idle'} dimmed /></td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                    <div className="mt-3 pt-2 border-t border-[#E2E8F0] flex gap-3 text-[10px] text-[#64748B]">
+                        <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLORS.oltp }} /> OLTP</span>
+                        <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLORS.analytical }} /> Analitik</span>
+                        <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLORS.bulk }} /> Toplu Yük</span>
+                        <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLORS.mixed }} /> Karma</span>
+                        <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: WL_COLORS.idle }} /> Boşta</span>
+                    </div>
+                </div>
+            )}
 
             {/* Top Bloat Tabloları */}
             {report.trends?.bloat_top?.length > 0 && (

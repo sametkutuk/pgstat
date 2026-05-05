@@ -585,7 +585,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     const [
       instanceInfo, cacheHit, connections, tempFiles, deadlocks,
       walProduction, openAlerts, tpsDaily, connectionDaily, walDaily, cpuProxyDaily, bloatTop, indexSuspect,
-      unusedIndex, settings
+      unusedIndex, settings, workloadProfile
     ] = await Promise.all([
       // Instance bilgisi
       safeQuery(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
@@ -730,6 +730,17 @@ router.get('/:id/health-report', async (req, res, next) => {
           select max(snapshot_ts) from fact.pg_settings_snapshot where instance_pk = $1
         )
         order by setting_name`, [id]),
+
+      // Workload profili — instance'in tum DB'leri icin 24h ve 90g sınıflandırması
+      // (V047/V049 ile WorkloadClassifier tarafından doldurulur)
+      safeQuery(`select dbid, datname,
+                        workload_label, workload_label_auto, workload_scores,
+                        workload_classified_at,
+                        workload_label_long, workload_scores_long,
+                        workload_classified_long_at
+                 from dim.database_ref
+                 where instance_pk = $1
+                 order by datname`, [id]),
     ]);
 
     const inst = instanceInfo.rows[0];
@@ -792,6 +803,7 @@ router.get('/:id/health-report', async (req, res, next) => {
       },
       settings: settings.rows,
       alert_counts: alertCounts,
+      workload: workloadProfile.rows,
     });
   } catch (err) {
     next(err);

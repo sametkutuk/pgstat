@@ -37,8 +37,10 @@ public class WorkloadClassifier {
         runClassification(cfg, windowHours, false);
     }
 
-    /** Uzun vade (90g) — 24 saatte 1, gerçek karakter (yön değişmez). */
-    @Scheduled(fixedDelay = 86_400_000, initialDelay = 5 * 60_000)
+    /**
+     * Uzun vade (90g) — günde 1 kez UTC 03:00'te JobOrchestrator tarafından çağrılır.
+     * (Nightly snapshot ile aynı pencerede, idempotency oradan gelir.)
+     */
     public void classifyLongTerm() {
         Map<String, Object> cfg = loadConfig();
         int days = 90;
