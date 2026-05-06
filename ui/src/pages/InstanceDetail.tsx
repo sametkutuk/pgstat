@@ -283,6 +283,14 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
 function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instanceId: string; onChange: () => void }) {
     const [editing, setEditing] = useState(false);
     const [groupId, setGroupId] = useState('');
+    const [mode, setMode] = useState<'existing' | 'custom' | 'remove'>('existing');
+
+    // Mevcut kümeleri çek (sadece editing modunda)
+    const clustersList = useQuery({
+        queryKey: ['all-clusters'],
+        queryFn: () => apiGet<any[]>('/clusters'),
+        enabled: editing,
+    });
 
     if (!cluster) return null;
 
@@ -295,11 +303,12 @@ function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instance
     };
 
     const save = async () => {
+        const value = mode === 'remove' ? null : (groupId.trim() || null);
         await fetch(`/api/instances/${instanceId}/manual-cluster`, {
             method: 'PATCH',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ manual_cluster_group_id: groupId.trim() || null }),
+            body: JSON.stringify({ manual_cluster_group_id: value }),
         });
         setEditing(false);
         onChange();
@@ -340,17 +349,69 @@ function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instance
             )}
 
             {editing && (
-                <div className="mt-2 flex gap-2 items-center">
-                    <input type="text" value={groupId} onChange={e => setGroupId(e.target.value)}
-                        placeholder="Örn: prod-main, etl-cluster (boş bırakılırsa kaldırılır)"
-                        className="flex-1 border border-[#CBD5E1] rounded px-2 py-1 text-xs" />
-                    <button onClick={save}
-                        className="px-3 py-1 bg-[#3B82F6] text-white text-xs rounded hover:bg-[#2563EB]">
-                        Kaydet
-                    </button>
-                    <button onClick={() => setEditing(false)} className="px-2 py-1 text-xs text-[#64748B]">
-                        İptal
-                    </button>
+                <div className="mt-3 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded space-y-2">
+                    {/* Mod seçici */}
+                    <div className="flex gap-1">
+                        {[
+                            { k: 'existing' as const, label: 'Mevcut kümeye katıl' },
+                            { k: 'custom' as const, label: 'Yeni grup oluştur' },
+                            { k: 'remove' as const, label: 'Manuel grubu kaldır' },
+                        ].map(opt => (
+                            <button key={opt.k} onClick={() => { setMode(opt.k); setGroupId(''); }}
+                                className={`px-2 py-1 text-[11px] rounded ${
+                                    mode === opt.k
+                                        ? 'bg-[#3B82F6] text-white'
+                                        : 'bg-white text-[#475569] border border-[#E2E8F0]'
+                                }`}>
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+
+                    {mode === 'existing' && (
+                        <select value={groupId} onChange={e => setGroupId(e.target.value)}
+                            className="w-full border border-[#CBD5E1] rounded px-2 py-1.5 text-xs">
+                            <option value="">— Küme seç —</option>
+                            {(clustersList.data || [])
+                                .filter((c: any) => c.cluster_id !== cluster.cluster_id)
+                                .map((c: any) => (
+                                    <option key={c.cluster_id} value={c.cluster_id}>
+                                        {c.label} ({c.total_instances} instance · {c.cluster_kind})
+                                    </option>
+                                ))}
+                        </select>
+                    )}
+
+                    {mode === 'custom' && (
+                        <input type="text" value={groupId} onChange={e => setGroupId(e.target.value)}
+                            placeholder="Örn: prod-main, etl-cluster (max 50 karakter)"
+                            maxLength={50}
+                            className="w-full border border-[#CBD5E1] rounded px-2 py-1.5 text-xs" />
+                    )}
+
+                    {mode === 'remove' && (
+                        <p className="text-[11px] text-[#64748B]">
+                            Manuel grup kaldırılacak — instance otomatik tespit (system_identifier)
+                            ile sınıflandırılacak.
+                        </p>
+                    )}
+
+                    <div className="flex gap-2 justify-end">
+                        <button onClick={() => setEditing(false)}
+                            className="px-3 py-1 text-xs text-[#64748B]">
+                            İptal
+                        </button>
+                        <button onClick={save}
+                            disabled={mode !== 'remove' && !groupId.trim()}
+                            className="px-3 py-1 bg-[#3B82F6] text-white text-xs rounded hover:bg-[#2563EB] disabled:opacity-50">
+                            Kaydet
+                        </button>
+                    </div>
+
+                    <p className="text-[10px] text-[#94A3B8]">
+                        💡 İpucu: aynı grubu paylaşan instance'lar tek kümede görünür. Mevcut bir kümenin
+                        cluster_id'sini seçerek bu instance'ı oraya ekleyebilirsin.
+                    </p>
                 </div>
             )}
 
