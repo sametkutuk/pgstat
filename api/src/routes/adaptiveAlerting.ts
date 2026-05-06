@@ -115,6 +115,41 @@ router.get('/maintenance-windows', async (_req, res, next) => {
     }
 });
 
+// PUT /api/maintenance-windows/:window_id
+router.put('/maintenance-windows/:window_id', async (req, res, next) => {
+    try {
+        const {
+            window_name, description, instance_pks, day_of_week,
+            start_time, end_time, timezone, suppress_all_alerts,
+            suppress_severity, is_enabled
+        } = req.body;
+
+        const result = await pool.query(
+            `update control.maintenance_window set
+                window_name = coalesce($1, window_name),
+                description = $2,
+                instance_pks = $3,
+                day_of_week = $4,
+                start_time = coalesce($5, start_time),
+                end_time = coalesce($6, end_time),
+                timezone = coalesce($7, timezone),
+                suppress_all_alerts = coalesce($8, suppress_all_alerts),
+                suppress_severity = $9,
+                is_enabled = coalesce($10, is_enabled)
+             where window_id = $11
+             returning *`,
+            [window_name, description, instance_pks, day_of_week,
+                start_time, end_time, timezone, suppress_all_alerts,
+                suppress_severity, is_enabled, req.params.window_id]
+        );
+
+        if (result.rows.length === 0) return res.status(404).json({ error: 'Window not found' });
+        res.json({ ...result.rows[0], message: 'Maintenance window updated' });
+    } catch (err) {
+        next(err);
+    }
+});
+
 // DELETE /api/maintenance-windows/:window_id
 router.delete('/maintenance-windows/:window_id', async (req, res, next) => {
     try {

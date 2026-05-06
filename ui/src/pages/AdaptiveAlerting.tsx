@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, apiDelete } from '../api/client';
+import { apiGet, apiPost, apiPut, apiDelete } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import InfoTip from '../components/common/InfoTip';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
@@ -487,6 +487,7 @@ function MaintenancePanel() {
     const toast = useToast();
     const qc = useQueryClient();
     const [showForm, setShowForm] = useState(false);
+    const [editingWindow, setEditingWindow] = useState<MaintenanceWindow | null>(null);
 
     const { data: windows = [] } = useQuery<MaintenanceWindow[]>({
         queryKey: ['maintenance-windows'],
@@ -501,6 +502,16 @@ function MaintenancePanel() {
         },
     });
 
+    const toggleMut = useMutation({
+        mutationFn: ({ id, is_enabled }: { id: number; is_enabled: boolean }) =>
+            apiPut(`/adaptive-alerting/maintenance-windows/${id}`, { is_enabled }),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['maintenance-windows'] });
+            qc.invalidateQueries({ queryKey: ['adaptive-overview'] });
+        },
+        onError: (e: any) => toast.error(e?.message || 'Hata'),
+    });
+
     const DAYS = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
 
     return (
@@ -512,7 +523,7 @@ function MaintenancePanel() {
                     </p>
                     <InfoTip text="Bakım penceresi belirli gün ve saatlerde alert'leri otomatik susturur. Haftalık bakım, yedekleme veya deploy saatlerinde kullanın. Timezone ayarına dikkat edin — container UTC'de çalışır. Instance seçmezseniz tüm instance'lar etkilenir." />
                 </div>
-                <button onClick={() => setShowForm(true)}
+                <button onClick={() => { setEditingWindow(null); setShowForm(true); }}
                     className="px-4 py-2 bg-[#3B82F6] text-white text-sm rounded-md hover:bg-[#2563EB]">
                     + Pencere Ekle
                 </button>
@@ -539,6 +550,14 @@ function MaintenancePanel() {
                                 </div>
                                 {w.description && <div className="text-xs text-[#94A3B8] mt-0.5">{w.description}</div>}
                             </div>
+                            <button onClick={() => toggleMut.mutate({ id: w.window_id, is_enabled: !w.is_enabled })}
+                                className={`text-xs px-2.5 py-1 rounded ${w.is_enabled ? 'bg-amber-50 text-amber-700 hover:bg-amber-100' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}>
+                                {w.is_enabled ? 'Devre Dışı' : 'Etkinleştir'}
+                            </button>
+                            <button onClick={() => { setEditingWindow(w); setShowForm(true); }}
+                                className="text-xs px-2.5 py-1 bg-blue-50 text-blue-700 rounded hover:bg-blue-100">
+                                Düzenle
+                            </button>
                             <button onClick={() => deleteMut.mutate(w.window_id)}
                                 className="text-xs px-2.5 py-1 bg-[#FEE2E2] text-[#DC2626] rounded hover:bg-[#FECACA]">
                                 Sil
@@ -548,12 +567,12 @@ function MaintenancePanel() {
                 </div>
             )}
 
-            {showForm && <MaintenanceFormModal onClose={() => setShowForm(false)} />}
+            {showForm && <MaintenanceFormModal window={editingWindow} onClose={() => { setShowForm(false); setEditingWindow(null); }} />}
         </div>
     );
 }
 
-function MaintenanceFormModal({ onClose }: { onClose: () => void }) {
+function MaintenanceFormModal({ window: editWindow, onClose }: { window: MaintenanceWindow | null; onClose: () => void }) {
     const toast = useToast();
     const qc = useQueryClient();
 
@@ -563,14 +582,14 @@ function MaintenanceFormModal({ onClose }: { onClose: () => void }) {
     });
 
     const [form, setForm] = useState({
-        window_name: '',
-        description: '',
-        instance_pks: [] as number[],
-        day_of_week: [1, 2, 3, 4, 5] as number[],
-        start_time: '02:00',
-        end_time: '04:00',
-        timezone: 'Europe/Istanbul',
-        suppress_all_alerts: true,
+        window_name: editWindow?.window_name || '',
+        description: editWindow?.description || '',
+        instance_pks: editWindow?.instance_pks || [] as number[],
+        day_of_week: editWindow?.day_of_week || [1, 2, 3, 4, 5] as number[],
+        start_time: (editWindow?.start_time || '02:00').slice(0, 5),
+        end_time: (editWindow?.end_time || '04:00').slice(0, 5),
+        timezone: editWindow?.timezone || 'Europe/Istanbul',
+        suppress_all_alerts: editWindow?.suppress_all_alerts ?? true,
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
     const toggleDay = (d: number) => set('day_of_week',
@@ -583,29 +602,34 @@ function MaintenanceFormModal({ onClose }: { onClose: () => void }) {
         { d: 4, l: 'Per' }, { d: 5, l: 'Cum' }, { d: 6, l: 'Cmt' }, { d: 0, l: 'Paz' }
     ];
 
-    const createMut = useMutation({
-        mutationFn: () => apiPost('/adaptive-alerting/maintenance-windows', {
-            window_name: form.window_name,
-            description: form.description || null,
-            instance_pks: form.instance_pks.length ? form.instance_pks : null,
-            day_of_week: form.day_of_week.length ? form.day_of_week : null,
-            start_time: form.start_time,
-            end_time: form.end_time,
-            timezone: form.timezone,
-            suppress_all_alerts: form.suppress_all_alerts,
-            suppress_severity: null,
-        }),
+    const saveMut = useMutation({
+        mutationFn: () => {
+            const payload = {
+                window_name: form.window_name,
+                description: form.description || null,
+                instance_pks: form.instance_pks.length ? form.instance_pks : null,
+                day_of_week: form.day_of_week.length ? form.day_of_week : null,
+                start_time: form.start_time,
+                end_time: form.end_time,
+                timezone: form.timezone,
+                suppress_all_alerts: form.suppress_all_alerts,
+                suppress_severity: null,
+            };
+            return editWindow
+                ? apiPut(`/adaptive-alerting/maintenance-windows/${editWindow.window_id}`, payload)
+                : apiPost('/adaptive-alerting/maintenance-windows', payload);
+        },
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['maintenance-windows'] });
             qc.invalidateQueries({ queryKey: ['adaptive-overview'] });
-            toast.success('Bakım penceresi oluşturuldu');
+            toast.success(editWindow ? 'Bakım penceresi güncellendi' : 'Bakım penceresi oluşturuldu');
             onClose();
         },
         onError: (e: any) => toast.error(e?.message || 'Hata'),
     });
 
     return (
-        <Modal title="Bakım Penceresi Ekle" onClose={onClose}>
+        <Modal title={editWindow ? 'Bakım Penceresi Düzenle' : 'Bakım Penceresi Ekle'} onClose={onClose}>
             <div className="space-y-4">
                 <div>
                     <label className="block text-xs font-medium text-[#475569] mb-1">Pencere Adı *</label>
@@ -659,7 +683,7 @@ function MaintenanceFormModal({ onClose }: { onClose: () => void }) {
                     </div>
                 </div>
             </div>
-            <ModalFooter onClose={onClose} onSave={() => createMut.mutate()} busy={createMut.isPending} />
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
         </Modal>
     );
 }
