@@ -10,20 +10,23 @@ import { createPortal } from 'react-dom';
  */
 export default function InfoTip({ text, className = '' }: { text: string; className?: string }) {
     const [open, setOpen] = useState(false);
-    const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+    const [pos, setPos] = useState<{ left: number; top: number; placement: 'above' | 'below' } | null>(null);
     const btnRef = useRef<HTMLButtonElement>(null);
 
-    // Açıldığında butonun pozisyonuna göre popup koordinatlarını hesapla
+    // Açıldığında butonun pozisyonuna göre popup koordinatlarını hesapla.
+    // Üstte yer yoksa (sayfa başında / viewport top'a yakın) altta aç.
     useEffect(() => {
         if (!open || !btnRef.current) {
             setPos(null);
             return;
         }
         const rect = btnRef.current.getBoundingClientRect();
-        // Popup'ı butonun üstünde, yatayda ortalı yerleştir
+        const minTopSpace = 250;  // popup tahmini yüksekliği (uzun metin için)
+        const placement: 'above' | 'below' = rect.top < minTopSpace ? 'below' : 'above';
         setPos({
             left: rect.left + rect.width / 2,
-            top: rect.top, // popup top:absolute ile alttan açar
+            top: placement === 'above' ? rect.top - 8 : rect.bottom + 8,
+            placement,
         });
     }, [open]);
 
@@ -55,10 +58,14 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
                     style={{
                         left: pos.left,
                         top: pos.top,
-                        transform: 'translate(-50%, calc(-100% - 8px))',
+                        transform: pos.placement === 'above'
+                            ? 'translate(-50%, -100%)'
+                            : 'translate(-50%, 0)',
                         minWidth: '280px',
                         width: 'max-content',
                         maxWidth: 'min(560px, calc(100vw - 32px))',
+                        maxHeight: 'calc(100vh - 32px)',
+                        overflowY: 'auto',
                     }}
                 >
                     {text}
