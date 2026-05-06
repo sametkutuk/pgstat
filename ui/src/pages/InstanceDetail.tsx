@@ -304,14 +304,15 @@ function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instance
 
     const save = async () => {
         const value = mode === 'remove' ? null : (groupId.trim() || null);
-        await fetch(`/api/instances/${instanceId}/manual-cluster`, {
-            method: 'PATCH',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ manual_cluster_group_id: value }),
-        });
-        setEditing(false);
-        onChange();
+        try {
+            await apiPatch(`/instances/${instanceId}/manual-cluster`, {
+                manual_cluster_group_id: value,
+            });
+            setEditing(false);
+            onChange();
+        } catch (e: any) {
+            alert('Kaydetme başarısız: ' + (e?.message || 'bilinmeyen hata'));
+        }
     };
 
     return (
