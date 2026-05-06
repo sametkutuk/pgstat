@@ -23,6 +23,7 @@ export default function InstanceDetail() {
 
     const instance = useQuery({ queryKey: ['instance', id], queryFn: () => apiGet<any>(`/instances/${id}`) });
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
+    const cluster = useQuery({ queryKey: ['inst-cluster', id], queryFn: () => apiGet<any>(`/instances/${id}/cluster`), enabled: !!id });
     const databases = useQuery({ queryKey: ['databases', id], queryFn: () => apiGet<any[]>(`/instances/${id}/databases`), enabled: tab === 'databases' });
     const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
     const statements = useQuery({ queryKey: ['inst-stmts', id], queryFn: () => apiGet<any[]>(`/instances/${id}/statements?hours=1&limit=30`), enabled: tab === 'statements' });
@@ -84,6 +85,31 @@ export default function InstanceDetail() {
             </div>
 
             {/* Workload profili — her tab'da görünür, sayfa içeriğinden önce */}
+            {cluster.data && cluster.data.role !== 'standalone' && (
+                <div className="mb-4 bg-white border border-[#E2E8F0] rounded-lg p-3 flex items-center gap-3 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                        cluster.data.role === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                    }`}>
+                        {cluster.data.role === 'primary' ? 'PRIMARY' : 'REPLICA'}
+                    </span>
+                    <span className="text-[#64748B]">Küme:</span>
+                    <Link to={`/clusters/${encodeURIComponent(cluster.data.cluster_id)}`}
+                        className="text-[#3B82F6] hover:underline font-medium">
+                        Tüm küme görünümü →
+                    </Link>
+                    {cluster.data.siblings?.length > 0 && (
+                        <div className="flex gap-2 ml-auto flex-wrap">
+                            <span className="text-[10px] text-[#94A3B8]">Diğer instance'lar:</span>
+                            {cluster.data.siblings.map((s: any) => (
+                                <Link key={s.instance_pk} to={`/instances/${s.instance_pk}`}
+                                    className="text-xs text-[#3B82F6] hover:underline">
+                                    {s.is_primary ? '👑 ' : ''}{s.display_name}
+                                </Link>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
             <WorkloadProfile instancePk={id!} />
 
             <div className="flex gap-1 mb-4 border-b border-[#E2E8F0] overflow-x-auto">

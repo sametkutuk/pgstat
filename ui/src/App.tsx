@@ -16,6 +16,8 @@ import ClusterDetail from './pages/ClusterDetail';
 import HealthReport from './pages/HealthReport';
 import ReportHistory from './pages/ReportHistory';
 import ClusterQuery from './pages/ClusterQuery';
+import Clusters from './pages/Clusters';
+import ClusterGroupDetail from './pages/ClusterGroupDetail';
 import GrafanaEmbed from './pages/GrafanaEmbed';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -55,6 +57,8 @@ function App() {
               <Route path="/jobs" element={<JobRuns />} />
               <Route path="/reports/history" element={<ReportHistory />} />
               <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
+              <Route path="/clusters" element={<Clusters />} />
+              <Route path="/clusters/:cluster_id" element={<ClusterGroupDetail />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/settings/alert-rules" element={<AlertRules />} />
               <Route path="/settings/adaptive-alerting" element={<AdaptiveAlerting />} />

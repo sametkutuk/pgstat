@@ -178,27 +178,48 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkIndexUnused() {
+        // KÜME-AWARE: Bir index sadece "küme genelinde" idx_scan toplamı 0 ise
+        // alert üretir. Read trafiği replica'da olabilir; primary'de 0 görmek
+        // false positive değil. cluster_id = manuel grup veya system_identifier.
+        // Standalone (cluster_id null) → eski mantık (per-instance).
         List<Map<String, Object>> rows = jdbc.queryForList("""
-            with idx as (
+            with per_inst as (
               select i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname,
                      sum(i.idx_scan_delta) as total_scans
               from fact.pg_index_stat_delta i
               where i.sample_ts > now() - interval '30 days'
               group by i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname
+            ),
+            cluster_idx as (
+              -- aynı küme + aynı index ismi (tüm replikalar dahil)
+              select vic.cluster_id, p.schemaname, p.indexrelname,
+                     sum(p.total_scans) as cluster_total_scans
+              from per_inst p
+              join control.v_instance_cluster vic on vic.instance_pk = p.instance_pk
+              where vic.cluster_id is not null
+              group by vic.cluster_id, p.schemaname, p.indexrelname
             )
-            select idx.*, rs.total_size_bytes, inst.display_name, dbr.datname
-            from idx
+            select p.*, rs.total_size_bytes, inst.display_name, dbr.datname,
+                   vic.cluster_id, ci.cluster_total_scans
+            from per_inst p
+            join control.instance_inventory inst on inst.instance_pk = p.instance_pk
+            left join control.v_instance_cluster vic on vic.instance_pk = p.instance_pk
+            left join cluster_idx ci on ci.cluster_id = vic.cluster_id
+                  and ci.schemaname = p.schemaname and ci.indexrelname = p.indexrelname
             left join lateral (
               select total_size_bytes from fact.pg_relation_size_snapshot rs
-              where rs.instance_pk = idx.instance_pk and rs.dbid = idx.dbid
-                and rs.schemaname = idx.schemaname and rs.relname = idx.indexrelname
+              where rs.instance_pk = p.instance_pk and rs.dbid = p.dbid
+                and rs.schemaname = p.schemaname and rs.relname = p.indexrelname
                 and rs.relkind = 'i'
               order by snapshot_ts desc limit 1
             ) rs on true
-            join control.instance_inventory inst on inst.instance_pk = idx.instance_pk
-            left join dim.database_ref dbr on dbr.instance_pk = idx.instance_pk and dbr.dbid = idx.dbid
-            where idx.total_scans = 0
+            left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.dbid = p.dbid
+            where p.total_scans = 0
               and coalesce(rs.total_size_bytes, 0) > 104857600
+              and (
+                vic.cluster_id is null                         -- standalone: bu instance'ta 0 yeter
+                or coalesce(ci.cluster_total_scans, 0) = 0     -- küme: küme genelinde 0 olmalı
+              )
             order by rs.total_size_bytes desc nulls last
             limit 20
             """);

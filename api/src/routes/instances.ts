@@ -183,6 +183,59 @@ router.post('/', async (req, res, next) => {
 });
 
 // PUT /api/instances/:id — Instance güncelle
+// PATCH /api/instances/:id/manual-cluster — manuel küme grubu ata (logical replication
+// veya farklı initdb'lerle aynı uygulamaya hizmet eden serverlar için)
+router.patch('/:id/manual-cluster', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const groupId = req.body?.manual_cluster_group_id;
+        const value = (typeof groupId === 'string' && groupId.trim()) ? groupId.trim().slice(0, 50) : null;
+        const r = await pool.query(
+            `update control.instance_inventory set manual_cluster_group_id = $1
+             where instance_pk = $2 returning instance_pk, manual_cluster_group_id`,
+            [value, id]
+        );
+        if (r.rowCount === 0) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
+        res.json(r.rows[0]);
+    } catch (err) { next(err); }
+});
+
+// GET /api/instances/:id/cluster — bu instance'ın küme bağlamı
+router.get('/:id/cluster', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const r = await pool.query(`
+            select vic.cluster_id, vic.system_identifier, vic.manual_cluster_group_id,
+                   coalesce(c.is_primary, false) as is_primary,
+                   case
+                     when vic.cluster_id is null then 'standalone'
+                     when coalesce(c.is_primary, false) then 'primary'
+                     else 'replica'
+                   end as role
+            from control.v_instance_cluster vic
+            left join control.instance_capability c on c.instance_pk = vic.instance_pk
+            where vic.instance_pk = $1
+        `, [id]);
+        const me = r.rows[0];
+        if (!me) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
+
+        let siblings: any[] = [];
+        if (me.cluster_id) {
+            const s = await pool.query(`
+                select i.instance_pk, i.display_name, coalesce(c.is_primary, false) as is_primary,
+                       i.bootstrap_state
+                from control.v_instance_cluster vic
+                join control.instance_inventory i on i.instance_pk = vic.instance_pk
+                left join control.instance_capability c on c.instance_pk = i.instance_pk
+                where vic.cluster_id = $1 and vic.instance_pk <> $2
+                order by c.is_primary desc nulls last, i.display_name
+            `, [me.cluster_id, id]);
+            siblings = s.rows;
+        }
+        res.json({ ...me, siblings });
+    } catch (err) { next(err); }
+});
+
 router.put('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
