@@ -89,6 +89,26 @@ public class ReportGenerator {
         return v instanceof Number ? ((Number) v).intValue() : 6;
     }
 
+    /**
+     * DB-bazlı tek günlük gönderim guard'ı. UTC bugün için aynı tipte
+     * 'sent' veya 'partial' status'lu kayıt varsa true. Restart'a karşı korur.
+     */
+    private boolean alreadySentToday(String reportType) {
+        try {
+            Integer count = jdbc.queryForObject(
+                "select count(*) from ops.report_history " +
+                "where report_type = ? " +
+                "  and generated_at >= date_trunc('day', now() at time zone 'UTC') " +
+                "  and sent_status in ('sent', 'partial')",
+                Integer.class, reportType);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            // Tablo yoksa veya hata: konservatif, gönderime izin ver
+            log.debug("alreadySentToday hata, gönderim devam: {}", e.getMessage());
+            return false;
+        }
+    }
+
     /** Rapor gonderim sonucu — DB history kaydi icin. */
     private record SendResult(int channelsCount, String recipientsJson,
                                String status, String errorMessage) {}
@@ -104,6 +124,13 @@ public class ReportGenerator {
     public void generateAndSendDailyReport() {
         if (!isDailyEnabled()) {
             log.info("Gunluk rapor devre disi (config), atlandi");
+            return;
+        }
+        // DB-bazlı idempotency: bugün zaten gönderilmişse atla.
+        // In-memory flag collector restart'ta sıfırlanıyordu → restart UTC 06:00-06:59
+        // arasındaysa rapor 2. kez gönderiliyordu. Bu kontrol restart'a karşı korur.
+        if (alreadySentToday("daily")) {
+            log.info("Gunluk rapor bugun zaten gonderilmis (DB), atlandi");
             return;
         }
         log.info("Gunluk rapor uretiliyor...");
@@ -213,6 +240,10 @@ public class ReportGenerator {
     public void generateAndSendWeeklyReport() {
         if (!isWeeklyEnabled()) {
             log.info("Haftalik rapor devre disi (config), atlandi");
+            return;
+        }
+        if (alreadySentToday("weekly")) {
+            log.info("Haftalik rapor bugun zaten gonderilmis (DB), atlandi");
             return;
         }
         log.info("Haftalik rapor uretiliyor...");
