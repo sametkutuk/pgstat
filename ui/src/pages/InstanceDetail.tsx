@@ -77,6 +77,8 @@ export default function InstanceDetail() {
                 </Link>
             </div>
 
+            <BootstrapBanner inst={inst} cap={cap} instanceId={id!} />
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
                 <InfoCard label="Host" value={`${inst.host}:${inst.port}`} />
                 <InfoCard label="PG Sürüm" value={cap?.pg_major ? `PG${cap.pg_major}` : '—'} />
@@ -280,6 +282,66 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
  *   - auto: otomatik tespit (system_identifier eşleşmesi)
  *   - standalone: bağlantı yok
  */
+/**
+ * Bootstrap sorunu banner'ı — degraded instance için açık alert'lerden
+ * EXTENSION_MISSING / BOOTSTRAP_FAILED / SECRET_REF_ERROR / AUTHENTICATION_FAILURE
+ * / PERMISSION_DENIED yakalar, mesajını + çözümünü görünür şekilde gösterir.
+ */
+function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; instanceId: string }) {
+    const alertsQ = useQuery({
+        queryKey: ['inst-bootstrap-alerts', instanceId],
+        queryFn: () => apiGet<any[]>(`/alerts?status=open&instance_pk=${instanceId}&limit=20`),
+        enabled: inst?.bootstrap_state === 'degraded',
+    });
+
+    if (inst?.bootstrap_state !== 'degraded') return null;
+
+    const bootstrapCodes = ['extension_missing', 'bootstrap_failed', 'secret_ref_error',
+        'authentication_failure', 'permission_denied', 'connection_failure'];
+    const issue = (alertsQ.data || []).find((a: any) => bootstrapCodes.includes(a.alert_code));
+
+    // Alert yoksa generic uyarı (örn. capability flag'lere göre)
+    const noPgss = cap && cap.has_pg_stat_statements === false;
+
+    if (!issue && !noPgss) return null;
+
+    return (
+        <div className="mb-4 bg-amber-50 border-2 border-amber-300 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-amber-900">
+                        {issue ? issue.title : 'pg_stat_statements extension yüklü değil'}
+                    </h3>
+                    {issue?.message && (
+                        <pre className="mt-2 text-xs whitespace-pre-wrap text-amber-900 font-sans bg-white/50 rounded px-3 py-2">
+                            {issue.message}
+                        </pre>
+                    )}
+                    {!issue && noPgss && (
+                        <div className="mt-2 text-sm text-amber-900 space-y-1">
+                            <p>Bu instance <strong>degraded</strong> durumda — istatistik toplama yapılamıyor.</p>
+                            <p className="font-semibold mt-2">Çözüm:</p>
+                            <ol className="list-decimal ml-5 space-y-1">
+                                <li>postgresql.conf'a ekle: <code className="bg-amber-100 px-1 rounded">shared_preload_libraries = 'pg_stat_statements'</code></li>
+                                <li>PostgreSQL'i restart et</li>
+                                <li>Veritabanına bağlan ve çalıştır: <code className="bg-amber-100 px-1 rounded">CREATE EXTENSION pg_stat_statements;</code></li>
+                                <li>Instance'da "↺ Yeniden Dene" butonuna tıkla</li>
+                            </ol>
+                        </div>
+                    )}
+                    {issue && (
+                        <Link to={`/alerts/${issue.alert_id}`}
+                            className="inline-block mt-2 text-xs text-amber-700 hover:underline">
+                            Tam alert detayına git →
+                        </Link>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instanceId: string; onChange: () => void }) {
     const [editing, setEditing] = useState(false);
     const [groupId, setGroupId] = useState('');
