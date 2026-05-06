@@ -10,23 +10,30 @@ import { createPortal } from 'react-dom';
  */
 export default function InfoTip({ text, className = '' }: { text: string; className?: string }) {
     const [open, setOpen] = useState(false);
-    const [pos, setPos] = useState<{ left: number; top: number; placement: 'above' | 'below' } | null>(null);
+    const [pos, setPos] = useState<{
+        left: number; top: number; placement: 'above' | 'below'; maxHeight: number
+    } | null>(null);
     const btnRef = useRef<HTMLButtonElement>(null);
 
     // Açıldığında butonun pozisyonuna göre popup koordinatlarını hesapla.
-    // Üstte yer yoksa (sayfa başında / viewport top'a yakın) altta aç.
+    // İki taraftaki gerçek boş alanı ölç, daha geniş olanı seç + popup
+    // max-height'ı o alana sınırla → üstten/alttan kesilme olmaz.
     useEffect(() => {
         if (!open || !btnRef.current) {
             setPos(null);
             return;
         }
         const rect = btnRef.current.getBoundingClientRect();
-        const minTopSpace = 250;  // popup tahmini yüksekliği (uzun metin için)
-        const placement: 'above' | 'below' = rect.top < minTopSpace ? 'below' : 'above';
+        const margin = 16;
+        const spaceAbove = rect.top - margin;
+        const spaceBelow = window.innerHeight - rect.bottom - margin;
+        const placement: 'above' | 'below' = spaceBelow >= spaceAbove ? 'below' : 'above';
+        const maxHeight = Math.max(180, placement === 'above' ? spaceAbove : spaceBelow);
         setPos({
             left: rect.left + rect.width / 2,
             top: placement === 'above' ? rect.top - 8 : rect.bottom + 8,
             placement,
+            maxHeight,
         });
     }, [open]);
 
@@ -76,9 +83,8 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
                         minWidth: '280px',
                         width: 'max-content',
                         maxWidth: 'min(560px, calc(100vw - 32px))',
-                        maxHeight: 'calc(100vh - 32px)',
+                        maxHeight: pos.maxHeight + 'px',
                         overflowY: 'auto',
-                        // pointer-events:auto (default) — popup üzerinde scroll/hover işler
                     }}
                 >
                     {text}
