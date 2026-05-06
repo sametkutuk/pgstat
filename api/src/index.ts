@@ -70,13 +70,16 @@ const loginLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-// Genel API rate limit
+// Genel API rate limit — pgstat UI çoklu polling (8+ instance × 5-6 endpoint
+// × 60s refetch) ile dakikada ~30 req atar. 15 dk = 450 req. Buffer ile 5000.
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 500,
+    max: 5000,
     message: { error: 'Çok fazla istek' },
     standardHeaders: true,
     legacyHeaders: false,
+    // /api/version sık çağrılır (sidebar her render) — bunu sayma
+    skip: (req) => req.path === '/version' || req.path === '/health',
 });
 
 app.use('/api/', apiLimiter);
