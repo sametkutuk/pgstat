@@ -1,14 +1,13 @@
 -- V050: Küme görünümü — primary+replica gruplandırması
--- system_identifier (initdb otomatik) + manual_cluster_group_id (manuel override)
+-- system_identifier control.instance_capability'de (instance_inventory'de değil)
 
 alter table control.instance_inventory
     add column if not exists manual_cluster_group_id varchar(50);
 
--- Önce summary'yi düşür (instance view'a bağlı)
 drop view if exists control.v_cluster_summary;
 drop view if exists control.v_instance_cluster;
 
--- Etkin küme kimliği: manuel öncelikli, yoksa system_identifier (text'e çevrilmiş)
+-- Etkin küme kimliği: manuel öncelikli, yoksa capability.system_identifier
 create view control.v_instance_cluster as
 select
     i.instance_pk,
@@ -16,18 +15,17 @@ select
     case
         when i.manual_cluster_group_id is not null and i.manual_cluster_group_id <> ''
              then i.manual_cluster_group_id
-        when i.system_identifier is not null
-             then i.system_identifier::text
+        when c.system_identifier is not null
+             then c.system_identifier::text
         else null
     end as cluster_id,
     coalesce(c.is_primary, false) as is_primary,
-    i.system_identifier,
+    c.system_identifier,
     i.manual_cluster_group_id,
     i.is_active
 from control.instance_inventory i
 left join control.instance_capability c on c.instance_pk = i.instance_pk;
 
--- Küme özeti
 create view control.v_cluster_summary as
 select
     cluster_id,

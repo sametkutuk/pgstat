@@ -37,7 +37,7 @@ router.get('/:cluster_id', async (req, res, next) => {
         const cid = req.params.cluster_id;
         const r = await pool.query(`
             select i.instance_pk, i.display_name, i.host, i.port, i.bootstrap_state,
-                   i.system_identifier, i.manual_cluster_group_id,
+                   c.system_identifier, i.manual_cluster_group_id,
                    c.pg_major, c.is_primary,
                    s.last_cluster_collect_at, s.last_success_at, s.consecutive_failures,
                    coalesce((select count(*) from ops.alert a where a.instance_pk=i.instance_pk and a.status='open'), 0) as open_alerts
