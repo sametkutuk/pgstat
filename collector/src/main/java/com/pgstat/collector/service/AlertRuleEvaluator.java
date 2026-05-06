@@ -3114,6 +3114,13 @@ public class AlertRuleEvaluator {
      */
     private String toFactColumn(String metricName, String metricType) {
         String safe = sanitizeCol(metricName);
+        // statement_metric.avg_exec_time_ms — pgss_delta'da bu kolon yok,
+        // total_exec_time_ms_delta ile karşılığı tutulur. Adaptive baseline
+        // sum(total_exec_time_ms_delta) bazlı çalışır; "avg" semantiği
+        // baseline farkıyla tutarlı kalır (rate of change).
+        if ("statement_metric".equals(metricType) && "avg_exec_time_ms".equals(safe)) {
+            return "total_exec_time_ms_delta";
+        }
         // Snapshot tablolari delta suffix kullanmaz
         if ("activity_metric".equals(metricType) || "replication_metric".equals(metricType)) {
             return safe;
