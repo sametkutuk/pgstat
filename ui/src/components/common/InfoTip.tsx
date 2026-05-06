@@ -39,14 +39,24 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
         return () => document.removeEventListener('mousedown', handler);
     }, [open]);
 
+    // Hover'da geç kapatma — kullanıcı popup'a hareket ederken kapanmasın.
+    const closeTimer = useRef<number | null>(null);
+    const scheduleClose = () => {
+        if (closeTimer.current) window.clearTimeout(closeTimer.current);
+        closeTimer.current = window.setTimeout(() => setOpen(false), 200);
+    };
+    const cancelClose = () => {
+        if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
+    };
+
     return (
         <span className={`relative inline-flex ${className}`}>
             <button
                 ref={btnRef}
                 type="button"
                 onClick={() => setOpen(o => !o)}
-                onMouseEnter={() => setOpen(true)}
-                onMouseLeave={() => setOpen(false)}
+                onMouseEnter={() => { cancelClose(); setOpen(true); }}
+                onMouseLeave={scheduleClose}
                 className="w-4 h-4 rounded-full bg-[#E2E8F0] text-[#64748B] text-[10px] font-bold leading-none flex items-center justify-center hover:bg-[#CBD5E1] hover:text-[#475569] transition-colors cursor-help flex-shrink-0"
                 aria-label="Bilgi"
             >
@@ -54,7 +64,9 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
             </button>
             {open && pos && createPortal(
                 <div
-                    className="fixed z-[9999] px-4 py-3 bg-[#1E293B] text-white text-xs rounded-lg shadow-2xl leading-relaxed pointer-events-none whitespace-pre-line"
+                    className="fixed z-[9999] px-4 py-3 bg-[#1E293B] text-white text-xs rounded-lg shadow-2xl leading-relaxed whitespace-pre-line"
+                    onMouseEnter={cancelClose}
+                    onMouseLeave={scheduleClose}
                     style={{
                         left: pos.left,
                         top: pos.top,
@@ -66,6 +78,7 @@ export default function InfoTip({ text, className = '' }: { text: string; classN
                         maxWidth: 'min(560px, calc(100vw - 32px))',
                         maxHeight: 'calc(100vh - 32px)',
                         overflowY: 'auto',
+                        // pointer-events:auto (default) — popup üzerinde scroll/hover işler
                     }}
                 >
                     {text}
