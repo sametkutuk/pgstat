@@ -239,4 +239,57 @@ router.get('/:seriesId/daily', async (req, res, next) => {
   }
 });
 
+// GET /api/statements/cluster/:queryid?from=ISO&to=ISO[&system_identifier=N]
+// Aynı queryid'ye sahip TÜM instance'larda verilen zaman aralığındaki toplam.
+router.get('/cluster/:queryid', async (req, res, next) => {
+    try {
+        const queryid = req.params.queryid;
+        const fromIso = req.query.from as string | undefined;
+        const toIso = req.query.to as string | undefined;
+        const sysId = req.query.system_identifier as string | undefined;
+        const from = fromIso || new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+        const to = toIso || new Date().toISOString();
+        const params: any[] = [queryid, from, to];
+        let sysFilter = '';
+        if (sysId) { params.push(sysId); sysFilter = ` and i.system_identifier = $${params.length}`; }
+        const r = await pool.query(`
+            select
+              i.instance_pk, i.display_name, i.host, i.port, i.system_identifier,
+              c.is_primary, c.pg_major, ss.statement_series_id,
+              coalesce(sum(d.calls_delta), 0) as calls,
+              coalesce(sum(d.total_exec_time_ms_delta), 0) as exec_ms,
+              coalesce(sum(d.rows_delta), 0) as rows_delta,
+              coalesce(sum(d.shared_blks_hit_delta), 0) as blks_hit,
+              coalesce(sum(d.shared_blks_read_delta), 0) as blks_read,
+              coalesce(sum(d.temp_blks_written_delta), 0) as temp_blks_written,
+              coalesce(sum(d.wal_bytes_delta), 0) as wal_bytes,
+              left(coalesce(qt.query_text, ''), 500) as query_text,
+              dbr.datname, rr.rolname
+            from dim.statement_series ss
+            join control.instance_inventory i on i.instance_pk = ss.instance_pk
+            left join control.instance_capability c on c.instance_pk = i.instance_pk
+            left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+            left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+            left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+            left join fact.pgss_delta d on d.statement_series_id = ss.statement_series_id
+                 and d.sample_ts between $2::timestamptz and $3::timestamptz
+            where ss.queryid = $1::bigint ${sysFilter}
+            group by i.instance_pk, i.display_name, i.host, i.port, i.system_identifier,
+                     c.is_primary, c.pg_major, ss.statement_series_id, qt.query_text,
+                     dbr.datname, rr.rolname
+            order by c.is_primary desc nulls last, i.display_name
+        `, params);
+        const totals = r.rows.reduce((a: any, x: any) => ({
+            calls: a.calls + Number(x.calls),
+            exec_ms: a.exec_ms + Number(x.exec_ms),
+            rows_delta: a.rows_delta + Number(x.rows_delta),
+            blks_hit: a.blks_hit + Number(x.blks_hit),
+            blks_read: a.blks_read + Number(x.blks_read),
+            temp_blks_written: a.temp_blks_written + Number(x.temp_blks_written),
+            wal_bytes: a.wal_bytes + Number(x.wal_bytes),
+        }), { calls: 0, exec_ms: 0, rows_delta: 0, blks_hit: 0, blks_read: 0, temp_blks_written: 0, wal_bytes: 0 });
+        res.json({ queryid, from, to, instances: r.rows, totals, query_text: r.rows[0]?.query_text || null });
+    } catch (err) { next(err); }
+});
+
 export default router;

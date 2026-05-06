@@ -33,6 +33,11 @@ export default function StatementDetail() {
                     <span>Rol: <strong>{series.rolname || '—'}</strong></span>
                     <span>QueryID: <strong>{series.queryid}</strong></span>
                     <span>Epoch: <strong>{series.pgss_epoch_key}</strong></span>
+                    {series.queryid && (
+                        <Link to={`/cluster-query/${series.queryid}`} className="ml-auto text-[#3B82F6] hover:underline font-medium">
+                            🔗 Küme geneli (primary + replikalar) →
+                        </Link>
+                    )}
                 </div>
             </div>
 
