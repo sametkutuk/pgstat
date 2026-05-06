@@ -762,7 +762,7 @@ public class AlertRuleEvaluator {
                     "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
                     "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
                     "), historical as (" +
-                    "  select ss.queryid, ss.dbid, ss.userid," +
+                    "  select queryid, dbid, userid," +
                     "         avg(window_sum) as baseline_avg," +
                     "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
                     "  from (" +
