@@ -8,12 +8,13 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates' | 'reports'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates' | 'reports' | 'audit'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
         { key: 'templates' as const, label: 'Alert Mesaj Şablonları' },
         { key: 'reports' as const, label: 'Raporlar' },
+        { key: 'audit' as const, label: 'Audit Log' },
     ];
 
     return (
@@ -31,6 +32,7 @@ export default function Settings() {
             {tab === 'schedule' && <ScheduleTab />}
             {tab === 'templates' && <MessageTemplatesTab />}
             {tab === 'reports' && <ReportsTab />}
+            {tab === 'audit' && <AuditLogTab />}
         </div>
     );
 }
@@ -252,9 +254,9 @@ function RetentionTab() {
     const openEdit = (r: any) => {
         setForm({
             policy_code: r.policy_code,
-            raw_retention_days:    r.raw_retention_days    ?? (r.raw_retention_months    ?? 14) * 30 / 30 * 1, // fallback
+            raw_retention_days: r.raw_retention_days ?? (r.raw_retention_months ?? 14) * 30 / 30 * 1, // fallback
             hourly_retention_days: r.hourly_retention_days ?? (r.hourly_retention_months ?? 6) * 30,
-            daily_retention_days:  r.daily_retention_days  ?? (r.daily_retention_months  ?? 24) * 30,
+            daily_retention_days: r.daily_retention_days ?? (r.daily_retention_months ?? 24) * 30,
             snapshot_retention_hours: r.snapshot_retention_hours ?? 48,
             purge_enabled: r.purge_enabled,
             is_active: r.is_active,
@@ -265,14 +267,22 @@ function RetentionTab() {
 
     const columns = [
         { key: 'policy_code', header: 'Kod' },
-        { key: 'raw_retention_days', header: 'Raw (gün)', className: 'text-right',
-            render: (r: any) => r.raw_retention_days ?? (r.raw_retention_months ? r.raw_retention_months * 30 : '-') },
-        { key: 'hourly_retention_days', header: 'Hourly (gün)', className: 'text-right',
-            render: (r: any) => r.hourly_retention_days ?? (r.hourly_retention_months ? r.hourly_retention_months * 30 : '-') },
-        { key: 'daily_retention_days', header: 'Daily (gün)', className: 'text-right',
-            render: (r: any) => r.daily_retention_days ?? (r.daily_retention_months ? r.daily_retention_months * 30 : '-') },
-        { key: 'snapshot_retention_hours', header: 'Snapshot (saat)', className: 'text-right',
-            render: (r: any) => r.snapshot_retention_hours ?? '-' },
+        {
+            key: 'raw_retention_days', header: 'Raw (gün)', className: 'text-right',
+            render: (r: any) => r.raw_retention_days ?? (r.raw_retention_months ? r.raw_retention_months * 30 : '-')
+        },
+        {
+            key: 'hourly_retention_days', header: 'Hourly (gün)', className: 'text-right',
+            render: (r: any) => r.hourly_retention_days ?? (r.hourly_retention_months ? r.hourly_retention_months * 30 : '-')
+        },
+        {
+            key: 'daily_retention_days', header: 'Daily (gün)', className: 'text-right',
+            render: (r: any) => r.daily_retention_days ?? (r.daily_retention_months ? r.daily_retention_months * 30 : '-')
+        },
+        {
+            key: 'snapshot_retention_hours', header: 'Snapshot (saat)', className: 'text-right',
+            render: (r: any) => r.snapshot_retention_hours ?? '-'
+        },
         { key: 'purge_enabled', header: 'Purge', render: (r: any) => r.purge_enabled ? '✅' : '❌' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
         { key: 'is_active', header: 'Durum', render: (r: any) => <Badge value={r.is_active ? 'ready' : 'paused'} /> },
@@ -323,9 +333,9 @@ function RetentionTab() {
                                 disabled={formMode === 'edit'} placeholder="standard"
                                 className="w-full border border-[#E2E8F0] rounded px-3 py-2 text-sm disabled:bg-[#F1F5F9]" />
                         </div>
-                        {numField('Raw (gün)',       'raw_retention_days')}
-                        {numField('Hourly (gün)',    'hourly_retention_days')}
-                        {numField('Daily (gün)',     'daily_retention_days')}
+                        {numField('Raw (gün)', 'raw_retention_days')}
+                        {numField('Hourly (gün)', 'hourly_retention_days')}
+                        {numField('Daily (gün)', 'daily_retention_days')}
                         {numField('Snapshot (saat)', 'snapshot_retention_hours')}
                         <div className="flex items-center gap-2">
                             <label className="text-xs text-[#64748B]">Purge Aktif</label>
@@ -500,7 +510,7 @@ function ScheduleTab() {
                             <label className="block text-xs text-[#64748B] mb-1 flex items-center gap-1">
                                 Max Paralel Host
                                 <span title="Bu ayar collector başlatılırken yüklenir. Değiştirdikten sonra ./pgstat restart collector gerekir."
-                                      className="text-[#F59E0B] cursor-help">⚠</span>
+                                    className="text-[#F59E0B] cursor-help">⚠</span>
                             </label>
                             <input type="number"
                                 value={form.max_host_concurrency as number}
@@ -732,6 +742,184 @@ function TemplateEditModal({ template, onClose }: { template: MessageTemplate; o
                     </button>
                 </div>
             </div>
+        </div>
+    );
+}
+
+
+// =========================================================================
+// Audit Log — API tarafindaki PUT/POST/DELETE/PATCH isteklerinin kaydı
+// =========================================================================
+
+interface AuditLogRow {
+    audit_id: number;
+    occurred_at: string;
+    user_name: string | null;
+    client_ip: string | null;
+    http_method: string;
+    endpoint: string;
+    request_body: any;
+    response_status: number | null;
+    response_summary: string | null;
+    duration_ms: number | null;
+}
+
+function AuditLogTab() {
+    const [hours, setHours] = useState(168);
+    const [methodFilter, setMethodFilter] = useState('');
+    const [endpointFilter, setEndpointFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
+    const [page, setPage] = useState(0);
+    const [expandedId, setExpandedId] = useState<number | null>(null);
+    const limit = 50;
+
+    const { data, isLoading } = useQuery({
+        queryKey: ['audit-log', hours, methodFilter, endpointFilter, statusFilter, page],
+        queryFn: () => {
+            const params = new URLSearchParams({
+                hours: String(hours),
+                limit: String(limit),
+                offset: String(page * limit),
+            });
+            if (methodFilter) params.set('method', methodFilter);
+            if (endpointFilter) params.set('endpoint', endpointFilter);
+            if (statusFilter) params.set('status', statusFilter);
+            return apiGet<{ rows: AuditLogRow[]; total: number }>(`/audit-log?${params}`);
+        },
+    });
+
+    const totalPages = data ? Math.ceil(data.total / limit) : 0;
+
+    const methodColors: Record<string, string> = {
+        GET: 'bg-blue-50 text-blue-700',
+        POST: 'bg-green-50 text-green-700',
+        PUT: 'bg-amber-50 text-amber-700',
+        PATCH: 'bg-purple-50 text-purple-700',
+        DELETE: 'bg-red-50 text-red-700',
+    };
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm p-5">
+            <div className="flex flex-wrap items-end gap-3 mb-4">
+                <div>
+                    <label className="block text-xs font-medium text-[#64748B] mb-1">Süre</label>
+                    <select value={hours} onChange={e => { setHours(Number(e.target.value)); setPage(0); }}
+                        className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm">
+                        <option value={1}>Son 1 saat</option>
+                        <option value={24}>Son 24 saat</option>
+                        <option value={168}>Son 7 gün</option>
+                        <option value={720}>Son 30 gün</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-[#64748B] mb-1">Method</label>
+                    <select value={methodFilter} onChange={e => { setMethodFilter(e.target.value); setPage(0); }}
+                        className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm">
+                        <option value="">Tümü</option>
+                        <option value="POST">POST</option>
+                        <option value="PUT">PUT</option>
+                        <option value="PATCH">PATCH</option>
+                        <option value="DELETE">DELETE</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-[#64748B] mb-1">Endpoint</label>
+                    <input type="text" value={endpointFilter} onChange={e => { setEndpointFilter(e.target.value); setPage(0); }}
+                        placeholder="/api/instances..." className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm w-64" />
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-[#64748B] mb-1">Status</label>
+                    <input type="text" value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(0); }}
+                        placeholder="200, 500..." className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm w-24" />
+                </div>
+                {data && (
+                    <div className="text-sm text-[#64748B] ml-auto">Toplam: <span className="font-mono font-semibold">{data.total}</span></div>
+                )}
+            </div>
+
+            {isLoading ? <div className="py-8 text-center text-[#94A3B8]">Yükleniyor...</div> : !data?.rows?.length ? (
+                <div className="py-8 text-center text-[#94A3B8]">Kayıt bulunamadı</div>
+            ) : (
+                <>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] text-[#64748B] text-xs uppercase">
+                                    <th className="text-left py-2 px-2">Zaman</th>
+                                    <th className="text-left py-2 px-2">Kullanıcı</th>
+                                    <th className="text-left py-2 px-2">IP</th>
+                                    <th className="text-left py-2 px-2">Method</th>
+                                    <th className="text-left py-2 px-2">Endpoint</th>
+                                    <th className="text-right py-2 px-2">Status</th>
+                                    <th className="text-right py-2 px-2">Süre</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.rows.map((r) => (
+                                    <>
+                                        <tr key={r.audit_id} onClick={() => setExpandedId(expandedId === r.audit_id ? null : r.audit_id)}
+                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer">
+                                            <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">
+                                                {new Date(r.occurred_at).toLocaleString('tr-TR')}
+                                            </td>
+                                            <td className="py-2 px-2">{r.user_name || '—'}</td>
+                                            <td className="py-2 px-2 font-mono text-xs">{r.client_ip || '—'}</td>
+                                            <td className="py-2 px-2">
+                                                <span className={`text-xs font-mono px-2 py-0.5 rounded ${methodColors[r.http_method] || 'bg-gray-50 text-gray-700'}`}>
+                                                    {r.http_method}
+                                                </span>
+                                            </td>
+                                            <td className="py-2 px-2 font-mono text-xs max-w-md truncate" title={r.endpoint}>{r.endpoint}</td>
+                                            <td className={`py-2 px-2 text-right font-mono text-xs ${r.response_status && r.response_status >= 400 ? 'text-red-600 font-semibold' : 'text-[#64748B]'}`}>
+                                                {r.response_status || '—'}
+                                            </td>
+                                            <td className="py-2 px-2 text-right font-mono text-xs text-[#64748B]">
+                                                {r.duration_ms ? `${r.duration_ms}ms` : '—'}
+                                            </td>
+                                        </tr>
+                                        {expandedId === r.audit_id && (
+                                            <tr key={`${r.audit_id}-detail`}>
+                                                <td colSpan={7} className="bg-[#F8FAFC] px-4 py-3">
+                                                    <div className="space-y-2 text-xs">
+                                                        {r.request_body && (
+                                                            <div>
+                                                                <div className="text-[#64748B] mb-1">Request Body:</div>
+                                                                <pre className="bg-white border border-[#E2E8F0] rounded p-2 font-mono text-[11px] overflow-x-auto">
+                                                                    {JSON.stringify(r.request_body, null, 2)}
+                                                                </pre>
+                                                            </div>
+                                                        )}
+                                                        {r.response_summary && (
+                                                            <div>
+                                                                <div className="text-[#64748B] mb-1">Response:</div>
+                                                                <pre className="bg-white border border-[#E2E8F0] rounded p-2 font-mono text-[11px] overflow-x-auto">
+                                                                    {r.response_summary}
+                                                                </pre>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {totalPages > 1 && (
+                        <div className="flex items-center justify-between mt-4 text-sm">
+                            <div className="text-[#64748B]">Sayfa {page + 1} / {totalPages}</div>
+                            <div className="flex gap-2">
+                                <button disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}
+                                    className="px-3 py-1 border border-[#CBD5E1] rounded disabled:opacity-50">← Önceki</button>
+                                <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
+                                    className="px-3 py-1 border border-[#CBD5E1] rounded disabled:opacity-50">Sonraki →</button>
+                            </div>
+                        </div>
+                    )}
+                </>
+            )}
         </div>
     );
 }
