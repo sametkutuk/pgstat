@@ -24,6 +24,7 @@ import reportRoutes from './routes/reports';
 import workloadRoutes from './routes/workload';
 import clusterRoutes from './routes/clusters';
 import auditLogRoutes from './routes/auditLog';
+import onboardingRoutes from './routes/onboarding';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
@@ -168,6 +169,7 @@ app.use('/api/reports', requireAuth, reportRoutes);
 app.use('/api/workload', requireAuth, workloadRoutes);
 app.use('/api/clusters', requireAuth, clusterRoutes);
 app.use('/api/audit-log', requireAuth, auditLogRoutes);
+app.use('/api/onboarding', requireAuth, onboardingRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiGet } from '../../api/client';
+import { apiGet, apiPost } from '../../api/client';
 
 export interface InstanceFormData {
     instance_id: string;
@@ -41,6 +41,29 @@ export default function InstanceForm({ initial, onSubmit, onCancel, isEdit }: Pr
     const [form, setForm] = useState<InstanceFormData>({ ...emptyForm, ...initial });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [authMode, setAuthMode] = useState<'password' | 'secret_ref'>('password');
+    const [precheck, setPrecheck] = useState<any>(null);
+    const [precheckLoading, setPrecheckLoading] = useState(false);
+
+    const runPrecheck = useCallback(async () => {
+        if (!form.host || !form.port || !form.admin_dbname || !form.collector_username || !form.password) {
+            setPrecheck({ error: 'Host, port, admin database, kullanıcı adı ve şifre zorunlu (precheck için)' });
+            return;
+        }
+        setPrecheckLoading(true);
+        setPrecheck(null);
+        try {
+            const result = await apiPost<any>('/onboarding/precheck', {
+                host: form.host, port: form.port, dbname: form.admin_dbname,
+                username: form.collector_username, password: form.password,
+                ssl_mode: form.ssl_mode, collector_username: form.collector_username,
+            });
+            setPrecheck(result);
+        } catch (e: any) {
+            setPrecheck({ error: e.message || 'Precheck başarısız' });
+        } finally {
+            setPrecheckLoading(false);
+        }
+    }, [form.host, form.port, form.admin_dbname, form.collector_username, form.password, form.ssl_mode]);
 
     useEffect(() => {
         if (initial) {
@@ -162,6 +185,69 @@ export default function InstanceForm({ initial, onSubmit, onCancel, isEdit }: Pr
                     )}
                 </div>
 
+                {/* Önkontrol bölümü — yeni instance ekleme öncesi prerequisite check */}
+                {!isEdit && authMode === 'password' && (
+                    <div className="md:col-span-2 border border-[#E2E8F0] rounded-lg p-4 bg-[#F8FAFC]">
+                        <div className="flex items-center justify-between mb-2">
+                            <div>
+                                <span className="text-xs font-semibold text-[#64748B]">Önkontrol</span>
+                                <p className="text-xs text-[#94A3B8] mt-0.5">
+                                    Hedef PG'ye bağlanıp pg_stat_statements, pg_monitor, track_io_timing gibi gereksinimleri kontrol et.
+                                </p>
+                            </div>
+                            <button type="button" onClick={runPrecheck} disabled={precheckLoading}
+                                className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded-md hover:bg-[#2563EB] disabled:opacity-50">
+                                {precheckLoading ? 'Kontrol ediliyor...' : '🔍 Önkontrol Yap'}
+                            </button>
+                        </div>
+
+                        {precheck && precheck.error && (
+                            <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                                ❌ {precheck.error}
+                            </div>
+                        )}
+
+                        {precheck && precheck.connected === false && (
+                            <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                                ❌ Bağlanılamadı: {precheck.error}
+                            </div>
+                        )}
+
+                        {precheck && precheck.connected && precheck.checks && (
+                            <div className="mt-2 space-y-1">
+                                <div className="text-xs text-[#64748B] mb-2">
+                                    Genel: <span className={`font-semibold ${precheck.overall === 'ok' ? 'text-green-700' : precheck.overall === 'critical' ? 'text-red-700' : 'text-amber-700'}`}>
+                                        {precheck.overall === 'ok' ? '✅ Hazır' : precheck.overall === 'critical' ? '❌ Eksikler var' : '⚠️ Uyarılar var'}
+                                    </span>
+                                </div>
+                                {precheck.checks.map((c: any, i: number) => (
+                                    <div key={i} className="bg-white border border-[#E2E8F0] rounded p-2.5 text-sm">
+                                        <div className="flex items-start gap-2">
+                                            <span>{c.status === 'ok' ? '✅' : c.status === 'critical' ? '❌' : c.status === 'warning' ? '⚠️' : 'ℹ️'}</span>
+                                            <div className="flex-1">
+                                                <div className="font-medium text-[#1E293B]">{c.label}</div>
+                                                <div className="text-xs text-[#64748B] mt-0.5">{c.detail}</div>
+                                                {c.fix_sql && (
+                                                    <details className="mt-2">
+                                                        <summary className="text-xs text-[#3B82F6] cursor-pointer hover:underline">
+                                                            Düzeltme SQL'i göster
+                                                        </summary>
+                                                        <pre className="mt-1 bg-[#1E293B] text-[#E2E8F0] p-2 rounded text-[11px] overflow-x-auto font-mono">{c.fix_sql}</pre>
+                                                        <button type="button" onClick={() => navigator.clipboard.writeText(c.fix_sql)}
+                                                            className="mt-1 text-[11px] text-[#3B82F6] hover:underline">
+                                                            📋 Kopyala
+                                                        </button>
+                                                    </details>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 <SelectField label="SSL Mode *" value={form.ssl_mode}
                     onChange={(v) => set('ssl_mode', v)}
                     options={['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full']} />
@@ -233,7 +319,7 @@ function fallbackCopy(text: string, done: () => void) {
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
-    try { document.execCommand('copy'); done(); } catch {}
+    try { document.execCommand('copy'); done(); } catch { }
     document.body.removeChild(ta);
 }
 
