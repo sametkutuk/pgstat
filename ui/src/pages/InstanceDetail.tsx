@@ -85,31 +85,7 @@ export default function InstanceDetail() {
             </div>
 
             {/* Workload profili — her tab'da görünür, sayfa içeriğinden önce */}
-            {cluster.data && cluster.data.role !== 'standalone' && (
-                <div className="mb-4 bg-white border border-[#E2E8F0] rounded-lg p-3 flex items-center gap-3 text-sm">
-                    <span className={`px-2 py-1 rounded text-xs font-bold ${
-                        cluster.data.role === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                        {cluster.data.role === 'primary' ? 'PRIMARY' : 'REPLICA'}
-                    </span>
-                    <span className="text-[#64748B]">Küme:</span>
-                    <Link to={`/clusters/${encodeURIComponent(cluster.data.cluster_id)}`}
-                        className="text-[#3B82F6] hover:underline font-medium">
-                        Tüm küme görünümü →
-                    </Link>
-                    {cluster.data.siblings?.length > 0 && (
-                        <div className="flex gap-2 ml-auto flex-wrap">
-                            <span className="text-[10px] text-[#94A3B8]">Diğer instance'lar:</span>
-                            {cluster.data.siblings.map((s: any) => (
-                                <Link key={s.instance_pk} to={`/instances/${s.instance_pk}`}
-                                    className="text-xs text-[#3B82F6] hover:underline">
-                                    {s.is_primary ? '👑 ' : ''}{s.display_name}
-                                </Link>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
+            <ClusterCard cluster={cluster.data} instanceId={id!} onChange={() => cluster.refetch()} />
             <WorkloadProfile instancePk={id!} />
 
             <div className="flex gap-1 mb-4 border-b border-[#E2E8F0] overflow-x-auto">
@@ -292,6 +268,103 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
                 { key: 'next_db_objects_collect_at', header: 'Sonraki', render: (r: any) => <TimeAgo date={r.next_db_objects_collect_at} /> },
                 { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
             ]} data={data || []} />
+        </div>
+    );
+}
+
+/**
+ * Küme kartı — instance'ın kümedeki rolünü gösterir.
+ * cluster_kind:
+ *   - manual: kullanıcı tarafından manuel grup
+ *   - orphan_clone: aynı sysid ama içinde >1 primary (klon/promote sonucu) — uyarı
+ *   - auto: otomatik tespit (system_identifier eşleşmesi)
+ *   - standalone: bağlantı yok
+ */
+function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instanceId: string; onChange: () => void }) {
+    const [editing, setEditing] = useState(false);
+    const [groupId, setGroupId] = useState('');
+
+    if (!cluster) return null;
+
+    const kind = cluster.cluster_kind || 'standalone';
+    const kindLabel: Record<string, { text: string; cls: string }> = {
+        manual: { text: '📌 MANUEL', cls: 'bg-purple-100 text-purple-700 border-purple-200' },
+        orphan_clone: { text: '⚠ KLON/PROMOTE', cls: 'bg-amber-100 text-amber-700 border-amber-300' },
+        auto: { text: '🔗 OTOMATİK', cls: 'bg-blue-100 text-blue-700 border-blue-200' },
+        standalone: { text: '○ STANDALONE', cls: 'bg-gray-100 text-gray-500 border-gray-200' },
+    };
+
+    const save = async () => {
+        await fetch(`/api/instances/${instanceId}/manual-cluster`, {
+            method: 'PATCH',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ manual_cluster_group_id: groupId.trim() || null }),
+        });
+        setEditing(false);
+        onChange();
+    };
+
+    return (
+        <div className="mb-4 bg-white border border-[#E2E8F0] rounded-lg p-3 text-sm">
+            <div className="flex items-center gap-3 flex-wrap">
+                <span className={`px-2 py-1 rounded text-xs font-bold border ${kindLabel[kind].cls}`}>
+                    {kindLabel[kind].text}
+                </span>
+                {cluster.role !== 'standalone' && (
+                    <>
+                        <span className={`px-2 py-1 rounded text-xs font-bold ${
+                            cluster.role === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                        }`}>
+                            {cluster.role === 'primary' ? 'PRIMARY' : 'REPLICA'}
+                        </span>
+                        <Link to={`/clusters/${encodeURIComponent(cluster.cluster_id)}`}
+                            className="text-[#3B82F6] hover:underline font-medium text-xs">
+                            Tüm küme görünümü →
+                        </Link>
+                    </>
+                )}
+                <button onClick={() => { setGroupId(cluster.manual_cluster_group_id || ''); setEditing(!editing); }}
+                    className="ml-auto text-xs text-[#3B82F6] hover:underline">
+                    {cluster.manual_cluster_group_id ? '✏ Manuel grubu düzenle' : '📌 Manuel küme grubu ata'}
+                </button>
+            </div>
+
+            {kind === 'orphan_clone' && (
+                <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                    ⚠ <strong>Aynı system_identifier'da birden fazla primary tespit edildi.</strong>
+                    Muhtemelen <code>pg_basebackup</code> ile alınmış sonra promote edilmiş ya da VM clone sonucu.
+                    Bu instance otomatik olarak ayrı küme sayıldı. Gerçek bir replication ilişkisi varsa
+                    "Manuel küme grubu ata" ile aynı grup adını verin.
+                </div>
+            )}
+
+            {editing && (
+                <div className="mt-2 flex gap-2 items-center">
+                    <input type="text" value={groupId} onChange={e => setGroupId(e.target.value)}
+                        placeholder="Örn: prod-main, etl-cluster (boş bırakılırsa kaldırılır)"
+                        className="flex-1 border border-[#CBD5E1] rounded px-2 py-1 text-xs" />
+                    <button onClick={save}
+                        className="px-3 py-1 bg-[#3B82F6] text-white text-xs rounded hover:bg-[#2563EB]">
+                        Kaydet
+                    </button>
+                    <button onClick={() => setEditing(false)} className="px-2 py-1 text-xs text-[#64748B]">
+                        İptal
+                    </button>
+                </div>
+            )}
+
+            {cluster.siblings?.length > 0 && (
+                <div className="mt-2 flex gap-2 flex-wrap text-[11px]">
+                    <span className="text-[#94A3B8]">Diğerleri:</span>
+                    {cluster.siblings.map((s: any) => (
+                        <Link key={s.instance_pk} to={`/instances/${s.instance_pk}`}
+                            className="text-[#3B82F6] hover:underline">
+                            {s.is_primary ? '👑 ' : ''}{s.display_name}
+                        </Link>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

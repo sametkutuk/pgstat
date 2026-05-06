@@ -205,7 +205,8 @@ router.get('/:id/cluster', async (req, res, next) => {
     try {
         const { id } = req.params;
         const r = await pool.query(`
-            select vic.cluster_id, vic.system_identifier, vic.manual_cluster_group_id,
+            select vic.cluster_id, vic.cluster_kind,
+                   vic.system_identifier, vic.manual_cluster_group_id,
                    coalesce(c.is_primary, false) as is_primary,
                    case
                      when vic.cluster_id is null then 'standalone'

@@ -10,7 +10,7 @@ const router = Router();
 router.get('/', async (_req, res, next) => {
     try {
         const r = await pool.query(`
-            select s.cluster_id, s.label, s.total_instances, s.primary_count, s.replica_count,
+            select s.cluster_id, s.label, s.cluster_kind, s.total_instances, s.primary_count, s.replica_count,
                    coalesce(o.open_alerts, 0) as open_alerts,
                    coalesce(c.critical_alerts, 0) as critical_alerts
             from control.v_cluster_summary s

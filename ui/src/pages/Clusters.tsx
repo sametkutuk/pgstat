@@ -11,12 +11,20 @@ import InfoTip from '../components/common/InfoTip';
 interface Cluster {
     cluster_id: string;
     label: string;
+    cluster_kind: string;
     total_instances: number;
     primary_count: number;
     replica_count: number;
     open_alerts: number;
     critical_alerts: number;
 }
+
+const KIND_BADGE: Record<string, { text: string; cls: string }> = {
+    manual: { text: '📌 Manuel', cls: 'bg-purple-100 text-purple-700' },
+    orphan_clone: { text: '⚠ Klon', cls: 'bg-amber-100 text-amber-700' },
+    auto: { text: '🔗 Otomatik', cls: 'bg-blue-100 text-blue-700' },
+    standalone: { text: '○ Tek', cls: 'bg-gray-100 text-gray-600' },
+};
 
 export default function Clusters() {
     const { data, isLoading, dataUpdatedAt } = useQuery({
@@ -28,10 +36,17 @@ export default function Clusters() {
     const columns = [
         {
             key: 'label', header: 'Küme', render: (r: Cluster) => (
-                <Link to={`/clusters/${encodeURIComponent(r.cluster_id)}`}
-                    className="font-medium text-[#3B82F6] hover:underline">
-                    {r.label || r.cluster_id.slice(0, 16)}
-                </Link>
+                <div className="flex items-center gap-2">
+                    <Link to={`/clusters/${encodeURIComponent(r.cluster_id)}`}
+                        className="font-medium text-[#3B82F6] hover:underline">
+                        {r.label || r.cluster_id.slice(0, 16)}
+                    </Link>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        KIND_BADGE[r.cluster_kind || 'auto']?.cls || ''
+                    }`}>
+                        {KIND_BADGE[r.cluster_kind || 'auto']?.text || r.cluster_kind}
+                    </span>
+                </div>
             )
         },
         {
