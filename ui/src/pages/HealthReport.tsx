@@ -22,9 +22,8 @@ function HealthScoreBar({ scores, label, dimmed }: { scores: any; label: string;
     if (label === 'idle' || total === 0) return <span className="text-[#94A3B8] text-[10px]">— düşük aktivite —</span>;
     return (
         <div className="flex items-center gap-2">
-            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${
-                dimmed ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]' : 'bg-[#0F172A] text-white'
-            }`}>{dimmed ? '90G' : '24S'}</span>
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${dimmed ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]' : 'bg-[#0F172A] text-white'
+                }`}>{dimmed ? '90G' : '24S'}</span>
             <div className={`flex flex-1 h-5 overflow-hidden border ${dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'}`}
                 title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}>
                 {oltp > 0 && <div style={{ width: `${oltp}%`, backgroundColor: WL_COLORS.oltp }} className="text-white text-[9px] font-medium flex items-center justify-center">{oltp >= 10 && `${oltp}%`}</div>}
@@ -137,6 +136,27 @@ export default function HealthReport() {
                             </div>
                         </div>
                     ))}
+
+                    {/* Yapılandırma değişiklikleri özeti */}
+                    {report.settings_change_count !== undefined && (
+                        <div>
+                            <h4 className="text-xs font-semibold text-[#94A3B8] uppercase tracking-wide mb-2">Yapılandırma</h4>
+                            <div className="space-y-1">
+                                <div className="flex items-center gap-2 text-sm">
+                                    <span>{report.settings_change_count === 0 ? 'ℹ️' : '🔧'}</span>
+                                    <span className="text-[#475569] w-48">Parametre Değişiklikleri</span>
+                                    <span className={`font-mono font-medium ${report.settings_change_count > 0 ? 'text-amber-600' : 'text-[#64748B]'}`}>
+                                        Son {report.period_days} günde {report.settings_change_count} değişiklik
+                                    </span>
+                                    {report.settings_change_count > 0 && (
+                                        <Link to={`/instances/${report.instance_pk}`} className="text-xs text-[#3B82F6] hover:underline ml-2">
+                                            detayları gör →
+                                        </Link>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 

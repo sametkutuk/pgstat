@@ -186,25 +186,25 @@ router.post('/', async (req, res, next) => {
 // PATCH /api/instances/:id/manual-cluster — manuel küme grubu ata (logical replication
 // veya farklı initdb'lerle aynı uygulamaya hizmet eden serverlar için)
 router.patch('/:id/manual-cluster', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const groupId = req.body?.manual_cluster_group_id;
-        const value = (typeof groupId === 'string' && groupId.trim()) ? groupId.trim().slice(0, 50) : null;
-        const r = await pool.query(
-            `update control.instance_inventory set manual_cluster_group_id = $1
+  try {
+    const { id } = req.params;
+    const groupId = req.body?.manual_cluster_group_id;
+    const value = (typeof groupId === 'string' && groupId.trim()) ? groupId.trim().slice(0, 50) : null;
+    const r = await pool.query(
+      `update control.instance_inventory set manual_cluster_group_id = $1
              where instance_pk = $2 returning instance_pk, manual_cluster_group_id`,
-            [value, id]
-        );
-        if (r.rowCount === 0) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
-        res.json(r.rows[0]);
-    } catch (err) { next(err); }
+      [value, id]
+    );
+    if (r.rowCount === 0) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
 });
 
 // GET /api/instances/:id/cluster — bu instance'ın küme bağlamı
 router.get('/:id/cluster', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const r = await pool.query(`
+  try {
+    const { id } = req.params;
+    const r = await pool.query(`
             select vic.cluster_id, vic.cluster_kind,
                    vic.system_identifier, vic.manual_cluster_group_id,
                    coalesce(c.is_primary, false) as is_primary,
@@ -217,12 +217,12 @@ router.get('/:id/cluster', async (req, res, next) => {
             left join control.instance_capability c on c.instance_pk = vic.instance_pk
             where vic.instance_pk = $1
         `, [id]);
-        const me = r.rows[0];
-        if (!me) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
+    const me = r.rows[0];
+    if (!me) { res.status(404).json({ error: 'Instance bulunamadı' }); return; }
 
-        let siblings: any[] = [];
-        if (me.cluster_id) {
-            const s = await pool.query(`
+    let siblings: any[] = [];
+    if (me.cluster_id) {
+      const s = await pool.query(`
                 select i.instance_pk, i.display_name, coalesce(c.is_primary, false) as is_primary,
                        i.bootstrap_state
                 from control.v_instance_cluster vic
@@ -231,10 +231,10 @@ router.get('/:id/cluster', async (req, res, next) => {
                 where vic.cluster_id = $1 and vic.instance_pk <> $2
                 order by c.is_primary desc nulls last, i.display_name
             `, [me.cluster_id, id]);
-            siblings = s.rows;
-        }
-        res.json({ ...me, siblings });
-    } catch (err) { next(err); }
+      siblings = s.rows;
+    }
+    res.json({ ...me, siblings });
+  } catch (err) { next(err); }
 });
 
 router.put('/:id', async (req, res, next) => {
@@ -639,7 +639,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     const [
       instanceInfo, cacheHit, connections, tempFiles, deadlocks,
       walProduction, openAlerts, tpsDaily, connectionDaily, walDaily, cpuProxyDaily, bloatTop, indexSuspect,
-      unusedIndex, settings, workloadProfile
+      unusedIndex, settings, workloadProfile, settingsChanges
     ] = await Promise.all([
       // Instance bilgisi
       safeQuery(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
@@ -795,6 +795,18 @@ router.get('/:id/health-report', async (req, res, next) => {
                  from dim.database_ref
                  where instance_pk = $1
                  order by datname`, [id]),
+
+      // Son N gun pg_settings degisiklik sayisi (ozet)
+      safeQuery(`with snapshots as (
+        select setting_name, setting_value,
+          lag(setting_value) over (partition by setting_name order by snapshot_ts) as prev_value
+        from fact.pg_settings_snapshot
+        where instance_pk = $1
+          and snapshot_ts > now() - make_interval(days => $2)
+      )
+      select count(*) as change_count
+      from snapshots
+      where prev_value is not null and prev_value <> setting_value`, [id, days]),
     ]);
 
     const inst = instanceInfo.rows[0];
@@ -858,6 +870,74 @@ router.get('/:id/health-report', async (req, res, next) => {
       settings: settings.rows,
       alert_counts: alertCounts,
       workload: workloadProfile.rows,
+      settings_change_count: parseInt(settingsChanges.rows[0]?.change_count || '0'),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/settings/diff — pg_settings degisikliklerini listele
+// Query: days (varsayilan 30), important_only (true/false)
+//
+// Mantik: her setting icin ardisik snapshot'lar arasinda LAG() ile degisim tespit
+// Sadece setting_value degisen satirlari donder (degisim zamani = setting'in
+// yeni degerle ilk gorundugu snapshot)
+router.get('/:id/settings/diff', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const days = parseInt(req.query.days as string) || 30;
+    const importantOnly = req.query.important_only === 'true';
+
+    // Onemli parametreler — tuning + restart-required olanlar
+    const importantSettings = [
+      'shared_buffers', 'effective_cache_size', 'work_mem', 'maintenance_work_mem',
+      'max_connections', 'max_wal_size', 'min_wal_size', 'wal_buffers',
+      'checkpoint_timeout', 'checkpoint_completion_target',
+      'random_page_cost', 'seq_page_cost', 'effective_io_concurrency',
+      'autovacuum_max_workers', 'autovacuum_vacuum_scale_factor',
+      'autovacuum_analyze_scale_factor', 'autovacuum_naptime',
+      'shared_preload_libraries', 'max_worker_processes', 'max_parallel_workers',
+      'max_parallel_workers_per_gather', 'max_locks_per_transaction',
+      'wal_level', 'archive_mode', 'archive_command',
+      'log_min_duration_statement', 'track_io_timing', 'track_functions',
+    ];
+
+    const params: any[] = [id, days];
+    let importantFilter = '';
+    if (importantOnly) {
+      params.push(importantSettings);
+      importantFilter = `and setting_name = any($${params.length})`;
+    }
+
+    const result = await pool.query(`
+      with snapshots as (
+        select
+          snapshot_ts, setting_name, setting_value, unit,
+          lag(setting_value) over (partition by setting_name order by snapshot_ts) as prev_value,
+          lag(snapshot_ts) over (partition by setting_name order by snapshot_ts) as prev_ts
+        from fact.pg_settings_snapshot
+        where instance_pk = $1
+          and snapshot_ts > now() - make_interval(days => $2)
+          ${importantFilter}
+      ),
+      changes as (
+        select setting_name, prev_value, setting_value as new_value,
+               prev_ts, snapshot_ts as changed_at, unit
+        from snapshots
+        where prev_value is not null and prev_value <> setting_value
+      )
+      select setting_name, prev_value, new_value, prev_ts, changed_at, unit,
+             setting_name = any($${importantOnly ? params.length : params.length + 1}) as is_important
+      from changes
+      order by changed_at desc, setting_name
+    `, importantOnly ? params : [...params, importantSettings]);
+
+    res.json({
+      instance_pk: parseInt(id as string),
+      period_days: days,
+      total_changes: result.rows.length,
+      changes: result.rows,
     });
   } catch (err) {
     next(err);

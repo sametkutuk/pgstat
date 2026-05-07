@@ -8,7 +8,7 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import { useState } from 'react';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -35,6 +35,12 @@ export default function InstanceDetail() {
     const walData = useQuery({ queryKey: ['inst-wal', id], queryFn: () => apiGet<any>(`/instances/${id}/wal?hours=1`), enabled: tab === 'wal' });
     const slruData = useQuery({ queryKey: ['inst-slru', id], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?hours=1`), enabled: tab === 'slru' });
     const tpsData = useQuery({ queryKey: ['inst-tps', id], queryFn: () => apiGet<any>(`/instances/${id}/tps?days=7`), enabled: tab === 'tps' });
+    const [settingsDiffDays, setSettingsDiffDays] = useState(30);
+    const settingsDiff = useQuery({
+        queryKey: ['settings-diff', id, settingsDiffDays],
+        queryFn: () => apiGet<any>(`/instances/${id}/settings/diff?days=${settingsDiffDays}`),
+        enabled: tab === 'settings_diff',
+    });
 
     const inst = instance.data;
     const cap = capability.data;
@@ -53,6 +59,7 @@ export default function InstanceDetail() {
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
         { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
+        { key: 'settings_diff', label: 'Yapılandırma Değişiklikleri', tip: 'pg_settings_snapshot tablosundan ardışık snapshot\'lar arasında değişen postgresql.conf parametreleri. shared_buffers, work_mem gibi önemli parametreler vurgulanır.' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
     ];
@@ -111,6 +118,7 @@ export default function InstanceDetail() {
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
+            {tab === 'settings_diff' && <SettingsDiffTab data={settingsDiff.data} loading={settingsDiff.isLoading} days={settingsDiffDays} onDaysChange={setSettingsDiffDays} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
         </div >
@@ -385,9 +393,8 @@ function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instance
                 </span>
                 {cluster.role !== 'standalone' && (
                     <>
-                        <span className={`px-2 py-1 rounded text-xs font-bold ${
-                            cluster.role === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                        }`}>
+                        <span className={`px-2 py-1 rounded text-xs font-bold ${cluster.role === 'primary' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                            }`}>
                             {cluster.role === 'primary' ? 'PRIMARY' : 'REPLICA'}
                         </span>
                         <Link to={`/clusters/${encodeURIComponent(cluster.cluster_id)}`}
@@ -421,11 +428,10 @@ function ClusterCard({ cluster, instanceId, onChange }: { cluster: any; instance
                             { k: 'remove' as const, label: 'Manuel grubu kaldır' },
                         ].map(opt => (
                             <button key={opt.k} onClick={() => { setMode(opt.k); setGroupId(''); }}
-                                className={`px-2 py-1 text-[11px] rounded ${
-                                    mode === opt.k
-                                        ? 'bg-[#3B82F6] text-white'
-                                        : 'bg-white text-[#475569] border border-[#E2E8F0]'
-                                }`}>
+                                className={`px-2 py-1 text-[11px] rounded ${mode === opt.k
+                                    ? 'bg-[#3B82F6] text-white'
+                                    : 'bg-white text-[#475569] border border-[#E2E8F0]'
+                                    }`}>
                                 {opt.label}
                             </button>
                         ))}
@@ -515,17 +521,15 @@ function ScoreBar({ scores, label, classifiedAt, dimmed }: {
 
     return (
         <div className="flex items-center gap-2">
-            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${
-                dimmed
-                    ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]'
-                    : 'bg-[#0F172A] text-white'
-            }`} title={dimmed ? '90 gün ortalaması' : 'Son 24 saat'}>
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${dimmed
+                ? 'bg-[#F1F5F9] text-[#64748B] border border-dashed border-[#94A3B8]'
+                : 'bg-[#0F172A] text-white'
+                }`} title={dimmed ? '90 gün ortalaması' : 'Son 24 saat'}>
                 {dimmed ? '90G' : '24S'}
             </span>
             <div
-                className={`flex flex-1 h-5 overflow-hidden border ${
-                    dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'
-                }`}
+                className={`flex flex-1 h-5 overflow-hidden border ${dimmed ? 'border-dashed border-[#64748B] rounded-sm' : 'border-[#1E293B] rounded'
+                    }`}
                 title={`OLTP %${oltp} · Analitik %${analytical} · Toplu %${bulk}`}
             >
                 {oltp > 0 && (
@@ -602,7 +606,7 @@ function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
             <div className="flex items-center gap-2 mb-3">
                 <h4 className="font-semibold text-[#1E293B]">DB Workload Profilleri</h4>
                 <InfoTip text={
-`Her DB için iki ayrı görünüm:
+                    `Her DB için iki ayrı görünüm:
 • Son 24 saat (anlık) — saatte 1 hesaplanır, bugünkü davranışı gösterir
 • Genel (90 gün ortalaması) — günde 1 hesaplanır, DB'nin gerçek karakterini verir
 İkisi farklıysa → bugün anormal aktivite. Aynıysa → tipik gün.
@@ -974,4 +978,112 @@ function formatBytesCompact(bytes: number): string {
     if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
     if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
     return `${bytes} B`;
+}
+
+
+// =========================================================================
+// Yapılandırma Değişiklikleri Tab — pg_settings snapshot diff
+// =========================================================================
+
+interface SettingChange {
+    setting_name: string;
+    prev_value: string;
+    new_value: string;
+    prev_ts: string;
+    changed_at: string;
+    unit: string | null;
+    is_important: boolean;
+}
+
+interface SettingsDiffData {
+    instance_pk: number;
+    period_days: number;
+    total_changes: number;
+    changes: SettingChange[];
+}
+
+function SettingsDiffTab({ data, loading, days, onDaysChange }: {
+    data: SettingsDiffData | undefined;
+    loading: boolean;
+    days: number;
+    onDaysChange: (d: number) => void;
+}) {
+    const [importantOnly, setImportantOnly] = useState(false);
+
+    const filtered = data?.changes.filter(c => !importantOnly || c.is_important) || [];
+
+    return (
+        <div>
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                <div className="flex items-center gap-3">
+                    <select value={days} onChange={e => onDaysChange(Number(e.target.value))}
+                        className="border border-[#CBD5E1] rounded px-3 py-1.5 text-sm">
+                        <option value={7}>Son 7 gün</option>
+                        <option value={30}>Son 30 gün</option>
+                        <option value={90}>Son 90 gün</option>
+                    </select>
+                    <label className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={importantOnly}
+                            onChange={e => setImportantOnly(e.target.checked)}
+                            className="accent-[#3B82F6]" />
+                        <span>Sadece önemli parametreler</span>
+                    </label>
+                </div>
+                {data && (
+                    <div className="text-sm text-[#64748B]">
+                        Toplam değişiklik: <span className="font-mono font-semibold text-[#1E293B]">{filtered.length}</span>
+                        {data.total_changes !== filtered.length && (
+                            <span className="text-[#94A3B8]"> (filtrelenmemiş: {data.total_changes})</span>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                {loading ? (
+                    <div className="py-8 text-center text-[#94A3B8]">Yükleniyor...</div>
+                ) : filtered.length === 0 ? (
+                    <div className="py-8 text-center text-[#94A3B8]">
+                        Bu dönemde yapılandırma değişikliği bulunamadı.
+                    </div>
+                ) : (
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-[#E2E8F0] text-[#64748B] text-xs uppercase">
+                                <th className="text-left py-2 px-2">Parametre</th>
+                                <th className="text-left py-2 px-2">Önceki Değer</th>
+                                <th className="text-left py-2 px-2">Yeni Değer</th>
+                                <th className="text-right py-2 px-2">Değişim Zamanı</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {filtered.map((c, i) => (
+                                <tr key={i} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] ${c.is_important ? 'bg-amber-50/30' : ''}`}>
+                                    <td className="py-2 px-2 font-mono text-xs">
+                                        {c.is_important && <span title="Önemli parametre" className="mr-1">⭐</span>}
+                                        <span className="font-semibold">{c.setting_name}</span>
+                                        {c.unit && <span className="text-[#94A3B8] ml-1">({c.unit})</span>}
+                                    </td>
+                                    <td className="py-2 px-2 font-mono text-xs text-red-700">
+                                        <span className="bg-red-50 px-1.5 py-0.5 rounded">{c.prev_value}</span>
+                                    </td>
+                                    <td className="py-2 px-2 font-mono text-xs text-green-700">
+                                        <span className="bg-green-50 px-1.5 py-0.5 rounded">{c.new_value}</span>
+                                    </td>
+                                    <td className="py-2 px-2 text-right text-xs text-[#64748B] font-mono whitespace-nowrap">
+                                        {new Date(c.changed_at).toLocaleString('tr-TR')}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+
+            <div className="mt-3 text-xs text-[#94A3B8]">
+                ⭐ ile işaretli parametreler tuning veya restart gerektiren önemli ayarlardır.
+                Snapshot'lar geceleri alındığı için değişim zamanı snapshot zamanını gösterir, gerçek değişim daha önce olabilir.
+            </div>
+        </div>
+    );
 }
