@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPut, apiPatch } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
+import PrintButton from '../components/common/PrintButton';
 import InstanceForm from '../components/forms/InstanceForm';
 import type { InstanceFormData } from '../components/forms/InstanceForm';
 import { useToast } from '../components/common/Toast';
@@ -143,10 +144,13 @@ export default function Instances() {
         <div>
             <div className="flex items-center justify-between mb-5">
                 <h1 className="text-xl font-bold">Instances</h1>
-                <button onClick={() => { setFormMode(formMode === 'closed' ? 'add' : 'closed'); setEditInstance(null); }}
-                    className="px-4 py-2 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB]">
-                    {formMode !== 'closed' ? 'Kapat' : '+ Instance Ekle'}
-                </button>
+                <div className="flex items-center gap-2">
+                    <PrintButton title="Instances" />
+                    <button onClick={() => { setFormMode(formMode === 'closed' ? 'add' : 'closed'); setEditInstance(null); }}
+                        className="px-4 py-2 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] print:hidden">
+                        {formMode !== 'closed' ? 'Kapat' : '+ Instance Ekle'}
+                    </button>
+                </div>
             </div>
 
             {formMode !== 'closed' && (

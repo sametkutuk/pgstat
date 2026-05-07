@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
 import { useState, useMemo } from 'react';
+import PrintButton from '../components/common/PrintButton';
 
 interface Statement {
   statement_series_id: number;
@@ -150,12 +151,15 @@ export default function Statements() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl font-bold">Top Statements</h1>
-        <button
-          onClick={() => refetch()}
-          className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors"
-        >
-          {isFetching ? 'Yenileniyor...' : 'Yenile'}
-        </button>
+        <div className="flex items-center gap-2">
+          <PrintButton title="Top Statements" />
+          <button
+            onClick={() => refetch()}
+            className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors print:hidden"
+          >
+            {isFetching ? 'Yenileniyor...' : 'Yenile'}
+          </button>
+        </div>
       </div>
 
       {/* Filtre çubuğu */}

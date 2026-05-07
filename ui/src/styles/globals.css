@@ -23,3 +23,90 @@ body {
   background: var(--content-bg);
   color: var(--text-primary);
 }
+
+
+/* ============================================================================ */
+/* Print stilleri — "PDF İndir" akışı için                                      */
+/* Kullanıcı butona tıklayınca window.print() çağrılır, tarayıcı "Save as PDF"  */
+/* diyaloğu açar. Sidebar, filtreler, butonlar print'te gizlenir; tablo tam     */
+/* genişlikte sığdırılır.                                                       */
+/* ============================================================================ */
+@media print {
+
+  /* Sayfa boyutu ve marjin */
+  @page {
+    size: A4;
+    margin: 1cm;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Sidebar ve genel layout */
+  aside,
+  nav.sidebar,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Sadece print'te gösterilecek bölümler */
+  .print\:block {
+    display: block !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Card'ları sadeleştir — gölge ve renkli arka plan kaldır */
+  .bg-white,
+  .bg-\[#F8FAFC\] {
+    background: white !important;
+    box-shadow: none !important;
+  }
+
+  /* Tablolar — kompakt ve tüm satırlar görünsün */
+  table {
+    width: 100% !important;
+    page-break-inside: auto;
+    font-size: 10px !important;
+  }
+
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  /* Renkleri yazdırılır hale getir */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Her grafik/grup ayrı sayfa kırılımı için */
+  .print\:break-before {
+    page-break-before: always;
+  }
+
+  .print\:break-inside-avoid {
+    page-break-inside: avoid;
+  }
+
+  /* Linkler — URL göster */
+  a[href]:after {
+    content: none !important;
+  }
+
+  /* Print başlık */
+  .print\:mt-4 {
+    margin-top: 1rem !important;
+  }
+}

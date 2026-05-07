@@ -11,6 +11,7 @@ import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
+import PrintButton from '../components/common/PrintButton';
 import { useToast } from '../components/common/Toast';
 
 interface ReportListItem {
@@ -109,10 +110,11 @@ export default function ReportHistory() {
                     <InfoTip text="Otomatik gönderilen günlük ve haftalık özet raporlar burada saklanır. Saklama süresi (retention) Ayarlar > Raporlar sekmesinden değiştirilebilir; eski raporlar UTC 02:00'da otomatik temizlenir." />
                 </div>
                 <div className="flex items-center gap-3">
-                    <Link to="/settings" className="text-sm text-[#3B82F6] hover:underline">
+                    <Link to="/settings" className="text-sm text-[#3B82F6] hover:underline print:hidden">
                         ⚙ Ayarlar
                     </Link>
                     <LastUpdated dataUpdatedAt={dataUpdatedAt} />
+                    <PrintButton title="Rapor Tarihçesi" />
                 </div>
             </div>
 

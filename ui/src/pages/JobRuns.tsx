@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
 import Badge from '../components/common/Badge';
+import PrintButton from '../components/common/PrintButton';
 
 interface JobRun {
   job_run_id: number;
@@ -96,12 +97,15 @@ export default function JobRuns() {
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl font-bold">Job Runs</h1>
-        <button
-          onClick={() => runs.refetch()}
-          className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors"
-        >
-          {runs.isFetching ? 'Yenileniyor...' : 'Yenile'}
-        </button>
+        <div className="flex items-center gap-2">
+          <PrintButton title="Job Runs" />
+          <button
+            onClick={() => runs.refetch()}
+            className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors print:hidden"
+          >
+            {runs.isFetching ? 'Yenileniyor...' : 'Yenile'}
+          </button>
+        </div>
       </div>
 
       {/* İstatistik kartları */}
@@ -190,9 +194,9 @@ export default function JobRuns() {
             onClick={() => applyStatus(v)}
             className={`px-3 py-1.5 text-sm rounded transition-colors ${statusFilter === v
               ? v === 'failed' ? 'bg-red-500 text-white'
-              : v === 'partial' ? 'bg-amber-500 text-white'
-              : v === 'success' ? 'bg-green-600 text-white'
-              : 'bg-[#3B82F6] text-white'
+                : v === 'partial' ? 'bg-amber-500 text-white'
+                  : v === 'success' ? 'bg-green-600 text-white'
+                    : 'bg-[#3B82F6] text-white'
               : 'bg-white text-[#64748B] border border-[#E2E8F0] hover:bg-[#F8FAFC]'
               }`}
           >

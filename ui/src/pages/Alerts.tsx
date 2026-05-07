@@ -5,6 +5,7 @@ import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
+import PrintButton from '../components/common/PrintButton';
 import { useToast } from '../components/common/Toast';
 import React, { useState, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -139,7 +140,10 @@ export default function Alerts() {
                     <h1 className="text-xl font-bold">Alerts</h1>
                     <InfoTip text="Collector her 5 saniyede alert kurallarını değerlendirir. Açık alert'ler otomatik tekrar sayısı artar. Onayla = farkındayım, Çöz = sorun giderildi. Snooze ve bakım penceresi ayarları Adaptive Alerting sayfasından yapılır." />
                 </div>
-                <LastUpdated dataUpdatedAt={dataUpdatedAt} />
+                <div className="flex items-center gap-3">
+                    <LastUpdated dataUpdatedAt={dataUpdatedAt} />
+                    <PrintButton title="Alerts" />
+                </div>
             </div>
 
             <div className="flex gap-4 mb-4 flex-wrap">
