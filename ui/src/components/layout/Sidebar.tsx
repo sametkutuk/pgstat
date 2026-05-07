@@ -12,8 +12,6 @@ const links = [
     { to: '/jobs', label: 'Job Runs', icon: '⚙️' },
     { to: '/reports/history', label: 'Raporlar', icon: '📜' },
     { to: '/settings', label: 'Ayarlar', icon: '🛠️' },
-    { to: '/settings/alert-rules', label: 'Alert Kuralları', icon: '📋' },
-    { to: '/settings/adaptive-alerting', label: 'Adaptive Alerting', icon: '⚡' },
 ];
 
 export default function Sidebar() {

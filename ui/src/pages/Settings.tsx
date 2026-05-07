@@ -8,11 +8,10 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'templates' | 'reports' | 'audit'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
-        { key: 'templates' as const, label: 'Alert Mesaj Şablonları' },
         { key: 'reports' as const, label: 'Raporlar' },
         { key: 'audit' as const, label: 'Audit Log' },
     ];
@@ -30,7 +29,6 @@ export default function Settings() {
             </div>
             {tab === 'retention' && <RetentionTab />}
             {tab === 'schedule' && <ScheduleTab />}
-            {tab === 'templates' && <MessageTemplatesTab />}
             {tab === 'reports' && <ReportsTab />}
             {tab === 'audit' && <AuditLogTab />}
         </div>
@@ -571,7 +569,7 @@ const TEMPLATE_PLACEHOLDERS = [
     'job_type', 'failed_count', 'total_count',
 ];
 
-function MessageTemplatesTab() {
+export function MessageTemplatesTab() {
     const { data = [], isLoading } = useQuery<MessageTemplate[]>({
         queryKey: ['message-templates'],
         queryFn: () => apiGet('/alert-rules/message-templates'),

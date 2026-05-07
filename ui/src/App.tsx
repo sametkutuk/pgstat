@@ -10,8 +10,7 @@ import StatementDetail from './pages/StatementDetail';
 import Alerts from './pages/Alerts';
 import JobRuns from './pages/JobRuns';
 import Settings from './pages/Settings';
-import AlertRules from './pages/AlertRules';
-import AdaptiveAlerting from './pages/AdaptiveAlerting';
+import AlertsHub from './pages/AlertsHub';
 import ClusterDetail from './pages/ClusterDetail';
 import HealthReport from './pages/HealthReport';
 import ReportHistory from './pages/ReportHistory';
@@ -52,7 +51,10 @@ function App() {
               <Route path="/instances/:id" element={<InstanceDetail />} />
               <Route path="/statements" element={<Statements />} />
               <Route path="/statements/:seriesId" element={<StatementDetail />} />
-              <Route path="/alerts" element={<Alerts />} />
+              <Route path="/alerts" element={<AlertsHub />} />
+              <Route path="/alerts/rules" element={<AlertsHub />} />
+              <Route path="/alerts/adaptive" element={<AlertsHub />} />
+              <Route path="/alerts/templates" element={<AlertsHub />} />
               <Route path="/alerts/:id" element={<Alerts />} />
               <Route path="/jobs" element={<JobRuns />} />
               <Route path="/reports/history" element={<ReportHistory />} />
@@ -60,8 +62,9 @@ function App() {
               <Route path="/clusters" element={<Clusters />} />
               <Route path="/clusters/:cluster_id" element={<ClusterGroupDetail />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/settings/alert-rules" element={<AlertRules />} />
-              <Route path="/settings/adaptive-alerting" element={<AdaptiveAlerting />} />
+              {/* Eski route'lar — yeni AlertsHub'a redirect */}
+              <Route path="/settings/alert-rules" element={<Navigate to="/alerts/rules" replace />} />
+              <Route path="/settings/adaptive-alerting" element={<Navigate to="/alerts/adaptive" replace />} />
               <Route path="/cluster-detail" element={<ClusterDetail />} />
               <Route path="/cluster/:id" element={<ClusterDetail />} />
               <Route path="/cluster/:id/health-report" element={<HealthReport />} />
