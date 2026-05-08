@@ -10,12 +10,13 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit' | 'dashboard'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
         { key: 'reports' as const, label: 'Raporlar' },
         { key: 'audit' as const, label: 'Audit Log' },
+        { key: 'dashboard' as const, label: 'Dashboard Görünümü' },
     ];
 
     return (
@@ -33,6 +34,7 @@ export default function Settings() {
             {tab === 'schedule' && <ScheduleTab />}
             {tab === 'reports' && <ReportsTab />}
             {tab === 'audit' && <AuditLogTab />}
+            {tab === 'dashboard' && <DashboardWidgetsTab />}
         </div>
     );
 }
@@ -939,6 +941,102 @@ function AuditLogTab() {
                     )}
                 </>
             )}
+        </div>
+    );
+}
+
+
+// =========================================================================
+// Dashboard Görünümü — widget visibility + pin yönetimi (preferences)
+// =========================================================================
+
+interface UserPrefs {
+    pinned_instances: number[];
+    dashboard_widgets: Record<string, boolean>;
+}
+
+const WIDGETS = [
+    { key: 'open_alerts', label: 'Açık Alert Özeti', desc: 'Severity bazında alert dağılımı' },
+    { key: 'instance_health', label: 'Instance Sağlık Kartları', desc: 'Tüm instance\'lar için durum kartları' },
+    { key: 'wal_production', label: 'WAL Üretimi', desc: 'Saatlik WAL byte üretim grafiği' },
+    { key: 'top_bloat', label: 'Top Bloat Tabloları', desc: 'En çok dead tup\'a sahip tablolar' },
+    { key: 'recent_jobs', label: 'Son Job Run\'lar', desc: 'Collector job geçmişi özet' },
+];
+
+function DashboardWidgetsTab() {
+    const qc = useQueryClient();
+    const toast = useToast();
+    const { data, isLoading } = useQuery<UserPrefs>({
+        queryKey: ['preferences'],
+        queryFn: () => apiGet('/preferences'),
+    });
+
+    const updateMut = useMutation({
+        mutationFn: (widgets: Record<string, boolean>) =>
+            apiPatch('/preferences', { dashboard_widgets: widgets }),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['preferences'] });
+            toast.success('Tercihler kaydedildi');
+        },
+        onError: () => toast.error('Kaydedilemedi'),
+    });
+
+    if (isLoading) return (
+        <div className="bg-white rounded-lg shadow-sm p-6 space-y-3">
+            <Skeleton width="40%" height="1rem" />
+            <Skeleton height="2rem" />
+            <Skeleton height="2rem" />
+            <Skeleton height="2rem" />
+        </div>
+    );
+
+    const widgets = data?.dashboard_widgets || {};
+
+    const toggle = (key: string) => {
+        const next = { ...widgets, [key]: !(widgets[key] !== false) };
+        updateMut.mutate(next);
+    };
+
+    return (
+        <div className="space-y-4">
+            <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-3 text-xs text-[#0369A1]">
+                Dashboard'da gösterilecek widget'ları seçin. Kapatılan widget'lar Dashboard sayfasında görünmez,
+                veri hâlâ toplanmaya devam eder. Pin'lenen instance'lar Instances sayfasında ⭐ ikonu ile yönetilir.
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm divide-y divide-[#E2E8F0]">
+                {WIDGETS.map(w => {
+                    const enabled = widgets[w.key] !== false;
+                    return (
+                        <div key={w.key} className="px-4 py-3 flex items-center gap-3">
+                            <div className="flex-1">
+                                <div className="text-sm font-medium text-[#1E293B]">{w.label}</div>
+                                <div className="text-xs text-[#94A3B8] mt-0.5">{w.desc}</div>
+                            </div>
+                            <button onClick={() => toggle(w.key)}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? 'bg-[#3B82F6]' : 'bg-[#CBD5E1]'}`}>
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {/* Pinned instances özeti */}
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <h3 className="text-sm font-semibold text-[#475569] mb-3">⭐ Sabit Instance'lar</h3>
+                {data?.pinned_instances && data.pinned_instances.length > 0 ? (
+                    <p className="text-sm text-[#64748B]">
+                        {data.pinned_instances.length} instance pinli. Yönetmek için
+                        <Link to="/instances" className="text-[#3B82F6] hover:underline ml-1">Instances</Link> sayfasına git.
+                    </p>
+                ) : (
+                    <p className="text-sm text-[#64748B]">
+                        Pinli instance yok. Instances sayfasından ⭐ ikonu ile pinleyebilirsin —
+                        Dashboard üstünde özet kartları görünür.
+                    </p>
+                )}
+            </div>
         </div>
     );
 }

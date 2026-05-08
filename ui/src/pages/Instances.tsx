@@ -80,7 +80,29 @@ export default function Instances() {
         setFormMode('edit');
     };
 
+    // Pin tercihleri
+    const prefs = useQuery({
+        queryKey: ['preferences'],
+        queryFn: () => apiGet<{ pinned_instances: number[] }>('/preferences'),
+    });
+    const pinSet = useMemo(() => new Set(prefs.data?.pinned_instances || []), [prefs.data]);
+
+    const togglePinMut = useMutation({
+        mutationFn: (id: number) => apiPost(`/preferences/pin/${id}`),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['preferences'] }),
+    });
+
     const columns = [
+        {
+            key: 'pin', header: '', render: (r: Instance) => (
+                <button
+                    onClick={(e) => { e.stopPropagation(); togglePinMut.mutate(r.instance_pk); }}
+                    title={pinSet.has(r.instance_pk) ? 'Pinden çıkar' : 'Sabitle (Dashboard\'da göster)'}
+                    className="text-lg hover:scale-110 transition-transform print:hidden">
+                    {pinSet.has(r.instance_pk) ? '⭐' : '☆'}
+                </button>
+            )
+        },
         {
             key: 'display_name', header: 'Instance', render: (r: Instance) => (
                 <div>

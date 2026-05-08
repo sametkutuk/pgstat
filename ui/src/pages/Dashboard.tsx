@@ -143,6 +143,14 @@ export default function Dashboard() {
     refetchInterval: 30_000,
   });
 
+  // User preferences — pinned instances + widget visibility
+  const preferences = useQuery({
+    queryKey: ['preferences'],
+    queryFn: () => apiGet<{ pinned_instances: number[]; dashboard_widgets: Record<string, boolean> }>('/preferences'),
+  });
+  const pinnedSet = useMemo(() => new Set(preferences.data?.pinned_instances || []), [preferences.data]);
+  const widgets = preferences.data?.dashboard_widgets || {};
+
   const metricsQuery = useQuery({
     queryKey: ['dash-metrics'],
     queryFn: () => apiGet<InstanceMetrics[]>('/dashboard/instance-metrics'),
@@ -346,6 +354,51 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* Sabit Instance'lar — kullanıcının pinlediği instance'ların özet kartları */}
+      {pinnedSet.size > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="text-sm font-semibold text-[#475569]">⭐ Sabit Instance'lar</h2>
+            <span className="text-xs text-[#94A3B8]">({pinnedSet.size})</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(health.data || []).filter(h => pinnedSet.has(h.instance_pk)).map(inst => {
+              const m = (metricsQuery.data || []).find(mm => mm.instance_pk === inst.instance_pk);
+              const status = inst.bootstrap_state === 'ready' && inst.consecutive_failures === 0 && inst.open_alerts_count === 0 ? 'ok'
+                : inst.bootstrap_state === 'degraded' || inst.consecutive_failures > 0 ? 'critical'
+                  : inst.open_alerts_count > 0 ? 'warning' : 'info';
+              const statusBg = status === 'ok' ? 'border-l-green-500' : status === 'critical' ? 'border-l-red-500' : status === 'warning' ? 'border-l-amber-500' : 'border-l-blue-500';
+              return (
+                <div key={inst.instance_pk}
+                  onClick={() => navigate(`/instances/${inst.instance_pk}`)}
+                  className={`bg-white rounded-lg shadow-sm p-3 border-l-4 ${statusBg} cursor-pointer hover:shadow-md transition-shadow`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-medium text-sm text-[#1E293B] truncate">{inst.display_name}</div>
+                    <span className="text-xs text-[#94A3B8] ml-2">PG{inst.pg_major || '?'}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <div className="text-[#94A3B8]">TPS</div>
+                      <div className="font-mono font-semibold text-[#1E293B]">{m?.tps?.toLocaleString() ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-[#94A3B8]">Bağlantı</div>
+                      <div className="font-mono font-semibold text-[#1E293B]">{m?.connections ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-[#94A3B8]">Alert</div>
+                      <div className={`font-mono font-semibold ${inst.open_alerts_count > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {inst.open_alerts_count || 0}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Özet kartları */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow-sm p-4">
@@ -491,7 +544,7 @@ export default function Dashboard() {
       {/* Yeni Metrik Widget'ları: WAL, Archiver, SLRU, Alert Özeti */}
       {hasNewMetrics && (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-          {walData.length > 0 && (
+          {walData.length > 0 && widgets.wal_production !== false && (
             <div className="bg-white rounded-lg shadow-sm p-4">
               <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
                 WAL Üretimi (byte/saat)
@@ -554,7 +607,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {alertSummary.length > 0 && (
+          {alertSummary.length > 0 && widgets.open_alerts !== false && (
             <div className="bg-white rounded-lg shadow-sm p-4">
               <div className="text-xs font-semibold text-[#64748B] mb-3 uppercase tracking-wide">
                 Açık Alert Özeti
