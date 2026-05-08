@@ -65,7 +65,7 @@ export default function InstanceDetail() {
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
         { key: 'tables', label: 'Tablo İstatistikleri', tip: 'Seçilen database için son 24 saatteki tablo istatistikleri.' },
-        { key: 'indexes', label: 'Index İstatistikleri', tip: 'Seçilen database için son 24 saatteki index istatistikleri.' },
+        { key: 'indexes', label: 'Index İstatistikleri', tip: 'Instance genelinde veya seçilen database için index istatistikleri ve unused index exportu.' },
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
@@ -231,6 +231,31 @@ function Row({ label, value }: { label: string; value: any }) {
             <dd className="font-medium">{value}</dd>
         </div>
     );
+}
+
+function excelCell(value: unknown): string {
+    const text = String(value ?? '');
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function safeFileName(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'export';
+}
+
+function downloadText(filename: string, content: string, mimeType: string): void {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }
 
 /**
@@ -658,16 +683,19 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
+    const [unusedOnly, setUnusedOnly] = useState(false);
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
     }, [initialDbid]);
 
     const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, hours],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}`),
+        queryKey: ['instance-indexes', instancePk, hours, unusedOnly],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}${unusedOnly ? '&unused=true&limit=10000' : ''}`),
         enabled: Number.isFinite(instancePk),
     });
+
+    const isUnusedIndex = (r: any) => statNumber(r.total_idx_scan) === 0;
 
     const metricValue = (r: any) => {
         if (orderBy === 'tup_read') return statNumber(r.total_idx_tup_read);
@@ -683,12 +711,13 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
         return (indexes.data || [])
             .filter((r: any) => {
                 if (dbFilter && String(r.dbid) !== dbFilter) return false;
+                if (unusedOnly && !isUnusedIndex(r)) return false;
                 if (q && !`${r.datname || ''}.${r.schemaname || ''}.${r.table_relname || ''}.${r.index_relname || ''}`.toLowerCase().includes(q)) return false;
                 if (min > 0 && metricValue(r) < min) return false;
                 return true;
             })
             .sort((a: any, b: any) => metricValue(b) - metricValue(a));
-    }, [indexes.data, dbFilter, search, minValue, orderBy]);
+    }, [indexes.data, dbFilter, search, minValue, orderBy, unusedOnly]);
 
     const databases = useMemo(() => {
         const map = new Map<string, string>();
@@ -696,7 +725,31 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
         return Array.from(map.entries()).map(([dbid, datname]) => ({ dbid, datname })).sort((a, b) => a.datname.localeCompare(b.datname));
     }, [indexes.data]);
 
-    const hasFilter = dbFilter || search || minValue;
+    const hasFilter = dbFilter || search || minValue || unusedOnly;
+    const unusedCount = useMemo(() => (indexes.data || []).filter(isUnusedIndex).length, [indexes.data]);
+    const selectedDatabase = databases.find(d => d.dbid === dbFilter)?.datname;
+
+    const exportExcel = () => {
+        const headers = ['database', 'schema', 'table', 'index', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct'];
+        const rows = filtered.map((r: any) => [
+            r.datname || '',
+            r.schemaname || '',
+            r.table_relname || '',
+            r.index_relname || '',
+            statNumber(r.total_idx_scan),
+            statNumber(r.total_idx_tup_read),
+            statNumber(r.total_idx_tup_fetch),
+            statNumber(r.total_idx_blks_read),
+            statNumber(r.total_idx_blks_hit),
+            hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit).toFixed(2),
+        ]);
+        const tableRows = [headers, ...rows]
+            .map(row => `<tr>${row.map(cell => `<td>${excelCell(cell)}</td>`).join('')}</tr>`)
+            .join('');
+        const workbook = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table>${tableRows}</table></body></html>`;
+        const scope = selectedDatabase || `instance-${instancePk}`;
+        downloadText(`pgstat-unused-indexes-${safeFileName(scope)}-${hours}h.xls`, workbook, 'application/vnd.ms-excel;charset=utf-8');
+    };
 
     return (
         <div>
@@ -731,6 +784,14 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                                     <option value="hit_ratio_low">Düşük Hit Ratio</option>
                                 </select>
                             </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Kullanım</label>
+                                <select value={unusedOnly ? 'unused' : 'all'} onChange={e => setUnusedOnly(e.target.value === 'unused')}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[145px]">
+                                    <option value="all">Tüm indexler</option>
+                                    <option value="unused">Unused only</option>
+                                </select>
+                            </div>
                             <div className="flex-1 min-w-[180px]">
                                 <label className="block text-xs text-[#64748B] mb-1">Index Ara</label>
                                 <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema, tablo veya index"
@@ -743,11 +804,15 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                             </div>
                             <div className="flex items-end gap-2 pb-0.5">
                                 {hasFilter && (
-                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); }}
+                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); setUnusedOnly(false); }}
                                         className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                                         Temizle
                                     </button>
                                 )}
+                                <button onClick={exportExcel} disabled={filtered.length === 0}
+                                    className="px-3 py-1.5 text-sm text-[#2563EB] border border-[#BFDBFE] rounded hover:bg-[#EFF6FF] disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Excel Export
+                                </button>
                                 <button onClick={() => indexes.refetch()}
                                     className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                                     {indexes.isFetching ? 'Yenileniyor...' : 'Yenile'}
@@ -758,6 +823,9 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                                         : `${filtered.length} index`}
                                 </span>
                             </div>
+                        </div>
+                        <div className="mt-3 text-xs text-[#64748B]">
+                            Unused kriteri: seçilen zaman aralığında idx_scan = 0. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta görünen unused index: ${unusedCount}.`}
                         </div>
                     </div>
 
@@ -781,7 +849,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                                         {filtered.map((r: any) => {
                                             const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
                                             return (
-                                        <tr key={`${r.dbid}-${r.index_relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                                        <tr key={`${r.dbid}-${r.index_relid}`} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${isUnusedIndex(r) ? 'bg-amber-50/40' : ''}`}>
                                             <td className="py-2.5 px-3 text-xs">
                                                 <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
                                                 <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>

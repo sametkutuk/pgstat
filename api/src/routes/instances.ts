@@ -572,26 +572,41 @@ router.get('/:id/indexes', async (req, res, next) => {
   try {
     const { id } = req.params;
     const hours = parseHours(req.query.hours, 1);
+    const limit = parseLimit(req.query.limit, 500);
+    const dbid = req.query.dbid ? Number(req.query.dbid) : null;
+    const unusedOnly = req.query.unused === 'true';
+
+    const params: Array<string | number> = [id, hours];
+    const where = [
+      'ix.instance_pk = $1',
+      'ix.sample_ts >= now() - make_interval(hours => $2)'
+    ];
+    if (Number.isFinite(dbid) && dbid && dbid > 0) {
+      params.push(dbid);
+      where.push(`ix.dbid = $${params.length}`);
+    }
+    params.push(limit);
+    const limitParam = `$${params.length}`;
 
     const result = await pool.query(`
       select
         ix.dbid, dbr.datname,
         ix.index_relid, ix.table_relid, ix.schemaname,
         ix.table_relname, ix.index_relname,
-        sum(ix.idx_scan_delta) as total_idx_scan,
-        sum(ix.idx_tup_read_delta) as total_idx_tup_read,
-        sum(ix.idx_tup_fetch_delta) as total_idx_tup_fetch,
-        sum(ix.idx_blks_read_delta) as total_idx_blks_read,
-        sum(ix.idx_blks_hit_delta) as total_idx_blks_hit
+        coalesce(sum(ix.idx_scan_delta), 0) as total_idx_scan,
+        coalesce(sum(ix.idx_tup_read_delta), 0) as total_idx_tup_read,
+        coalesce(sum(ix.idx_tup_fetch_delta), 0) as total_idx_tup_fetch,
+        coalesce(sum(ix.idx_blks_read_delta), 0) as total_idx_blks_read,
+        coalesce(sum(ix.idx_blks_hit_delta), 0) as total_idx_blks_hit
       from fact.pg_index_stat_delta ix
       left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
-      where ix.instance_pk = $1
-        and ix.sample_ts >= now() - make_interval(hours => $2)
+      where ${where.join('\n        and ')}
       group by ix.dbid, dbr.datname, ix.index_relid, ix.table_relid, ix.schemaname,
                ix.table_relname, ix.index_relname
-      order by total_idx_scan desc nulls last
-      limit 500
-    `, [id, hours]);
+      ${unusedOnly ? 'having coalesce(sum(ix.idx_scan_delta), 0) = 0' : ''}
+      order by ${unusedOnly ? 'total_idx_blks_read desc nulls last, dbr.datname, ix.schemaname, ix.index_relname' : 'total_idx_scan desc nulls last'}
+      limit ${limitParam}
+    `, params);
     res.json(result.rows);
   } catch (err) {
     next(err);

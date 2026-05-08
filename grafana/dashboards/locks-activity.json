@@ -8,7 +8,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "30s",
   "time": {
     "from": "now-1h",
@@ -86,7 +86,7 @@
       },
       "targets": [
         {
-          "rawSql": "select count(*) as value from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state is not null and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk) select count(*) as \"value\" from fact.pg_activity_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where a.state is not null and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
           "format": "table"
         }
       ]
@@ -135,7 +135,7 @@
       },
       "targets": [
         {
-          "rawSql": "select count(*) as value from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'active' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk) select count(*) as \"value\" from fact.pg_activity_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where a.state = 'active' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
           "format": "table"
         }
       ]
@@ -184,7 +184,7 @@
       },
       "targets": [
         {
-          "rawSql": "select count(*) as value from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'idle' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk) select count(*) as \"value\" from fact.pg_activity_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where a.state = 'idle' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
           "format": "table"
         }
       ]
@@ -217,7 +217,7 @@
       },
       "targets": [
         {
-          "rawSql": "select count(*) as value from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'idle in transaction' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk) select count(*) as \"value\" from fact.pg_activity_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where a.state = 'idle in transaction' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring}))",
           "format": "table"
         }
       ]
@@ -317,7 +317,7 @@
       },
       "targets": [
         {
-          "rawSql": "with active as (select instance_pk, count(*) filter (where state is not null) as open_cnt, count(*) filter (where state='active') as active_cnt, count(*) filter (where state='idle') as idle_cnt, count(*) filter (where state='idle in transaction') as idle_tx_cnt, count(*) filter (where state='active' and wait_event_type is not null) as waiting_cnt from fact.pg_activity_snapshot where snapshot_ts > now() - interval '5 minutes' group by instance_pk), locks as (select instance_pk, count(*) filter (where granted = false) as waiting_locks from fact.pg_lock_snapshot where snapshot_ts > now() - interval '5 minutes' group by instance_pk), prog as (select instance_pk, count(*) as prog_cnt from fact.pg_progress_snapshot where snapshot_ts > now() - interval '5 minutes' group by instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, '-') as group_name, coalesce(a.open_cnt, 0) as open, coalesce(a.active_cnt, 0) as aktif, coalesce(a.idle_cnt, 0) as idle, coalesce(a.idle_tx_cnt, 0) as idle_tx, coalesce(a.waiting_cnt, 0) as wait_event, coalesce(l.waiting_locks, 0) as bekleyen_lock, coalesce(p.prog_cnt, 0) as vacuum_progress from control.instance_inventory i left join active a on a.instance_pk = i.instance_pk left join locks l on l.instance_pk = i.instance_pk left join prog p on p.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring})) order by idle_tx desc nulls last, bekleyen_lock desc nulls last, aktif desc",
+          "rawSql": "with latest_activity as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk), activity as (select a.instance_pk, count(*) filter (where a.state is not null) as open_cnt, count(*) filter (where a.state='active') as active_cnt, count(*) filter (where a.state='idle') as idle_cnt, count(*) filter (where a.state='idle in transaction') as idle_tx_cnt, count(*) filter (where a.state='active' and a.wait_event_type is not null) as waiting_cnt from fact.pg_activity_snapshot a join latest_activity l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts group by a.instance_pk), latest_locks as (select instance_pk, max(snapshot_ts) as ts from fact.pg_lock_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk), locks as (select l.instance_pk, count(*) filter (where l.granted = false) as waiting_locks from fact.pg_lock_snapshot l join latest_locks x on x.instance_pk = l.instance_pk and x.ts = l.snapshot_ts group by l.instance_pk), latest_prog as (select instance_pk, max(snapshot_ts) as ts from fact.pg_progress_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk), prog as (select p.instance_pk, count(*) as prog_cnt from fact.pg_progress_snapshot p join latest_prog x on x.instance_pk = p.instance_pk and x.ts = p.snapshot_ts group by p.instance_pk) select i.instance_pk, i.display_name as instance, coalesce(i.service_group, '-') as group_name, coalesce(a.open_cnt, 0) as open, coalesce(a.active_cnt, 0) as aktif, coalesce(a.idle_cnt, 0) as idle, coalesce(a.idle_tx_cnt, 0) as idle_tx, coalesce(a.waiting_cnt, 0) as wait_event, coalesce(l.waiting_locks, 0) as bekleyen_lock, coalesce(p.prog_cnt, 0) as vacuum_progress from control.instance_inventory i left join activity a on a.instance_pk = i.instance_pk left join locks l on l.instance_pk = i.instance_pk left join prog p on p.instance_pk = i.instance_pk where i.is_active and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring})) order by idle_tx desc nulls last, bekleyen_lock desc nulls last, aktif desc",
           "format": "table"
         }
       ]
@@ -349,7 +349,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "süre_sn"
+              "options": "sure_sn"
             },
             "properties": [
               {
@@ -362,7 +362,7 @@
       },
       "targets": [
         {
-          "rawSql": "select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"süre_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join control.instance_inventory i on i.instance_pk = a.instance_pk where a.snapshot_ts > now() - interval '5 minutes' and a.state = 'active' and a.query_start is not null and (a.snapshot_ts - a.query_start) > interval '1 minute' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring})) and (a.datname in (${database:sqlstring})) order by a.query_start asc limit 100",
+          "rawSql": "with latest as (select instance_pk, max(snapshot_ts) as ts from fact.pg_activity_snapshot where snapshot_ts > now() - interval '10 minutes' group by instance_pk) select i.instance_pk, i.display_name as instance, a.snapshot_ts, a.pid, a.datname, a.usename as \"user\", a.state, a.wait_event_type, extract(epoch from (a.snapshot_ts - a.query_start))::int as \"sure_sn\", left(a.query, 200) as query from fact.pg_activity_snapshot a join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts join control.instance_inventory i on i.instance_pk = a.instance_pk where a.state = 'active' and a.query_start is not null and (a.snapshot_ts - a.query_start) > interval '1 minute' and (i.instance_pk::text in (${instance:sqlstring})) and (coalesce(i.service_group, '(none)') in (${service_group:sqlstring})) and (a.datname in (${database:sqlstring})) order by a.query_start asc limit 100",
           "format": "table"
         }
       ]
