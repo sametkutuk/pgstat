@@ -831,7 +831,7 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                 break;
             }
             case 'email': {
-                const c: any = { recipients: form.recipients.split(',').map(s => s.trim()).filter(Boolean) };
+                const c: any = { recipients: form.recipients.split(',').map((s: string) => s.trim()).filter(Boolean) };
                 if (form.email_from?.trim()) c.from = form.email_from.trim();
                 if (form.email_subject_template?.trim()) c.subject_template = form.email_subject_template.trim();
                 if (form.email_body_template?.trim()) c.body_template = form.email_body_template.trim();
@@ -1121,14 +1121,15 @@ function BaselineChart({ detail, metricKey }: { detail: { general: any; hourly: 
                     <YAxis tick={{ fontSize: 10 }} width={60} />
                     <Tooltip
                         contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                        formatter={(value: number, name: string) => {
+                        formatter={(value: unknown, name: unknown) => {
                             const labels: Record<string, string> = { avg: 'Ortalama', p95: 'P95', min: 'Min', max: 'Max' };
-                            return [value.toFixed(2), labels[name] || name];
+                            const key = String(name);
+                            return [Number(value ?? 0).toFixed(2), labels[key] || key];
                         }}
                         labelFormatter={(label) => `Saat: ${label} (UTC)`}
                     />
                     <Bar dataKey="avg" name="avg" radius={[3, 3, 0, 0]}>
-                        {chartData.map((entry, idx) => (
+                        {chartData.map((_entry, idx) => (
                             <Cell key={idx} fill={idx === currentHour ? '#2563EB' : '#93C5FD'} />
                         ))}
                     </Bar>

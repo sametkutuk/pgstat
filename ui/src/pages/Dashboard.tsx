@@ -364,9 +364,9 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {(health.data || []).filter(h => pinnedSet.has(h.instance_pk)).map(inst => {
               const m = (metricsQuery.data || []).find(mm => mm.instance_pk === inst.instance_pk);
-              const status = inst.bootstrap_state === 'ready' && inst.consecutive_failures === 0 && inst.open_alerts_count === 0 ? 'ok'
+              const status = inst.bootstrap_state === 'ready' && inst.consecutive_failures === 0 && inst.open_alerts === 0 ? 'ok'
                 : inst.bootstrap_state === 'degraded' || inst.consecutive_failures > 0 ? 'critical'
-                  : inst.open_alerts_count > 0 ? 'warning' : 'info';
+                  : inst.open_alerts > 0 ? 'warning' : 'info';
               const statusBg = status === 'ok' ? 'border-l-green-500' : status === 'critical' ? 'border-l-red-500' : status === 'warning' ? 'border-l-amber-500' : 'border-l-blue-500';
               return (
                 <div key={inst.instance_pk}
@@ -379,16 +379,16 @@ export default function Dashboard() {
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div>
                       <div className="text-[#94A3B8]">TPS</div>
-                      <div className="font-mono font-semibold text-[#1E293B]">{m?.tps?.toLocaleString() ?? '—'}</div>
+                      <div className="font-mono font-semibold text-[#1E293B]">{m?.qps?.toLocaleString() ?? '—'}</div>
                     </div>
                     <div>
                       <div className="text-[#94A3B8]">Bağlantı</div>
-                      <div className="font-mono font-semibold text-[#1E293B]">{m?.connections ?? '—'}</div>
+                      <div className="font-mono font-semibold text-[#1E293B]">{m?.client_connections ?? '—'}</div>
                     </div>
                     <div>
                       <div className="text-[#94A3B8]">Alert</div>
-                      <div className={`font-mono font-semibold ${inst.open_alerts_count > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {inst.open_alerts_count || 0}
+                      <div className={`font-mono font-semibold ${inst.open_alerts > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {inst.open_alerts || 0}
                       </div>
                     </div>
                   </div>

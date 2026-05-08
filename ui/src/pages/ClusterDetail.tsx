@@ -4,7 +4,6 @@ import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import { SkeletonTable } from '../components/common/Skeleton';
-import EmptyState from '../components/common/EmptyState';
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 

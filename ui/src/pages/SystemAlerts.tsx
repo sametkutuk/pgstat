@@ -2,10 +2,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPut, apiDelete } from '../api/client';
 import { useToast } from '../components/common/Toast';
-import InfoTip from '../components/common/InfoTip';
 import Badge from '../components/common/Badge';
 import Skeleton from '../components/common/Skeleton';
-import EmptyState from '../components/common/EmptyState';
 
 interface SystemAlertConfig {
     alert_code: string;

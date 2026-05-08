@@ -174,7 +174,7 @@ export default function HealthReport() {
                                 <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                                 <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                                 <YAxis tick={{ fontSize: 10 }} />
-                                <Tooltip formatter={(v: number) => [v.toLocaleString(), 'Ort. TPS']} />
+                                <Tooltip formatter={(v: unknown) => [Number(v ?? 0).toLocaleString(), 'Ort. TPS']} />
                                 <Bar dataKey="tps" fill="#3B82F6" radius={[3, 3, 0, 0]} />
                             </BarChart>
                         </ResponsiveContainer>
@@ -193,7 +193,7 @@ export default function HealthReport() {
                                 <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                                 <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                                 <YAxis tick={{ fontSize: 10 }} />
-                                <Tooltip formatter={(v: number) => [v.toLocaleString(), 'Max Bağlantı']} />
+                                <Tooltip formatter={(v: unknown) => [Number(v ?? 0).toLocaleString(), 'Max Bağlantı']} />
                                 <Line type="monotone" dataKey="conn" stroke="#8B5CF6" strokeWidth={2} dot={{ r: 3 }} />
                             </LineChart>
                         </ResponsiveContainer>
@@ -216,7 +216,7 @@ export default function HealthReport() {
                                 <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                                 <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                                 <YAxis tick={{ fontSize: 10 }} />
-                                <Tooltip formatter={(v: number, _: any, entry: any) => [`${v} ${entry.payload.unit}`, 'WAL']} />
+                                <Tooltip formatter={(v: unknown, _name: unknown, entry: any) => [`${Number(v ?? 0)} ${entry.payload.unit}`, 'WAL']} />
                                 <Bar dataKey="wal" fill="#F59E0B" radius={[3, 3, 0, 0]} />
                             </BarChart>
                         </ResponsiveContainer>
@@ -236,7 +236,7 @@ export default function HealthReport() {
                                 <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                                 <XAxis dataKey="day" tick={{ fontSize: 10 }} />
                                 <YAxis tick={{ fontSize: 10 }} unit="%" />
-                                <Tooltip formatter={(v: number) => [`${v}%`, 'Active %']} />
+                                <Tooltip formatter={(v: unknown) => [`${Number(v ?? 0)}%`, 'Active %']} />
                                 <Line type="monotone" dataKey="pct" stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} />
                             </LineChart>
                         </ResponsiveContainer>

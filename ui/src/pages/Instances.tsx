@@ -182,7 +182,7 @@ export default function Instances() {
     const pinSet = useMemo(() => new Set(prefs.data?.pinned_instances || []), [prefs.data]);
 
     const togglePinMut = useMutation({
-        mutationFn: (id: number) => apiPost(`/preferences/pin/${id}`),
+        mutationFn: (id: number) => apiPost(`/preferences/pin/${id}`, {}),
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['preferences'] }),
     });
 

@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPatch } from '../api/client';
 import { useToast } from '../components/common/Toast';
@@ -8,15 +8,20 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
 
 export default function InstanceDetail() {
     const { id } = useParams();
     const [tab, setTab] = useState<Tab>('overview');
+    const [selectedDbid, setSelectedDbid] = useState<number | null>(null);
     const queryClient = useQueryClient();
     const toast = useToast();
+
+    useEffect(() => {
+        setSelectedDbid(null);
+    }, [id]);
 
     const retryMutation = useMutation({
         mutationFn: () => apiPatch(`/instances/${id}/retry`),
@@ -28,8 +33,6 @@ export default function InstanceDetail() {
     const cluster = useQuery({ queryKey: ['inst-cluster', id], queryFn: () => apiGet<any>(`/instances/${id}/cluster`), enabled: !!id });
     const databases = useQuery({ queryKey: ['databases', id], queryFn: () => apiGet<any[]>(`/instances/${id}/databases`), enabled: tab === 'databases' });
     const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
-    const statements = useQuery({ queryKey: ['inst-stmts', id], queryFn: () => apiGet<any[]>(`/instances/${id}/statements?hours=1&limit=30`), enabled: tab === 'statements' });
-    const activity = useQuery({ queryKey: ['activity', id], queryFn: () => apiGet<any[]>(`/instances/${id}/activity`), enabled: tab === 'activity' });
     const alerts = useQuery({ queryKey: ['inst-alerts', id], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}`), enabled: tab === 'alerts' });
     const jobruns = useQuery({ queryKey: ['inst-jobruns', id], queryFn: () => apiGet<any[]>(`/job-runs?limit=20`), enabled: tab === 'jobruns' });
     const functions = useQuery({ queryKey: ['inst-functions', id], queryFn: () => apiGet<any[]>(`/instances/${id}/functions?hours=1`), enabled: tab === 'functions' });
@@ -61,8 +64,10 @@ export default function InstanceDetail() {
         { key: 'storage', label: 'Collector DB', tip: 'PgStat collector veritabanında bu instance için tutulan yaklaşık mantıksal veri boyutu ve database kırılımı.' },
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
+        { key: 'tables', label: 'Tablo / Index', tip: 'Seçilen database için son 24 saatteki tablo ve index istatistikleri.' },
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
+        { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
         { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
@@ -118,9 +123,11 @@ export default function InstanceDetail() {
 
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
-            {tab === 'statements' && <StatementsTab data={statements.data} loading={statements.isLoading} />}
-            {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} />}
-            {tab === 'activity' && <ActivityTab data={activity.data} loading={activity.isLoading} />}
+            {tab === 'statements' && <StatementsTab instancePk={Number(id)} />}
+            {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
+            {tab === 'tables' && <TablesTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
+            {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
+            {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
@@ -261,24 +268,201 @@ function CapabilityCard({ name, desc, available, mode }: {
     );
 }
 
-function StatementsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    const columns = [
-        { key: 'datname', header: 'Database' },
-        { key: 'rolname', header: 'Rol' },
-        { key: 'query_text', header: 'SQL', render: (r: any) => <div className="max-w-md truncate text-xs font-mono" title={r.query_text}>{r.query_text || '—'}</div> },
-        { key: 'total_calls', header: 'Calls', render: (r: any) => Number(r.total_calls).toLocaleString() },
-        { key: 'total_exec_time_ms', header: 'Exec (ms)', render: (r: any) => Number(r.total_exec_time_ms).toFixed(1) },
-        { key: 'avg_exec_time_ms', header: 'Avg (ms)', render: (r: any) => Number(r.avg_exec_time_ms).toFixed(2) },
-        { key: 'total_rows', header: 'Rows', render: (r: any) => Number(r.total_rows).toLocaleString() },
-    ];
-    return <div className="bg-white rounded-lg shadow-sm p-4">
-        <DataTable columns={columns} data={data || []} loading={loading}
-            emptyState={<EmptyState icon="📝" title="Sorgu kaydı yok" description="Bu instance'da pg_stat_statements extension'ı yüklü değil veya henüz veri toplanmadı." />}
-        />
-    </div>;
+function fmtMs(ms: number): string {
+    if (!Number.isFinite(ms)) return '-';
+    if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}dk`;
+    if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)}s`;
+    return `${ms.toFixed(1)}ms`;
 }
 
-function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boolean; instanceId?: string }) {
+function fmtNum(n: number): string {
+    if (!Number.isFinite(n)) return '-';
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return String(Math.round(n));
+}
+
+function StatementsTab({ instancePk }: { instancePk: number }) {
+    const navigate = useNavigate();
+    const [hours, setHours] = useState(24);
+    const [orderBy, setOrderBy] = useState('exec_time');
+    const [datname, setDatname] = useState('');
+    const [rolname, setRolname] = useState('');
+    const [sqlSearch, setSqlSearch] = useState('');
+    const [minAvgMs, setMinAvgMs] = useState('');
+
+    const qp = new URLSearchParams({
+        hours: String(hours),
+        limit: '100',
+        order_by: orderBy,
+        ...(datname ? { datname } : {}),
+        ...(rolname ? { rolname } : {}),
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-top-stmts', instancePk, hours, orderBy, datname, rolname],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/statements?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    const datnames = useMemo(() => {
+        const s = new Set((data ?? []).map((r: any) => r.datname).filter(Boolean));
+        return Array.from(s).sort() as string[];
+    }, [data]);
+
+    const rolnames = useMemo(() => {
+        const s = new Set((data ?? []).map((r: any) => r.rolname).filter(Boolean));
+        return Array.from(s).sort() as string[];
+    }, [data]);
+
+    const filtered = useMemo(() => {
+        const minMs = parseFloat(minAvgMs) || 0;
+        const q = sqlSearch.trim().toLowerCase();
+        return (data ?? []).filter((r: any) => {
+            if (q && !(r.query_text ?? '').toLowerCase().includes(q)) return false;
+            if (minMs > 0 && Number(r.avg_exec_time_ms) < minMs) return false;
+            return true;
+        });
+    }, [data, sqlSearch, minAvgMs]);
+
+    const hasFilter = datname || rolname || sqlSearch || minAvgMs;
+
+    if (isLoading) return <SkeletonTable rows={5} cols={6} />;
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                <div className="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
+                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            <option value={1}>Son 1 saat</option>
+                            <option value={6}>Son 6 saat</option>
+                            <option value={24}>Son 24 saat</option>
+                            <option value={72}>Son 3 gün</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
+                        <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            <option value="exec_time">Toplam Süre</option>
+                            <option value="avg_time">Ort. Süre</option>
+                            <option value="calls">Çağrı Sayısı</option>
+                            <option value="rows">Satır Sayısı</option>
+                            <option value="blks_read">Blok Okuma</option>
+                            <option value="temp_blks">Temp Blok</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                        <select value={datname} onChange={e => setDatname(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[130px]">
+                            <option value="">Tümü</option>
+                            {datnames.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Rol</label>
+                        <select value={rolname} onChange={e => setRolname(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[110px]">
+                            <option value="">Tümü</option>
+                            {rolnames.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                    </div>
+                    <div className="flex-1 min-w-[160px]">
+                        <label className="block text-xs text-[#64748B] mb-1">SQL Ara</label>
+                        <input type="text" placeholder="SELECT, update..." value={sqlSearch}
+                            onChange={e => setSqlSearch(e.target.value)}
+                            className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Min Ort. (ms)</label>
+                        <input type="number" placeholder="0" value={minAvgMs} min={0}
+                            onChange={e => setMinAvgMs(e.target.value)}
+                            className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div className="flex items-end gap-2 pb-0.5">
+                        {hasFilter && (
+                            <button onClick={() => { setDatname(''); setRolname(''); setSqlSearch(''); setMinAvgMs(''); }}
+                                className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                Temizle
+                            </button>
+                        )}
+                        <button onClick={() => refetch()}
+                            className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                            {isFetching ? 'Yenileniyor...' : 'Yenile'}
+                        </button>
+                        <span className="text-xs text-[#94A3B8]">
+                            {hasFilter && filtered.length !== (data?.length ?? 0)
+                                ? `${filtered.length} / ${data?.length ?? 0}`
+                                : `${filtered.length} sorgu`}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {filtered.length === 0 ? (
+                    <EmptyState icon="📝" title="Sorgu kaydı yok" description={data?.length === 0 ? "Bu aralıkta statement verisi yok." : "Filtreyle eşleşen sorgu bulunamadı."} />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Calls</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort.</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Rows</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blks R</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filtered.map((r: any, i: number) => {
+                                    const avgMs = Number(r.avg_exec_time_ms);
+                                    const avgColor = avgMs >= 1000 ? 'text-red-600 font-semibold'
+                                        : avgMs >= 100 ? 'text-amber-600 font-semibold' : 'text-[#64748B]';
+                                    const canOpen = Boolean(r.statement_series_id);
+                                    return (
+                                        <tr key={r.statement_series_id ?? i}
+                                            onClick={() => canOpen && navigate(`/statements/${r.statement_series_id}`)}
+                                            className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${canOpen ? 'cursor-pointer' : ''}`}>
+                                            <td className="py-2.5 px-3 text-xs">
+                                                <div className="text-[#1E293B]">{r.datname ?? '-'}</div>
+                                                <div className="text-[#94A3B8]">{r.rolname ?? '-'}</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 max-w-xs">
+                                                <div className="truncate text-xs font-mono text-[#1E293B]" title={r.query_text}>
+                                                    {r.query_text || <span className="text-[#94A3B8] italic not-italic">metin yok</span>}
+                                                </div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_calls))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtMs(Number(r.total_exec_time_ms))}</td>
+                                            <td className={`py-2.5 px-3 text-right font-mono text-xs ${avgColor}`}>{fmtMs(avgMs)}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_rows))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_shared_blks_read))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                {Number(r.total_temp_blks_written) > 0
+                                                    ? <span className="text-amber-600 font-semibold">{fmtNum(Number(r.total_temp_blks_written))}</span>
+                                                    : <span className="text-[#94A3B8]">0</span>}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function DatabasesTab({ data, loading, onSelectDb }: { data: any[] | undefined; loading: boolean; instanceId?: string; onSelectDb?: (dbid: number) => void }) {
     if (loading) return <SkeletonTable rows={5} cols={4} />;
     return (
         <div className="bg-white rounded-lg shadow-sm p-4">
@@ -288,7 +472,78 @@ function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boo
                 { key: 'last_db_objects_collect_at', header: 'Son Toplama', render: (r: any) => <TimeAgo date={r.last_db_objects_collect_at} /> },
                 { key: 'next_db_objects_collect_at', header: 'Sonraki', render: (r: any) => <TimeAgo date={r.next_db_objects_collect_at} /> },
                 { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
-            ]} data={data || []} />
+            ]} data={data || []} onRowClick={onSelectDb ? (r: any) => onSelectDb(r.dbid) : undefined} />
+        </div>
+    );
+}
+
+function TablesTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+    const dbs = useQuery({
+        queryKey: ['instance-dbs-for-objects', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    const tables = useQuery({
+        queryKey: ['instance-tables', instancePk, selectedDbid],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/tables?hours=24`),
+        enabled: Number.isFinite(instancePk) && !!selectedDbid,
+    });
+
+    const indexes = useQuery({
+        queryKey: ['instance-indexes', instancePk, selectedDbid],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=24`),
+        enabled: Number.isFinite(instancePk) && !!selectedDbid,
+    });
+
+    const tableCols = [
+        { key: 'schemaname', header: 'Schema' },
+        { key: 'relname', header: 'Tablo' },
+        { key: 'total_seq_scan', header: 'Seq Scan', render: (r: any) => Number(r.total_seq_scan).toLocaleString(), className: 'text-right' },
+        { key: 'total_idx_scan', header: 'Idx Scan', render: (r: any) => Number(r.total_idx_scan).toLocaleString(), className: 'text-right' },
+        { key: 'total_inserts', header: 'Insert', render: (r: any) => Number(r.total_inserts).toLocaleString(), className: 'text-right' },
+        { key: 'total_updates', header: 'Update', render: (r: any) => Number(r.total_updates).toLocaleString(), className: 'text-right' },
+        { key: 'total_deletes', header: 'Delete', render: (r: any) => Number(r.total_deletes).toLocaleString(), className: 'text-right' },
+        { key: 'n_live_tup', header: 'Live Tup', render: (r: any) => Number(r.n_live_tup).toLocaleString(), className: 'text-right' },
+        { key: 'n_dead_tup', header: 'Dead Tup', render: (r: any) => Number(r.n_dead_tup).toLocaleString(), className: 'text-right' },
+    ];
+
+    const indexCols = [
+        { key: 'schemaname', header: 'Schema' },
+        { key: 'table_relname', header: 'Tablo' },
+        { key: 'index_relname', header: 'Index' },
+        { key: 'total_idx_scan', header: 'Idx Scan', render: (r: any) => Number(r.total_idx_scan).toLocaleString(), className: 'text-right' },
+        { key: 'total_idx_tup_read', header: 'Tup Read', render: (r: any) => Number(r.total_idx_tup_read).toLocaleString(), className: 'text-right' },
+        { key: 'total_idx_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_idx_blks_read).toLocaleString(), className: 'text-right' },
+        { key: 'total_idx_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_idx_blks_hit).toLocaleString(), className: 'text-right' },
+    ];
+
+    return (
+        <div>
+            <div className="mb-4">
+                <label className="block text-xs text-[#64748B] mb-1">Database Seçin</label>
+                <select value={selectedDbid ?? ''} onChange={(e) => onSelectDb(parseInt(e.target.value) || null)}
+                    className="border border-[#E2E8F0] rounded px-3 py-2 text-sm bg-white min-w-[200px]" aria-label="Database seçimi">
+                    <option value="">Seçiniz...</option>
+                    {(dbs.data || []).map((d: any) => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                </select>
+                {dbs.isLoading && <span className="ml-2 text-xs text-[#94A3B8]">Database listesi yükleniyor...</span>}
+            </div>
+
+            {!selectedDbid && <div className="text-[#94A3B8] py-4 text-center">Bir database seçin. Databases sekmesinde satıra tıklayarak da bu sekmeye gelebilirsiniz.</div>}
+
+            {selectedDbid && (
+                <>
+                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                        <h3 className="text-sm font-semibold text-[#64748B] mb-3">Tablolar (son 24 saat)</h3>
+                        {tables.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={tableCols} data={tables.data || []} emptyText="Tablo istatistiği yok" />}
+                    </div>
+                    <div className="bg-white rounded-lg shadow-sm p-4">
+                        <h3 className="text-sm font-semibold text-[#64748B] mb-3">Indexler (son 24 saat)</h3>
+                        {indexes.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={indexCols} data={indexes.data || []} emptyText="Index istatistiği yok" />}
+                    </div>
+                </>
+            )}
         </div>
     );
 }
@@ -765,18 +1020,218 @@ function fmtBytes(value: any): string {
     return `${bytes.toLocaleString()} B`;
 }
 
-function ActivityTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const columns = [
+function ActivityTab({ instancePk }: { instancePk: number }) {
+    const [view, setView] = useState<'summary' | 'detail'>('summary');
+    const [filter, setFilter] = useState('all');
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-activity', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/activity`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    const snapshotDate = data?.[0]?.snapshot_ts ? new Date(data[0].snapshot_ts) : null;
+    const snapshotAgo = snapshotDate
+        ? Math.round((Date.now() - snapshotDate.getTime()) / 1000)
+        : null;
+
+    const clientSessions = (data || []).filter((r: any) => r.backend_type === 'client backend');
+    const hotWindowMs = 1000;
+    const isJustBecameIdle = (r: any) => {
+        if (r.state !== 'idle' || !r.state_change || !snapshotDate) return false;
+        const stateChangeMs = new Date(r.state_change).getTime();
+        return (snapshotDate.getTime() - stateChangeMs) <= hotWindowMs;
+    };
+
+    const summaryMap = new Map<string, {
+        datname: string; client_addr: string; usename: string;
+        open: number; active_now: number; idle_in_trans_now: number;
+        idle_now: number; just_became_idle: number;
+    }>();
+    for (const r of clientSessions) {
+        const key = `${r.datname || ''}|${r.client_addr || ''}|${r.usename || ''}`;
+        let row = summaryMap.get(key);
+        if (!row) {
+            row = {
+                datname: r.datname || '-', client_addr: r.client_addr || '-', usename: r.usename || '-',
+                open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0
+            };
+            summaryMap.set(key, row);
+        }
+        row.open++;
+        if (r.state === 'active') row.active_now++;
+        else if (r.state === 'idle in transaction') row.idle_in_trans_now++;
+        else if (r.state === 'idle') {
+            if (isJustBecameIdle(r)) row.just_became_idle++;
+            else row.idle_now++;
+        }
+    }
+    const summaryRows = [...summaryMap.values()].sort((a, b) => b.active_now - a.active_now || b.open - a.open);
+    const totals = summaryRows.reduce((t, r) => ({
+        open: t.open + r.open, active_now: t.active_now + r.active_now,
+        idle_in_trans_now: t.idle_in_trans_now + r.idle_in_trans_now,
+        idle_now: t.idle_now + r.idle_now, just_became_idle: t.just_became_idle + r.just_became_idle,
+    }), { open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0 });
+
+    const idleWaitTypes = new Set(['Activity', 'Client']);
+    const detailFiltered = (data || []).filter((r: any) => {
+        if (filter === 'client') return r.backend_type === 'client backend';
+        if (filter === 'active') return r.state === 'active' || isJustBecameIdle(r);
+        if (filter === 'idle') return r.state === 'idle' && !isJustBecameIdle(r);
+        if (filter === 'idle_tx') return r.state === 'idle in transaction';
+        if (filter === 'waiting') return r.wait_event_type && !idleWaitTypes.has(r.wait_event_type);
+        return true;
+    });
+    const detailCounts = {
+        all: (data || []).length,
+        client: clientSessions.length,
+        active: (data || []).filter((r: any) => r.state === 'active' || isJustBecameIdle(r)).length,
+        idle: clientSessions.filter((r: any) => r.state === 'idle' && !isJustBecameIdle(r)).length,
+        idle_tx: (data || []).filter((r: any) => r.state === 'idle in transaction').length,
+        waiting: (data || []).filter((r: any) => r.wait_event_type && !idleWaitTypes.has(r.wait_event_type)).length,
+    };
+
+    const detailColumns = [
         { key: 'pid', header: 'PID' },
         { key: 'datname', header: 'Database' },
         { key: 'usename', header: 'User' },
-        { key: 'state', header: 'State', render: (r: any) => <Badge value={r.state || 'unknown'} /> },
-        { key: 'wait_event_type', header: 'Wait', render: (r: any) => r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '—' },
-        { key: 'query', header: 'Query', render: (r: any) => <div className="max-w-xs truncate text-xs font-mono" title={r.query}>{r.query || '—'}</div> },
+        { key: 'application_name', header: 'Uygulama' },
+        {
+            key: 'state', header: 'Durum', render: (r: any) => {
+                const jbi = isJustBecameIdle(r);
+                const color = r.state === 'active' ? 'text-green-600' : jbi ? 'text-green-500' : r.state === 'idle in transaction' ? 'text-yellow-600' : r.state === 'idle' ? 'text-[#94A3B8]' : 'text-[#CBD5E1]';
+                const label = jbi ? 'idle (aktifti)' : r.state || '-';
+                return <span className={`font-medium ${color}`}>{label}</span>;
+            }
+        },
+        { key: 'wait_event_type', header: 'Wait', render: (r: any) => r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '-' },
+        { key: 'query', header: 'Sorgu', render: (r: any) => <div className="max-w-xs truncate text-xs font-mono" title={r.query}>{r.query ? r.query.substring(0, 120) : '-'}</div> },
         { key: 'backend_type', header: 'Backend' },
     ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
+
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
+
+    const summaryColumns = [
+        { key: 'datname', header: 'Database' },
+        { key: 'client_addr', header: 'Client' },
+        { key: 'usename', header: 'User' },
+        { key: 'open', header: 'Open', className: 'text-right' },
+        { key: 'active_now', header: 'Active', render: (r: any) => <span className={r.active_now > 0 ? 'text-green-600 font-medium' : ''}>{r.active_now}</span>, className: 'text-right' },
+        { key: 'idle_in_trans_now', header: 'Idle in TX', render: (r: any) => <span className={r.idle_in_trans_now > 0 ? 'text-yellow-600 font-medium' : ''}>{r.idle_in_trans_now}</span>, className: 'text-right' },
+        { key: 'idle_now', header: 'Idle', className: 'text-right' },
+        { key: 'just_became_idle', header: 'Just Idle', render: (r: any) => <span className={r.just_became_idle > 0 ? 'text-green-500' : ''} title="Snapshot anından <1s önce idle olmuş session">{r.just_became_idle}</span>, className: 'text-right' },
+    ];
+
+    return (
+        <div>
+            <div className="flex gap-1 mb-3 items-center">
+                <button onClick={() => setView('summary')}
+                    className={`px-3 py-1 text-xs rounded ${view === 'summary' ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
+                    Özet
+                </button>
+                <button onClick={() => setView('detail')}
+                    className={`px-3 py-1 text-xs rounded ${view === 'detail' ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
+                    Detay
+                </button>
+                {snapshotDate && (
+                    <span className="ml-auto text-xs text-[#64748B]">
+                        Snapshot: {snapshotDate.toLocaleTimeString()}
+                        <span className="text-[#94A3B8] ml-1">
+                            ({snapshotAgo! < 60 ? `${snapshotAgo}s` : `${Math.floor(snapshotAgo! / 60)}dk`} önce)
+                        </span>
+                    </span>
+                )}
+                <button onClick={() => refetch()} disabled={isFetching}
+                    className={`px-3 py-1 text-xs rounded border border-[#E2E8F0] hover:bg-[#F1F5F9] ${isFetching ? 'bg-[#F1F5F9] text-[#94A3B8]' : 'bg-white text-[#64748B]'}`}>
+                    {isFetching ? 'Yenileniyor...' : 'Yenile'}
+                </button>
+            </div>
+
+            {view === 'summary' && (
+                <div className="bg-white rounded-lg shadow-sm p-4">
+                    <DataTable columns={summaryColumns} data={summaryRows} emptyText="Client session yok" />
+                    {summaryRows.length > 0 && (
+                        <div className="border-t border-[#E2E8F0] mt-1 pt-2 flex gap-6 text-xs flex-wrap">
+                            <span className="text-[#64748B] font-medium">TOPLAM</span>
+                            <span>Open: <strong>{totals.open}</strong></span>
+                            <span className={totals.active_now > 0 ? 'text-green-600' : ''}>Active: <strong>{totals.active_now}</strong></span>
+                            <span className={totals.idle_in_trans_now > 0 ? 'text-yellow-600' : ''}>Idle in TX: <strong>{totals.idle_in_trans_now}</strong></span>
+                            <span>Idle: <strong>{totals.idle_now}</strong></span>
+                            <span className={totals.just_became_idle > 0 ? 'text-green-500' : ''}>Just Idle: <strong>{totals.just_became_idle}</strong></span>
+                        </div>
+                    )}
+                    <p className="text-[10px] text-[#94A3B8] mt-2">
+                        Just Idle = snapshot anından &lt;1s önce idle olmuş session. Sadece client backend session'ları gösterilir.
+                    </p>
+                </div>
+            )}
+
+            {view === 'detail' && (
+                <div>
+                    <div className="flex gap-1 mb-3 flex-wrap">
+                        {([
+                            { k: 'all', l: 'Tümü' },
+                            { k: 'client', l: 'Client' },
+                            { k: 'active', l: 'Active + Just Idle' },
+                            { k: 'idle', l: 'Idle' },
+                            { k: 'idle_tx', l: 'Idle in TX' },
+                            { k: 'waiting', l: 'Bekleyen' },
+                        ] as { k: keyof typeof detailCounts; l: string }[]).map((f) => (
+                            <button key={f.k} onClick={() => setFilter(f.k)}
+                                className={`px-3 py-1 text-xs rounded ${filter === f.k ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
+                                {f.l} ({detailCounts[f.k]})
+                            </button>
+                        ))}
+                    </div>
+                    <div className="bg-white rounded-lg shadow-sm p-4">
+                        <DataTable columns={detailColumns} data={detailFiltered} emptyText="Bu filtrede session yok" />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ReplicationTab({ instancePk, isPrimary }: { instancePk: number; isPrimary: boolean | null | undefined }) {
+    const { data, isLoading } = useQuery({
+        queryKey: ['instance-replication', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/replication`),
+        enabled: Number.isFinite(instancePk) && isPrimary === true,
+    });
+
+    if (isPrimary !== true) {
+        return <div className="text-[#94A3B8] py-8 text-center">Bu node primary değil. Replikasyon bilgisi yalnızca primary node'larda gösterilir.</div>;
+    }
+
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
+
+    const formatBytes = (b: number) => {
+        if (b > 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+        if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB';
+        if (b > 1024) return (b / 1024).toFixed(1) + ' KB';
+        return b + ' B';
+    };
+
+    const columns = [
+        { key: 'application_name', header: 'Replica' },
+        { key: 'client_addr', header: 'Adres' },
+        { key: 'state', header: 'Durum', render: (r: any) => <Badge value={r.state || 'unknown'} /> },
+        { key: 'sync_state', header: 'Sync' },
+        { key: 'replay_lag', header: 'Replay Lag' },
+        {
+            key: 'replay_lag_bytes', header: 'Lag (byte)', render: (r: any) => {
+                const bytes = Number(r.replay_lag_bytes);
+                const cls = bytes > 1073741824 ? 'text-red-600 font-medium' : bytes > 314572800 ? 'text-yellow-600' : '';
+                return <span className={cls}>{formatBytes(bytes)}</span>;
+            }
+        },
+        { key: 'flush_lag', header: 'Flush Lag' },
+    ];
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm p-4">
+            <DataTable columns={columns} data={data || []} emptyText="Replica bağlantısı yok" />
+        </div>
+    );
 }
 
 function AlertsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
