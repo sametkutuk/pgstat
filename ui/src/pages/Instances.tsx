@@ -5,6 +5,7 @@ import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import PrintButton from '../components/common/PrintButton';
+import EmptyState from '../components/common/EmptyState';
 import InstanceForm from '../components/forms/InstanceForm';
 import type { InstanceFormData } from '../components/forms/InstanceForm';
 import { useToast } from '../components/common/Toast';
@@ -190,9 +191,23 @@ export default function Instances() {
             )}
 
             <div className="bg-white rounded-lg shadow-sm p-4">
-                {isLoading ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div> : (
-                    <DataTable columns={columns} data={data || []} onRowClick={(r) => navigate(`/instances/${r.instance_pk}`)} />
-                )}
+                <DataTable
+                    columns={columns}
+                    data={data || []}
+                    loading={isLoading}
+                    onRowClick={(r) => navigate(`/instances/${r.instance_pk}`)}
+                    emptyState={
+                        <EmptyState
+                            icon="🖥️"
+                            title="Henüz instance eklenmedi"
+                            description="İlk PostgreSQL instance'ını ekleyerek izlemeye başlayın."
+                            action={{
+                                label: '+ İlk Instance\'ı Ekle',
+                                onClick: () => { setFormMode('add'); setEditInstance(null); }
+                            }}
+                        />
+                    }
+                />
             </div>
         </div>
     );

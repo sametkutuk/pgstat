@@ -6,6 +6,7 @@ import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
 import PrintButton from '../components/common/PrintButton';
+import EmptyState from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
 import React, { useState, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -166,10 +167,16 @@ export default function Alerts() {
             </div>
 
             <div className="bg-white rounded-lg shadow-sm p-4">
-                {isLoading ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div> : (
-                    <DataTable columns={columns} data={data || []}
-                        onRowClick={(r) => setExpandedId(expandedId === r.alert_id ? null : r.alert_id)} />
-                )}
+                <DataTable columns={columns} data={data || []}
+                    loading={isLoading}
+                    onRowClick={(r) => setExpandedId(expandedId === r.alert_id ? null : r.alert_id)}
+                    emptyState={
+                        <EmptyState
+                            icon="✅"
+                            title="Açık alert bulunmuyor"
+                            description="Tüm sistemler sağlıklı çalışıyor. Yeni bir alert oluşursa burada görünecek."
+                        />
+                    } />
             </div>
 
             {/* Detay paneli */}
@@ -210,44 +217,47 @@ export default function Alerts() {
                         )}
                     </div>
                 );
-            })()}
+            })()
+            }
 
             {/* Acknowledge modal */}
-            {ackModal && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-                        <div className="px-6 py-4 border-b border-[#E2E8F0]">
-                            <h2 className="font-semibold text-[#1E293B]">Alert Onayla</h2>
-                            <p className="text-sm text-[#64748B] mt-1">{ackModal.title}</p>
-                        </div>
-                        <div className="px-6 py-4">
-                            <label className="block text-xs font-medium text-[#475569] mb-1">
-                                Not (opsiyonel)
-                            </label>
-                            <textarea
-                                value={ackNote}
-                                onChange={e => setAckNote(e.target.value)}
-                                rows={3}
-                                placeholder="Örn: İncelendi, kapasite artışı planlandı..."
-                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6] resize-none"
-                            />
-                        </div>
-                        <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2">
-                            <button onClick={() => setAckModal(null)}
-                                className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B]">
-                                İptal
-                            </button>
-                            <button
-                                onClick={() => ackMutation.mutate({ id: ackModal.id, note: ackNote })}
-                                disabled={ackMutation.isPending}
-                                className="px-5 py-2 bg-[#F59E0B] text-white text-sm rounded-md hover:bg-[#D97706] disabled:opacity-50">
-                                {ackMutation.isPending ? 'Onaylanıyor...' : 'Onayla'}
-                            </button>
+            {
+                ackModal && (
+                    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+                            <div className="px-6 py-4 border-b border-[#E2E8F0]">
+                                <h2 className="font-semibold text-[#1E293B]">Alert Onayla</h2>
+                                <p className="text-sm text-[#64748B] mt-1">{ackModal.title}</p>
+                            </div>
+                            <div className="px-6 py-4">
+                                <label className="block text-xs font-medium text-[#475569] mb-1">
+                                    Not (opsiyonel)
+                                </label>
+                                <textarea
+                                    value={ackNote}
+                                    onChange={e => setAckNote(e.target.value)}
+                                    rows={3}
+                                    placeholder="Örn: İncelendi, kapasite artışı planlandı..."
+                                    className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6] resize-none"
+                                />
+                            </div>
+                            <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2">
+                                <button onClick={() => setAckModal(null)}
+                                    className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B]">
+                                    İptal
+                                </button>
+                                <button
+                                    onClick={() => ackMutation.mutate({ id: ackModal.id, note: ackNote })}
+                                    disabled={ackMutation.isPending}
+                                    className="px-5 py-2 bg-[#F59E0B] text-white text-sm rounded-md hover:bg-[#D97706] disabled:opacity-50">
+                                    {ackMutation.isPending ? 'Onaylanıyor...' : 'Onayla'}
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }
 

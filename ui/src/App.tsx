@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from './components/common/Toast';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
 import Dashboard from './pages/Dashboard';
 import Instances from './pages/Instances';
@@ -40,41 +41,43 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/instances" element={<Instances />} />
-              <Route path="/instances/:id" element={<InstanceDetail />} />
-              <Route path="/statements" element={<Statements />} />
-              <Route path="/statements/:seriesId" element={<StatementDetail />} />
-              <Route path="/alerts" element={<AlertsHub />} />
-              <Route path="/alerts/rules" element={<AlertsHub />} />
-              <Route path="/alerts/adaptive" element={<AlertsHub />} />
-              <Route path="/alerts/templates" element={<AlertsHub />} />
-              <Route path="/alerts/:id" element={<Alerts />} />
-              <Route path="/jobs" element={<JobRuns />} />
-              <Route path="/reports/history" element={<ReportHistory />} />
-              <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
-              <Route path="/clusters" element={<Clusters />} />
-              <Route path="/clusters/:cluster_id" element={<ClusterGroupDetail />} />
-              <Route path="/settings" element={<Settings />} />
-              {/* Eski route'lar — yeni AlertsHub'a redirect */}
-              <Route path="/settings/alert-rules" element={<Navigate to="/alerts/rules" replace />} />
-              <Route path="/settings/adaptive-alerting" element={<Navigate to="/alerts/adaptive" replace />} />
-              <Route path="/cluster-detail" element={<ClusterDetail />} />
-              <Route path="/cluster/:id" element={<ClusterDetail />} />
-              <Route path="/cluster/:id/health-report" element={<HealthReport />} />
-              <Route path="/grafana/:uid" element={<GrafanaEmbed />} />
-              <Route path="/grafana" element={<GrafanaEmbed />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </ToastProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/instances" element={<Instances />} />
+                <Route path="/instances/:id" element={<InstanceDetail />} />
+                <Route path="/statements" element={<Statements />} />
+                <Route path="/statements/:seriesId" element={<StatementDetail />} />
+                <Route path="/alerts" element={<AlertsHub />} />
+                <Route path="/alerts/rules" element={<AlertsHub />} />
+                <Route path="/alerts/adaptive" element={<AlertsHub />} />
+                <Route path="/alerts/templates" element={<AlertsHub />} />
+                <Route path="/alerts/:id" element={<Alerts />} />
+                <Route path="/jobs" element={<JobRuns />} />
+                <Route path="/reports/history" element={<ReportHistory />} />
+                <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
+                <Route path="/clusters" element={<Clusters />} />
+                <Route path="/clusters/:cluster_id" element={<ClusterGroupDetail />} />
+                <Route path="/settings" element={<Settings />} />
+                {/* Eski route'lar — yeni AlertsHub'a redirect */}
+                <Route path="/settings/alert-rules" element={<Navigate to="/alerts/rules" replace />} />
+                <Route path="/settings/adaptive-alerting" element={<Navigate to="/alerts/adaptive" replace />} />
+                <Route path="/cluster-detail" element={<ClusterDetail />} />
+                <Route path="/cluster/:id" element={<ClusterDetail />} />
+                <Route path="/cluster/:id/health-report" element={<HealthReport />} />
+                <Route path="/grafana/:uid" element={<GrafanaEmbed />} />
+                <Route path="/grafana" element={<GrafanaEmbed />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

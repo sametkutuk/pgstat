@@ -1,3 +1,6 @@
+import type { ReactNode } from 'react';
+import { SkeletonTable } from './Skeleton';
+
 interface Column<T> {
     key: string;
     header: string;
@@ -10,6 +13,8 @@ interface Props<T> {
     data: T[];
     onRowClick?: (row: T) => void;
     emptyText?: string;
+    loading?: boolean;
+    emptyState?: ReactNode; // Özel empty state component'i (EmptyState gibi)
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -18,8 +23,17 @@ export default function DataTable<T = any>({
     data,
     onRowClick,
     emptyText = 'Veri bulunamadı',
+    loading = false,
+    emptyState,
 }: Props<T>) {
+    // Loading: skeleton tablo
+    if (loading) {
+        return <SkeletonTable rows={5} cols={Math.min(columns.length, 6)} />;
+    }
+
+    // Boş state: özel component varsa onu kullan, yoksa düz metin
     if (data.length === 0) {
+        if (emptyState) return <>{emptyState}</>;
         return <div className="text-center text-[#64748B] py-8">{emptyText}</div>;
     }
 
