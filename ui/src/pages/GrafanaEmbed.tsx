@@ -131,6 +131,15 @@ const CATEGORY_LABELS: Record<DashboardEntry['category'], { label: string; descr
     detail: { label: '🔬 Detay — Tek Instance / Sorgu', description: 'Drill-down hedefleri (genelde otomatik açılır)' },
 };
 
+function grafanaSlug(selected: DashboardEntry | undefined, uid: string) {
+    const title = selected ? `pgstat ${selected.title}` : `pgstat ${uid}`;
+    return title
+        .toLowerCase()
+        .replace(/&/g, 'and')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
 export default function GrafanaEmbed() {
     const { uid } = useParams<{ uid?: string }>();
     const [searchParams] = useSearchParams();
@@ -206,7 +215,8 @@ export default function GrafanaEmbed() {
         .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
         .join('&');
 
-    let grafanaUrl = `/grafana/d/${uid}/?orgId=1&theme=light`;
+    const slug = grafanaSlug(selected, uid);
+    let grafanaUrl = `/grafana/d/${uid}/${slug}?orgId=1&theme=light`;
     if (from) grafanaUrl += `&from=${encodeURIComponent(from)}`;
     if (to) grafanaUrl += `&to=${encodeURIComponent(to)}`;
     if (variableParams) grafanaUrl += `&${variableParams}`;
@@ -247,7 +257,7 @@ export default function GrafanaEmbed() {
                     🔄 Yenile
                 </button>
                 <a
-                    href={`/grafana/d/${uid}/?orgId=1&theme=light`}
+                    href={`/grafana/d/${uid}/${slug}?orgId=1&theme=light`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="px-3 py-1.5 text-sm bg-white border border-[#CBD5E1] text-[#475569] rounded-md hover:bg-[#F8FAFC]"
