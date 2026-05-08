@@ -1017,22 +1017,31 @@ router.get('/:id/functions', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/sequences — Sequence I/O istatistikleri
+// Snapshot'lar arasındaki delta'yı window function ile hesaplar
 router.get('/:id/sequences', async (req, res, next) => {
   try {
     const { id } = req.params;
     const hours = parseHours(req.query.hours, 1);
     const result = await pool.query(`
+      with deltas as (
+        select
+          relid, schemaname, relname,
+          greatest(blks_read - lag(blks_read) over w, 0) as read_d,
+          greatest(blks_hit - lag(blks_hit) over w, 0) as hit_d
+        from fact.pg_sequence_io_snapshot
+        where instance_pk = $1
+          and sample_ts >= now() - make_interval(hours => $2)
+        window w as (partition by relid order by sample_ts)
+      )
       select
-        s.relid, s.schemaname, s.relname,
-        sum(s.blks_read_delta) as total_blks_read,
-        sum(s.blks_hit_delta) as total_blks_hit,
-        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
-          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+        relid, schemaname, relname,
+        coalesce(sum(read_d), 0)::bigint as total_blks_read,
+        coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
+        case when sum(read_d) + sum(hit_d) > 0
+          then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
           else 100 end as hit_ratio
-      from fact.pg_sequence_io_snapshot s
-      where s.instance_pk = $1
-        and s.snapshot_ts >= now() - make_interval(hours => $2)
-      group by s.relid, s.schemaname, s.relname
+      from deltas
+      group by relid, schemaname, relname
       order by total_blks_read desc nulls last
       limit 100
     `, [id, hours]);
@@ -1098,27 +1107,41 @@ router.get('/:id/wal', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/slru — SLRU cache istatistikleri
+// Snapshot'lar arasındaki delta'yı window function ile hesaplar
 router.get('/:id/slru', async (req, res, next) => {
   try {
     const { id } = req.params;
     const hours = parseHours(req.query.hours, 1);
     const result = await pool.query(`
+      with deltas as (
+        select
+          name,
+          greatest(blks_zeroed - lag(blks_zeroed) over w, 0) as zeroed_d,
+          greatest(blks_hit - lag(blks_hit) over w, 0) as hit_d,
+          greatest(blks_read - lag(blks_read) over w, 0) as read_d,
+          greatest(blks_written - lag(blks_written) over w, 0) as written_d,
+          greatest(blks_exists - lag(blks_exists) over w, 0) as exists_d,
+          greatest(flushes - lag(flushes) over w, 0) as flushes_d,
+          greatest(truncates - lag(truncates) over w, 0) as truncates_d
+        from fact.pg_slru_snapshot
+        where instance_pk = $1
+          and sample_ts >= now() - make_interval(hours => $2)
+        window w as (partition by name order by sample_ts)
+      )
       select
-        s.name,
-        sum(s.blks_zeroed_delta) as total_blks_zeroed,
-        sum(s.blks_hit_delta) as total_blks_hit,
-        sum(s.blks_read_delta) as total_blks_read,
-        sum(s.blks_written_delta) as total_blks_written,
-        sum(s.blks_exists_delta) as total_blks_exists,
-        sum(s.flushes_delta) as total_flushes,
-        sum(s.truncates_delta) as total_truncates,
-        case when sum(s.blks_read_delta) + sum(s.blks_hit_delta) > 0
-          then round(100.0 * sum(s.blks_hit_delta) / (sum(s.blks_read_delta) + sum(s.blks_hit_delta)), 1)
+        name,
+        coalesce(sum(zeroed_d), 0)::bigint as total_blks_zeroed,
+        coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
+        coalesce(sum(read_d), 0)::bigint as total_blks_read,
+        coalesce(sum(written_d), 0)::bigint as total_blks_written,
+        coalesce(sum(exists_d), 0)::bigint as total_blks_exists,
+        coalesce(sum(flushes_d), 0)::bigint as total_flushes,
+        coalesce(sum(truncates_d), 0)::bigint as total_truncates,
+        case when sum(read_d) + sum(hit_d) > 0
+          then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
           else 100 end as hit_ratio
-      from fact.pg_slru_snapshot s
-      where s.instance_pk = $1
-        and s.snapshot_ts >= now() - make_interval(hours => $2)
-      group by s.name
+      from deltas
+      group by name
       order by total_blks_read desc nulls last
     `, [id, hours]);
     res.json(result.rows);
