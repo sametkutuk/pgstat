@@ -575,6 +575,7 @@ router.get('/:id/indexes', async (req, res, next) => {
     const limit = parseLimit(req.query.limit, 500);
     const dbid = req.query.dbid ? Number(req.query.dbid) : null;
     const unusedOnly = req.query.unused === 'true';
+    const invalidOnly = req.query.invalid === 'true';
 
     const params: Array<string | number> = [id, hours];
     const where = [
@@ -587,6 +588,14 @@ router.get('/:id/indexes', async (req, res, next) => {
     }
     params.push(limit);
     const limitParam = `$${params.length}`;
+    const havingClauses: string[] = [];
+    if (unusedOnly) {
+      havingClauses.push("coalesce(sum(ix.idx_scan_delta), 0) = 0 and min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance");
+    }
+    if (invalidOnly) {
+      havingClauses.push("(bool_and(coalesce(ix.is_valid, true)) = false or bool_and(coalesce(ix.is_ready, true)) = false)");
+    }
+    const havingSql = havingClauses.length ? `having ${havingClauses.join('\n        and ')}` : '';
 
     const result = await pool.query(`
       with bounds as (
@@ -604,6 +613,10 @@ router.get('/:id/indexes', async (req, res, next) => {
         coalesce(sum(ix.idx_tup_fetch_delta), 0) as total_idx_tup_fetch,
         coalesce(sum(ix.idx_blks_read_delta), 0) as total_idx_blks_read,
         coalesce(sum(ix.idx_blks_hit_delta), 0) as total_idx_blks_hit,
+        bool_and(coalesce(ix.is_valid, true)) as is_valid,
+        bool_and(coalesce(ix.is_ready, true)) as is_ready,
+        bool_or(coalesce(ix.is_primary, false)) as is_primary,
+        bool_or(coalesce(ix.is_unique, false)) as is_unique,
         min(ix.sample_ts) as observed_since,
         max(ix.sample_ts) as observed_until,
         round(extract(epoch from (max(ix.sample_ts) - min(ix.sample_ts))) / 3600.0, 1) as observed_hours,
@@ -614,7 +627,7 @@ router.get('/:id/indexes', async (req, res, next) => {
       where ${where.join('\n        and ')}
       group by ix.dbid, dbr.datname, ix.index_relid, ix.table_relid, ix.schemaname,
                ix.table_relname, ix.index_relname, b.window_start, b.window_end, b.tolerance
-      ${unusedOnly ? "having coalesce(sum(ix.idx_scan_delta), 0) = 0 and min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance" : ''}
+      ${havingSql}
       order by ${unusedOnly ? 'total_idx_blks_read desc nulls last, dbr.datname, ix.schemaname, ix.index_relname' : 'total_idx_scan desc nulls last'}
       limit ${limitParam}
     `, params);
@@ -661,6 +674,7 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
     const hours = parseHours(req.query.hours, 1);
+    const invalidOnly = req.query.invalid === 'true';
 
     const result = await pool.query(`
       select
@@ -670,13 +684,18 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
         sum(ix.idx_tup_read_delta) as total_idx_tup_read,
         sum(ix.idx_tup_fetch_delta) as total_idx_tup_fetch,
         sum(ix.idx_blks_read_delta) as total_idx_blks_read,
-        sum(ix.idx_blks_hit_delta) as total_idx_blks_hit
+        sum(ix.idx_blks_hit_delta) as total_idx_blks_hit,
+        bool_and(coalesce(ix.is_valid, true)) as is_valid,
+        bool_and(coalesce(ix.is_ready, true)) as is_ready,
+        bool_or(coalesce(ix.is_primary, false)) as is_primary,
+        bool_or(coalesce(ix.is_unique, false)) as is_unique
       from fact.pg_index_stat_delta ix
       where ix.instance_pk = $1
         and ix.dbid = $2
         and ix.sample_ts >= now() - make_interval(hours => $3)
       group by ix.index_relid, ix.table_relid, ix.schemaname,
                ix.table_relname, ix.index_relname
+      ${invalidOnly ? "having bool_and(coalesce(ix.is_valid, true)) = false or bool_and(coalesce(ix.is_ready, true)) = false" : ''}
       order by total_idx_scan desc nulls last
       limit 100
     `, [id, dbid, hours]);

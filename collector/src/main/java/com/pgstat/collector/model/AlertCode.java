@@ -24,7 +24,10 @@ public enum AlertCode {
     // Aksiyon-odakli alert'ler (ActionableAlertEvaluator tarafindan tetiklenir)
     INDEX_SUSPECT_MISSING("index_suspect_missing", "warning", "instance"),
     INDEX_UNUSED("index_unused", "info", "instance"),
+    INDEX_INVALID("index_invalid", "warning", "instance"),
     HIGH_TEMP_FILES("high_temp_files", "warning", "instance"),
+    HIGH_TEMP_FILES_DAILY("high_temp_files_daily", "warning", "instance"),
+    HIGH_TEMP_SQLS_DAILY("high_temp_sqls_daily", "warning", "instance"),
     IDLE_IN_TX_TIME_HIGH("idle_in_tx_time_high", "warning", "instance"),
     REPLICATION_SLOT_INACTIVE("replication_slot_inactive", "warning", "instance"),
 

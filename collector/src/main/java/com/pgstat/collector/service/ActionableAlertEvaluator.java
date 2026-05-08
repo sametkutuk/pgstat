@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 5 aksiyon-odakli alert evaluator.
+ * Aksiyon-odakli built-in alert evaluator.
  * UTC 04:00'te JobOrchestrator tarafindan gunde 1 kez tetiklenir.
  * Gece snapshot (03:00) + runtime fact tablolarindan veri okur.
  *
@@ -34,6 +34,8 @@ public class ActionableAlertEvaluator {
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
     private final SystemAlertConfigCache configCache;
+    private static final long DAILY_TEMP_SQL_MIN_BYTES = 100L * 1024L * 1024L;
+    private static final long DAILY_TEMP_SQL_MIN_MB = DAILY_TEMP_SQL_MIN_BYTES / 1024L / 1024L;
 
     public ActionableAlertEvaluator(JdbcTemplate jdbc, AlertRepository alertRepo,
                                      AlertMessageRenderer renderer,
@@ -44,12 +46,15 @@ public class ActionableAlertEvaluator {
         this.configCache = configCache;
     }
 
-    /** Tum 5 alert'i degerlendir. Hata olursa diger alert'lere devam et. */
+    /** Tum gunluk alert'leri degerlendir. Hata olursa diger alert'lere devam et. */
     public void evaluateAll() {
         log.info("Aksiyon-odakli alert degerlendirmesi basliyor (gunluk)...");
         int total = 0;
         total += safeEval("INDEX_SUSPECT_MISSING", this::checkIndexSuspectMissing);
         total += safeEval("INDEX_UNUSED", this::checkIndexUnused);
+        total += safeEval("INDEX_INVALID", this::checkIndexInvalid);
+        total += safeEval("HIGH_TEMP_FILES_DAILY", this::checkHighTempFilesDaily);
+        total += safeEval("HIGH_TEMP_SQLS_DAILY", this::checkHighTempSqlsDaily);
         total += safeEval("HIGH_BLOAT_RATIO", this::checkHighBloatRatio);
         log.info("Gunluk aksiyon-odakli alert degerlendirmesi tamamlandi: {} alert", total);
     }
@@ -193,7 +198,8 @@ public class ActionableAlertEvaluator {
                      interval '6 hours' as tolerance
             ),
             per_inst as (
-              select i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname,
+              select i.instance_pk, i.dbid, i.schemaname,
+                     i.index_relname as indexrelname, i.table_relname,
                      sum(i.idx_scan_delta) as total_scans,
                      min(i.sample_ts) as observed_since,
                      max(i.sample_ts) as observed_until,
@@ -202,7 +208,7 @@ public class ActionableAlertEvaluator {
               from fact.pg_index_stat_delta i
               cross join bounds b
               where i.sample_ts >= b.window_start
-              group by i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname,
+              group by i.instance_pk, i.dbid, i.schemaname, i.index_relname, i.table_relname,
                        b.window_start, b.window_end, b.tolerance
             ),
             cluster_idx as (
@@ -232,7 +238,6 @@ public class ActionableAlertEvaluator {
             left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.dbid = p.dbid
             where p.total_scans = 0
               and p.full_window_covered
-              and coalesce(rs.total_size_bytes, 0) > 0
               and (
                 vic.cluster_id is null                         -- standalone: bu instance'ta 0 yeter
                 or (coalesce(ci.cluster_total_scans, 0) = 0 and ci.cluster_window_covered)
@@ -245,9 +250,6 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("index_unused", instancePk)) continue;
-            long minSizeBytes = configCache.getThreshold(
-                "index_unused", instancePk, new BigDecimal("100")).longValue() * 1_048_576L;
-            if (toLong(r.get("total_size_bytes")) <= minSizeBytes) continue;
 
             String alertKey = "actionable:index_unused:" +
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
@@ -279,6 +281,75 @@ public class ActionableAlertEvaluator {
             alertRepo.upsert(alertKey, AlertCode.INDEX_UNUSED,
                 toLong(r.get("instance_pk")), null, null,
                 rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 2b. INDEX_INVALID — pg_index says index is invalid or not ready
+    // =========================================================================
+
+    private int checkIndexInvalid() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            with latest as (
+              select instance_pk, dbid, index_relid, max(sample_ts) as ts
+              from fact.pg_index_stat_delta
+              group by instance_pk, dbid, index_relid
+            )
+            select i.instance_pk, inv.display_name, i.dbid, dbr.datname,
+                   i.schemaname, i.table_relname, i.index_relname,
+                   i.is_valid, i.is_ready, i.is_primary, i.is_unique
+            from fact.pg_index_stat_delta i
+            join latest l on l.instance_pk = i.instance_pk
+                         and l.dbid = i.dbid
+                         and l.index_relid = i.index_relid
+                         and l.ts = i.sample_ts
+            join control.instance_inventory inv on inv.instance_pk = i.instance_pk
+            left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid
+            where coalesce(i.is_valid, true) = false
+               or coalesce(i.is_ready, true) = false
+            order by inv.display_name, i.schemaname, i.index_relname
+            limit 100
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("index_invalid", instancePk)) continue;
+
+            String index = r.get("schemaname") + "." + r.get("index_relname");
+            String table = r.get("schemaname") + "." + r.get("table_relname");
+            String alertKey = "actionable:index_invalid:" + instancePk + ":" + r.get("dbid") + ":" + index;
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("database", r.get("datname") != null ? r.get("datname") : "?");
+            ctx.put("index", index);
+            ctx.put("table", table);
+            ctx.put("is_valid", r.get("is_valid"));
+            ctx.put("is_ready", r.get("is_ready"));
+            ctx.put("is_primary", r.get("is_primary"));
+            ctx.put("is_unique", r.get("is_unique"));
+
+            String[] rendered = renderer.renderForCode("index_invalid", ctx,
+                "Invalid index: " + index,
+                "Index valid=" + r.get("is_valid") + ", ready=" + r.get("is_ready"));
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("usage_summary")
+                .addContext("database", ctx.get("database"))
+                .addContext("index", index)
+                .addContext("table", table)
+                .addContext("is_valid", r.get("is_valid"))
+                .addContext("is_ready", r.get("is_ready"))
+                .addContext("is_primary", r.get("is_primary"))
+                .addContext("is_unique", r.get("is_unique"))
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.INDEX_INVALID,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
             count++;
         }
         return count;
@@ -367,7 +438,150 @@ public class ActionableAlertEvaluator {
     }
 
     // =========================================================================
-    // 4. IDLE_IN_TX_TIME_HIGH — idle_in_tx / session > 30% (PG14+)
+    // 3b. HIGH_TEMP_FILES_DAILY - temp_files > threshold / 24h
+    // =========================================================================
+
+    private int checkHighTempFilesDaily() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            select d.instance_pk, d.dbid, d.datname,
+                   sum(d.temp_files_delta) as temp_files,
+                   sum(d.temp_bytes_delta) as temp_bytes,
+                   i.display_name
+            from fact.pg_database_delta d
+            join control.instance_inventory i on i.instance_pk = d.instance_pk
+            where d.sample_ts > now() - interval '24 hours'
+            group by d.instance_pk, d.dbid, d.datname, i.display_name
+            having sum(d.temp_files_delta) > 0
+            """);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("high_temp_files_daily", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "high_temp_files_daily", instancePk, new BigDecimal("1000"));
+            if (toBD(r.get("temp_files")).compareTo(threshold) <= 0) continue;
+
+            long tempBytes = toLong(r.get("temp_bytes"));
+            String alertKey = "actionable:high_temp_files_daily:" + instancePk + ":" + r.get("dbid");
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("database", r.get("datname"));
+            ctx.put("temp_files", r.get("temp_files"));
+            ctx.put("temp_bytes_human", humanBytes(tempBytes));
+
+            String[] rendered = renderer.renderForCode("high_temp_files_daily", ctx,
+                "Gunluk yuksek temp file: " + r.get("datname"),
+                "temp_files > " + threshold + "/24h");
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("temp_files")
+                .addContext("database", r.get("datname"))
+                .addContext("temp_files", r.get("temp_files"))
+                .addContext("temp_bytes", tempBytes)
+                .addContext("window", "24h")
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.HIGH_TEMP_FILES_DAILY,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    private int checkHighTempSqlsDaily() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            with per_sql as (
+              select d.instance_pk,
+                     ss.dbid,
+                     coalesce(dbr.datname, '?') as datname,
+                     ss.statement_series_id,
+                     ss.queryid,
+                     coalesce(qt.query_text, '?') as query_text,
+                     sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 as temp_bytes
+              from fact.pgss_delta d
+              join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+              left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+              left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+              where d.sample_ts > now() - interval '24 hours'
+                and coalesce(d.temp_blks_written_delta, 0) > 0
+              group by d.instance_pk, ss.dbid, dbr.datname, ss.statement_series_id, ss.queryid, qt.query_text
+              having sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 >= ?
+            ),
+            ranked as (
+              select p.*,
+                     row_number() over (partition by p.instance_pk, p.dbid order by p.temp_bytes desc) as rn
+              from per_sql p
+            ),
+            agg as (
+              select instance_pk, dbid, datname,
+                     count(*) as sql_count,
+                     sum(temp_bytes) as temp_bytes
+              from per_sql
+              group by instance_pk, dbid, datname
+            ),
+            top_queries as (
+              select instance_pk, dbid,
+                     string_agg(
+                       left(query_text, 120) || ' -> ' || pg_size_pretty(temp_bytes::bigint),
+                       E'\n' order by temp_bytes desc
+                     ) as top_temp_queries
+              from ranked
+              where rn <= 5
+              group by instance_pk, dbid
+            )
+            select a.*, tq.top_temp_queries, i.display_name
+            from agg a
+            join control.instance_inventory i on i.instance_pk = a.instance_pk
+            left join top_queries tq on tq.instance_pk = a.instance_pk and tq.dbid = a.dbid
+            """, DAILY_TEMP_SQL_MIN_BYTES);
+
+        int count = 0;
+        for (Map<String, Object> r : rows) {
+            long instancePk = toLong(r.get("instance_pk"));
+            if (!configCache.isEnabled("high_temp_sqls_daily", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "high_temp_sqls_daily", instancePk, new BigDecimal("10"));
+            if (toBD(r.get("sql_count")).compareTo(threshold) <= 0) continue;
+
+            long tempBytes = toLong(r.get("temp_bytes"));
+            String alertKey = "actionable:high_temp_sqls_daily:" + instancePk + ":" + r.get("dbid");
+
+            Map<String, Object> ctx = new java.util.HashMap<>();
+            ctx.put("instance", r.get("display_name"));
+            ctx.put("instance_pk", instancePk);
+            ctx.put("database", r.get("datname"));
+            ctx.put("sql_count", r.get("sql_count"));
+            ctx.put("min_temp_mb_per_sql", DAILY_TEMP_SQL_MIN_MB);
+            ctx.put("temp_bytes_human", humanBytes(tempBytes));
+            ctx.put("top_temp_queries", r.get("top_temp_queries") != null ? r.get("top_temp_queries") : "(veri yok)");
+
+            String[] rendered = renderer.renderForCode("high_temp_sqls_daily", ctx,
+                "Temp-heavy SQL sayisi yuksek: " + r.get("datname"),
+                r.get("sql_count") + " SQL >= " + DAILY_TEMP_SQL_MIN_MB + "MB temp yazdi");
+
+            String detailsJson = new AlertDetailsBuilder()
+                .setKind("temp_files")
+                .addContext("database", r.get("datname"))
+                .addContext("sql_count", r.get("sql_count"))
+                .addContext("min_temp_bytes_per_sql", DAILY_TEMP_SQL_MIN_BYTES)
+                .addContext("min_temp_mb_per_sql", DAILY_TEMP_SQL_MIN_MB)
+                .addContext("temp_bytes", tempBytes)
+                .addContext("top_temp_queries", r.get("top_temp_queries"))
+                .addContext("window", "24h")
+                .build();
+
+            alertRepo.upsert(alertKey, AlertCode.HIGH_TEMP_SQLS_DAILY,
+                instancePk, null, null, rendered[0], rendered[1], detailsJson);
+            count++;
+        }
+        return count;
+    }
+
+    // =========================================================================
+    // 4. IDLE_IN_TX_TIME_HIGH - idle_in_tx / session > 30% (PG14+)
     // =========================================================================
 
     private int checkIdleInTxTimeHigh() {

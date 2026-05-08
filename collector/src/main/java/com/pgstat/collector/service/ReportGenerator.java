@@ -200,8 +200,16 @@ public class ReportGenerator {
                     where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as cache_pct,
                   coalesce((select sum(temp_files_delta) from fact.pg_database_delta d
                     where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as temp_files,
+                  coalesce((select sum(temp_bytes_delta) from fact.pg_database_delta d
+                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as temp_bytes,
                   coalesce((select sum(deadlocks_delta) from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as deadlocks
+                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as deadlocks,
+                  coalesce((select count(*) from (
+                    select distinct on (x.dbid, x.index_relid) x.is_valid, x.is_ready
+                    from fact.pg_index_stat_delta x
+                    where x.instance_pk = i.instance_pk
+                    order by x.dbid, x.index_relid, x.sample_ts desc
+                  ) ix where coalesce(ix.is_valid, true) = false or coalesce(ix.is_ready, true) = false), 0) as invalid_indexes
                 from control.instance_inventory i
                 where i.is_active and i.bootstrap_state = 'ready'
                 order by i.display_name
@@ -210,8 +218,11 @@ public class ReportGenerator {
             for (Map<String, Object> inst : instances) {
                 String status = "🟢";
                 long tempFiles = toLong(inst.get("temp_files"));
+                long tempBytes = toLong(inst.get("temp_bytes"));
                 long deadlocks = toLong(inst.get("deadlocks"));
+                long invalidIndexes = toLong(inst.get("invalid_indexes"));
                 double cachePct = toDouble(inst.get("cache_pct"));
+                if (invalidIndexes > 0) status = "\uD83D\uDFE1";
                 if (tempFiles > 100 || deadlocks > 0 || cachePct < 95) status = "🟡";
 
                 sb.append(status).append(" **").append(inst.get("display_name")).append("**\n");
@@ -219,8 +230,9 @@ public class ReportGenerator {
                 sb.append(" | Bağlantı: ").append(inst.get("connections"));
                 sb.append(" | WAL: ").append(humanBytes(toLong(inst.get("wal_bytes"))));
                 sb.append(" | Cache: ").append(cachePct).append("%");
-                sb.append(" | Temp: ").append(tempFiles);
-                sb.append(" | Deadlock: ").append(deadlocks).append("\n\n");
+                sb.append(" | Temp: ").append(tempFiles).append(" / ").append(humanBytes(tempBytes));
+                sb.append(" | Deadlock: ").append(deadlocks);
+                sb.append(" | Invalid index: ").append(invalidIndexes).append("\n\n");
             }
         } catch (Exception e) {
             sb.append("Instance bilgileri alinamadi: ").append(e.getMessage()).append("\n");
@@ -333,7 +345,7 @@ public class ReportGenerator {
                   select 1 from fact.pg_index_stat_delta i
                   cross join bounds b
                   where i.sample_ts >= b.window_start
-                  group by i.instance_pk, i.schemaname, i.indexrelname,
+                  group by i.instance_pk, i.schemaname, i.index_relname,
                            b.window_start, b.window_end, b.tolerance
                   having coalesce(sum(idx_scan_delta), 0) = 0
                      and min(i.sample_ts) <= b.window_start + b.tolerance
@@ -342,6 +354,20 @@ public class ReportGenerator {
                 """, Integer.class);
             if (unusedCount != null && unusedCount > 0) {
                 sb.append("• ").append(unusedCount).append(" kullanılmayan index drop edilebilir\n");
+            }
+
+            Integer invalidIndexCount = jdbc.queryForObject("""
+                select count(*) from (
+                  select distinct on (i.instance_pk, i.dbid, i.index_relid)
+                         i.is_valid, i.is_ready
+                  from fact.pg_index_stat_delta i
+                  order by i.instance_pk, i.dbid, i.index_relid, i.sample_ts desc
+                ) x
+                where coalesce(x.is_valid, true) = false
+                   or coalesce(x.is_ready, true) = false
+                """, Integer.class);
+            if (invalidIndexCount != null && invalidIndexCount > 0) {
+                sb.append("â€¢ ").append(invalidIndexCount).append(" invalid/not-ready index kontrol edilmeli\n");
             }
 
             // Temp file ureten instance sayisi

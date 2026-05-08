@@ -359,21 +359,25 @@ public class FactRepository {
                                      String indexRelname,
                                      long idxScanDelta, long idxTupReadDelta,
                                      long idxTupFetchDelta,
-                                     long idxBlksReadDelta, long idxBlksHitDelta) {
+                                     long idxBlksReadDelta, long idxBlksHitDelta,
+                                     Boolean isValid, Boolean isReady,
+                                     Boolean isPrimary, Boolean isUnique) {
         jdbc.update("""
             insert into fact.pg_index_stat_delta (
               sample_ts, instance_pk, dbid, table_relid, index_relid,
               schemaname, table_relname, index_relname,
               idx_scan_delta, idx_tup_read_delta, idx_tup_fetch_delta,
-              idx_blks_read_delta, idx_blks_hit_delta
+              idx_blks_read_delta, idx_blks_hit_delta,
+              is_valid, is_ready, is_primary, is_unique
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, tableRelid, indexRelid,
             schemaname, tableRelname, indexRelname,
             idxScanDelta, idxTupReadDelta, idxTupFetchDelta,
-            idxBlksReadDelta, idxBlksHitDelta
+            idxBlksReadDelta, idxBlksHitDelta,
+            isValid, isReady, isPrimary, isUnique
         );
     }
 

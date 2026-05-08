@@ -73,7 +73,10 @@ public static final Map<String, AlertMeta> METADATA = Map.ofEntries(
   entry("idle_in_tx_time_high",    new AlertMeta("Idle in Tx Yüksek", "performance", "percent", "Idle in tx oranı (%)")),
   entry("high_bloat_ratio",        new AlertMeta("Bloat Yüksek", "index_table", "percent", "Dead tuple oranı (%)")),
   entry("index_suspect_missing",   new AlertMeta("Index Gerekiyor", "index_table", "ratio", "Seq/Idx scan oranı (×)")),
-  entry("index_unused",            new AlertMeta("Kullanılmayan Index", "index_table", "MB", "Min index boyutu (MB)")),
+  entry("index_unused",            new AlertMeta("Kullanılmayan Index", "index_table", null, null)),
+  entry("index_invalid",           new AlertMeta("Invalid Index", "index_table", null, null)),
+  entry("high_temp_files_daily",   new AlertMeta("Günlük Temp File", "performance", "count", "Temp file sayısı/24s")),
+  entry("high_temp_sqls_daily",    new AlertMeta("Temp-heavy SQL", "performance", "count", "100MB+ temp yazan SQL sayısı/24s")),
   entry("replication_lag",         new AlertMeta("Replikasyon Gecikmesi", "replication", "MB", "Max lag (MB)")),
   entry("replication_slot_inactive", new AlertMeta("Inactive Slot", "replication", "MB", "Min slot lag (MB)")),
 
@@ -149,7 +152,7 @@ Her alert üreten yer, alert oluşturmadan önce `configCache.isEnabled()` kontr
 | `BootstrapHandler.java` | bootstrap_failed, extension_missing, permission_denied, authentication_failure | Aynı check |
 | `DbObjectsCollector.java` | secret_ref_error | Aynı check |
 | `AlertRuleEvaluator.java` | lock_contention, high_connection_usage, long_running_query, replication_lag, high_bloat_ratio | Eşik de config'den okunur |
-| `ActionableAlertEvaluator.java` | index_suspect_missing, index_unused, high_temp_files, idle_in_tx_time_high, replication_slot_inactive | Eşik de config'den okunur |
+| `ActionableAlertEvaluator.java` | index_suspect_missing, index_unused, index_invalid, high_temp_files, high_temp_files_daily, high_temp_sqls_daily, idle_in_tx_time_high, replication_slot_inactive | Eşik de config'den okunur |
 | `JobOrchestrator.java` | job_failed, job_partial_failure, advisory_lock_skip | Global toggle check (instance yok) |
 
 **Pattern:**
@@ -214,7 +217,7 @@ DELETE /api/system-alerts/config/:alert_code/instances/:instance_pk
 | 🔌 Bağlantı | connection_failure, authentication_failure, permission_denied, extension_missing, secret_ref_error, bootstrap_failed |
 | 📊 Veri Toplama | stale_data, stats_reset_detected |
 | ⚡ Performans | high_temp_files, idle_in_tx_time_high, high_connection_usage, long_running_query, lock_contention |
-| 🗄️ Index / Tablo | index_suspect_missing, index_unused, high_bloat_ratio |
+| 🗄️ Index / Tablo | index_suspect_missing, index_unused, index_invalid, high_bloat_ratio |
 | 🔄 Replikasyon | replication_lag, replication_slot_inactive |
 | 🔧 Job | job_partial_failure, job_failed, advisory_lock_skip |
 

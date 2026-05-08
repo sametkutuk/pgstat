@@ -296,9 +296,14 @@ public class Pg11_12Queries implements SourceQueries {
               s.indexrelname as index_relname,
               s.idx_scan, s.idx_tup_read, s.idx_tup_fetch,
               coalesce(io.idx_blks_read, 0) as idx_blks_read,
-              coalesce(io.idx_blks_hit, 0) as idx_blks_hit
+              coalesce(io.idx_blks_hit, 0) as idx_blks_hit,
+              ix.indisvalid as is_valid,
+              ix.indisready as is_ready,
+              ix.indisprimary as is_primary,
+              ix.indisunique as is_unique
             from pg_stat_user_indexes s
             left join pg_statio_user_indexes io on io.indexrelid = s.indexrelid
+            left join pg_index ix on ix.indexrelid = s.indexrelid
             """;
     }
 

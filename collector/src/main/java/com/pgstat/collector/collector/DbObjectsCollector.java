@@ -288,7 +288,9 @@ public class DbObjectsCollector {
                     schemaname, tableRelname, indexRelname,
                     d(prev, current, "idx_scan"), d(prev, current, "idx_tup_read"),
                     d(prev, current, "idx_tup_fetch"),
-                    d(prev, current, "idx_blks_read"), d(prev, current, "idx_blks_hit")
+                    d(prev, current, "idx_blks_read"), d(prev, current, "idx_blks_hit"),
+                    (Boolean) rs.getObject("is_valid"), (Boolean) rs.getObject("is_ready"),
+                    (Boolean) rs.getObject("is_primary"), (Boolean) rs.getObject("is_unique")
                 );
                 rows++;
             }

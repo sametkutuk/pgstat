@@ -20,8 +20,11 @@ varsa global degerin onune gecer.
 | `replication_lag` | Primary'de replay lag byte esigi asarsa | Lag MB | 50 MB warning, critical=10x | Replication snapshot | Lag normale donunce resolve/manuel |
 | `high_bloat_ratio` | Tablo dead tuple orani esigi asarsa | Dead tuple yuzdesi | 20% | Son table stat snapshot | Oran normale donunce resolve/manuel |
 | `index_suspect_missing` | Seq scan/idx scan orani yuksek ve tablo anlamli buyukse | Seq/idx oran | 100x | Son 24 saat table delta + relation size | Kosul kalkinca resolve/manuel |
-| `index_unused` | Index tam gozlem penceresinde hic scan edilmezse | Min index boyutu MB | 100 MB | Son 30 gun tam gozlem, cluster-aware | Index kullanilirsa veya drop edilirse resolve/manuel |
+| `index_unused` | Index tam gozlem penceresinde hic scan edilmezse | Esik yok; boyut bilgi amacli | Esik yok | Son 30 gun tam gozlem, cluster-aware | Index kullanilirsa veya drop edilirse resolve/manuel |
+| `index_invalid` | Index invalid veya not-ready durumdaysa | Esik yok | Esik yok | Son index stat snapshot | Index valid/ready olunca veya drop edilince resolve/manuel |
 | `high_temp_files` | DB temp file sayisi esigi asarsa | Temp file sayisi/saat | 100/saat | Son 1 saat database delta | Temp file normale donunce resolve/manuel |
+| `high_temp_files_daily` | DB temp file sayisi gunluk esigi asarsa | Temp file sayisi/24s | 1000/24s | Son 24 saat database delta | Temp file normale donunce resolve/manuel |
+| `high_temp_sqls_daily` | 24 saatte cok sayida SQL 100MB+ temp yazarsa | SQL sayisi/24s | 10 SQL | Son 24 saat pg_stat_statements delta | SQL sayisi normale donunce resolve/manuel |
 | `idle_in_tx_time_high` | Idle-in-transaction sure orani esigi asarsa | Idle/session yuzdesi | 30% | Son 1 saat database delta, PG14+ | Oran normale donunce resolve/manuel |
 | `replication_slot_inactive` | Slot 1 saat inactive kalip WAL tutarsa | Slot lag MB | 1024 MB | Son 1 saat slot snapshot | Slot active olur/drop edilirse resolve/manuel |
 | `job_partial_failure` | Job run'da bazi instance'lar fail olursa | Failed/total sayisi | Esik yok | Job orchestrator | Sonraki basarili job/manuel |
@@ -45,7 +48,9 @@ template secimi metric tipine gore yapilir.
 
 ## Work Mem Notu
 
-`high_temp_files` alerti global `ALTER SYSTEM SET work_mem` onermez. Guvenli
-yaklasim once query/session seviyesinde `SET LOCAL work_mem` ile test etmektir.
-Global deger icin host RAM, `shared_buffers`, `max_connections` ve eszamanli
-sort/hash sayisi bilinmelidir.
+`high_temp_files`, `high_temp_files_daily` ve `high_temp_sqls_daily` global
+`ALTER SYSTEM SET work_mem` onermez. Guvenli yaklasim once query/session
+seviyesinde `SET LOCAL work_mem` ile test etmektir. Global deger icin host RAM,
+`shared_buffers`, `max_connections` ve eszamanli sort/hash sayisi bilinmelidir.
+`high_temp_sqls_daily` icin SQL basina minimum temp yazimi ilk fazda sabit
+100MB'dir; `threshold_value` sadece kac SQL'den sonra alert uretilecegini belirler.
