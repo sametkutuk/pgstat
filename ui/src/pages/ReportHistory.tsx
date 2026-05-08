@@ -12,6 +12,8 @@ import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
 import PrintButton from '../components/common/PrintButton';
+import Skeleton, { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 import { useToast } from '../components/common/Toast';
 
 interface ReportListItem {
@@ -131,11 +133,9 @@ export default function ReportHistory() {
 
             <div className="bg-white rounded-lg shadow-sm p-4">
                 {isLoading
-                    ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>
+                    ? <SkeletonTable rows={5} cols={5} />
                     : (data && data.length === 0)
-                        ? <div className="text-[#94A3B8] py-8 text-center">
-                            Henüz rapor gönderilmemiş. Ayarlar &gt; Raporlar bölümünden konfigürasyonu kontrol edin.
-                        </div>
+                        ? <EmptyState icon="📜" title="Henüz rapor yok" description="Otomatik günlük/haftalık raporlar Settings → Raporlar bölümünden yapılandırılır." />
                         : <DataTable columns={columns} data={data || []} />}
             </div>
 
@@ -174,7 +174,7 @@ function ReportDetailModal({ id, onClose }: { id: number; onClose: () => void })
                 </div>
                 <div className="px-6 py-4 overflow-y-auto flex-1">
                     {isLoading
-                        ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>
+                        ? <div className="space-y-3"><Skeleton width="60%" height="1rem" /><Skeleton height="0.875rem" /><Skeleton height="0.875rem" /><Skeleton height="0.875rem" /></div>
                         : (
                             <>
                                 {data?.error_message && (

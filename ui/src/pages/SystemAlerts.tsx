@@ -4,6 +4,8 @@ import { apiGet, apiPut, apiDelete } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import InfoTip from '../components/common/InfoTip';
 import Badge from '../components/common/Badge';
+import Skeleton from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface SystemAlertConfig {
     alert_code: string;
@@ -56,7 +58,15 @@ export default function SystemAlerts() {
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['system-alert-config'] }); toast.success('Override silindi'); },
     });
 
-    if (isLoading) return <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>;
+    if (isLoading) return (
+        <div className="space-y-3">
+            <Skeleton height="3rem" />
+            <Skeleton height="3rem" />
+            <Skeleton height="3rem" />
+            <Skeleton height="3rem" />
+            <Skeleton height="3rem" />
+        </div>
+    );
 
     return (
         <div className="space-y-6">

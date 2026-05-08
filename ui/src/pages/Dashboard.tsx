@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
 import TimeAgo from '../components/common/TimeAgo';
 import InfoTip from '../components/common/InfoTip';
+import { SkeletonCard } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface Summary {
   total_instances: number;
@@ -631,13 +633,18 @@ export default function Dashboard() {
 
       {/* Instance grid */}
       {health.isLoading ? (
-        <div className="text-[#94A3B8] text-sm py-10 text-center">Yükleniyor...</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-[#94A3B8] text-sm py-10 text-center">
-          {instances.length === 0
-            ? 'Henüz instance eklenmemiş.'
-            : 'Filtreyle eşleşen instance bulunamadı.'}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
+      ) : filtered.length === 0 ? (
+        instances.length === 0
+          ? <EmptyState icon="🖥️" title="Henüz instance yok" description="İlk PostgreSQL instance'ını eklemek için Instances sayfasına gidin." />
+          : <EmptyState icon="🔍" title="Eşleşme yok" description="Filtreyi değiştirin veya temizleyin." />
       ) : (
         <div className="space-y-6">
           {groups.map(group => (

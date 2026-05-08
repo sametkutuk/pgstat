@@ -7,6 +7,8 @@ import { apiGet } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import LastUpdated from '../components/common/LastUpdated';
 import InfoTip from '../components/common/InfoTip';
+import { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface Cluster {
     cluster_id: string;
@@ -41,9 +43,8 @@ export default function Clusters() {
                         className="font-medium text-[#3B82F6] hover:underline">
                         {r.label || r.cluster_id.slice(0, 16)}
                     </Link>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                        KIND_BADGE[r.cluster_kind || 'auto']?.cls || ''
-                    }`}>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${KIND_BADGE[r.cluster_kind || 'auto']?.cls || ''
+                        }`}>
                         {KIND_BADGE[r.cluster_kind || 'auto']?.text || r.cluster_kind}
                     </span>
                 </div>
@@ -93,11 +94,9 @@ Standalone (sibling'i olmayan) instance'lar bu listede görünmez.`} />
 
             <div className="bg-white rounded-lg shadow-sm p-4">
                 {isLoading
-                    ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>
+                    ? <SkeletonTable rows={5} cols={5} />
                     : (data && data.length === 0)
-                        ? <div className="text-[#94A3B8] py-8 text-center">
-                            Aktif küme yok. Aynı system_identifier'a sahip ≥2 instance gerekli.
-                        </div>
+                        ? <EmptyState icon="🗂️" title="Aktif küme yok" description="Aynı system_identifier'a sahip en az 2 instance eklenmeli." />
                         : <DataTable columns={columns} data={data || []} />}
             </div>
         </div>

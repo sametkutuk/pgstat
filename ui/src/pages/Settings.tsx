@@ -3,6 +3,8 @@ import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import ConfirmDialog from '../components/common/ConfirmDialog';
+import EmptyState from '../components/common/EmptyState';
+import Skeleton from '../components/common/Skeleton';
 import { useToast } from '../components/common/Toast';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
@@ -79,7 +81,14 @@ function ReportsTab() {
         onError: () => toast.error('Kaydetme başarısız'),
     });
 
-    if (isLoading) return <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>;
+    if (isLoading) return (
+        <div className="bg-white rounded-lg shadow-sm p-6 space-y-3">
+            <Skeleton width="40%" height="1rem" />
+            <Skeleton height="2rem" />
+            <Skeleton height="2rem" />
+            <Skeleton width="60%" height="2rem" />
+        </div>
+    );
 
     const trHour = (utc: number) => {
         const tr = (utc + 3) % 24;
@@ -352,7 +361,9 @@ function RetentionTab() {
             )}
 
             <div className="bg-white rounded-lg shadow-sm p-4">
-                {isLoading ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div> : <DataTable columns={columns} data={data || []} />}
+                <DataTable columns={columns} data={data || []} loading={isLoading}
+                    emptyState={<EmptyState icon="🗂️" title="Henüz retention politikası yok" description="Bir politika ekleyerek instance'lara atayabilirsin." />}
+                />
             </div>
 
             <ConfirmDialog open={!!deleteTarget} title="Politika Sil"
@@ -537,7 +548,9 @@ function ScheduleTab() {
             )}
 
             <div className="bg-white rounded-lg shadow-sm p-4">
-                {isLoading ? <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div> : <DataTable columns={columns} data={data || []} />}
+                <DataTable columns={columns} data={data || []} loading={isLoading}
+                    emptyState={<EmptyState icon="⏱️" title="Henüz zamanlama profili yok" description="Bir profil ekleyerek collector job aralıklarını ayarla." />}
+                />
             </div>
 
             <ConfirmDialog open={!!deleteTarget} title="Profil Sil"
@@ -576,7 +589,7 @@ export function MessageTemplatesTab() {
     });
     const [editing, setEditing] = useState<MessageTemplate | null>(null);
 
-    if (isLoading) return <div className="text-sm text-[#64748B]">Yükleniyor...</div>;
+    if (isLoading) return <Skeleton width="50%" height="1rem" />;
 
     return (
         <div>
@@ -835,8 +848,16 @@ function AuditLogTab() {
                 )}
             </div>
 
-            {isLoading ? <div className="py-8 text-center text-[#94A3B8]">Yükleniyor...</div> : !data?.rows?.length ? (
-                <div className="py-8 text-center text-[#94A3B8]">Kayıt bulunamadı</div>
+            {isLoading ? (
+                <div className="space-y-2">
+                    <Skeleton height="2.5rem" />
+                    <Skeleton height="2.5rem" />
+                    <Skeleton height="2.5rem" />
+                    <Skeleton height="2.5rem" />
+                    <Skeleton height="2.5rem" />
+                </div>
+            ) : !data?.rows?.length ? (
+                <EmptyState icon="📋" title="Audit kaydı bulunamadı" description="Seçilen kriterlere uygun değişiklik kaydı yok." />
             ) : (
                 <>
                     <div className="overflow-x-auto">

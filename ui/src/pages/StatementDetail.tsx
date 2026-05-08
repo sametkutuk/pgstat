@@ -2,6 +2,8 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
 import { useState } from 'react';
+import Skeleton, { SkeletonCard } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 export default function StatementDetail() {
     const { seriesId } = useParams();
@@ -12,8 +14,14 @@ export default function StatementDetail() {
         queryFn: () => apiGet<any>(`/statements/${seriesId}?hours=${hours}`),
     });
 
-    if (isLoading) return <div className="py-8 text-[#94A3B8]">Yükleniyor...</div>;
-    if (!data) return <div className="py-8 text-red-500">Statement bulunamadı</div>;
+    if (isLoading) return (
+        <div className="space-y-4">
+            <Skeleton width="30%" height="1.5rem" />
+            <SkeletonCard />
+            <SkeletonCard />
+        </div>
+    );
+    if (!data) return <EmptyState icon="🔍" title="Statement bulunamadı" description="Bu sorgu kaydı silinmiş veya hiç toplanmamış olabilir." />;
 
     const { series, deltas } = data;
 

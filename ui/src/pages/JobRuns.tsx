@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
 import Badge from '../components/common/Badge';
 import PrintButton from '../components/common/PrintButton';
+import Skeleton, { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface JobRun {
   job_run_id: number;
@@ -221,9 +223,9 @@ export default function JobRuns() {
       {/* Tablo */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
         {runs.isLoading ? (
-          <div className="text-[#94A3B8] py-10 text-center text-sm">Yükleniyor...</div>
+          <SkeletonTable rows={6} cols={6} />
         ) : !runs.data?.length ? (
-          <div className="text-[#94A3B8] py-10 text-center text-sm">Job kaydı bulunamadı.</div>
+          <EmptyState icon="⚙️" title="Henüz job kaydı yok" description="Collector başladıktan sonra ilk job çalışmasında burada gözükecek." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -315,7 +317,7 @@ function JobInstancesInline({ jobRunId }: { jobRunId: number }) {
 
   if (isLoading) {
     return (
-      <div className="px-8 py-3 text-xs text-[#94A3B8] bg-[#F8FAFC]">Yükleniyor...</div>
+      <div className="px-8 py-3 bg-[#F8FAFC]"><Skeleton width="40%" height="0.75rem" /></div>
     );
   }
 

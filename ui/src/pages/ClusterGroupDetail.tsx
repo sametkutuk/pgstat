@@ -5,6 +5,8 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
+import Skeleton, { SkeletonCard } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface ClusterInstance {
     instance_pk: number;
@@ -29,12 +31,20 @@ export default function ClusterGroupDetail() {
         refetchInterval: 30_000,
     });
 
-    if (isLoading) return <div className="text-[#94A3B8] py-8">Yükleniyor...</div>;
+    if (isLoading) return (
+        <div className="space-y-4">
+            <Skeleton width="40%" height="1.5rem" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <SkeletonCard />
+                <SkeletonCard />
+            </div>
+        </div>
+    );
     if (!data || data.instances.length === 0) {
         return (
             <div>
-                <Link to="/clusters" className="text-[#3B82F6] hover:underline text-sm">← Kümeler</Link>
-                <div className="text-[#94A3B8] py-8 text-center">Küme bulunamadı.</div>
+                <Link to="/clusters" className="text-[#3B82F6] hover:underline text-sm mb-4 inline-block">← Kümeler</Link>
+                <EmptyState icon="🗂️" title="Küme bulunamadı" description="Bu cluster ID'si geçersiz veya henüz instance eklenmemiş." />
             </div>
         );
     }
@@ -65,9 +75,8 @@ export default function ClusterGroupDetail() {
                         style={{ borderColor: inst.is_primary ? '#3B82F6' : '#E2E8F0' }}>
                         <div className="flex items-center justify-between mb-2">
                             <h3 className="font-semibold text-[#1E293B] truncate">{inst.display_name}</h3>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                inst.is_primary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
-                            }`}>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${inst.is_primary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'
+                                }`}>
                                 {inst.is_primary ? 'PRIMARY' : 'REPLICA'}
                             </span>
                         </div>

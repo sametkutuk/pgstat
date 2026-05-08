@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
 import { useState, useMemo } from 'react';
 import PrintButton from '../components/common/PrintButton';
+import { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 interface Statement {
   statement_series_id: number;
@@ -242,13 +244,12 @@ export default function Statements() {
       {/* Tablo */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
         {isLoading ? (
-          <div className="text-[#94A3B8] py-10 text-center text-sm">Yükleniyor...</div>
+          <SkeletonTable rows={8} cols={6} />
         ) : filtered.length === 0 ? (
-          <div className="text-[#94A3B8] py-10 text-center text-sm">
-            {sqlSearch.length >= 3 && !deepLoading
-              ? 'Eşleşen sorgu bulunamadı (delta verisi olanlar ve tüm bilinen sorgular arandı).'
-              : 'Bu aralıkta statement verisi yok.'}
-          </div>
+          <EmptyState icon="🔍" title={sqlSearch.length >= 3 && !deepLoading ? 'Eşleşen sorgu yok' : 'Statement verisi yok'}
+            description={sqlSearch.length >= 3 && !deepLoading
+              ? 'Farklı bir arama terimi deneyin veya zaman aralığını genişletin.'
+              : 'Bu aralıkta pg_stat_statements verisi toplanmamış. Zaman aralığını genişletmeyi deneyin.'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

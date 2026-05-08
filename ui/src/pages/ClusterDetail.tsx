@@ -3,6 +3,8 @@ import { apiGet } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
+import { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 
@@ -111,7 +113,7 @@ function DatabasesPanel({ instancePk, onSelectDb }: { instancePk: number; onSele
         { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
     ];
 
-    if (isLoading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} onRowClick={(r) => onSelectDb(r.dbid)} /></div>;
 }
 
@@ -121,12 +123,12 @@ function DatabasesPanel({ instancePk, onSelectDb }: { instancePk: number; onSele
 
 function fmtMs(ms: number): string {
     if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}dk`;
-    if (ms >= 1_000)  return `${(ms / 1_000).toFixed(2)}s`;
+    if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)}s`;
     return `${ms.toFixed(1)}ms`;
 }
 function fmtNum(n: number): string {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-    if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
     return String(Math.round(n));
 }
 
@@ -134,14 +136,14 @@ function StatementsPanel({ instancePk }: { instancePk: number }) {
     const navigate = useNavigate();
 
     // Server-side filtreler
-    const [hours, setHours]     = useState(24);
+    const [hours, setHours] = useState(24);
     const [orderBy, setOrderBy] = useState('exec_time');
     const [datname, setDatname] = useState('');
     const [rolname, setRolname] = useState('');
 
     // Client-side filtreler
     const [sqlSearch, setSqlSearch] = useState('');
-    const [minAvgMs, setMinAvgMs]   = useState('');
+    const [minAvgMs, setMinAvgMs] = useState('');
 
     const qp = new URLSearchParams({
         hours: String(hours), limit: '100', order_by: orderBy,
@@ -176,7 +178,7 @@ function StatementsPanel({ instancePk }: { instancePk: number }) {
 
     const hasFilter = datname || rolname || sqlSearch || minAvgMs;
 
-    if (isLoading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
 
     return (
         <div>
@@ -372,11 +374,11 @@ function TablesPanel({ instancePk, selectedDbid, onSelectDb }: { instancePk: num
                 <>
                     <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                         <h3 className="text-sm font-semibold text-[#64748B] mb-3">Tablolar (son 24 saat)</h3>
-                        {tables.isLoading ? <div className="text-[#94A3B8]">Yükleniyor...</div> : <DataTable columns={tableCols} data={tables.data || []} />}
+                        {tables.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={tableCols} data={tables.data || []} />}
                     </div>
                     <div className="bg-white rounded-lg shadow-sm p-4">
                         <h3 className="text-sm font-semibold text-[#64748B] mb-3">Indexler (son 24 saat)</h3>
-                        {indexes.isLoading ? <div className="text-[#94A3B8]">Yükleniyor...</div> : <DataTable columns={indexCols} data={indexes.data || []} />}
+                        {indexes.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={indexCols} data={indexes.data || []} />}
                     </div>
                 </>
             )}
@@ -423,8 +425,10 @@ function ActivityPanel({ instancePk }: { instancePk: number }) {
         const key = `${r.datname || ''}|${r.client_addr || ''}|${r.usename || ''}`;
         let row = summaryMap.get(key);
         if (!row) {
-            row = { datname: r.datname || '—', client_addr: r.client_addr || '—', usename: r.usename || '—',
-                open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0 };
+            row = {
+                datname: r.datname || '—', client_addr: r.client_addr || '—', usename: r.usename || '—',
+                open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0
+            };
             summaryMap.set(key, row);
         }
         row.open++;
@@ -481,7 +485,7 @@ function ActivityPanel({ instancePk }: { instancePk: number }) {
         { key: 'backend_type', header: 'Backend' },
     ];
 
-    if (isLoading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
 
     const summaryColumns = [
         { key: 'datname', header: 'Database' },
@@ -583,7 +587,7 @@ function ReplicationPanel({ instancePk, isPrimary }: { instancePk: number; isPri
         return <div className="text-[#94A3B8] py-8 text-center">Bu node primary değil — replikasyon bilgisi yalnızca primary node'larda gösterilir.</div>;
     }
 
-    if (isLoading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
 
     const formatBytes = (b: number) => {
         if (b > 1073741824) return (b / 1073741824).toFixed(1) + ' GB';

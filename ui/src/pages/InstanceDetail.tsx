@@ -6,6 +6,8 @@ import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
+import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 import { useState } from 'react';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'activity' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
@@ -45,8 +47,14 @@ export default function InstanceDetail() {
     const inst = instance.data;
     const cap = capability.data;
 
-    if (instance.isLoading) return <div className="py-8 text-[#94A3B8]">Yükleniyor...</div>;
-    if (!inst) return <div className="py-8 text-red-500">Instance bulunamadı</div>;
+    if (instance.isLoading) return (
+        <div className="space-y-4">
+            <Skeleton width="40%" height="1.5rem" />
+            <SkeletonCard />
+            <SkeletonTable rows={6} cols={5} />
+        </div>
+    );
+    if (!inst) return <EmptyState icon="🔍" title="Instance bulunamadı" description="Bu instance silinmiş veya erişilebilir değil." />;
 
     const tabs: { key: Tab; label: string; tip?: string }[] = [
         { key: 'overview', label: 'Genel' },
@@ -254,7 +262,6 @@ function CapabilityCard({ name, desc, available, mode }: {
 }
 
 function StatementsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
     const columns = [
         { key: 'datname', header: 'Database' },
         { key: 'rolname', header: 'Rol' },
@@ -264,11 +271,15 @@ function StatementsTab({ data, loading }: { data: any[] | undefined; loading: bo
         { key: 'avg_exec_time_ms', header: 'Avg (ms)', render: (r: any) => Number(r.avg_exec_time_ms).toFixed(2) },
         { key: 'total_rows', header: 'Rows', render: (r: any) => Number(r.total_rows).toLocaleString() },
     ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} /></div>;
+    return <div className="bg-white rounded-lg shadow-sm p-4">
+        <DataTable columns={columns} data={data || []} loading={loading}
+            emptyState={<EmptyState icon="📝" title="Sorgu kaydı yok" description="Bu instance'da pg_stat_statements extension'ı yüklü değil veya henüz veri toplanmadı." />}
+        />
+    </div>;
 }
 
 function DatabasesTab({ data, loading }: { data: any[] | undefined; loading: boolean; instanceId?: string }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={4} />;
     return (
         <div className="bg-white rounded-lg shadow-sm p-4">
             <DataTable columns={[
@@ -587,8 +598,13 @@ function WorkloadProfile({ instancePk }: { instancePk: string | number }) {
     if (error) return null;
     if (isLoading) {
         return (
-            <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4 text-xs text-[#94A3B8]">
-                Workload profili yükleniyor...
+            <div className="mb-5 border border-[#E2E8F0] rounded-lg p-4">
+                <Skeleton width="40%" height="0.875rem" />
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                    <Skeleton height="1.5rem" />
+                    <Skeleton height="1.5rem" />
+                    <Skeleton height="1.5rem" />
+                </div>
             </div>
         );
     }
@@ -686,7 +702,7 @@ tablosundan tunable. Sınıflandırma saatte bir collector tarafından yenilenir
 }
 
 function StorageTab({ data, loading }: { data: any; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const databases = data?.databases || [];
     const tables = data?.tables || [];
     const totalBytes = Number(data?.total_bytes || 0);
@@ -750,7 +766,7 @@ function fmtBytes(value: any): string {
 }
 
 function ActivityTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
         { key: 'pid', header: 'PID' },
         { key: 'datname', header: 'Database' },
@@ -770,7 +786,7 @@ function AlertsTab({ data, loading }: { data: any[] | undefined; loading: boolea
         onSuccess: () => queryClient.invalidateQueries({ queryKey: ['inst-alerts'] }),
     });
 
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
         { key: 'severity', header: 'Seviye', render: (r: any) => <Badge value={r.severity} /> },
         { key: 'status', header: 'Durum', render: (r: any) => <Badge value={r.status} /> },
@@ -788,7 +804,7 @@ function AlertsTab({ data, loading }: { data: any[] | undefined; loading: boolea
 }
 
 function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     // job_run_instance tablosundan bu instance'a ait olanları filtrele
     // Not: API'den direkt instance bazlı endpoint olmadığı için job_run listesini gösteriyoruz
     const columns = [
@@ -803,7 +819,7 @@ function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boole
 }
 
 function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
         { key: 'schemaname', header: 'Schema' },
         { key: 'funcname', header: 'Fonksiyon' },
@@ -816,7 +832,7 @@ function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boo
 }
 
 function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
         { key: 'schemaname', header: 'Schema' },
         { key: 'relname', header: 'Sequence' },
@@ -834,7 +850,7 @@ function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boo
 }
 
 function WalArchiveTab({ data, loading }: { data: any | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const wal = data?.wal || [];
     const statWal = data?.stat_wal || [];
     const archiver = data?.archiver || [];
@@ -895,7 +911,7 @@ function WalArchiveTab({ data, loading }: { data: any | undefined; loading: bool
 }
 
 function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
         { key: 'name', header: 'SLRU' },
         { key: 'total_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_blks_hit).toLocaleString(), className: 'text-right' },
@@ -915,7 +931,7 @@ function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean 
 }
 
 function TpsTab({ data, loading }: { data: any | undefined; loading: boolean }) {
-    if (loading) return <div className="text-[#94A3B8] py-4">Yükleniyor...</div>;
+    if (loading) return <SkeletonTable rows={5} cols={5} />;
     const daily = data?.daily || [];
     const hourly = data?.hourly || [];
 
@@ -1041,11 +1057,9 @@ function SettingsDiffTab({ data, loading, days, onDaysChange }: {
 
             <div className="bg-white rounded-lg shadow-sm p-4">
                 {loading ? (
-                    <div className="py-8 text-center text-[#94A3B8]">Yükleniyor...</div>
+                    <SkeletonTable rows={5} cols={4} />
                 ) : filtered.length === 0 ? (
-                    <div className="py-8 text-center text-[#94A3B8]">
-                        Bu dönemde yapılandırma değişikliği bulunamadı.
-                    </div>
+                    <EmptyState icon="✅" title="Yapılandırma değişikliği yok" description="Bu dönemde postgresql.conf parametrelerinde değişiklik tespit edilmedi." />
                 ) : (
                     <table className="w-full text-sm">
                         <thead>

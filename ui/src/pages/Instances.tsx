@@ -6,6 +6,7 @@ import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import PrintButton from '../components/common/PrintButton';
 import EmptyState from '../components/common/EmptyState';
+import Skeleton from '../components/common/Skeleton';
 import InstanceForm from '../components/forms/InstanceForm';
 import type { InstanceFormData } from '../components/forms/InstanceForm';
 import { useToast } from '../components/common/Toast';
@@ -105,7 +106,7 @@ export default function Instances() {
         {
             key: 'collector_bytes', header: 'Collector DB', render: (r: Instance) => {
                 const s = storageMap.get(Number(r.instance_pk));
-                if (!s) return storage.isLoading ? 'Yükleniyor...' : '—';
+                if (!s) return storage.isLoading ? <Skeleton width="80px" height="0.875rem" /> : '—';
                 const bytes = Number(s.collector_bytes || 0);
                 const total = Number(s.collector_db_bytes || 0);
                 const pct = total > 0 ? Math.min(100, bytes * 100 / total) : 0;

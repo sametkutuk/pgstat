@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import InfoTip from '../components/common/InfoTip';
+import { SkeletonTable } from '../components/common/Skeleton';
 import SystemAlerts from './SystemAlerts';
 
 // =========================================================================
@@ -376,7 +377,7 @@ function SmartRulePanel({ onEdit }: { onEdit: (r: AlertRule) => void }) {
 
   const smartRules = rules.filter(r => r.alert_category === 'smart');
 
-  if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
+  if (isLoading) return <SkeletonTable rows={5} cols={4} />;
 
   // Grupla
   const grouped: Record<string, AlertRule[]> = {};
@@ -500,7 +501,7 @@ function RuleList({ onEdit, categoryFilter: propCategoryFilter }: { onEdit: (r: 
     onError: () => toast.error('Silme başarısız'),
   });
 
-  if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
+  if (isLoading) return <SkeletonTable rows={5} cols={4} />;
 
   // propCategoryFilter='threshold' ise sadece threshold kategorisindeki kuralları göster
   const baseRules = propCategoryFilter
@@ -724,7 +725,7 @@ function TemplateGallery({ onActivate }: { onActivate: (t: AlertRule) => void })
     queryFn: () => apiGet('/alert-rules/templates'),
   });
 
-  if (isLoading) return <div className="text-[#64748B] text-sm">Yükleniyor...</div>;
+  if (isLoading) return <SkeletonTable rows={5} cols={4} />;
 
   const grouped: Record<string, AlertRule[]> = {};
   for (const t of templates) {

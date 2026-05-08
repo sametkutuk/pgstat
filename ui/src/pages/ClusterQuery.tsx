@@ -6,6 +6,8 @@ import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
+import { SkeletonTable } from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
 
 function fmtMs(ms: number) {
     if (ms >= 3_600_000) return (ms / 3_600_000).toFixed(2) + ' sa';
@@ -154,12 +156,9 @@ export default function ClusterQuery() {
 
             <div className="bg-white rounded-lg shadow-sm p-4">
                 {isLoading ? (
-                    <div className="text-[#94A3B8] py-8 text-center">Yükleniyor...</div>
+                    <SkeletonTable rows={5} cols={6} />
                 ) : !data?.instances?.length ? (
-                    <div className="text-[#94A3B8] py-8 text-center">
-                        Bu queryid için seçili aralıkta veri yok.
-                        Farklı bir tarih seç ya da queryid'nin tüm instance'larda gerçekten kullanıldığından emin ol.
-                    </div>
+                    <EmptyState icon="🔍" title="Bu queryid için veri yok" description="Seçili zaman aralığında bu sorgu hiçbir instance'da çalışmamış. Farklı bir tarih veya queryid deneyin." />
                 ) : (
                     <>
                         <DataTable columns={columns} data={data.instances} />
