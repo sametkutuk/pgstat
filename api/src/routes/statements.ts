@@ -4,6 +4,10 @@ import { parseHours, parseDays, parseLimit, parseId, parseOrderBy } from '../mid
 
 const router = Router();
 
+function emptyClusterQueryTotals() {
+  return { calls: 0, exec_ms: 0, rows_delta: 0, blks_hit: 0, blks_read: 0, temp_blks_written: 0, wal_bytes: 0 };
+}
+
 // GET /api/statements/top — Tüm instance'lar genelinde top statement'lar
 // Filtreler: hours, limit, order_by, instance_pk, datname, rolname
 router.get('/top', async (req, res, next) => {
@@ -249,12 +253,20 @@ router.get('/cluster/:queryid', async (req, res, next) => {
         const sysId = req.query.system_identifier as string | undefined;
         const from = fromIso || new Date(Date.now() - 24 * 3600 * 1000).toISOString();
         const to = toIso || new Date().toISOString();
+        if (!/^-?\d+$/.test(queryid)) {
+            res.status(400).json({ error: 'Invalid queryid' });
+            return;
+        }
+        if (sysId && !/^\d+$/.test(sysId)) {
+            res.json({ queryid, from, to, instances: [], totals: emptyClusterQueryTotals(), query_text: null });
+            return;
+        }
         const params: any[] = [queryid, from, to];
         let sysFilter = '';
-        if (sysId) { params.push(sysId); sysFilter = ` and i.system_identifier = $${params.length}`; }
+        if (sysId) { params.push(sysId); sysFilter = ` and c.system_identifier = $${params.length}::bigint`; }
         const r = await pool.query(`
             select
-              i.instance_pk, i.display_name, i.host, i.port, i.system_identifier,
+              i.instance_pk, i.display_name, i.host, i.port, c.system_identifier,
               c.is_primary, c.pg_major, ss.statement_series_id,
               coalesce(sum(d.calls_delta), 0) as calls,
               coalesce(sum(d.total_exec_time_ms_delta), 0) as exec_ms,
@@ -274,7 +286,7 @@ router.get('/cluster/:queryid', async (req, res, next) => {
             left join fact.pgss_delta d on d.statement_series_id = ss.statement_series_id
                  and d.sample_ts between $2::timestamptz and $3::timestamptz
             where ss.queryid = $1::bigint ${sysFilter}
-            group by i.instance_pk, i.display_name, i.host, i.port, i.system_identifier,
+            group by i.instance_pk, i.display_name, i.host, i.port, c.system_identifier,
                      c.is_primary, c.pg_major, ss.statement_series_id, qt.query_text,
                      dbr.datname, rr.rolname
             order by c.is_primary desc nulls last, i.display_name
