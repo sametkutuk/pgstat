@@ -534,6 +534,70 @@ router.get('/:id/replication', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/:id/tables — Instance genelinde tablo istatistikleri
+router.get('/:id/tables', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+
+    const result = await pool.query(`
+      select
+        t.dbid, dbr.datname,
+        t.relid, t.schemaname, t.relname,
+        sum(t.seq_scan_delta) as total_seq_scan,
+        sum(t.idx_scan_delta) as total_idx_scan,
+        sum(t.n_tup_ins_delta) as total_inserts,
+        sum(t.n_tup_upd_delta) as total_updates,
+        sum(t.n_tup_del_delta) as total_deletes,
+        sum(t.heap_blks_read_delta) as total_heap_blks_read,
+        sum(t.heap_blks_hit_delta) as total_heap_blks_hit,
+        max(t.n_live_tup_estimate) as n_live_tup,
+        max(t.n_dead_tup_estimate) as n_dead_tup
+      from fact.pg_table_stat_delta t
+      left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
+      where t.instance_pk = $1
+        and t.sample_ts >= now() - make_interval(hours => $2)
+      group by t.dbid, dbr.datname, t.relid, t.schemaname, t.relname
+      order by total_seq_scan desc nulls last
+      limit 500
+    `, [id, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/indexes — Instance genelinde index istatistikleri
+router.get('/:id/indexes', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 1);
+
+    const result = await pool.query(`
+      select
+        ix.dbid, dbr.datname,
+        ix.index_relid, ix.table_relid, ix.schemaname,
+        ix.table_relname, ix.index_relname,
+        sum(ix.idx_scan_delta) as total_idx_scan,
+        sum(ix.idx_tup_read_delta) as total_idx_tup_read,
+        sum(ix.idx_tup_fetch_delta) as total_idx_tup_fetch,
+        sum(ix.idx_blks_read_delta) as total_idx_blks_read,
+        sum(ix.idx_blks_hit_delta) as total_idx_blks_hit
+      from fact.pg_index_stat_delta ix
+      left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
+      where ix.instance_pk = $1
+        and ix.sample_ts >= now() - make_interval(hours => $2)
+      group by ix.dbid, dbr.datname, ix.index_relid, ix.table_relid, ix.schemaname,
+               ix.table_relname, ix.index_relname
+      order by total_idx_scan desc nulls last
+      limit 500
+    `, [id, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/databases/:dbid/tables — Database tablo istatistikleri
 router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
   try {

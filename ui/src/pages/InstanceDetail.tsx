@@ -126,8 +126,8 @@ export default function InstanceDetail() {
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
             {tab === 'statements' && <StatementsTab instancePk={Number(id)} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
-            {tab === 'tables' && <TableStatsTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
-            {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
+            {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} />}
+            {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
@@ -479,30 +479,6 @@ function DatabasesTab({ data, loading, onSelectDb }: { data: any[] | undefined; 
     );
 }
 
-function ObjectDatabaseSelect({ instancePk, selectedDbid, onSelectDb, hint }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void; hint: string }) {
-    const dbs = useQuery({
-        queryKey: ['instance-dbs-for-objects', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases`),
-        enabled: Number.isFinite(instancePk),
-    });
-
-    return (
-        <>
-            <div className="mb-4">
-                <label className="block text-xs text-[#64748B] mb-1">Database Seçin</label>
-                <select value={selectedDbid ?? ''} onChange={(e) => onSelectDb(parseInt(e.target.value) || null)}
-                    className="border border-[#E2E8F0] rounded px-3 py-2 text-sm bg-white min-w-[200px]" aria-label="Database seçimi">
-                    <option value="">Seçiniz...</option>
-                    {(dbs.data || []).map((d: any) => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
-                </select>
-                {dbs.isLoading && <span className="ml-2 text-xs text-[#94A3B8]">Database listesi yükleniyor...</span>}
-            </div>
-
-            {!selectedDbid && <div className="text-[#94A3B8] py-4 text-center">{hint}</div>}
-        </>
-    );
-}
-
 function statNumber(value: any): number {
     const n = Number(value || 0);
     return Number.isFinite(n) ? n : 0;
@@ -514,16 +490,21 @@ function hitRatio(read: any, hit: any): number {
     return r + h > 0 ? (100 * h) / (r + h) : 100;
 }
 
-function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+function TableStatsTab({ instancePk, initialDbid }: { instancePk: number; initialDbid: number | null }) {
     const [hours, setHours] = useState(24);
     const [orderBy, setOrderBy] = useState('seq_scan');
+    const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
 
+    useEffect(() => {
+        if (initialDbid) setDbFilter(String(initialDbid));
+    }, [initialDbid]);
+
     const tables = useQuery({
-        queryKey: ['instance-tables', instancePk, selectedDbid, hours],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/tables?hours=${hours}`),
-        enabled: Number.isFinite(instancePk) && !!selectedDbid,
+        queryKey: ['instance-tables', instancePk, hours],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/tables?hours=${hours}`),
+        enabled: Number.isFinite(instancePk),
     });
 
     const metricValue = (r: any) => {
@@ -539,26 +520,24 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
         const min = parseFloat(minValue) || 0;
         return (tables.data || [])
             .filter((r: any) => {
-                if (q && !`${r.schemaname || ''}.${r.relname || ''}`.toLowerCase().includes(q)) return false;
+                if (dbFilter && String(r.dbid) !== dbFilter) return false;
+                if (q && !`${r.datname || ''}.${r.schemaname || ''}.${r.relname || ''}`.toLowerCase().includes(q)) return false;
                 if (min > 0 && metricValue(r) < min) return false;
                 return true;
             })
             .sort((a: any, b: any) => metricValue(b) - metricValue(a));
-    }, [tables.data, search, minValue, orderBy]);
+    }, [tables.data, dbFilter, search, minValue, orderBy]);
 
-    const hasFilter = search || minValue;
+    const databases = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const r of tables.data || []) map.set(String(r.dbid), r.datname || String(r.dbid));
+        return Array.from(map.entries()).map(([dbid, datname]) => ({ dbid, datname })).sort((a, b) => a.datname.localeCompare(b.datname));
+    }, [tables.data]);
+
+    const hasFilter = dbFilter || search || minValue;
 
     return (
         <div>
-            <ObjectDatabaseSelect
-                instancePk={instancePk}
-                selectedDbid={selectedDbid}
-                onSelectDb={onSelectDb}
-                hint="Tablo istatistiklerini görmek için bir database seçin. Databases sekmesinde satıra tıklayarak da bu sekmeye gelebilirsiniz."
-            />
-
-            {selectedDbid && (
-                <>
                     <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                         <div className="flex flex-wrap gap-3 items-end">
                             <div>
@@ -569,6 +548,14 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                                     <option value={6}>Son 6 saat</option>
                                     <option value={24}>Son 24 saat</option>
                                     <option value={72}>Son 3 gün</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                                <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                                    <option value="">Tümü</option>
+                                    {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
                                 </select>
                             </div>
                             <div>
@@ -594,7 +581,7 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                             </div>
                             <div className="flex items-end gap-2 pb-0.5">
                                 {hasFilter && (
-                                    <button onClick={() => { setSearch(''); setMinValue(''); }}
+                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); }}
                                         className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                                         Temizle
                                     </button>
@@ -604,9 +591,9 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                                     {tables.isFetching ? 'Yenileniyor...' : 'Yenile'}
                                 </button>
                                 <span className="text-xs text-[#94A3B8]">
-                                    {hasFilter && filtered.length !== (tables.data?.length ?? 0)
-                                        ? `${filtered.length} / ${tables.data?.length ?? 0}`
-                                        : `${filtered.length} tablo`}
+                                        {hasFilter && filtered.length !== (tables.data?.length ?? 0)
+                                            ? `${filtered.length} / ${tables.data?.length ?? 0}`
+                                            : `${filtered.length} tablo`}
                                 </span>
                             </div>
                         </div>
@@ -634,11 +621,11 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                                             const ratio = hitRatio(r.total_heap_blks_read, r.total_heap_blks_hit);
                                             const dead = statNumber(r.n_dead_tup);
                                             return (
-                                                <tr key={r.relid} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
-                                                    <td className="py-2.5 px-3 text-xs">
-                                                        <div className="text-[#94A3B8]">{r.schemaname || '-'}</div>
-                                                        <div className="font-medium text-[#1E293B]">{r.relname || '-'}</div>
-                                                    </td>
+                                        <tr key={`${r.dbid}-${r.relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                                            <td className="py-2.5 px-3 text-xs">
+                                                <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
+                                                <div className="font-medium text-[#1E293B]">{r.relname || '-'}</div>
+                                            </td>
                                                     <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_seq_scan))}</td>
                                                     <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
                                                     <td className="py-2.5 px-3 text-right font-mono text-xs">
@@ -661,22 +648,25 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                             </div>
                         )}
                     </div>
-                </>
-            )}
         </div>
     );
 }
 
-function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initialDbid: number | null }) {
     const [hours, setHours] = useState(24);
     const [orderBy, setOrderBy] = useState('idx_scan');
+    const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
 
+    useEffect(() => {
+        if (initialDbid) setDbFilter(String(initialDbid));
+    }, [initialDbid]);
+
     const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, selectedDbid, hours],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=${hours}`),
-        enabled: Number.isFinite(instancePk) && !!selectedDbid,
+        queryKey: ['instance-indexes', instancePk, hours],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}`),
+        enabled: Number.isFinite(instancePk),
     });
 
     const metricValue = (r: any) => {
@@ -692,26 +682,24 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
         const min = parseFloat(minValue) || 0;
         return (indexes.data || [])
             .filter((r: any) => {
-                if (q && !`${r.schemaname || ''}.${r.table_relname || ''}.${r.index_relname || ''}`.toLowerCase().includes(q)) return false;
+                if (dbFilter && String(r.dbid) !== dbFilter) return false;
+                if (q && !`${r.datname || ''}.${r.schemaname || ''}.${r.table_relname || ''}.${r.index_relname || ''}`.toLowerCase().includes(q)) return false;
                 if (min > 0 && metricValue(r) < min) return false;
                 return true;
             })
             .sort((a: any, b: any) => metricValue(b) - metricValue(a));
-    }, [indexes.data, search, minValue, orderBy]);
+    }, [indexes.data, dbFilter, search, minValue, orderBy]);
 
-    const hasFilter = search || minValue;
+    const databases = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const r of indexes.data || []) map.set(String(r.dbid), r.datname || String(r.dbid));
+        return Array.from(map.entries()).map(([dbid, datname]) => ({ dbid, datname })).sort((a, b) => a.datname.localeCompare(b.datname));
+    }, [indexes.data]);
+
+    const hasFilter = dbFilter || search || minValue;
 
     return (
         <div>
-            <ObjectDatabaseSelect
-                instancePk={instancePk}
-                selectedDbid={selectedDbid}
-                onSelectDb={onSelectDb}
-                hint="Index istatistiklerini görmek için bir database seçin. Databases sekmesinde satıra tıklayarak tablo sekmesine geçip aynı seçimi kullanabilirsiniz."
-            />
-
-            {selectedDbid && (
-                <>
                     <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                         <div className="flex flex-wrap gap-3 items-end">
                             <div>
@@ -722,6 +710,14 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                                     <option value={6}>Son 6 saat</option>
                                     <option value={24}>Son 24 saat</option>
                                     <option value={72}>Son 3 gün</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                                <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                                    <option value="">Tümü</option>
+                                    {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
                                 </select>
                             </div>
                             <div>
@@ -747,7 +743,7 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                             </div>
                             <div className="flex items-end gap-2 pb-0.5">
                                 {hasFilter && (
-                                    <button onClick={() => { setSearch(''); setMinValue(''); }}
+                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); }}
                                         className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                                         Temizle
                                     </button>
@@ -785,11 +781,11 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                                         {filtered.map((r: any) => {
                                             const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
                                             return (
-                                                <tr key={r.index_relid} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
-                                                    <td className="py-2.5 px-3 text-xs">
-                                                        <div className="text-[#94A3B8]">{r.schemaname || '-'}</div>
-                                                        <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>
-                                                    </td>
+                                        <tr key={`${r.dbid}-${r.index_relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                                            <td className="py-2.5 px-3 text-xs">
+                                                <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
+                                                <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>
+                                            </td>
                                                     <td className="py-2.5 px-3 max-w-xs">
                                                         <div className="truncate text-xs font-mono text-[#1E293B]" title={r.index_relname}>{r.index_relname || '-'}</div>
                                                     </td>
@@ -813,8 +809,6 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
                             </div>
                         )}
                     </div>
-                </>
-            )}
         </div>
     );
 }
