@@ -1305,6 +1305,7 @@ function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boole
 function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
     if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
+        { key: 'datname', header: 'Database' },
         { key: 'schemaname', header: 'Schema' },
         { key: 'funcname', header: 'Fonksiyon' },
         { key: 'total_calls', header: 'Calls', render: (r: any) => Number(r.total_calls).toLocaleString(), className: 'text-right' },

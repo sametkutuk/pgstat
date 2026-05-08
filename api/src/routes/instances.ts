@@ -995,18 +995,34 @@ router.get('/:id/functions', async (req, res, next) => {
     const { id } = req.params;
     const hours = parseHours(req.query.hours, 1);
     const result = await pool.query(`
+      with deltas as (
+        select
+          f.dbid,
+          dbr.datname,
+          f.funcid,
+          f.schemaname,
+          f.funcname,
+          greatest(f.calls - lag(f.calls) over w, 0) as calls_d,
+          greatest(f.total_time - lag(f.total_time) over w, 0) as total_time_d,
+          greatest(f.self_time - lag(f.self_time) over w, 0) as self_time_d
+        from fact.pg_user_function_snapshot f
+        left join dim.database_ref dbr
+          on dbr.instance_pk = f.instance_pk
+         and dbr.dbid = f.dbid
+        where f.instance_pk = $1
+          and f.sample_ts >= now() - make_interval(hours => $2)
+        window w as (partition by f.dbid, f.funcid order by f.sample_ts)
+      )
       select
-        f.funcid, f.schemaname, f.funcname,
-        sum(f.calls_delta) as total_calls,
-        sum(f.total_time_delta) as total_time_ms,
-        sum(f.self_time_delta) as self_time_ms,
-        case when sum(f.calls_delta) > 0
-          then sum(f.total_time_delta) / sum(f.calls_delta)
+        dbid, datname, funcid, schemaname, funcname,
+        coalesce(sum(calls_d), 0)::bigint as total_calls,
+        coalesce(sum(total_time_d), 0) as total_time_ms,
+        coalesce(sum(self_time_d), 0) as self_time_ms,
+        case when coalesce(sum(calls_d), 0) > 0
+          then coalesce(sum(total_time_d), 0) / sum(calls_d)
           else 0 end as avg_time_ms
-      from fact.pg_user_function_snapshot f
-      where f.instance_pk = $1
-        and f.snapshot_ts >= now() - make_interval(hours => $2)
-      group by f.funcid, f.schemaname, f.funcname
+      from deltas
+      group by dbid, datname, funcid, schemaname, funcname
       order by total_time_ms desc nulls last
       limit 100
     `, [id, hours]);
