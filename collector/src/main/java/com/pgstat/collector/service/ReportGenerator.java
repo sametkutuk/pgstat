@@ -324,11 +324,20 @@ public class ReportGenerator {
         try {
             // Unused index sayisi
             Integer unusedCount = jdbc.queryForObject("""
+                with bounds as (
+                  select now() - interval '30 days' as window_start,
+                         now() as window_end,
+                         interval '6 hours' as tolerance
+                )
                 select count(*) from (
                   select 1 from fact.pg_index_stat_delta i
-                  where i.sample_ts > now() - interval '30 days'
-                  group by i.instance_pk, i.schemaname, i.indexrelname
+                  cross join bounds b
+                  where i.sample_ts >= b.window_start
+                  group by i.instance_pk, i.schemaname, i.indexrelname,
+                           b.window_start, b.window_end, b.tolerance
                   having coalesce(sum(idx_scan_delta), 0) = 0
+                     and min(i.sample_ts) <= b.window_start + b.tolerance
+                     and max(i.sample_ts) >= b.window_end - b.tolerance
                 ) sub
                 """, Integer.class);
             if (unusedCount != null && unusedCount > 0) {

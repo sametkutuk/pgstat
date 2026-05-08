@@ -708,7 +708,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
         enabled: Number.isFinite(instancePk),
     });
 
-    const isUnusedIndex = (r: any) => statNumber(r.total_idx_scan) === 0;
+    const isUnusedIndex = (r: any) => statNumber(r.total_idx_scan) === 0 && r.unused_window_covered === true;
 
     const metricValue = (r: any) => {
         if (orderBy === 'tup_read') return statNumber(r.total_idx_tup_read);
@@ -744,7 +744,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
     const selectedRange = INDEX_TIME_RANGES.find(r => r.hours === hours) || { hours, label: `${hours} saat`, slug: `${hours}h` };
 
     const exportExcel = () => {
-        const headers = ['database', 'schema', 'table', 'index', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct'];
+        const headers = ['database', 'schema', 'table', 'index', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct', 'observed_since', 'observed_until', 'observed_hours', 'unused_window_covered'];
         const rows = filtered.map((r: any) => [
             r.datname || '',
             r.schemaname || '',
@@ -756,6 +756,10 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
             statNumber(r.total_idx_blks_read),
             statNumber(r.total_idx_blks_hit),
             hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit).toFixed(2),
+            r.observed_since || '',
+            r.observed_until || '',
+            r.observed_hours ?? '',
+            r.unused_window_covered === true ? 'yes' : 'no',
         ]);
         const tableRows = [headers, ...rows]
             .map(row => `<tr>${row.map(cell => `<td>${excelCell(cell)}</td>`).join('')}</tr>`)
@@ -838,7 +842,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                             </div>
                         </div>
                         <div className="mt-3 text-xs text-[#64748B]">
-                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta görünen unused index: ${unusedCount}.`}
+                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0 ve pencereyi kapsayan yeterli gözlem datası var. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta kanıtlanabilen unused index: ${unusedCount}.`}
                         </div>
                     </div>
 

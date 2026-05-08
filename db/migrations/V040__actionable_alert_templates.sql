@@ -34,14 +34,14 @@ insert into control.alert_message_template (alert_code, title_template, message_
  E'🔧 Index: `{{index}}` ({{index_size_human}})\n' ||
  E'\n' ||
  E'**Tespit:**\n' ||
- E'• Son 30 günde idx_scan = **0**\n' ||
+E'• Son 30 gün tam gözlemde idx_scan = **0**\n' ||
  E'• Disk kullanımı: {{index_size_human}}\n' ||
  E'• Yazma maliyeti: her INSERT/UPDATE bu index''i günceller\n' ||
  E'\n' ||
  E'**Aksiyon:**\n' ||
  E'```sql\nDROP INDEX CONCURRENTLY {{index}};\n```\n' ||
  E'⚠️ UNIQUE/FK constraint için kullanılıyor olabilir — kontrol et.',
- 'Index 30 gündür hiç scan edilmedi — drop adayı'),
+'Index 30 gün tam gözlemde hiç scan edilmedi — drop adayı'),
 
 ('high_temp_files',
  '[WARNING] {{instance}} · Yüksek temp file (work_mem yetersiz)',

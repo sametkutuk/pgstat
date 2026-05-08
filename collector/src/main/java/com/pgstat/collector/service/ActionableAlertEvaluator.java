@@ -183,17 +183,29 @@ public class ActionableAlertEvaluator {
         // false positive değil. cluster_id = manuel grup veya system_identifier.
         // Standalone (cluster_id null) → eski mantık (per-instance).
         List<Map<String, Object>> rows = jdbc.queryForList("""
-            with per_inst as (
+            with bounds as (
+              select now() - interval '30 days' as window_start,
+                     now() as window_end,
+                     interval '6 hours' as tolerance
+            ),
+            per_inst as (
               select i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname,
-                     sum(i.idx_scan_delta) as total_scans
+                     sum(i.idx_scan_delta) as total_scans,
+                     min(i.sample_ts) as observed_since,
+                     max(i.sample_ts) as observed_until,
+                     (min(i.sample_ts) <= b.window_start + b.tolerance
+                      and max(i.sample_ts) >= b.window_end - b.tolerance) as full_window_covered
               from fact.pg_index_stat_delta i
-              where i.sample_ts > now() - interval '30 days'
-              group by i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname
+              cross join bounds b
+              where i.sample_ts >= b.window_start
+              group by i.instance_pk, i.dbid, i.schemaname, i.indexrelname, i.table_relname,
+                       b.window_start, b.window_end, b.tolerance
             ),
             cluster_idx as (
               -- aynı küme + aynı index ismi (tüm replikalar dahil)
               select vic.cluster_id, p.schemaname, p.indexrelname,
-                     sum(p.total_scans) as cluster_total_scans
+                     sum(p.total_scans) as cluster_total_scans,
+                     bool_and(p.full_window_covered) as cluster_window_covered
               from per_inst p
               join control.v_instance_cluster vic on vic.instance_pk = p.instance_pk
               where vic.cluster_id is not null
@@ -215,10 +227,11 @@ public class ActionableAlertEvaluator {
             ) rs on true
             left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.dbid = p.dbid
             where p.total_scans = 0
+              and p.full_window_covered
               and coalesce(rs.total_size_bytes, 0) > 104857600
               and (
                 vic.cluster_id is null                         -- standalone: bu instance'ta 0 yeter
-                or coalesce(ci.cluster_total_scans, 0) = 0     -- küme: küme genelinde 0 olmalı
+                or (coalesce(ci.cluster_total_scans, 0) = 0 and ci.cluster_window_covered)
               )
             order by rs.total_size_bytes desc nulls last
             limit 20
@@ -243,7 +256,7 @@ public class ActionableAlertEvaluator {
 
             String[] rendered = renderer.renderForCode("index_unused", ctx,
                 "Kullanılmayan index: " + r.get("schemaname") + "." + r.get("indexrelname"),
-                "30 gündür idx_scan = 0");
+                "30 gün tam gözlemde idx_scan = 0");
 
             String detailsJson = new AlertDetailsBuilder()
                 .setKind("usage_summary")
@@ -252,6 +265,8 @@ public class ActionableAlertEvaluator {
                 .addContext("index_size_bytes", toLong(r.get("total_size_bytes")))
                 .addContext("index_size_human", humanBytes(toLong(r.get("total_size_bytes"))))
                 .addContext("total_scans_30d", 0)
+                .addContext("observed_since", r.get("observed_since"))
+                .addContext("observed_until", r.get("observed_until"))
                 .build();
 
             alertRepo.upsert(alertKey, AlertCode.INDEX_UNUSED,

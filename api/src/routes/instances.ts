@@ -579,7 +579,7 @@ router.get('/:id/indexes', async (req, res, next) => {
     const params: Array<string | number> = [id, hours];
     const where = [
       'ix.instance_pk = $1',
-      'ix.sample_ts >= now() - make_interval(hours => $2)'
+      'ix.sample_ts >= b.window_start'
     ];
     if (Number.isFinite(dbid) && dbid && dbid > 0) {
       params.push(dbid);
@@ -589,6 +589,12 @@ router.get('/:id/indexes', async (req, res, next) => {
     const limitParam = `$${params.length}`;
 
     const result = await pool.query(`
+      with bounds as (
+        select
+          now() - make_interval(hours => $2) as window_start,
+          now() as window_end,
+          least(greatest(make_interval(hours => $2) * 0.05, interval '10 minutes'), interval '6 hours') as tolerance
+      )
       select
         ix.dbid, dbr.datname,
         ix.index_relid, ix.table_relid, ix.schemaname,
@@ -597,13 +603,18 @@ router.get('/:id/indexes', async (req, res, next) => {
         coalesce(sum(ix.idx_tup_read_delta), 0) as total_idx_tup_read,
         coalesce(sum(ix.idx_tup_fetch_delta), 0) as total_idx_tup_fetch,
         coalesce(sum(ix.idx_blks_read_delta), 0) as total_idx_blks_read,
-        coalesce(sum(ix.idx_blks_hit_delta), 0) as total_idx_blks_hit
+        coalesce(sum(ix.idx_blks_hit_delta), 0) as total_idx_blks_hit,
+        min(ix.sample_ts) as observed_since,
+        max(ix.sample_ts) as observed_until,
+        round(extract(epoch from (max(ix.sample_ts) - min(ix.sample_ts))) / 3600.0, 1) as observed_hours,
+        (min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance) as unused_window_covered
       from fact.pg_index_stat_delta ix
+      cross join bounds b
       left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
       where ${where.join('\n        and ')}
       group by ix.dbid, dbr.datname, ix.index_relid, ix.table_relid, ix.schemaname,
-               ix.table_relname, ix.index_relname
-      ${unusedOnly ? 'having coalesce(sum(ix.idx_scan_delta), 0) = 0' : ''}
+               ix.table_relname, ix.index_relname, b.window_start, b.window_end, b.tolerance
+      ${unusedOnly ? "having coalesce(sum(ix.idx_scan_delta), 0) = 0 and min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance" : ''}
       order by ${unusedOnly ? 'total_idx_blks_read desc nulls last, dbr.datname, ix.schemaname, ix.index_relname' : 'total_idx_scan desc nulls last'}
       limit ${limitParam}
     `, params);
@@ -846,11 +857,17 @@ router.get('/:id/health-report', async (req, res, next) => {
       ) sub`, [id]),
 
       // Unused index sayısı
-      pool.query(`select count(*) as cnt from (
+      pool.query(`with bounds as (
+        select now() - interval '30 days' as window_start, now() as window_end, interval '6 hours' as tolerance
+      )
+      select count(*) as cnt from (
         select 1 from fact.pg_index_stat_delta i
-        where i.instance_pk = $1 and i.sample_ts > now() - interval '30 days'
-        group by i.schemaname, i.index_relname
+        cross join bounds b
+        where i.instance_pk = $1 and i.sample_ts >= b.window_start
+        group by i.schemaname, i.index_relname, b.window_start, b.window_end, b.tolerance
         having coalesce(sum(idx_scan_delta), 0) = 0
+        and min(i.sample_ts) <= b.window_start + b.tolerance
+        and max(i.sample_ts) >= b.window_end - b.tolerance
       ) sub`, [id]),
 
       // PG settings (son snapshot — sadece onemli parametreler)

@@ -21,7 +21,7 @@ const ALERT_METADATA: Record<string, { label: string; category: string; threshol
     idle_in_tx_time_high: { label: 'Idle in Tx Yüksek', category: 'performance', thresholdUnit: 'percent', thresholdDesc: 'Idle in tx oranı (%)', severity: 'warning', description: 'Idle in transaction süresi yüksek' },
     high_bloat_ratio: { label: 'Bloat Yüksek', category: 'index_table', thresholdUnit: 'percent', thresholdDesc: 'Dead tuple oranı (%)', severity: 'info', description: 'Tablo dead tuple oranı yüksek' },
     index_suspect_missing: { label: 'Index Gerekiyor', category: 'index_table', thresholdUnit: 'ratio', thresholdDesc: 'Seq/Idx scan oranı (×)', severity: 'warning', description: 'Seq scan/idx scan oranı çok yüksek' },
-    index_unused: { label: 'Kullanılmayan Index', category: 'index_table', thresholdUnit: 'MB', thresholdDesc: 'Min index boyutu (MB)', severity: 'info', description: '30 gündür idx_scan = 0' },
+    index_unused: { label: 'Kullanılmayan Index', category: 'index_table', thresholdUnit: 'MB', thresholdDesc: 'Min index boyutu (MB)', severity: 'info', description: '30 gün tam gözlemde idx_scan = 0' },
     replication_lag: { label: 'Replikasyon Gecikmesi', category: 'replication', thresholdUnit: 'MB', thresholdDesc: 'Max lag (MB)', severity: 'warning', description: 'Streaming replication gecikmesi' },
     replication_slot_inactive: { label: 'Inactive Slot', category: 'replication', thresholdUnit: 'MB', thresholdDesc: 'Min slot lag (MB)', severity: 'warning', description: 'Inactive replication slot WAL tutuyor' },
     job_partial_failure: { label: 'Job Kısmen Başarısız', category: 'job', thresholdUnit: null, thresholdDesc: null, severity: 'warning', description: 'Bir job içinde bazı instance\'lar başarısız' },
