@@ -9,6 +9,7 @@ import { pool } from './config/database';
 import { validateAuthConfig, requireAuth } from './config/auth';
 import { errorHandler } from './middleware/errorHandler';
 import { auditLogMiddleware } from './middleware/auditLog';
+import { responseTimeMiddleware } from './middleware/responseTime';
 import authRoutes from './routes/auth';
 import dashboardRoutes from './routes/dashboard';
 import instanceRoutes from './routes/instances';
@@ -154,6 +155,9 @@ app.get('/api/health', async (_req, res) => {
 // Audit log middleware — PUT/POST/DELETE/PATCH istekleri ops.audit_log'a yazilir
 // requireAuth'tan SONRA, route'lardan ONCE — sadece auth gecmis istekleri logla
 app.use('/api', auditLogMiddleware);
+
+// Response time logger — tüm istekler için console'a yavaş/hatalı log
+app.use('/api', responseTimeMiddleware);
 
 // Korumalı route'lar — JWT zorunlu
 app.use('/api/dashboard', requireAuth, dashboardRoutes);
