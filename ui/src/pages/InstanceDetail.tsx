@@ -10,7 +10,7 @@ import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skel
 import EmptyState from '../components/common/EmptyState';
 import { useEffect, useMemo, useState } from 'react';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -64,7 +64,8 @@ export default function InstanceDetail() {
         { key: 'storage', label: 'Collector DB', tip: 'PgStat collector veritabanında bu instance için tutulan yaklaşık mantıksal veri boyutu ve database kırılımı.' },
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
-        { key: 'tables', label: 'Tablo / Index', tip: 'Seçilen database için son 24 saatteki tablo ve index istatistikleri.' },
+        { key: 'tables', label: 'Tablo İstatistikleri', tip: 'Seçilen database için son 24 saatteki tablo istatistikleri.' },
+        { key: 'indexes', label: 'Index İstatistikleri', tip: 'Seçilen database için son 24 saatteki index istatistikleri.' },
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
@@ -125,7 +126,8 @@ export default function InstanceDetail() {
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
             {tab === 'statements' && <StatementsTab instancePk={Number(id)} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
-            {tab === 'tables' && <TablesTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
+            {tab === 'tables' && <TableStatsTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
+            {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} selectedDbid={selectedDbid} onSelectDb={setSelectedDbid} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
@@ -477,22 +479,34 @@ function DatabasesTab({ data, loading, onSelectDb }: { data: any[] | undefined; 
     );
 }
 
-function TablesTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+function ObjectDatabaseSelect({ instancePk, selectedDbid, onSelectDb, hint }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void; hint: string }) {
     const dbs = useQuery({
         queryKey: ['instance-dbs-for-objects', instancePk],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases`),
         enabled: Number.isFinite(instancePk),
     });
 
+    return (
+        <>
+            <div className="mb-4">
+                <label className="block text-xs text-[#64748B] mb-1">Database Seçin</label>
+                <select value={selectedDbid ?? ''} onChange={(e) => onSelectDb(parseInt(e.target.value) || null)}
+                    className="border border-[#E2E8F0] rounded px-3 py-2 text-sm bg-white min-w-[200px]" aria-label="Database seçimi">
+                    <option value="">Seçiniz...</option>
+                    {(dbs.data || []).map((d: any) => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                </select>
+                {dbs.isLoading && <span className="ml-2 text-xs text-[#94A3B8]">Database listesi yükleniyor...</span>}
+            </div>
+
+            {!selectedDbid && <div className="text-[#94A3B8] py-4 text-center">{hint}</div>}
+        </>
+    );
+}
+
+function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
     const tables = useQuery({
         queryKey: ['instance-tables', instancePk, selectedDbid],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/tables?hours=24`),
-        enabled: Number.isFinite(instancePk) && !!selectedDbid,
-    });
-
-    const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, selectedDbid],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=24`),
         enabled: Number.isFinite(instancePk) && !!selectedDbid,
     });
 
@@ -508,6 +522,32 @@ function TablesTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: numbe
         { key: 'n_dead_tup', header: 'Dead Tup', render: (r: any) => Number(r.n_dead_tup).toLocaleString(), className: 'text-right' },
     ];
 
+    return (
+        <div>
+            <ObjectDatabaseSelect
+                instancePk={instancePk}
+                selectedDbid={selectedDbid}
+                onSelectDb={onSelectDb}
+                hint="Tablo istatistiklerini görmek için bir database seçin. Databases sekmesinde satıra tıklayarak da bu sekmeye gelebilirsiniz."
+            />
+
+            {selectedDbid && (
+                <div className="bg-white rounded-lg shadow-sm p-4">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Tablolar (son 24 saat)</h3>
+                    {tables.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={tableCols} data={tables.data || []} emptyText="Tablo istatistiği yok" />}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+    const indexes = useQuery({
+        queryKey: ['instance-indexes', instancePk, selectedDbid],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=24`),
+        enabled: Number.isFinite(instancePk) && !!selectedDbid,
+    });
+
     const indexCols = [
         { key: 'schemaname', header: 'Schema' },
         { key: 'table_relname', header: 'Tablo' },
@@ -520,29 +560,18 @@ function TablesTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: numbe
 
     return (
         <div>
-            <div className="mb-4">
-                <label className="block text-xs text-[#64748B] mb-1">Database Seçin</label>
-                <select value={selectedDbid ?? ''} onChange={(e) => onSelectDb(parseInt(e.target.value) || null)}
-                    className="border border-[#E2E8F0] rounded px-3 py-2 text-sm bg-white min-w-[200px]" aria-label="Database seçimi">
-                    <option value="">Seçiniz...</option>
-                    {(dbs.data || []).map((d: any) => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
-                </select>
-                {dbs.isLoading && <span className="ml-2 text-xs text-[#94A3B8]">Database listesi yükleniyor...</span>}
-            </div>
-
-            {!selectedDbid && <div className="text-[#94A3B8] py-4 text-center">Bir database seçin. Databases sekmesinde satıra tıklayarak da bu sekmeye gelebilirsiniz.</div>}
+            <ObjectDatabaseSelect
+                instancePk={instancePk}
+                selectedDbid={selectedDbid}
+                onSelectDb={onSelectDb}
+                hint="Index istatistiklerini görmek için bir database seçin. Databases sekmesinde satıra tıklayarak tablo sekmesine geçip aynı seçimi kullanabilirsiniz."
+            />
 
             {selectedDbid && (
-                <>
-                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
-                        <h3 className="text-sm font-semibold text-[#64748B] mb-3">Tablolar (son 24 saat)</h3>
-                        {tables.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={tableCols} data={tables.data || []} emptyText="Tablo istatistiği yok" />}
-                    </div>
-                    <div className="bg-white rounded-lg shadow-sm p-4">
-                        <h3 className="text-sm font-semibold text-[#64748B] mb-3">Indexler (son 24 saat)</h3>
-                        {indexes.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={indexCols} data={indexes.data || []} emptyText="Index istatistiği yok" />}
-                    </div>
-                </>
+                <div className="bg-white rounded-lg shadow-sm p-4">
+                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Indexler (son 24 saat)</h3>
+                    {indexes.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={indexCols} data={indexes.data || []} emptyText="Index istatistiği yok" />}
+                </div>
             )}
         </div>
     );
