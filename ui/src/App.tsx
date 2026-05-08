@@ -16,7 +16,6 @@ import ClusterDetail from './pages/ClusterDetail';
 import HealthReport from './pages/HealthReport';
 import ReportHistory from './pages/ReportHistory';
 import ClusterQuery from './pages/ClusterQuery';
-import Clusters from './pages/Clusters';
 import ClusterGroupDetail from './pages/ClusterGroupDetail';
 import GrafanaEmbed from './pages/GrafanaEmbed';
 import Login from './pages/Login';
@@ -61,13 +60,15 @@ function App() {
                 <Route path="/jobs" element={<JobRuns />} />
                 <Route path="/reports/history" element={<ReportHistory />} />
                 <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
-                <Route path="/clusters" element={<Clusters />} />
+                {/* /clusters → Instances Hub'da kümeler view'ına redirect */}
+                <Route path="/clusters" element={<Navigate to="/instances?view=clusters" replace />} />
                 <Route path="/clusters/:cluster_id" element={<ClusterGroupDetail />} />
                 <Route path="/settings" element={<Settings />} />
                 {/* Eski route'lar — yeni AlertsHub'a redirect */}
                 <Route path="/settings/alert-rules" element={<Navigate to="/alerts/rules" replace />} />
                 <Route path="/settings/adaptive-alerting" element={<Navigate to="/alerts/adaptive" replace />} />
-                <Route path="/cluster-detail" element={<ClusterDetail />} />
+                {/* /cluster-detail Instances Hub'a redirect — instance detay /instances/:id'de */}
+                <Route path="/cluster-detail" element={<Navigate to="/instances" replace />} />
                 <Route path="/cluster/:id" element={<ClusterDetail />} />
                 <Route path="/cluster/:id/health-report" element={<HealthReport />} />
                 <Route path="/grafana/:uid" element={<GrafanaEmbed />} />

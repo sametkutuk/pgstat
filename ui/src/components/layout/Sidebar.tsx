@@ -6,9 +6,7 @@ import { apiGet, apiLogout } from '../../api/client';
 const links = [
     { to: '/', label: 'Dashboard', icon: '📊' },
     { to: '/instances', label: 'Instances', icon: '🖥️' },
-    { to: '/clusters', label: 'Kümeler', icon: '🗂️' },
     { to: '/statements', label: 'Statements', icon: '📝' },
-    { to: '/cluster-detail', label: 'Cluster Detay', icon: '🗄️' },
     { to: '/alerts', label: 'Alerts', icon: '🔔' },
     { to: '/jobs', label: 'Job Runs', icon: '⚙️' },
     { to: '/reports/history', label: 'Raporlar', icon: '📜' },
