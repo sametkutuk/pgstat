@@ -57,9 +57,9 @@ E'• Son 30 gün tam gözlemde idx_scan = **0**\n' ||
  E'{{top_temp_queries}}\n' ||
  E'\n' ||
  E'**Aksiyon:**\n' ||
- E'```sql\nALTER SYSTEM SET work_mem = ''{{suggested_work_mem}}'';\nSELECT pg_reload_conf();\n```\n' ||
+ E'```sql\nBEGIN;\nSET LOCAL work_mem = ''{{suggested_work_mem}}'';\n-- ilgili sorguyu test et\nROLLBACK;\n```\n' ||
  E'⚠️ work_mem her connection × sort/hash için ayrılır.',
- 'Sorgular sort/hash için disk kullanıyor → work_mem artırılmalı'),
+ 'Sorgular sort/hash için disk kullanıyor → query-level work_mem testi önerilir'),
 
 ('idle_in_tx_time_high',
  '[WARNING] {{instance}} · Idle in transaction yüksek (%{{idle_pct}})',

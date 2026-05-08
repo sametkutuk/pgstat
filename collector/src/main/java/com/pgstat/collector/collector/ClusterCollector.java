@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -47,9 +48,6 @@ public class ClusterCollector {
 
     /** Replication lag alert esigi (5 dakika) */
     private static final long REPLICATION_LAG_THRESHOLD_SECONDS = 300;
-
-    /** Lock bekleme alert esigi (5 dakika, millisaniye cinsinden) */
-    private static final long LOCK_WAIT_THRESHOLD_MS = 300_000;
 
     private final SourceConnectionFactory connectionFactory;
     private final SqlFamilyResolver familyResolver;
@@ -477,7 +475,10 @@ public class ClusterCollector {
         // replay_lag null degilse ve interval olarak parse edilebilirse kontrol et
         // Basit kontrol: replay_lag_bytes > 0 ve lag string'i "00:05" ten buyukse
         // Gercek uygulamada interval parse yapilir; burada bytes bazli threshold
-        if (replayLagBytes > 100_000_000) { // 100MB uzerinde lag
+        long warningBytes = configCache.getThreshold(
+            "replication_lag", instancePk, new BigDecimal("50")).longValue() * 1_048_576L;
+        long criticalBytes = warningBytes * 10L;
+        if (replayLagBytes > warningBytes) {
             String alertKey = "replication_lag:instance:" + instancePk;
             java.util.Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", "instance_pk=" + instancePk);
@@ -485,9 +486,9 @@ public class ClusterCollector {
             ctx.put("lag_bytes", replayLagBytes);
             ctx.put("lag_human", humanBytes(replayLagBytes));
             ctx.put("replay_lag_seconds", replayLagStr);
-            ctx.put("warning_threshold", "100MB");
-            ctx.put("critical_threshold", "1GB");
-            ctx.put("severity", replayLagBytes > 1_000_000_000 ? "critical" : "warning");
+            ctx.put("warning_threshold", humanBytes(warningBytes));
+            ctx.put("critical_threshold", humanBytes(criticalBytes));
+            ctx.put("severity", replayLagBytes > criticalBytes ? "critical" : "warning");
             raiseTemplated(alertKey, AlertCode.REPLICATION_LAG, instancePk, ctx,
                 "Yuksek replication lag",
                 "Replay lag: " + replayLagStr + " (" + replayLagBytes + " bytes)");
@@ -534,7 +535,9 @@ public class ClusterCollector {
                 // Lock contention alert: 5 dakikadan fazla bekleyen lock
                 if (waitstart != null) {
                     long waitMs = java.time.Duration.between(waitstart, now).toMillis();
-                    if (waitMs > LOCK_WAIT_THRESHOLD_MS) {
+                    long thresholdMs = configCache.getThreshold(
+                        "lock_contention", instancePk, new BigDecimal("300")).longValue() * 1000L;
+                    if (waitMs > thresholdMs) {
                         String alertKey = "lock_contention:instance:" + instancePk;
                         java.util.Map<String, Object> ctx = new java.util.HashMap<>();
                         ctx.put("instance", "instance_pk=" + instancePk);

@@ -16,7 +16,7 @@ const ALERT_METADATA: Record<string, { label: string; category: string; threshol
     stats_reset_detected: { label: 'Stats Reset', category: 'collection', thresholdUnit: null, thresholdDesc: null, severity: 'info', description: 'pg_stat_statements reset edildi' },
     high_connection_usage: { label: 'Bağlantı Doluyor', category: 'performance', thresholdUnit: 'percent', thresholdDesc: 'Bağlantı kullanım oranı (%)', severity: 'warning', description: 'numbackends / max_connections oranı eşik üstü' },
     long_running_query: { label: 'Uzun Sorgu', category: 'performance', thresholdUnit: 'seconds', thresholdDesc: 'Sorgu süresi (saniye)', severity: 'warning', description: 'Eşik süreyi aşan aktif sorgu' },
-    lock_contention: { label: 'Kilit Bekleme', category: 'performance', thresholdUnit: null, thresholdDesc: null, severity: 'warning', description: 'Kilit bekleme zinciri tespit edildi' },
+    lock_contention: { label: 'Kilit Bekleme', category: 'performance', thresholdUnit: 'seconds', thresholdDesc: 'Lock bekleme süresi (saniye)', severity: 'warning', description: 'Kilit bekleme zinciri tespit edildi' },
     high_temp_files: { label: 'Temp File Yüksek', category: 'performance', thresholdUnit: 'count', thresholdDesc: 'Temp file sayısı/saat', severity: 'warning', description: 'Sorgular sort/hash için disk kullanıyor' },
     idle_in_tx_time_high: { label: 'Idle in Tx Yüksek', category: 'performance', thresholdUnit: 'percent', thresholdDesc: 'Idle in tx oranı (%)', severity: 'warning', description: 'Idle in transaction süresi yüksek' },
     high_bloat_ratio: { label: 'Bloat Yüksek', category: 'index_table', thresholdUnit: 'percent', thresholdDesc: 'Dead tuple oranı (%)', severity: 'info', description: 'Tablo dead tuple oranı yüksek' },

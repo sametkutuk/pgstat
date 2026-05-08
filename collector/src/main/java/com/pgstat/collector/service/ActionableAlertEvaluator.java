@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -126,7 +127,7 @@ public class ActionableAlertEvaluator {
             join control.instance_inventory i on i.instance_pk = s.instance_pk
             left join dim.database_ref dbr on dbr.instance_pk = s.instance_pk and dbr.dbid = s.dbid
             where s.seq_scans > 0
-              and (s.idx_scans = 0 or s.ratio > 100)
+              and (s.idx_scans = 0 or s.ratio > 0)
               and s.seq_tup_read > 100000
               and s.total_size_bytes > 10485760
             order by s.seq_tup_read desc
@@ -138,6 +139,9 @@ public class ActionableAlertEvaluator {
             long instancePk = toLong(r.get("instance_pk"));
             // Config check: bu instance için alert aktif mi?
             if (!configCache.isEnabled("index_suspect_missing", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "index_suspect_missing", instancePk, new BigDecimal("100"));
+            if (toBD(r.get("ratio")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:index_suspect_missing:" +
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
@@ -228,7 +232,7 @@ public class ActionableAlertEvaluator {
             left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.dbid = p.dbid
             where p.total_scans = 0
               and p.full_window_covered
-              and coalesce(rs.total_size_bytes, 0) > 104857600
+              and coalesce(rs.total_size_bytes, 0) > 0
               and (
                 vic.cluster_id is null                         -- standalone: bu instance'ta 0 yeter
                 or (coalesce(ci.cluster_total_scans, 0) = 0 and ci.cluster_window_covered)
@@ -241,6 +245,9 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("index_unused", instancePk)) continue;
+            long minSizeBytes = configCache.getThreshold(
+                "index_unused", instancePk, new BigDecimal("100")).longValue() * 1_048_576L;
+            if (toLong(r.get("total_size_bytes")) <= minSizeBytes) continue;
 
             String alertKey = "actionable:index_unused:" +
                 r.get("instance_pk") + ":" + r.get("dbid") + ":" +
@@ -291,32 +298,32 @@ public class ActionableAlertEvaluator {
             join control.instance_inventory i on i.instance_pk = d.instance_pk
             where d.sample_ts > now() - interval '1 hour'
             group by d.instance_pk, d.dbid, d.datname, i.display_name
-            having sum(d.temp_files_delta) > 100
+            having sum(d.temp_files_delta) > 0
             """);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("high_temp_files", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "high_temp_files", instancePk, new BigDecimal("100"));
+            if (toBD(r.get("temp_files")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:high_temp_files:" + instancePk + ":" + r.get("dbid");
 
-            // work_mem degerini snapshot'tan oku
-            String workMem = "?";
-            try {
-                workMem = jdbc.queryForObject(
-                    "select setting_value from fact.pg_settings_snapshot " +
-                    "where instance_pk = ? and setting_name = 'work_mem' " +
-                    "order by snapshot_ts desc limit 1",
-                    String.class, instancePk);
-            } catch (Exception ignore) {}
+            String workMem = readSetting(instancePk, "work_mem");
+            String maxConnections = readSetting(instancePk, "max_connections");
 
             // Top 3 temp ureten sorgu
             List<Map<String, Object>> topTempQueries = getTopTempQueries(instancePk);
 
-            // Onerilen work_mem hesabi (basit: max temp_bytes / 1M, en yakin guzel deger)
             long tempBytes = toLong(r.get("temp_bytes"));
-            String suggested = suggestWorkMem(tempBytes);
+            long maxQueryTempBytes = tempBytes;
+            for (Map<String, Object> q : topTempQueries) {
+                maxQueryTempBytes = Math.max(maxQueryTempBytes, toLong(q.get("temp_bytes")));
+            }
+            String suggested = suggestQueryLocalWorkMem(maxQueryTempBytes);
+            String workMemGuidance = buildWorkMemGuidance(suggested, maxConnections);
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -325,18 +332,22 @@ public class ActionableAlertEvaluator {
             ctx.put("temp_files", r.get("temp_files"));
             ctx.put("temp_bytes_human", humanBytes(tempBytes));
             ctx.put("work_mem", workMem);
+            ctx.put("max_connections", maxConnections);
             ctx.put("top_temp_queries", formatTopTempQueriesToText(topTempQueries));
             ctx.put("suggested_work_mem", suggested);
+            ctx.put("work_mem_guidance", workMemGuidance);
 
             String[] rendered = renderer.renderForCode("high_temp_files", ctx,
                 "Yüksek temp file: " + r.get("datname"),
-                "temp_files > 100/saat, work_mem=" + workMem);
+                "temp_files > " + threshold + "/saat, work_mem=" + workMem);
 
             // AlertDetailsBuilder ile zengin details_json
             AlertDetailsBuilder details = new AlertDetailsBuilder()
                 .setKind("temp_files")
                 .addContext("work_mem", workMem)
+                .addContext("max_connections", maxConnections)
                 .addContext("suggested_work_mem", suggested)
+                .addContext("work_mem_guidance", workMemGuidance)
                 .addContext("temp_files", r.get("temp_files"))
                 .addContext("temp_bytes", tempBytes)
                 .addContext("database", r.get("datname"));
@@ -374,14 +385,15 @@ public class ActionableAlertEvaluator {
             where d.sample_ts > now() - interval '1 hour'
             group by d.instance_pk, d.dbid, d.datname, i.display_name
             having sum(d.session_time_ms_delta) > 60000
-               and (sum(d.idle_in_transaction_time_ms_delta)::numeric /
-                    nullif(sum(d.session_time_ms_delta), 0)) > 0.3
             """);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("idle_in_tx_time_high", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "idle_in_tx_time_high", instancePk, new BigDecimal("30"));
+            if (toBD(r.get("idle_pct")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:idle_in_tx:" + r.get("instance_pk") + ":" + r.get("dbid");
 
@@ -432,7 +444,7 @@ public class ActionableAlertEvaluator {
             join latest l on l.instance_pk = s.instance_pk and l.slot_name = s.slot_name and l.ts = s.sample_ts
             join control.instance_inventory i on i.instance_pk = s.instance_pk
             where s.active = false
-              and s.slot_lag_bytes > 1073741824
+              and s.slot_lag_bytes > 0
               and not exists (
                 select 1 from fact.pg_replication_slot_snapshot s2
                 where s2.instance_pk = s.instance_pk and s2.slot_name = s.slot_name
@@ -445,6 +457,9 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("replication_slot_inactive", instancePk)) continue;
+            long thresholdBytes = configCache.getThreshold(
+                "replication_slot_inactive", instancePk, new BigDecimal("1024")).longValue() * 1_048_576L;
+            if (toLong(r.get("slot_lag_bytes")) <= thresholdBytes) continue;
 
             String alertKey = "actionable:slot_inactive:" + r.get("instance_pk") + ":" + r.get("slot_name");
 
@@ -483,18 +498,21 @@ public class ActionableAlertEvaluator {
     private int checkLongRunningQuery() {
         // pg_activity_snapshot'tan son snapshot'taki 5dk+ calisan sorgulari bul
         List<Map<String, Object>> rows = jdbc.queryForList("""
-            with latest as (select max(snapshot_ts) as ts from fact.pg_activity_snapshot)
+            with latest as (
+              select instance_pk, max(snapshot_ts) as ts
+              from fact.pg_activity_snapshot
+              group by instance_pk
+            )
             select a.instance_pk, i.display_name, a.pid, a.datname, a.usename,
                    a.application_name, a.state,
                    extract(epoch from (l.ts - a.query_start))::bigint as duration_seconds,
                    left(a.query, 200) as query_text
             from fact.pg_activity_snapshot a
             join control.instance_inventory i on i.instance_pk = a.instance_pk
-            cross join latest l
-            where a.snapshot_ts = l.ts
+            join latest l on l.instance_pk = a.instance_pk and l.ts = a.snapshot_ts
+            where true
               and a.state = 'active'
               and a.query_start is not null
-              and extract(epoch from (l.ts - a.query_start)) > 300
               and a.backend_type = 'client backend'
             order by duration_seconds desc
             limit 20
@@ -504,6 +522,9 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("long_running_query", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "long_running_query", instancePk, new BigDecimal("300"));
+            if (toBD(r.get("duration_seconds")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:long_running_query:" + instancePk + ":" + r.get("pid");
 
@@ -571,13 +592,15 @@ public class ActionableAlertEvaluator {
             join control.instance_inventory i on i.instance_pk = c.instance_pk
             join max_conn m on m.instance_pk = c.instance_pk
             where m.max_connections is not null
-              and c.total_backends > m.max_connections * 0.8
             """);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("high_connection_usage", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "high_connection_usage", instancePk, new BigDecimal("80"));
+            if (toBD(r.get("usage_pct")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:high_connection_usage:" + instancePk;
 
@@ -691,7 +714,7 @@ public class ActionableAlertEvaluator {
               order by snapshot_ts desc limit 1
             ) rs on true
             where (t.n_live_tup_estimate + t.n_dead_tup_estimate) > 1000
-              and t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) > 0.20
+              and t.n_dead_tup_estimate > 0
               and coalesce(rs.total_size_bytes, 0) > 10485760
             order by dead_pct desc
             limit 20
@@ -701,6 +724,9 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("high_bloat_ratio", instancePk)) continue;
+            BigDecimal threshold = configCache.getThreshold(
+                "high_bloat_ratio", instancePk, new BigDecimal("20"));
+            if (toBD(r.get("dead_pct")).compareTo(threshold) <= 0) continue;
 
             String relation = r.get("schemaname") + "." + r.get("relname");
             String alertKey = "actionable:high_bloat:" + instancePk + ":" + relation;
@@ -899,10 +925,28 @@ public class ActionableAlertEvaluator {
         return formatTopTempQueriesToText(getTopTempQueries(instancePk));
     }
 
-    /** Onerilen work_mem: temp_bytes'a gore en yakin guzel deger */
-    private String suggestWorkMem(long tempBytes) {
-        // En buyuk temp islem icin yeterli olacak deger
-        long mb = Math.max(16, tempBytes / 1048576 / 10); // kaba tahmin
+    private String readSetting(long instancePk, String settingName) {
+        try {
+            return jdbc.queryForObject(
+                "select setting_value from fact.pg_settings_snapshot " +
+                "where instance_pk = ? and setting_name = ? " +
+                "order by snapshot_ts desc limit 1",
+                String.class, instancePk, settingName);
+        } catch (Exception ignore) {
+            return "?";
+        }
+    }
+
+    private String buildWorkMemGuidance(String queryLocalWorkMem, String maxConnections) {
+        return "Query bazli oner: SET LOCAL work_mem = '" + queryLocalWorkMem + "'. " +
+            "Global work_mem icin host RAM bilinmeden deger onermiyoruz. " +
+            "Formul: (RAM - shared_buffers - OS payi) / max_connections(" + maxConnections +
+            ") / eszamanli sort-hash katsayisi.";
+    }
+
+    /** Query/session scope icin guvenli baslangic onerisi; global ALTER SYSTEM onerisi degildir. */
+    private String suggestQueryLocalWorkMem(long tempBytes) {
+        long mb = Math.max(16, tempBytes / 1048576 / 10);
         if (mb <= 16) return "16MB";
         if (mb <= 32) return "32MB";
         if (mb <= 64) return "64MB";
@@ -928,5 +972,12 @@ public class ActionableAlertEvaluator {
     private static long toLong(Object val) {
         if (val == null) return 0;
         return ((Number) val).longValue();
+    }
+
+    private static BigDecimal toBD(Object val) {
+        if (val == null) return BigDecimal.ZERO;
+        if (val instanceof BigDecimal bd) return bd;
+        if (val instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
+        return new BigDecimal(val.toString());
     }
 }

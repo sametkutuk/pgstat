@@ -503,9 +503,10 @@ public class AlertRuleEvaluator {
                 }
             }
             summary.append("🧠 Mevcut `work_mem`: **").append(workMem).append("**\n");
-            summary.append("🎯 Öneri: **").append(suggestedWorkMem).append("**");
+            summary.append("🎯 Query-level öneri: **SET LOCAL work_mem = '").append(suggestedWorkMem).append("'**");
             summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
-            summary.append("work_mem connection ve sort/hash node başına ayrılır; global artırmadan önce sorgu planı da incelenmeli.");
+            summary.append("Global work_mem için host RAM bilinmeden değer önermiyoruz; work_mem connection ve sort/hash node başına ayrılır. ");
+            summary.append("Güvenli global hesap: (RAM - shared_buffers - OS payı) / max_connections / eşzamanlı sort/hash katsayısı.");
 
             StringBuilder json = new StringBuilder();
             json.append("{\"kind\":\"temp_files\"");
@@ -2254,11 +2255,14 @@ public class AlertRuleEvaluator {
             // Flatline: flatlineMinutes suresi icinde degerin hic artip artmadigini kontrol et.
             // max - min == 0 ise counter durmus demektir.
             try {
-                Map<String, Object> stats = jdbc.queryForMap(
-                    "select max(" + col + ")::numeric as mx, min(" + col + ")::numeric as mn, count(*) as cnt" +
+                String metricFilter = parts.length > 3 ? " and metric_name = ?" : "";
+                String sql = "select max(" + col + ")::numeric as mx, min(" + col + ")::numeric as mn, count(*) as cnt" +
                     " from " + table +
-                    " where instance_pk = ? and " + timeCol + " >= now() - ?::interval",
-                    instancePk, flatlineMinutes + " minutes");
+                    " where instance_pk = ?" + metricFilter +
+                    " and " + timeCol + " >= now() - ?::interval";
+                Map<String, Object> stats = parts.length > 3
+                    ? jdbc.queryForMap(sql, instancePk, parts[3], flatlineMinutes + " minutes")
+                    : jdbc.queryForMap(sql, instancePk, flatlineMinutes + " minutes");
 
                 long cnt = stats.get("cnt") != null ? ((Number) stats.get("cnt")).longValue() : 0;
                 if (cnt < 2) continue; // yeterli olcum yok
@@ -2575,15 +2579,20 @@ public class AlertRuleEvaluator {
         if (tableSql == null) return null;
         String[] parts = tableSql.split("\\|");
         try {
-            return jdbc.queryForObject(
-                "select " + extremeFn + "(computed_value) from (" +
+            String metricFilter = parts.length > 3 ? " and metric_name = ?" : "";
+            String sql = "select " + extremeFn + "(computed_value) from (" +
                 "  select " + aggFn + "(" + parts[1] + ") as computed_value" +
                 "  from " + parts[0] +
-                "  where instance_pk = ?" +
+                "  where instance_pk = ?" + metricFilter +
                 "    and " + parts[2] + " < now() - ?::interval" +
                 "  group by date_trunc('hour', " + parts[2] + ")" +
-                ") sub",
-                BigDecimal.class, instancePk, excludeLastMinutes + " minutes");
+                ") sub";
+            if (parts.length > 3) {
+                return jdbc.queryForObject(
+                    sql, BigDecimal.class, instancePk, parts[3], excludeLastMinutes + " minutes");
+            }
+            return jdbc.queryForObject(
+                sql, BigDecimal.class, instancePk, excludeLastMinutes + " minutes");
         } catch (Exception e) {
             log.debug("Tarihi extreme sorgu hatasi metric={}: {}", metricName, e.getMessage());
             return null;
@@ -2595,10 +2604,10 @@ public class AlertRuleEvaluator {
      */
     private String getMetricTableAndColumn(String metricType, String metricName) {
         return switch (metricType + "." + metricName) {
-            case "cluster_metric.wal_bytes"              -> "fact.pg_cluster_delta|wal_bytes|sample_ts";
-            case "cluster_metric.checkpoint_write_time"  -> "fact.pg_cluster_delta|checkpoint_write_time|sample_ts";
-            case "cluster_metric.buffers_checkpoint"     -> "fact.pg_cluster_delta|buffers_checkpoint|sample_ts";
-            case "cluster_metric.checkpoints_timed"      -> "fact.pg_cluster_delta|checkpoints_timed|sample_ts";
+            case "cluster_metric.wal_bytes"              -> "fact.pg_cluster_delta|metric_value_num|sample_ts|wal_bytes";
+            case "cluster_metric.checkpoint_write_time"  -> "fact.pg_cluster_delta|metric_value_num|sample_ts|checkpoint_write_time";
+            case "cluster_metric.buffers_checkpoint"     -> "fact.pg_cluster_delta|metric_value_num|sample_ts|buffers_checkpoint";
+            case "cluster_metric.checkpoints_timed"      -> "fact.pg_cluster_delta|metric_value_num|sample_ts|checkpoints_timed";
             case "database_metric.deadlocks"             -> "fact.pg_database_delta|deadlocks_delta|sample_ts";
             case "database_metric.temp_files"            -> "fact.pg_database_delta|temp_files_delta|sample_ts";
             case "database_metric.blk_read_time"         -> "fact.pg_database_delta|blk_read_time_delta|sample_ts";
@@ -2663,11 +2672,13 @@ public class AlertRuleEvaluator {
         String table = getMetricTable(metricType);
         if (table == null) return false;
         try {
-            Integer count = jdbc.queryForObject(
-                "select count(distinct date_trunc('day', " + getTimeColumn(metricType) + "))" +
-                " from " + table + " where instance_pk = ?" +
-                " and " + getTimeColumn(metricType) + " >= now() - ?::interval",
-                Integer.class, instancePk, minDataDays + " days");
+            String metricFilter = "cluster_metric".equals(metricType) ? " and metric_name = ?" : "";
+            String sql = "select count(distinct date_trunc('day', " + getTimeColumn(metricType) + "))" +
+                " from " + table + " where instance_pk = ?" + metricFilter +
+                " and " + getTimeColumn(metricType) + " >= now() - ?::interval";
+            Integer count = "cluster_metric".equals(metricType)
+                ? jdbc.queryForObject(sql, Integer.class, instancePk, metricName, minDataDays + " days")
+                : jdbc.queryForObject(sql, Integer.class, instancePk, minDataDays + " days");
             return count != null && count >= minDataDays;
         } catch (Exception e) {
             return false;
@@ -2716,9 +2727,11 @@ public class AlertRuleEvaluator {
                 """, interval);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
-            " from fact.pg_cluster_delta where sample_ts >= now() - ?::interval group by instance_pk",
-            interval);
+            "select instance_pk, " + aggFn + "(metric_value_num) as value" +
+            " from fact.pg_cluster_delta" +
+            " where metric_name = ? and sample_ts >= now() - ?::interval" +
+            " group by instance_pk",
+            metricName, interval);
     }
 
     private List<Map<String, Object>> queryDatabaseMetric(String metricName, String aggFn, String interval) {
@@ -2816,10 +2829,12 @@ public class AlertRuleEvaluator {
                 """, intervalStart, intervalEnd);
         }
         return jdbc.queryForList(
-            "select instance_pk, " + aggFn + "(" + sanitizeCol(metricName) + ") as value" +
+            "select instance_pk, " + aggFn + "(metric_value_num) as value" +
             " from fact.pg_cluster_delta" +
-            " where sample_ts between now() - ?::interval and now() - ?::interval group by instance_pk",
-            intervalStart, intervalEnd);
+            " where metric_name = ?" +
+            " and sample_ts between now() - ?::interval and now() - ?::interval" +
+            " group by instance_pk",
+            metricName, intervalStart, intervalEnd);
     }
 
     private List<Map<String, Object>> queryDatabaseMetricBetween(String metricName, String aggFn,
