@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 const WL_LABELS: Record<string, string> = {
@@ -42,6 +42,7 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContai
  */
 export default function HealthReport() {
     const { id } = useParams();
+    const navigate = useNavigate();
     const [days, setDays] = useState(7);
 
     const { data: report, isLoading } = useQuery({
@@ -63,6 +64,11 @@ export default function HealthReport() {
         healthy: 'bg-green-50 border-green-200', warning: 'bg-amber-50 border-amber-200', critical: 'bg-red-50 border-red-200'
     };
 
+    function goBack() {
+        if (window.history.length > 1) navigate(-1);
+        else navigate('/instances');
+    }
+
     // Checks'i section'a göre grupla
     const sections: Record<string, any[]> = {};
     report.checks.forEach((c: any) => {
@@ -80,7 +86,9 @@ export default function HealthReport() {
             {/* Screen header */}
             <div className="flex items-center justify-between mb-5 print:hidden">
                 <div>
-                    <Link to={`/cluster/${id}`} className="text-sm text-[#3B82F6] hover:underline">← Instance Detail</Link>
+                    <button type="button" onClick={goBack} className="text-sm text-[#3B82F6] hover:underline">
+                        ← Geri dön
+                    </button>
                     <h1 className="text-xl font-bold mt-1">Sağlık Raporu</h1>
                 </div>
                 <div className="flex items-center gap-3">
