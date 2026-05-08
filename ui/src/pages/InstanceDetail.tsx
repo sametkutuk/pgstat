@@ -258,6 +258,19 @@ function downloadText(filename: string, content: string, mimeType: string): void
     URL.revokeObjectURL(url);
 }
 
+const INDEX_TIME_RANGES = [
+    { hours: 1, label: 'Son 1 saat', slug: '1h' },
+    { hours: 6, label: 'Son 6 saat', slug: '6h' },
+    { hours: 24, label: 'Son 24 saat', slug: '24h' },
+    { hours: 72, label: 'Son 3 gün', slug: '3d' },
+    { hours: 168, label: 'Son 1 hafta', slug: '1w' },
+    { hours: 720, label: 'Son 1 ay', slug: '1m' },
+    { hours: 1440, label: 'Son 2 ay', slug: '2m' },
+    { hours: 2160, label: 'Son 3 ay', slug: '3m' },
+    { hours: 4320, label: 'Son 6 ay', slug: '6m' },
+    { hours: 8760, label: 'Son 1 yıl', slug: '1y' },
+];
+
 /**
  * Capability kartı — tek bir feature için durum gösterir.
  * available=true/false ise Aktif/Yok rozetleri, mode varsa metin rozeti.
@@ -728,6 +741,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
     const hasFilter = dbFilter || search || minValue || unusedOnly;
     const unusedCount = useMemo(() => (indexes.data || []).filter(isUnusedIndex).length, [indexes.data]);
     const selectedDatabase = databases.find(d => d.dbid === dbFilter)?.datname;
+    const selectedRange = INDEX_TIME_RANGES.find(r => r.hours === hours) || { hours, label: `${hours} saat`, slug: `${hours}h` };
 
     const exportExcel = () => {
         const headers = ['database', 'schema', 'table', 'index', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct'];
@@ -748,7 +762,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
             .join('');
         const workbook = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table>${tableRows}</table></body></html>`;
         const scope = selectedDatabase || `instance-${instancePk}`;
-        downloadText(`pgstat-unused-indexes-${safeFileName(scope)}-${hours}h.xls`, workbook, 'application/vnd.ms-excel;charset=utf-8');
+        downloadText(`pgstat-unused-indexes-${safeFileName(scope)}-${selectedRange.slug}.xls`, workbook, 'application/vnd.ms-excel;charset=utf-8');
     };
 
     return (
@@ -759,10 +773,9 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                                 <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
                                 <select value={hours} onChange={e => setHours(Number(e.target.value))}
                                     className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                                    <option value={1}>Son 1 saat</option>
-                                    <option value={6}>Son 6 saat</option>
-                                    <option value={24}>Son 24 saat</option>
-                                    <option value={72}>Son 3 gün</option>
+                                    {INDEX_TIME_RANGES.map(range => (
+                                        <option key={range.hours} value={range.hours}>{range.label}</option>
+                                    ))}
                                 </select>
                             </div>
                             <div>
@@ -825,7 +838,7 @@ function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
                             </div>
                         </div>
                         <div className="mt-3 text-xs text-[#64748B]">
-                            Unused kriteri: seçilen zaman aralığında idx_scan = 0. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta görünen unused index: ${unusedCount}.`}
+                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta görünen unused index: ${unusedCount}.`}
                         </div>
                     </div>
 
