@@ -503,24 +503,50 @@ function ObjectDatabaseSelect({ instancePk, selectedDbid, onSelectDb, hint }: { 
     );
 }
 
+function statNumber(value: any): number {
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function hitRatio(read: any, hit: any): number {
+    const r = statNumber(read);
+    const h = statNumber(hit);
+    return r + h > 0 ? (100 * h) / (r + h) : 100;
+}
+
 function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+    const [hours, setHours] = useState(24);
+    const [orderBy, setOrderBy] = useState('seq_scan');
+    const [search, setSearch] = useState('');
+    const [minValue, setMinValue] = useState('');
+
     const tables = useQuery({
-        queryKey: ['instance-tables', instancePk, selectedDbid],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/tables?hours=24`),
+        queryKey: ['instance-tables', instancePk, selectedDbid, hours],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/tables?hours=${hours}`),
         enabled: Number.isFinite(instancePk) && !!selectedDbid,
     });
 
-    const tableCols = [
-        { key: 'schemaname', header: 'Schema' },
-        { key: 'relname', header: 'Tablo' },
-        { key: 'total_seq_scan', header: 'Seq Scan', render: (r: any) => Number(r.total_seq_scan).toLocaleString(), className: 'text-right' },
-        { key: 'total_idx_scan', header: 'Idx Scan', render: (r: any) => Number(r.total_idx_scan).toLocaleString(), className: 'text-right' },
-        { key: 'total_inserts', header: 'Insert', render: (r: any) => Number(r.total_inserts).toLocaleString(), className: 'text-right' },
-        { key: 'total_updates', header: 'Update', render: (r: any) => Number(r.total_updates).toLocaleString(), className: 'text-right' },
-        { key: 'total_deletes', header: 'Delete', render: (r: any) => Number(r.total_deletes).toLocaleString(), className: 'text-right' },
-        { key: 'n_live_tup', header: 'Live Tup', render: (r: any) => Number(r.n_live_tup).toLocaleString(), className: 'text-right' },
-        { key: 'n_dead_tup', header: 'Dead Tup', render: (r: any) => Number(r.n_dead_tup).toLocaleString(), className: 'text-right' },
-    ];
+    const metricValue = (r: any) => {
+        if (orderBy === 'idx_scan') return statNumber(r.total_idx_scan);
+        if (orderBy === 'writes') return statNumber(r.total_inserts) + statNumber(r.total_updates) + statNumber(r.total_deletes);
+        if (orderBy === 'dead_tup') return statNumber(r.n_dead_tup);
+        if (orderBy === 'heap_read') return statNumber(r.total_heap_blks_read);
+        return statNumber(r.total_seq_scan);
+    };
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        const min = parseFloat(minValue) || 0;
+        return (tables.data || [])
+            .filter((r: any) => {
+                if (q && !`${r.schemaname || ''}.${r.relname || ''}`.toLowerCase().includes(q)) return false;
+                if (min > 0 && metricValue(r) < min) return false;
+                return true;
+            })
+            .sort((a: any, b: any) => metricValue(b) - metricValue(a));
+    }, [tables.data, search, minValue, orderBy]);
+
+    const hasFilter = search || minValue;
 
     return (
         <div>
@@ -532,31 +558,148 @@ function TableStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
             />
 
             {selectedDbid && (
-                <div className="bg-white rounded-lg shadow-sm p-4">
-                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Tablolar (son 24 saat)</h3>
-                    {tables.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={tableCols} data={tables.data || []} emptyText="Tablo istatistiği yok" />}
-                </div>
+                <>
+                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                        <div className="flex flex-wrap gap-3 items-end">
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
+                                <select value={hours} onChange={e => setHours(Number(e.target.value))}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                                    <option value={1}>Son 1 saat</option>
+                                    <option value={6}>Son 6 saat</option>
+                                    <option value={24}>Son 24 saat</option>
+                                    <option value={72}>Son 3 gün</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
+                                <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                                    <option value="seq_scan">Seq Scan</option>
+                                    <option value="idx_scan">Idx Scan</option>
+                                    <option value="writes">Write Toplamı</option>
+                                    <option value="dead_tup">Dead Tuple</option>
+                                    <option value="heap_read">Heap Read</option>
+                                </select>
+                            </div>
+                            <div className="flex-1 min-w-[180px]">
+                                <label className="block text-xs text-[#64748B] mb-1">Tablo Ara</label>
+                                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema veya tablo"
+                                    className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
+                                <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
+                                    className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                            </div>
+                            <div className="flex items-end gap-2 pb-0.5">
+                                {hasFilter && (
+                                    <button onClick={() => { setSearch(''); setMinValue(''); }}
+                                        className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                        Temizle
+                                    </button>
+                                )}
+                                <button onClick={() => tables.refetch()}
+                                    className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                    {tables.isFetching ? 'Yenileniyor...' : 'Yenile'}
+                                </button>
+                                <span className="text-xs text-[#94A3B8]">
+                                    {hasFilter && filtered.length !== (tables.data?.length ?? 0)
+                                        ? `${filtered.length} / ${tables.data?.length ?? 0}`
+                                        : `${filtered.length} tablo`}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                        {tables.isLoading ? <SkeletonTable rows={5} cols={6} /> : filtered.length === 0 ? (
+                            <div className="text-[#94A3B8] py-8 text-center text-sm">Tablo istatistiği yok veya filtreyle eşleşen tablo bulunamadı.</div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Seq Scan</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Write</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Heap I/O</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuple</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filtered.map((r: any) => {
+                                            const writes = statNumber(r.total_inserts) + statNumber(r.total_updates) + statNumber(r.total_deletes);
+                                            const ratio = hitRatio(r.total_heap_blks_read, r.total_heap_blks_hit);
+                                            const dead = statNumber(r.n_dead_tup);
+                                            return (
+                                                <tr key={r.relid} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                                                    <td className="py-2.5 px-3 text-xs">
+                                                        <div className="text-[#94A3B8]">{r.schemaname || '-'}</div>
+                                                        <div className="font-medium text-[#1E293B]">{r.relname || '-'}</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_seq_scan))}</td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                        <div className={writes > 0 ? 'text-[#1E293B]' : 'text-[#94A3B8]'}>{fmtNum(writes)}</div>
+                                                        <div className="text-[10px] text-[#94A3B8]">I {fmtNum(statNumber(r.total_inserts))} / U {fmtNum(statNumber(r.total_updates))} / D {fmtNum(statNumber(r.total_deletes))}</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                        <div>{fmtNum(statNumber(r.total_heap_blks_read))} R / {fmtNum(statNumber(r.total_heap_blks_hit))} H</div>
+                                                        <div className={ratio < 95 ? 'text-amber-600' : 'text-green-600'}>{ratio.toFixed(1)}%</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                        <div>Live {fmtNum(statNumber(r.n_live_tup))}</div>
+                                                        <div className={dead > 0 ? 'text-red-600 font-semibold' : 'text-[#94A3B8]'}>Dead {fmtNum(dead)}</div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </>
             )}
         </div>
     );
 }
 
 function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: number; selectedDbid: number | null; onSelectDb: (dbid: number | null) => void }) {
+    const [hours, setHours] = useState(24);
+    const [orderBy, setOrderBy] = useState('idx_scan');
+    const [search, setSearch] = useState('');
+    const [minValue, setMinValue] = useState('');
+
     const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, selectedDbid],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=24`),
+        queryKey: ['instance-indexes', instancePk, selectedDbid, hours],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/${selectedDbid}/indexes?hours=${hours}`),
         enabled: Number.isFinite(instancePk) && !!selectedDbid,
     });
 
-    const indexCols = [
-        { key: 'schemaname', header: 'Schema' },
-        { key: 'table_relname', header: 'Tablo' },
-        { key: 'index_relname', header: 'Index' },
-        { key: 'total_idx_scan', header: 'Idx Scan', render: (r: any) => Number(r.total_idx_scan).toLocaleString(), className: 'text-right' },
-        { key: 'total_idx_tup_read', header: 'Tup Read', render: (r: any) => Number(r.total_idx_tup_read).toLocaleString(), className: 'text-right' },
-        { key: 'total_idx_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_idx_blks_read).toLocaleString(), className: 'text-right' },
-        { key: 'total_idx_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_idx_blks_hit).toLocaleString(), className: 'text-right' },
-    ];
+    const metricValue = (r: any) => {
+        if (orderBy === 'tup_read') return statNumber(r.total_idx_tup_read);
+        if (orderBy === 'tup_fetch') return statNumber(r.total_idx_tup_fetch);
+        if (orderBy === 'blks_read') return statNumber(r.total_idx_blks_read);
+        if (orderBy === 'hit_ratio_low') return 100 - hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
+        return statNumber(r.total_idx_scan);
+    };
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        const min = parseFloat(minValue) || 0;
+        return (indexes.data || [])
+            .filter((r: any) => {
+                if (q && !`${r.schemaname || ''}.${r.table_relname || ''}.${r.index_relname || ''}`.toLowerCase().includes(q)) return false;
+                if (min > 0 && metricValue(r) < min) return false;
+                return true;
+            })
+            .sort((a: any, b: any) => metricValue(b) - metricValue(a));
+    }, [indexes.data, search, minValue, orderBy]);
+
+    const hasFilter = search || minValue;
 
     return (
         <div>
@@ -568,10 +711,109 @@ function IndexStatsTab({ instancePk, selectedDbid, onSelectDb }: { instancePk: n
             />
 
             {selectedDbid && (
-                <div className="bg-white rounded-lg shadow-sm p-4">
-                    <h3 className="text-sm font-semibold text-[#64748B] mb-3">Indexler (son 24 saat)</h3>
-                    {indexes.isLoading ? <SkeletonTable rows={3} cols={4} /> : <DataTable columns={indexCols} data={indexes.data || []} emptyText="Index istatistiği yok" />}
-                </div>
+                <>
+                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                        <div className="flex flex-wrap gap-3 items-end">
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
+                                <select value={hours} onChange={e => setHours(Number(e.target.value))}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                                    <option value={1}>Son 1 saat</option>
+                                    <option value={6}>Son 6 saat</option>
+                                    <option value={24}>Son 24 saat</option>
+                                    <option value={72}>Son 3 gün</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
+                                <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                                    <option value="idx_scan">Idx Scan</option>
+                                    <option value="tup_read">Tuple Read</option>
+                                    <option value="tup_fetch">Tuple Fetch</option>
+                                    <option value="blks_read">Block Read</option>
+                                    <option value="hit_ratio_low">Düşük Hit Ratio</option>
+                                </select>
+                            </div>
+                            <div className="flex-1 min-w-[180px]">
+                                <label className="block text-xs text-[#64748B] mb-1">Index Ara</label>
+                                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema, tablo veya index"
+                                    className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
+                                <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
+                                    className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                            </div>
+                            <div className="flex items-end gap-2 pb-0.5">
+                                {hasFilter && (
+                                    <button onClick={() => { setSearch(''); setMinValue(''); }}
+                                        className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                        Temizle
+                                    </button>
+                                )}
+                                <button onClick={() => indexes.refetch()}
+                                    className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                    {indexes.isFetching ? 'Yenileniyor...' : 'Yenile'}
+                                </button>
+                                <span className="text-xs text-[#94A3B8]">
+                                    {hasFilter && filtered.length !== (indexes.data?.length ?? 0)
+                                        ? `${filtered.length} / ${indexes.data?.length ?? 0}`
+                                        : `${filtered.length} index`}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                        {indexes.isLoading ? <SkeletonTable rows={5} cols={6} /> : filtered.length === 0 ? (
+                            <div className="text-[#94A3B8] py-8 text-center text-sm">Index istatistiği yok veya filtreyle eşleşen index bulunamadı.</div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
+                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Index</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuples</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blocks</th>
+                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Hit Ratio</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filtered.map((r: any) => {
+                                            const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
+                                            return (
+                                                <tr key={r.index_relid} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                                                    <td className="py-2.5 px-3 text-xs">
+                                                        <div className="text-[#94A3B8]">{r.schemaname || '-'}</div>
+                                                        <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 max-w-xs">
+                                                        <div className="truncate text-xs font-mono text-[#1E293B]" title={r.index_relname}>{r.index_relname || '-'}</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                        <div>Read {fmtNum(statNumber(r.total_idx_tup_read))}</div>
+                                                        <div className="text-[#94A3B8]">Fetch {fmtNum(statNumber(r.total_idx_tup_fetch))}</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                        <div>{fmtNum(statNumber(r.total_idx_blks_read))} R</div>
+                                                        <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} H</div>
+                                                    </td>
+                                                    <td className={`py-2.5 px-3 text-right font-mono text-xs ${ratio < 95 ? 'text-amber-600 font-semibold' : 'text-green-600'}`}>
+                                                        {ratio.toFixed(1)}%
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </>
             )}
         </div>
     );
