@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
-import { parseHours, parseLimit, parseOrderBy } from '../middleware/validation';
+import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
 
 const router = Router();
 
@@ -384,7 +384,7 @@ router.get('/:id/capability', async (req, res, next) => {
 router.get('/:id/statements', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const limit = parseLimit(req.query.limit, 100);
     const datname = (req.query.datname as string) || null;
     const rolname = (req.query.rolname as string) || null;
@@ -399,18 +399,14 @@ router.get('/:id/statements', async (req, res, next) => {
     };
     const orderCol = orderMap[(req.query.order_by as string) || ''] || 'total_exec_time_ms';
 
-    const params: any[] = [id, hours, limit];
+    const params: any[] = [id, fromIso, toIso, limit];
     let whereExtra = '';
     if (datname) { params.push(datname); whereExtra += ` and dbr.datname = $${params.length}`; }
     if (rolname) { params.push(rolname); whereExtra += ` and rr.rolname = $${params.length}`; }
 
     const result = await pool.query(`
-      select
-        ss.statement_series_id,
-        ss.dbid, ss.userid, ss.queryid,
-        left(qt.query_text, 500) as query_text,
-        rr.rolname,
-        dbr.datname,
+      select ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
+        left(qt.query_text, 500) as query_text, rr.rolname, dbr.datname,
         sum(d.calls_delta) as total_calls,
         sum(d.total_exec_time_ms_delta) as total_exec_time_ms,
         sum(d.rows_delta) as total_rows,
@@ -418,20 +414,19 @@ router.get('/:id/statements', async (req, res, next) => {
         sum(d.shared_blks_read_delta) as total_shared_blks_read,
         sum(d.temp_blks_written_delta) as total_temp_blks_written,
         case when sum(d.calls_delta) > 0
-          then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta)
-          else 0 end as avg_exec_time_ms
+          then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta) else 0 end as avg_exec_time_ms
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
       left join dim.query_text qt on qt.query_text_id = ss.query_text_id
       left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
       left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
       where d.instance_pk = $1
-        and d.sample_ts >= now() - make_interval(hours => $2)
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${whereExtra}
       group by ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
                qt.query_text, rr.rolname, dbr.datname
       order by ${orderCol} desc nulls last
-      limit $3
+      limit $4
     `, params);
     res.json(result.rows);
   } catch (err) {

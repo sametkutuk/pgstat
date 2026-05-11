@@ -8,6 +8,7 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
+import TimeRangePicker, { TimeRange, loadPersistedRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
@@ -28,18 +29,31 @@ export default function InstanceDetail() {
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['instance', id] }); toast.success('Yeniden bağlanılıyor...'); },
     });
 
+    // Global tarih aralığı — tüm tab'lardaki zaman-serisi sorguları bu aralığa göre çekilir.
+    // Snapshot bazlı veriler (bloat oranı, son satır sayısı, son DB listesi) bu aralıktan
+    // etkilenmez — onlar her zaman en son snapshot'ı kullanır.
+    const [range, setRange] = useState<TimeRange>(() => loadPersistedRange(`inst-range-${id}`));
+    // Mevcut endpoint'lerin geri uyumluluğu için range'ten hours hesabı (preset bazlı kullanım)
+    const rangeQp = `from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`;
+    const rangeHours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
+    const hoursQp = `hours=${rangeHours}`;
+
     const instance = useQuery({ queryKey: ['instance', id], queryFn: () => apiGet<any>(`/instances/${id}`) });
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
     const cluster = useQuery({ queryKey: ['inst-cluster', id], queryFn: () => apiGet<any>(`/instances/${id}/cluster`), enabled: !!id });
+    // Snapshot-bazlı (range'den etkilenmez) — DB listesi, storage en son snapshot
     const databases = useQuery({ queryKey: ['databases', id], queryFn: () => apiGet<any[]>(`/instances/${id}/databases`), enabled: tab === 'databases' });
     const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
-    const alerts = useQuery({ queryKey: ['inst-alerts', id], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}`), enabled: tab === 'alerts' });
+    // Range'e bağlı (zaman-serisi)
+    const alerts = useQuery({ queryKey: ['inst-alerts', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}&${rangeQp}`), enabled: tab === 'alerts' });
     const jobruns = useQuery({ queryKey: ['inst-jobruns', id], queryFn: () => apiGet<any[]>(`/job-runs?limit=20`), enabled: tab === 'jobruns' });
-    const functions = useQuery({ queryKey: ['inst-functions', id], queryFn: () => apiGet<any[]>(`/instances/${id}/functions?hours=1`), enabled: tab === 'functions' });
-    const sequences = useQuery({ queryKey: ['inst-sequences', id], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?hours=1`), enabled: tab === 'sequences' });
-    const walData = useQuery({ queryKey: ['inst-wal', id], queryFn: () => apiGet<any>(`/instances/${id}/wal?hours=1`), enabled: tab === 'wal' });
-    const slruData = useQuery({ queryKey: ['inst-slru', id], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?hours=1`), enabled: tab === 'slru' });
-    const tpsData = useQuery({ queryKey: ['inst-tps', id], queryFn: () => apiGet<any>(`/instances/${id}/tps?days=7`), enabled: tab === 'tps' });
+    const functions = useQuery({ queryKey: ['inst-functions', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/functions?${hoursQp}&${rangeQp}`), enabled: tab === 'functions' });
+    const sequences = useQuery({ queryKey: ['inst-sequences', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?${hoursQp}&${rangeQp}`), enabled: tab === 'sequences' });
+    const walData = useQuery({ queryKey: ['inst-wal', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/wal?${hoursQp}&${rangeQp}`), enabled: tab === 'wal' });
+    const slruData = useQuery({ queryKey: ['inst-slru', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?${hoursQp}&${rangeQp}`), enabled: tab === 'slru' });
+    // TPS gün bazlı endpoint — range'den gün sayısı hesapla
+    const rangeDays = Math.max(1, Math.round(rangeHours / 24));
+    const tpsData = useQuery({ queryKey: ['inst-tps', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/tps?days=${rangeDays}`), enabled: tab === 'tps' });
     const [settingsDiffDays, setSettingsDiffDays] = useState(30);
     const settingsDiff = useQuery({
         queryKey: ['settings-diff', id, settingsDiffDays],
@@ -100,6 +114,20 @@ export default function InstanceDetail() {
 
             <BootstrapBanner inst={inst} cap={cap} instanceId={id!} />
 
+            {/* Global tarih aralığı seçici — tüm tab'lardaki zaman serileri bu aralığa göre */}
+            <div className="mb-4 bg-white border border-[#E2E8F0] rounded-lg p-3 flex items-center gap-3 flex-wrap">
+                <span className="text-xs text-[#64748B] font-medium">⏱ Tarih Aralığı:</span>
+                <TimeRangePicker value={range} onChange={setRange} persistKey={`inst-range-${id}`} />
+                <InfoTip text={`Tüm zaman-serisi grafikleri ve sorgular bu aralığa göre çekilir
+(Statements, TPS, WAL, SLRU, Functions, Sequences, Activity, Alerts).
+
+Snapshot bazlı veriler (Bloat oranı, son tablo boyutu, son satır sayısı,
+DB listesi, Sequences son değeri) bu aralıktan ETKİLENMEZ — her zaman
+en son snapshot'tan okunur.
+
+Seçim localStorage'da hatırlanır.`} />
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
                 <InfoCard label="Host" value={`${inst.host}:${inst.port}`} />
                 <InfoCard label="PG Sürüm" value={cap?.pg_major ? `PG${cap.pg_major}` : '—'} />
@@ -124,10 +152,10 @@ export default function InstanceDetail() {
 
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
-            {tab === 'statements' && <StatementsTab instancePk={Number(id)} />}
+            {tab === 'statements' && <StatementsTab instancePk={Number(id)} range={range} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
-            {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} />}
-            {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} />}
+            {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
+            {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
@@ -322,9 +350,8 @@ function fmtNum(n: number): string {
     return String(Math.round(n));
 }
 
-function StatementsTab({ instancePk }: { instancePk: number }) {
+function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeRange }) {
     const navigate = useNavigate();
-    const [hours, setHours] = useState(24);
     const [orderBy, setOrderBy] = useState('exec_time');
     const [datname, setDatname] = useState('');
     const [rolname, setRolname] = useState('');
@@ -332,7 +359,8 @@ function StatementsTab({ instancePk }: { instancePk: number }) {
     const [minAvgMs, setMinAvgMs] = useState('');
 
     const qp = new URLSearchParams({
-        hours: String(hours),
+        from: range.fromIso,
+        to: range.toIso,
         limit: '100',
         order_by: orderBy,
         ...(datname ? { datname } : {}),
@@ -340,7 +368,7 @@ function StatementsTab({ instancePk }: { instancePk: number }) {
     });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-top-stmts', instancePk, hours, orderBy, datname, rolname],
+        queryKey: ['instance-top-stmts', instancePk, range.fromIso, range.toIso, orderBy, datname, rolname],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/statements?${qp}`),
         enabled: Number.isFinite(instancePk),
     });
@@ -373,15 +401,8 @@ function StatementsTab({ instancePk }: { instancePk: number }) {
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
-                    <div>
-                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
-                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
-                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                            <option value={1}>Son 1 saat</option>
-                            <option value={6}>Son 6 saat</option>
-                            <option value={24}>Son 24 saat</option>
-                            <option value={72}>Son 3 gün</option>
-                        </select>
+                    <div className="text-[10px] text-[#94A3B8]">
+                        Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
                     <div>
                         <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
@@ -528,12 +549,14 @@ function hitRatio(read: any, hit: any): number {
     return r + h > 0 ? (100 * h) / (r + h) : 100;
 }
 
-function TableStatsTab({ instancePk, initialDbid }: { instancePk: number; initialDbid: number | null }) {
-    const [hours, setHours] = useState(24);
+function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
+    // hours global range'ten türetilir (saat farkı) — local state kaldırıldı
+    const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
     const [orderBy, setOrderBy] = useState('seq_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
+    const setHours = (_: number) => { /* artık global picker'dan geliyor — bu setter no-op */ };
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
@@ -690,8 +713,10 @@ function TableStatsTab({ instancePk, initialDbid }: { instancePk: number; initia
     );
 }
 
-function IndexStatsTab({ instancePk, initialDbid }: { instancePk: number; initialDbid: number | null }) {
-    const [hours, setHours] = useState(24);
+function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
+    // hours global range'ten türetilir
+    const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
+    const setHours = (_: number) => { /* no-op, global picker */ };
     const [orderBy, setOrderBy] = useState('idx_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
