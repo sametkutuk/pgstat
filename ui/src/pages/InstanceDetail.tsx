@@ -8,7 +8,8 @@ import DataTable from '../components/common/DataTable';
 import InfoTip from '../components/common/InfoTip';
 import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
-import TimeRangePicker, { TimeRange, loadPersistedRange } from '../components/common/TimeRangePicker';
+import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRangePicker';
+import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
