@@ -859,6 +859,13 @@ router.get('/:id/health-report', async (req, res, next) => {
         and sample_ts > now() - make_interval(days => $2)
         group by 1
       ),
+      hourly_agg as (
+        select date_trunc('day', hour_ts)::date as day,
+          sum(wal_bytes_total) as wal_bytes
+        from agg.pg_wal_hourly where instance_pk = $1
+        and hour_ts > now() - make_interval(days => $2)
+        group by 1
+      ),
       cluster_agg as (
         select date_trunc('day', sample_ts)::date as day,
           sum(metric_value_num) as wal_bytes
@@ -870,11 +877,13 @@ router.get('/:id/health-report', async (req, res, next) => {
       select d.day,
         coalesce(
           round(s.wal_bytes::numeric / 1048576, 1),
+          round(h.wal_bytes::numeric / 1048576, 1),
           round(c.wal_bytes::numeric / 1048576, 1),
           0
         ) as wal_mb
       from days_series d
       left join snap_agg s on s.day = d.day
+      left join hourly_agg h on h.day = d.day
       left join cluster_agg c on c.day = d.day
       order by d.day`, [id, days]),
 

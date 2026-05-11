@@ -452,4 +452,86 @@ public class PurgeEvaluator {
             log.debug("notification_log purge atlandi: {}", e.getMessage());
         }
     }
+
+    /**
+     * Snapshot tabloları için hourly rollup + raw temizlik.
+     * 24 saat öncesine kadar olan raw kayıtları saatlik özetleyip agg tablolarına
+     * yazar, sonra raw'ı siler. UTC 02:00 daily cleanup'tan çağrılır.
+     *
+     * Şu an WAL ve Archiver için. Diğer snapshot'lar (activity/lock/slru/replication)
+     * için Kiro'ya bırakıldı — pattern aynı.
+     */
+    public void rollupSnapshotsHourly() {
+        // === WAL hourly rollup ===
+        try {
+            int rolledUp = jdbc.update("""
+                insert into agg.pg_wal_hourly (hour_ts, instance_pk, sample_count,
+                    wal_bytes_total, wal_directory_size_avg, wal_file_count_avg)
+                select date_trunc('hour', sample_ts) as hour_ts,
+                       instance_pk,
+                       count(*)::int as sample_count,
+                       sum(period_wal_size_byte)::bigint as wal_bytes_total,
+                       avg(wal_directory_size_byte)::bigint as wal_directory_size_avg,
+                       avg(wal_file_count)::int as wal_file_count_avg
+                from fact.pg_wal_snapshot
+                where sample_ts < now() - interval '1 hour'
+                  and sample_ts >= now() - interval '48 hours'
+                  and not exists (
+                    select 1 from agg.pg_wal_hourly h
+                    where h.hour_ts = date_trunc('hour', fact.pg_wal_snapshot.sample_ts)
+                      and h.instance_pk = fact.pg_wal_snapshot.instance_pk
+                  )
+                group by 1, 2
+                on conflict (hour_ts, instance_pk) do nothing
+                """);
+            if (rolledUp > 0) log.info("WAL hourly rollup: {} satır", rolledUp);
+        } catch (Exception e) {
+            log.warn("WAL hourly rollup hatası: {}", e.getMessage());
+        }
+
+        // === Archiver hourly rollup ===
+        try {
+            int rolledUp = jdbc.update("""
+                insert into agg.pg_archiver_hourly (hour_ts, instance_pk, sample_count,
+                    archived_count_max, failed_count_max, last_archived_wal, last_failed_wal)
+                select date_trunc('hour', sample_ts) as hour_ts,
+                       instance_pk,
+                       count(*)::int,
+                       max(archived_count)::bigint,
+                       max(failed_count)::bigint,
+                       (array_agg(last_archived_wal order by sample_ts desc))[1],
+                       (array_agg(last_failed_wal order by sample_ts desc))[1]
+                from fact.pg_archiver_snapshot
+                where sample_ts < now() - interval '1 hour'
+                  and sample_ts >= now() - interval '48 hours'
+                  and not exists (
+                    select 1 from agg.pg_archiver_hourly h
+                    where h.hour_ts = date_trunc('hour', fact.pg_archiver_snapshot.sample_ts)
+                      and h.instance_pk = fact.pg_archiver_snapshot.instance_pk
+                  )
+                group by 1, 2
+                on conflict (hour_ts, instance_pk) do nothing
+                """);
+            if (rolledUp > 0) log.info("Archiver hourly rollup: {} satır", rolledUp);
+        } catch (Exception e) {
+            log.warn("Archiver hourly rollup hatası: {}", e.getMessage());
+        }
+
+        // === Eski hourly rollup'ları temizle (hourly_snapshot_retention_days) ===
+        try {
+            int retDays = 90;
+            try {
+                Integer cfg = jdbc.queryForObject(
+                    "select max(hourly_snapshot_retention_days) from control.retention_policy where is_active",
+                    Integer.class);
+                if (cfg != null && cfg > 0) retDays = cfg;
+            } catch (Exception ignore) {}
+
+            int n1 = jdbc.update("delete from agg.pg_wal_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            int n2 = jdbc.update("delete from agg.pg_archiver_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            if (n1 + n2 > 0) log.info("Eski hourly rollup temizlendi: wal={}, archiver={} (>{} gün)", n1, n2, retDays);
+        } catch (Exception e) {
+            log.debug("Hourly rollup retention atlandı: {}", e.getMessage());
+        }
+    }
 }

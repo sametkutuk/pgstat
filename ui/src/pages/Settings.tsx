@@ -319,6 +319,40 @@ function RetentionTab() {
 
     return (
         <div>
+            {/* Bilgilendirme: 4 katmanlı veri yaşam döngüsü */}
+            <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-blue-900">
+                <h4 className="font-bold mb-2">📚 Veri Yaşam Döngüsü</h4>
+                <p className="mb-2">
+                    pgstat 3 katmanlı yapıyla veri tutar — son saatler için detay,
+                    eski dönem için özet. Bu yapı disk'i %95 azaltır ama tüm sürelerde
+                    grafik görmeye izin verir.
+                </p>
+                <ul className="space-y-1.5 list-disc list-inside ml-2">
+                    <li>
+                        <strong>Delta tabloları</strong> (pgss_delta, pg_database_delta) —
+                        her cycle (60s) bir kayıt. <strong>raw_retention</strong> kadar tutulur,
+                        sonra <strong>hourly</strong> agregat'a iner (1 satır/saat),
+                        <strong>hourly_retention</strong> sonra <strong>daily</strong>'ye iner.
+                    </li>
+                    <li>
+                        <strong>Snapshot tabloları</strong> (pg_wal_snapshot, pg_archiver_snapshot,
+                        pg_activity/lock/slru/replication_snapshot) — her cycle 1 kayıt.
+                        <strong>snapshot_retention_hours</strong> (default 24h) sonra
+                        WAL & Archiver için <strong>hourly rollup</strong>'a iner
+                        (<strong>hourly_snapshot_retention_days</strong>, default 90g).
+                        Diğer snapshot'lar şu an sadece raw.
+                    </li>
+                    <li>
+                        <strong>Health Report</strong> ve uzun-vade grafikler hem raw hem hourly hem
+                        daily'den COALESCE ile en uygun granularity'yi alır.
+                    </li>
+                </ul>
+                <p className="mt-2 text-blue-700">
+                    💡 Disk tahmin: 8 instance × 60s cycle × 30g raw = ~50MB. Hourly rollup
+                    aynı dönem için ~3MB. Daily ~150KB. 12 ay'a kadar saklayabilirsin.
+                </p>
+            </div>
+
             <div className="flex justify-end mb-3">
                 <button onClick={() => { setFormMode(formMode === 'closed' ? 'add' : 'closed'); setForm(emptyRetention); }}
                     className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB]">

@@ -491,6 +491,8 @@ public class JobOrchestrator {
                 try {
                     purgeEvaluator.purgeJobRunHistory();
                     purgeEvaluator.purgeReportsAndNotifications();
+                    // Snapshot raw → hourly rollup (24h+ olanları taşır, raw'ı 24h'a iner)
+                    purgeEvaluator.rollupSnapshotsHourly();
                 } catch (Exception e) {
                     log.warn("Daily cleanup hatasi: {}", e.getMessage());
                     lastJobPurgeDate = null;
