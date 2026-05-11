@@ -825,6 +825,10 @@ router.get('/:id/health-report', async (req, res, next) => {
       order by d.day`, [id, days]),
 
       // Günlük WAL üretimi (MB cinsinden, eksik günler 0 olarak doldurulur)
+      // ÖNCE pg_wal_snapshot.period_wal_size_byte (LSN farkı — tüm PG sürümleri)
+      // YOKSA pg_cluster_delta'dan metric_family='pg_stat_wal' (PG13+)
+      // pg_wal_snapshot retention sadece saat bazlı (default 48h), bu yüzden
+      // eski günler için cluster_delta yedek kaynağıdır.
       safeQuery(`with days_series as (
         select generate_series(
           (now() - make_interval(days => $2))::date,
@@ -832,15 +836,30 @@ router.get('/:id/health-report', async (req, res, next) => {
           '1 day'::interval
         )::date as day
       ),
-      wal_agg as (
+      snap_agg as (
         select date_trunc('day', sample_ts)::date as day,
           sum(period_wal_size_byte) as wal_bytes
         from fact.pg_wal_snapshot where instance_pk = $1
         and sample_ts > now() - make_interval(days => $2)
         group by 1
+      ),
+      cluster_agg as (
+        select date_trunc('day', sample_ts)::date as day,
+          sum(metric_value_num) as wal_bytes
+        from fact.pg_cluster_delta where instance_pk = $1
+        and metric_family = 'pg_stat_wal' and metric_name = 'wal_bytes'
+        and sample_ts > now() - make_interval(days => $2)
+        group by 1
       )
-      select d.day, coalesce(round(w.wal_bytes::numeric / 1048576, 1), 0) as wal_mb
-      from days_series d left join wal_agg w on w.day = d.day
+      select d.day,
+        coalesce(
+          round(s.wal_bytes::numeric / 1048576, 1),
+          round(c.wal_bytes::numeric / 1048576, 1),
+          0
+        ) as wal_mb
+      from days_series d
+      left join snap_agg s on s.day = d.day
+      left join cluster_agg c on c.day = d.day
       order by d.day`, [id, days]),
 
       // CPU proxy: active_time / session_time (PG14+, session_time > 0 olan günler)
