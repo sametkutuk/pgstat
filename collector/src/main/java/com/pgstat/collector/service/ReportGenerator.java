@@ -383,7 +383,7 @@ public class ReportGenerator {
                    or coalesce(x.is_ready, true) = false
                 """, Integer.class);
             if (invalidIndexCount != null && invalidIndexCount > 0) {
-                sb.append("â€¢ ").append(invalidIndexCount).append(" invalid/not-ready index kontrol edilmeli\n");
+                sb.append("• ").append(invalidIndexCount).append(" invalid/not-ready index kontrol edilmeli\n");
             }
 
             // Temp file ureten instance sayisi
