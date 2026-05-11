@@ -8,8 +8,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Aksiyon-odakli built-in alert evaluator.
@@ -313,17 +315,19 @@ public class ActionableAlertEvaluator {
             where coalesce(i.is_valid, true) = false
                or coalesce(i.is_ready, true) = false
             order by inv.display_name, i.schemaname, i.index_relname
-            limit 100
             """);
 
         int count = 0;
+        Set<String> activeAlertKeys = new HashSet<>();
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
-            if (!configCache.isEnabled("index_invalid", instancePk)) continue;
 
             String index = r.get("schemaname") + "." + r.get("index_relname");
             String table = r.get("schemaname") + "." + r.get("table_relname");
             String alertKey = "actionable:index_invalid:" + instancePk + ":" + r.get("dbid") + ":" + index;
+            activeAlertKeys.add(alertKey);
+
+            if (!configCache.isEnabled("index_invalid", instancePk)) continue;
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -355,6 +359,19 @@ public class ActionableAlertEvaluator {
                 instancePk, null, null, rendered[0], rendered[1], detailsJson);
             count++;
         }
+
+        List<String> openKeys = jdbc.queryForList("""
+            select alert_key
+            from ops.alert
+            where alert_code = ?
+              and status = 'open'
+            """, String.class, AlertCode.INDEX_INVALID.getCode());
+        for (String key : openKeys) {
+            if (!activeAlertKeys.contains(key)) {
+                alertRepo.resolve(key);
+            }
+        }
+
         return count;
     }
 
