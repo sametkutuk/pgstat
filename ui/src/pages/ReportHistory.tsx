@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { apiGet, apiDelete } from '../api/client';
+import { apiGet, apiDelete, apiPost } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
@@ -54,6 +54,16 @@ export default function ReportHistory() {
             toast.success('Rapor silindi');
         },
         onError: () => toast.error('Silme başarısız'),
+    });
+
+    const triggerWeeklyMut = useMutation({
+        mutationFn: () => apiPost('/reports/trigger/weekly', {}),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['report-history'] });
+            toast.success('Haftalık rapor kuyruğa alındı');
+            window.setTimeout(() => qc.invalidateQueries({ queryKey: ['report-history'] }), 7000);
+        },
+        onError: () => toast.error('Haftalık rapor tetiklenemedi'),
     });
 
     const columns = [
@@ -115,6 +125,12 @@ export default function ReportHistory() {
                     <Link to="/settings" className="text-sm text-[#3B82F6] hover:underline print:hidden">
                         ⚙ Ayarlar
                     </Link>
+                    <button
+                        onClick={() => triggerWeeklyMut.mutate()}
+                        disabled={triggerWeeklyMut.isPending}
+                        className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] disabled:opacity-50 print:hidden">
+                        {triggerWeeklyMut.isPending ? 'Tetikleniyor...' : 'Haftalık Raporu Çalıştır'}
+                    </button>
                     <LastUpdated dataUpdatedAt={dataUpdatedAt} />
                     <PrintButton title="Rapor Tarihçesi" />
                 </div>

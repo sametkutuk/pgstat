@@ -13,6 +13,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,8 @@ public class ReportGenerator {
     private final NotificationService notificationService;
     private final ReportConfigRepository reportConfigRepo;
     private final ReportHistoryRepository reportHistoryRepo;
+    private static final DateTimeFormatter REPORT_RANGE_FMT =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'");
 
     public ReportGenerator(JdbcTemplate jdbc, InventoryRepository inventoryRepo,
                            NotificationService notificationService,
@@ -250,25 +253,31 @@ public class ReportGenerator {
      * Trend karsilastirmasi: bu hafta vs gecen hafta.
      */
     public void generateAndSendWeeklyReport() {
-        if (!isWeeklyEnabled()) {
+        generateAndSendWeeklyReport(false, OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    private long generateAndSendWeeklyReport(boolean manual, OffsetDateTime periodEnd) {
+        if (!manual && !isWeeklyEnabled()) {
             log.info("Haftalik rapor devre disi (config), atlandi");
-            return;
+            return -1;
         }
-        if (alreadySentToday("weekly")) {
+        if (!manual && alreadySentToday("weekly")) {
             log.info("Haftalik rapor bugun zaten gonderilmis (DB), atlandi");
-            return;
+            return -1;
         }
         log.info("Haftalik rapor uretiliyor...");
-        String title = "📈 pgstat Haftalık Kapasite Raporu — " + LocalDate.now(ZoneOffset.UTC);
+        OffsetDateTime end = periodEnd.withOffsetSameInstant(ZoneOffset.UTC);
+        String title = (manual ? "[Manuel] " : "") + "📈 pgstat Haftalık Kapasite Raporu — " + end.toLocalDate();
         try {
-            String body = buildWeeklyReport();
+            String body = buildWeeklyReport(end);
             if (body == null || body.isBlank()) {
                 log.warn("Haftalik rapor bos uretildi, gonderim atlandi");
-                return;
+                return -1;
             }
             SendResult result = sendReportToChannels(title, body);
+            long reportId = -1;
             try {
-                reportHistoryRepo.insert("weekly", title, body,
+                reportId = reportHistoryRepo.insert("weekly", title, body,
                     result.recipientsJson(), result.status(),
                     result.channelsCount(), result.errorMessage());
             } catch (Exception e) {
@@ -276,17 +285,23 @@ public class ReportGenerator {
             }
             log.info("Haftalik rapor gonderildi (status={}, channels={})",
                 result.status(), result.channelsCount());
+            return reportId;
         } catch (Exception e) {
             log.warn("Haftalik rapor hatasi: {}", e.getMessage());
+            throw e;
         }
     }
 
-    private String buildWeeklyReport() {
+    private String buildWeeklyReport(OffsetDateTime periodEnd) {
         StringBuilder sb = new StringBuilder();
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
-        LocalDate weekStart = today.minusDays(7);
+        OffsetDateTime end = periodEnd.withOffsetSameInstant(ZoneOffset.UTC);
+        OffsetDateTime weekStart = end.minusDays(7);
+        OffsetDateTime previousWeekStart = weekStart.minusDays(7);
         sb.append("📈 **pgstat Haftalık Kapasite Raporu**\n");
-        sb.append("📅 ").append(weekStart).append(" → ").append(today).append("\n\n");
+        sb.append("Aralık: ").append(REPORT_RANGE_FMT.format(weekStart))
+          .append(" -> ").append(REPORT_RANGE_FMT.format(end)).append("\n");
+        sb.append("Karşılaştırma: ").append(REPORT_RANGE_FMT.format(previousWeekStart))
+          .append(" -> ").append(REPORT_RANGE_FMT.format(weekStart)).append("\n\n");
 
         try {
             // Bu hafta vs gecen hafta karsilastirmasi
@@ -296,17 +311,16 @@ public class ReportGenerator {
                   coalesce(sum(temp_files_delta), 0) as temp_files,
                   coalesce(sum(deadlocks_delta), 0) as deadlocks
                 from fact.pg_database_delta
-                where sample_ts > now() - interval '7 days'
-                """);
+                where sample_ts > ? and sample_ts <= ?
+                """, weekStart, end);
             Map<String, Object> lastWeek = jdbc.queryForMap("""
                 select
                   coalesce(sum(xact_commit_delta + xact_rollback_delta), 0) as total_xact,
                   coalesce(sum(temp_files_delta), 0) as temp_files,
                   coalesce(sum(deadlocks_delta), 0) as deadlocks
                 from fact.pg_database_delta
-                where sample_ts > now() - interval '14 days'
-                  and sample_ts <= now() - interval '7 days'
-                """);
+                where sample_ts > ? and sample_ts <= ?
+                """, previousWeekStart, weekStart);
 
             long thisXact = toLong(thisWeek.get("total_xact"));
             long lastXact = toLong(lastWeek.get("total_xact"));
@@ -321,9 +335,11 @@ public class ReportGenerator {
 
             // WAL trendi
             Map<String, Object> walThis = jdbc.queryForMap(
-                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > now() - interval '7 days'");
+                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > ? and sample_ts <= ?",
+                weekStart, end);
             Map<String, Object> walLast = jdbc.queryForMap(
-                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > now() - interval '14 days' and sample_ts <= now() - interval '7 days'");
+                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > ? and sample_ts <= ?",
+                previousWeekStart, weekStart);
             sb.append("• WAL/hafta: ").append(humanBytes(toLong(walThis.get("wal"))))
               .append(" (geçen: ").append(humanBytes(toLong(walLast.get("wal")))).append(")\n\n");
 
@@ -373,14 +389,66 @@ public class ReportGenerator {
             // Temp file ureten instance sayisi
             Integer tempInstances = jdbc.queryForObject("""
                 select count(distinct instance_pk) from fact.pg_database_delta
-                where sample_ts > now() - interval '7 days' and temp_files_delta > 0
-                """, Integer.class);
+                where sample_ts > ? and sample_ts <= ? and temp_files_delta > 0
+                """, Integer.class, weekStart, end);
             if (tempInstances != null && tempInstances > 0) {
                 sb.append("• ").append(tempInstances).append(" instance temp file üretiyor (work_mem kontrol)\n");
             }
         } catch (Exception ignore) {}
 
         return sb.toString();
+    }
+
+    /**
+     * UI/API tarafindan control.report_trigger tablosuna yazilan manuel rapor
+     * isteklerini isler. Haftalik manuel rapor, request zamanindan onceki son
+     * 7 gunu baz alir ve otomatik gunluk idempotency guard'ini bypass eder.
+     */
+    public void processPendingManualReportTriggers() {
+        List<Map<String, Object>> triggers;
+        try {
+            triggers = jdbc.queryForList("""
+                select trigger_id, report_type, requested_at
+                from control.report_trigger
+                where status = 'pending'
+                order by requested_at
+                limit 5
+                """);
+        } catch (Exception e) {
+            log.debug("Manual report trigger tablosu okunamadi: {}", e.getMessage());
+            return;
+        }
+
+        for (Map<String, Object> trigger : triggers) {
+            long triggerId = toLong(trigger.get("trigger_id"));
+            String reportType = String.valueOf(trigger.get("report_type"));
+            int claimed = jdbc.update("""
+                update control.report_trigger
+                set status = 'running', started_at = now()
+                where trigger_id = ? and status = 'pending'
+                """, triggerId);
+            if (claimed == 0) continue;
+
+            try {
+                if (!"weekly".equals(reportType)) {
+                    throw new IllegalArgumentException("Desteklenmeyen manuel rapor tipi: " + reportType);
+                }
+                OffsetDateTime periodEnd = toOffsetDateTime(trigger.get("requested_at"));
+                long reportId = generateAndSendWeeklyReport(true, periodEnd);
+                jdbc.update("""
+                    update control.report_trigger
+                    set status = 'done', completed_at = now(), report_id = ?
+                    where trigger_id = ?
+                    """, reportId > 0 ? reportId : null, triggerId);
+            } catch (Exception e) {
+                String msg = e.getMessage() != null ? e.getMessage() : "unknown";
+                jdbc.update("""
+                    update control.report_trigger
+                    set status = 'failed', completed_at = now(), error_message = ?
+                    where trigger_id = ?
+                    """, msg.substring(0, Math.min(1000, msg.length())), triggerId);
+            }
+        }
     }
 
     // =========================================================================
@@ -445,6 +513,13 @@ public class ReportGenerator {
     private static double toDouble(Object val) {
         if (val == null) return 0;
         return ((Number) val).doubleValue();
+    }
+
+    private static OffsetDateTime toOffsetDateTime(Object val) {
+        if (val instanceof OffsetDateTime odt) return odt.withOffsetSameInstant(ZoneOffset.UTC);
+        if (val instanceof java.sql.Timestamp ts) return ts.toInstant().atOffset(ZoneOffset.UTC);
+        if (val instanceof java.util.Date date) return date.toInstant().atOffset(ZoneOffset.UTC);
+        return OffsetDateTime.now(ZoneOffset.UTC);
     }
 
     private static String humanBytes(long bytes) {

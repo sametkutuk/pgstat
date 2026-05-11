@@ -566,6 +566,12 @@ public class JobOrchestrator {
             // 3f. Gunluk/haftalik rapor — saat config'den alinir (UI'da duzenlenebilir).
             // Idempotency: gun bazinda tek tetik (saat 1 saat surdugu icin yuzlerce
             // tekrarli rapor olusmasin diye gun bazinda guard).
+            try {
+                reportGenerator.processPendingManualReportTriggers();
+            } catch (Exception e) {
+                log.warn("Manuel rapor trigger hatasi: {}", e.getMessage());
+            }
+
             int dailyHour = reportGenerator.dailyHourUtc();
             int weeklyHour = reportGenerator.weeklyHourUtc();
             if (currentUtcHour == dailyHour && !todayUtc.equals(lastDailyReportDate)) {

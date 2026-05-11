@@ -77,6 +77,38 @@ router.patch('/config', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// ----- MANUAL TRIGGER -----
+router.post('/trigger/:type', async (req, res, next) => {
+    try {
+        const reportType = req.params.type;
+        if (reportType !== 'weekly') {
+            res.status(400).json({ error: 'Geçersiz rapor tipi' });
+            return;
+        }
+        const requestedBy = (req as any).user?.username || (req as any).user?.email || 'ui';
+        const result = await pool.query(
+            `insert into control.report_trigger (report_type, requested_by)
+             values ($1, $2)
+             returning trigger_id, report_type, status, requested_at`,
+            [reportType, requestedBy]
+        );
+        res.status(202).json(result.rows[0]);
+    } catch (err) { next(err); }
+});
+
+router.get('/triggers', async (_req, res, next) => {
+    try {
+        const result = await pool.query(`
+            select trigger_id, report_type, requested_by, requested_at,
+                   started_at, completed_at, status, report_id, error_message
+            from control.report_trigger
+            order by requested_at desc
+            limit 20
+        `);
+        res.json(result.rows);
+    } catch (err) { next(err); }
+});
+
 // ----- HISTORY -----
 router.get('/history', async (req, res, next) => {
     try {
