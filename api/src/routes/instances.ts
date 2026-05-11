@@ -588,7 +588,7 @@ router.get('/:id/indexes', async (req, res, next) => {
       havingClauses.push("coalesce(sum(ix.idx_scan_delta), 0) = 0 and min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance");
     }
     if (invalidOnly) {
-      havingClauses.push("(bool_and(coalesce(ix.is_valid, true)) = false or bool_and(coalesce(ix.is_ready, true)) = false)");
+      havingClauses.push("(coalesce(lf.is_valid, true) = false or coalesce(lf.is_ready, true) = false)");
     }
     const havingSql = havingClauses.length ? `having ${havingClauses.join('\n        and ')}` : '';
 
@@ -598,6 +598,14 @@ router.get('/:id/indexes', async (req, res, next) => {
           now() - make_interval(hours => $2) as window_start,
           now() as window_end,
           least(greatest(make_interval(hours => $2) * 0.05, interval '10 minutes'), interval '6 hours') as tolerance
+      ),
+      latest_flags as (
+        select distinct on (ix.instance_pk, ix.dbid, ix.index_relid)
+          ix.instance_pk, ix.dbid, ix.index_relid,
+          ix.is_valid, ix.is_ready, ix.is_primary, ix.is_unique
+        from fact.pg_index_stat_delta ix
+        where ix.instance_pk = $1
+        order by ix.instance_pk, ix.dbid, ix.index_relid, ix.sample_ts desc
       )
       select
         ix.dbid, dbr.datname,
@@ -608,20 +616,22 @@ router.get('/:id/indexes', async (req, res, next) => {
         coalesce(sum(ix.idx_tup_fetch_delta), 0) as total_idx_tup_fetch,
         coalesce(sum(ix.idx_blks_read_delta), 0) as total_idx_blks_read,
         coalesce(sum(ix.idx_blks_hit_delta), 0) as total_idx_blks_hit,
-        bool_and(coalesce(ix.is_valid, true)) as is_valid,
-        bool_and(coalesce(ix.is_ready, true)) as is_ready,
-        bool_or(coalesce(ix.is_primary, false)) as is_primary,
-        bool_or(coalesce(ix.is_unique, false)) as is_unique,
+        coalesce(lf.is_valid, true) as is_valid,
+        coalesce(lf.is_ready, true) as is_ready,
+        coalesce(lf.is_primary, false) as is_primary,
+        coalesce(lf.is_unique, false) as is_unique,
         min(ix.sample_ts) as observed_since,
         max(ix.sample_ts) as observed_until,
         round(extract(epoch from (max(ix.sample_ts) - min(ix.sample_ts))) / 3600.0, 1) as observed_hours,
         (min(ix.sample_ts) <= b.window_start + b.tolerance and max(ix.sample_ts) >= b.window_end - b.tolerance) as unused_window_covered
       from fact.pg_index_stat_delta ix
       cross join bounds b
+      left join latest_flags lf on lf.instance_pk = ix.instance_pk and lf.dbid = ix.dbid and lf.index_relid = ix.index_relid
       left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
       where ${where.join('\n        and ')}
       group by ix.dbid, dbr.datname, ix.index_relid, ix.table_relid, ix.schemaname,
-               ix.table_relname, ix.index_relname, b.window_start, b.window_end, b.tolerance
+               ix.table_relname, ix.index_relname, lf.is_valid, lf.is_ready, lf.is_primary, lf.is_unique,
+               b.window_start, b.window_end, b.tolerance
       ${havingSql}
       order by ${unusedOnly ? 'total_idx_blks_read desc nulls last, dbr.datname, ix.schemaname, ix.index_relname' : 'total_idx_scan desc nulls last'}
       limit ${limitParam}
@@ -672,6 +682,15 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
     const invalidOnly = req.query.invalid === 'true';
 
     const result = await pool.query(`
+      with latest_flags as (
+        select distinct on (ix.instance_pk, ix.dbid, ix.index_relid)
+          ix.instance_pk, ix.dbid, ix.index_relid,
+          ix.is_valid, ix.is_ready, ix.is_primary, ix.is_unique
+        from fact.pg_index_stat_delta ix
+        where ix.instance_pk = $1
+          and ix.dbid = $2
+        order by ix.instance_pk, ix.dbid, ix.index_relid, ix.sample_ts desc
+      )
       select
         ix.index_relid, ix.table_relid, ix.schemaname,
         ix.table_relname, ix.index_relname,
@@ -680,17 +699,18 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
         sum(ix.idx_tup_fetch_delta) as total_idx_tup_fetch,
         sum(ix.idx_blks_read_delta) as total_idx_blks_read,
         sum(ix.idx_blks_hit_delta) as total_idx_blks_hit,
-        bool_and(coalesce(ix.is_valid, true)) as is_valid,
-        bool_and(coalesce(ix.is_ready, true)) as is_ready,
-        bool_or(coalesce(ix.is_primary, false)) as is_primary,
-        bool_or(coalesce(ix.is_unique, false)) as is_unique
+        coalesce(lf.is_valid, true) as is_valid,
+        coalesce(lf.is_ready, true) as is_ready,
+        coalesce(lf.is_primary, false) as is_primary,
+        coalesce(lf.is_unique, false) as is_unique
       from fact.pg_index_stat_delta ix
+      left join latest_flags lf on lf.instance_pk = ix.instance_pk and lf.dbid = ix.dbid and lf.index_relid = ix.index_relid
       where ix.instance_pk = $1
         and ix.dbid = $2
         and ix.sample_ts >= now() - make_interval(hours => $3)
       group by ix.index_relid, ix.table_relid, ix.schemaname,
-               ix.table_relname, ix.index_relname
-      ${invalidOnly ? "having bool_and(coalesce(ix.is_valid, true)) = false or bool_and(coalesce(ix.is_ready, true)) = false" : ''}
+               ix.table_relname, ix.index_relname, lf.is_valid, lf.is_ready, lf.is_primary, lf.is_unique
+      ${invalidOnly ? "having coalesce(lf.is_valid, true) = false or coalesce(lf.is_ready, true) = false" : ''}
       order by total_idx_scan desc nulls last
       limit 100
     `, [id, dbid, hours]);
@@ -743,7 +763,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     const [
       instanceInfo, cacheHit, connections, tempFiles, deadlocks,
       walProduction, openAlerts, tpsDaily, connectionDaily, walDaily, cpuProxyDaily, bloatTop, indexSuspect,
-      unusedIndex, settings, workloadProfile, settingsChanges
+      unusedIndex, invalidIndex, settings, workloadProfile, settingsChanges
     ] = await Promise.all([
       // Instance bilgisi
       safeQuery(`select i.*, c.pg_major, c.is_primary, s.last_cluster_collect_at, s.consecutive_failures
@@ -928,6 +948,16 @@ router.get('/:id/health-report', async (req, res, next) => {
         and max(i.sample_ts) >= b.window_end - b.tolerance
       ) sub`, [id]),
 
+      pool.query(`select count(*) as cnt from (
+        select distinct on (i.dbid, i.index_relid)
+          i.is_valid, i.is_ready
+        from fact.pg_index_stat_delta i
+        where i.instance_pk = $1
+        order by i.dbid, i.index_relid, i.sample_ts desc
+      ) latest
+      where coalesce(latest.is_valid, true) = false
+         or coalesce(latest.is_ready, true) = false`, [id]),
+
       // PG settings (son snapshot — sadece onemli parametreler)
       safeQuery(`select setting_name, setting_value, unit from fact.pg_settings_snapshot
         where instance_pk = $1
@@ -979,6 +1009,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     const walBytes = parseInt(walProduction.rows[0]?.wal_bytes || '0');
     const missingIndexCount = parseInt(indexSuspect.rows[0]?.cnt || '0');
     const unusedIndexCount = parseInt(unusedIndex.rows[0]?.cnt || '0');
+    const invalidIndexCount = parseInt(invalidIndex.rows[0]?.cnt || '0');
 
     // Alert sayıları
     const alertCounts: Record<string, number> = {};
@@ -988,7 +1019,7 @@ router.get('/:id/health-report', async (req, res, next) => {
     // Overall status
     let overallStatus = 'healthy';
     if (alertCounts.critical > 0 || connPct > 90) overallStatus = 'critical';
-    else if (alertCounts.warning > 0 || cacheHitPct < 95 || tempFilesCount > 100 || connPct > 80) overallStatus = 'warning';
+    else if (alertCounts.warning > 0 || invalidIndexCount > 0 || cacheHitPct < 95 || tempFilesCount > 100 || connPct > 80) overallStatus = 'warning';
 
     // Checks
     const checks = [
@@ -1000,6 +1031,7 @@ router.get('/:id/health-report', async (req, res, next) => {
       { section: 'Depolama', name: 'WAL Üretimi (son 24 saat)', status: walBytes < 5_000_000_000 ? 'ok' : 'warning', value: formatBytes(walBytes) },
       { section: 'Index Sağlığı', name: 'Missing Index Suspect', status: missingIndexCount === 0 ? 'ok' : 'warning', value: `${missingIndexCount} tablo` },
       { section: 'Index Sağlığı', name: 'Unused Index', status: unusedIndexCount === 0 ? 'ok' : 'info', value: `${unusedIndexCount} index` },
+      { section: 'Index Sağlığı', name: 'Invalid / Not-ready Index', status: invalidIndexCount === 0 ? 'ok' : 'warning', value: `${invalidIndexCount} index` },
       { section: 'Alert', name: 'Açık Alert', status: totalAlerts === 0 ? 'ok' : alertCounts.critical ? 'critical' : 'warning', value: `${totalAlerts} alert` },
     ];
 

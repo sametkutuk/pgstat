@@ -31,14 +31,16 @@ public class NotificationService {
     private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     private final JdbcTemplate jdbc;
+    private final SystemAlertConfigCache systemAlertConfigCache;
     private final HttpClient httpClient;
 
     /** JavaMailSender opsiyonel — SMTP ayarları yoksa null kalır */
     @Autowired(required = false)
     private JavaMailSender mailSender;
 
-    public NotificationService(JdbcTemplate jdbc) {
+    public NotificationService(JdbcTemplate jdbc, SystemAlertConfigCache systemAlertConfigCache) {
         this.jdbc = jdbc;
+        this.systemAlertConfigCache = systemAlertConfigCache;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -48,7 +50,7 @@ public class NotificationService {
      * Alert oluşturulduktan/güncellendikten sonra çağrılır.
      * Snooze ve bakım penceresi kontrolü yapılır, uygunsa bildirim gönderilir.
      */
-    public void notifyIfNeeded(long alertId, String alertKey, String severity,
+    public void notifyIfNeeded(long alertId, String alertKey, String alertCode, String severity,
                                 Long instancePk, String title, String message) {
         try {
             // Spam koruma: ayni alert_id tekrar tetiklendiginde bildirim gonderme.
@@ -59,24 +61,34 @@ public class NotificationService {
                     "select count(*) from ops.notification_log where alert_id = ? and status = 'sent'",
                     Long.class, alertId);
                 if (previousNotifications != null && previousNotifications > 0) {
-                    // Bu alert icin daha onceden bildirim gonderildi.
-                    // Severity yukseldiyse tekrar gonder, yoksa atla.
-                    // KRITIK: Karsilastirma nl.severity (bildirim gonderildigi andaki
-                    // severity) uzerinden yapilir — ops.alert.severity her upsert'te
-                    // yeni severity'ye guncellenir, eski seviyeyi kaybeder.
-                    Long higherSeverityNotifications = jdbc.queryForObject(
-                        "select count(*) from ops.notification_log nl " +
-                        "where nl.alert_id = ? and nl.status = 'sent' " +
-                        "  and (case nl.severity when 'info' then 0 when 'warning' then 1 " +
-                        "                        when 'error' then 2 when 'critical' then 3 " +
-                        "                        when 'emergency' then 4 else 0 end) >= " +
-                        "      (case ? when 'info' then 0 when 'warning' then 1 " +
-                        "              when 'error' then 2 when 'critical' then 3 " +
-                        "              when 'emergency' then 4 else 0 end)",
-                        Long.class, alertId, severity);
-                    if (higherSeverityNotifications != null && higherSeverityNotifications > 0) {
-                        log.debug("Spam koruma: alert_id={} ayni/dusuk severity zaten gonderilmis, atlandi",
-                            alertId);
+                    boolean actionableSystemAlert = alertKey != null && alertKey.startsWith("actionable:");
+                    int cooldownMinutes = actionableSystemAlert
+                        ? Math.max(0, systemAlertConfigCache.getCooldownMinutes(alertCode, instancePk))
+                        : -1;
+                    String rank = "(case %s when 'info' then 0 when 'warning' then 1 " +
+                        "when 'error' then 2 when 'critical' then 3 " +
+                        "when 'emergency' then 4 else 0 end)";
+
+                    Long suppressingNotifications;
+                    if (actionableSystemAlert && cooldownMinutes > 0) {
+                        suppressingNotifications = jdbc.queryForObject(
+                            "select count(*) from ops.notification_log nl " +
+                            "where nl.alert_id = ? and nl.status = 'sent' " +
+                            "  and nl.sent_at >= now() - (? * interval '1 minute') " +
+                            "  and " + rank.formatted("nl.severity") + " >= " + rank.formatted("?"),
+                            Long.class, alertId, cooldownMinutes, severity);
+                    } else if (actionableSystemAlert) {
+                        suppressingNotifications = 0L;
+                    } else {
+                        suppressingNotifications = jdbc.queryForObject(
+                            "select count(*) from ops.notification_log nl " +
+                            "where nl.alert_id = ? and nl.status = 'sent' " +
+                            "  and " + rank.formatted("nl.severity") + " >= " + rank.formatted("?"),
+                            Long.class, alertId, severity);
+                    }
+
+                    if (suppressingNotifications != null && suppressingNotifications > 0) {
+                        log.debug("Spam koruma: alert_id={} cooldown/severity nedeniyle atlandi", alertId);
                         return;
                     }
                 }

@@ -80,7 +80,7 @@ export default function InstanceDetail() {
         { key: 'statements', label: 'Statements', tip: 'pg_stat_statements — son 1 saatteki en yoğun sorgular. Exec time, calls, rows bazında sıralanır.' },
         { key: 'databases', label: 'Databases' },
         { key: 'tables', label: 'Tablo İstatistikleri', tip: 'Seçilen database için son 24 saatteki tablo istatistikleri.' },
-        { key: 'indexes', label: 'Index İstatistikleri', tip: 'Instance genelinde veya seçilen database için index istatistikleri ve unused index exportu.' },
+        { key: 'indexes', label: 'Index İstatistikleri', tip: 'Instance genelinde veya seçilen database için index istatistikleri, invalid/unused filtreleri ve Excel export.' },
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
@@ -722,19 +722,27 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
-    const [unusedOnly, setUnusedOnly] = useState(false);
+    const [indexState, setIndexState] = useState<'all' | 'unused' | 'invalid'>('all');
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
     }, [initialDbid]);
 
     const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, hours, unusedOnly],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}${unusedOnly ? '&unused=true&limit=10000' : ''}`),
+        queryKey: ['instance-indexes', instancePk, hours, indexState],
+        queryFn: () => {
+            const stateParam = indexState === 'unused'
+                ? '&unused=true&limit=10000'
+                : indexState === 'invalid'
+                    ? '&invalid=true&limit=10000'
+                    : '';
+            return apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}${stateParam}`);
+        },
         enabled: Number.isFinite(instancePk),
     });
 
     const isUnusedIndex = (r: any) => statNumber(r.total_idx_scan) === 0 && r.unused_window_covered === true;
+    const isInvalidIndex = (r: any) => r.is_valid === false || r.is_ready === false;
 
     const metricValue = (r: any) => {
         if (orderBy === 'tup_read') return statNumber(r.total_idx_tup_read);
@@ -750,13 +758,14 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         return (indexes.data || [])
             .filter((r: any) => {
                 if (dbFilter && String(r.dbid) !== dbFilter) return false;
-                if (unusedOnly && !isUnusedIndex(r)) return false;
+                if (indexState === 'unused' && !isUnusedIndex(r)) return false;
+                if (indexState === 'invalid' && !isInvalidIndex(r)) return false;
                 if (q && !`${r.datname || ''}.${r.schemaname || ''}.${r.table_relname || ''}.${r.index_relname || ''}`.toLowerCase().includes(q)) return false;
                 if (min > 0 && metricValue(r) < min) return false;
                 return true;
             })
             .sort((a: any, b: any) => metricValue(b) - metricValue(a));
-    }, [indexes.data, dbFilter, search, minValue, orderBy, unusedOnly]);
+    }, [indexes.data, dbFilter, search, minValue, orderBy, indexState]);
 
     const databases = useMemo(() => {
         const map = new Map<string, string>();
@@ -764,18 +773,24 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         return Array.from(map.entries()).map(([dbid, datname]) => ({ dbid, datname })).sort((a, b) => a.datname.localeCompare(b.datname));
     }, [indexes.data]);
 
-    const hasFilter = dbFilter || search || minValue || unusedOnly;
+    const hasFilter = dbFilter || search || minValue || indexState !== 'all';
     const unusedCount = useMemo(() => (indexes.data || []).filter(isUnusedIndex).length, [indexes.data]);
+    const invalidCount = useMemo(() => (indexes.data || []).filter(isInvalidIndex).length, [indexes.data]);
     const selectedDatabase = databases.find(d => d.dbid === dbFilter)?.datname;
     const selectedRange = INDEX_TIME_RANGES.find(r => r.hours === hours) || { hours, label: `${hours} saat`, slug: `${hours}h` };
 
     const exportExcel = () => {
-        const headers = ['database', 'schema', 'table', 'index', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct', 'observed_since', 'observed_until', 'observed_hours', 'unused_window_covered'];
+        const headers = ['database', 'schema', 'table', 'index', 'status', 'is_valid', 'is_ready', 'is_primary', 'is_unique', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct', 'observed_since', 'observed_until', 'observed_hours', 'unused_window_covered'];
         const rows = filtered.map((r: any) => [
             r.datname || '',
             r.schemaname || '',
             r.table_relname || '',
             r.index_relname || '',
+            isInvalidIndex(r) ? 'invalid_or_not_ready' : isUnusedIndex(r) ? 'unused' : 'ok',
+            r.is_valid === false ? 'no' : 'yes',
+            r.is_ready === false ? 'no' : 'yes',
+            r.is_primary === true ? 'yes' : 'no',
+            r.is_unique === true ? 'yes' : 'no',
             statNumber(r.total_idx_scan),
             statNumber(r.total_idx_tup_read),
             statNumber(r.total_idx_tup_fetch),
@@ -792,7 +807,8 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
             .join('');
         const workbook = `<!doctype html><html><head><meta charset="utf-8" /></head><body><table>${tableRows}</table></body></html>`;
         const scope = selectedDatabase || `instance-${instancePk}`;
-        downloadText(`pgstat-unused-indexes-${safeFileName(scope)}-${selectedRange.slug}.xls`, workbook, 'application/vnd.ms-excel;charset=utf-8');
+        const exportKind = indexState === 'invalid' ? 'invalid-indexes' : indexState === 'unused' ? 'unused-indexes' : 'indexes';
+        downloadText(`pgstat-${exportKind}-${safeFileName(scope)}-${selectedRange.slug}.xls`, workbook, 'application/vnd.ms-excel;charset=utf-8');
     };
 
     return (
@@ -828,11 +844,12 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Kullanım</label>
-                                <select value={unusedOnly ? 'unused' : 'all'} onChange={e => setUnusedOnly(e.target.value === 'unused')}
+                                <label className="block text-xs text-[#64748B] mb-1">Durum</label>
+                                <select value={indexState} onChange={e => setIndexState(e.target.value as 'all' | 'unused' | 'invalid')}
                                     className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[145px]">
                                     <option value="all">Tüm indexler</option>
                                     <option value="unused">Unused only</option>
+                                    <option value="invalid">Invalid / not-ready</option>
                                 </select>
                             </div>
                             <div className="flex-1 min-w-[180px]">
@@ -847,7 +864,7 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                             </div>
                             <div className="flex items-end gap-2 pb-0.5">
                                 {hasFilter && (
-                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); setUnusedOnly(false); }}
+                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); setIndexState('all'); }}
                                         className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                                         Temizle
                                     </button>
@@ -868,12 +885,12 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                             </div>
                         </div>
                         <div className="mt-3 text-xs text-[#64748B]">
-                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0 ve pencereyi kapsayan yeterli gözlem datası var. {unusedOnly ? `Export kapsamı: ${selectedDatabase || 'tüm instance'} (${filtered.length} unused index).` : `Bu aralıkta kanıtlanabilen unused index: ${unusedCount}.`}
+                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0 ve pencereyi kapsayan yeterli gözlem datası var. Invalid kriteri son snapshot'ta indisvalid=false veya indisready=false olmasıdır. Kanıtlı unused: {unusedCount}, invalid/not-ready: {invalidCount}.
                         </div>
                     </div>
 
                     <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-                        {indexes.isLoading ? <SkeletonTable rows={5} cols={6} /> : filtered.length === 0 ? (
+                        {indexes.isLoading ? <SkeletonTable rows={5} cols={7} /> : filtered.length === 0 ? (
                             <div className="text-[#94A3B8] py-8 text-center text-sm">Index istatistiği yok veya filtreyle eşleşen index bulunamadı.</div>
                         ) : (
                             <div className="overflow-x-auto">
@@ -885,14 +902,17 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                                             <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
                                             <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuples</th>
                                             <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blocks</th>
+                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Status</th>
                                             <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Hit Ratio</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {filtered.map((r: any) => {
                                             const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
+                                            const invalid = isInvalidIndex(r);
+                                            const unused = isUnusedIndex(r);
                                             return (
-                                        <tr key={`${r.dbid}-${r.index_relid}`} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${isUnusedIndex(r) ? 'bg-amber-50/40' : ''}`}>
+                                        <tr key={`${r.dbid}-${r.index_relid}`} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${invalid ? 'bg-red-50/60' : unused ? 'bg-amber-50/40' : ''}`}>
                                             <td className="py-2.5 px-3 text-xs">
                                                 <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
                                                 <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>
@@ -908,6 +928,18 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                                                     <td className="py-2.5 px-3 text-right font-mono text-xs">
                                                         <div>{fmtNum(statNumber(r.total_idx_blks_read))} R</div>
                                                         <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} H</div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-xs">
+                                                        {invalid ? (
+                                                            <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">Invalid / not-ready</span>
+                                                        ) : unused ? (
+                                                            <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">Unused</span>
+                                                        ) : (
+                                                            <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700">OK</span>
+                                                        )}
+                                                        <div className="mt-1 text-[10px] text-[#94A3B8]">
+                                                            valid={r.is_valid === false ? 'no' : 'yes'} ready={r.is_ready === false ? 'no' : 'yes'}
+                                                        </div>
                                                     </td>
                                                     <td className={`py-2.5 px-3 text-right font-mono text-xs ${ratio < 95 ? 'text-amber-600 font-semibold' : 'text-green-600'}`}>
                                                         {ratio.toFixed(1)}%

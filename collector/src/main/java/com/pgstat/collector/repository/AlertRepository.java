@@ -92,7 +92,7 @@ public class AlertRepository {
         );
 
         // Bildirim gönder
-        fireNotification(alertId, alertKey, alertCode.getDefaultSeverity(), instancePk, title, message);
+        fireNotification(alertId, alertKey, alertCode.getCode(), alertCode.getDefaultSeverity(), instancePk, title, message);
 
         return alertId;
     }
@@ -146,7 +146,7 @@ public class AlertRepository {
         );
 
         // Bildirim gönder
-        fireNotification(alertId, alertKey, severity, instancePk, title, message);
+        fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
 
         return alertId;
     }
@@ -166,11 +166,11 @@ public class AlertRepository {
     }
 
     /** Bildirim servisine async olarak iletir. Hata olursa alert akışını bozmaz. */
-    private void fireNotification(long alertId, String alertKey, String severity,
+    private void fireNotification(long alertId, String alertKey, String alertCode, String severity,
                                    Long instancePk, String title, String message) {
         if (notificationService == null) return;
         try {
-            notificationService.notifyIfNeeded(alertId, alertKey, severity, instancePk, title, message);
+            notificationService.notifyIfNeeded(alertId, alertKey, alertCode, severity, instancePk, title, message);
         } catch (Exception e) {
             // Bildirim hatası alert akışını kesmemeli
         }
