@@ -788,7 +788,11 @@ router.get('/:id/health-report', async (req, res, next) => {
       // Günlük TPS trendi (son N gün, eksik günler 0 olarak doldurulur)
       safeQuery(`with days_series as (
         select generate_series(
-          (now() - make_interval(days => $2))::date,
+          greatest(
+            (now() - make_interval(days => $2))::date,
+            coalesce((select min(sample_ts)::date from fact.pg_database_delta where instance_pk = $1),
+                     (now() - make_interval(days => $2))::date)
+          ),
           current_date,
           '1 day'::interval
         )::date as day
@@ -808,7 +812,11 @@ router.get('/:id/health-report', async (req, res, next) => {
       // Günlük max bağlantı trendi (eksik günler 0)
       safeQuery(`with days_series as (
         select generate_series(
-          (now() - make_interval(days => $2))::date,
+          greatest(
+            (now() - make_interval(days => $2))::date,
+            coalesce((select min(sample_ts)::date from fact.pg_database_delta where instance_pk = $1),
+                     (now() - make_interval(days => $2))::date)
+          ),
           current_date,
           '1 day'::interval
         )::date as day
@@ -829,12 +837,20 @@ router.get('/:id/health-report', async (req, res, next) => {
       // YOKSA pg_cluster_delta'dan metric_family='pg_stat_wal' (PG13+)
       // pg_wal_snapshot retention sadece saat bazlı (default 48h), bu yüzden
       // eski günler için cluster_delta yedek kaynağıdır.
-      safeQuery(`with days_series as (
-        select generate_series(
+      // SERİ BAŞLANGICI: instance için ilk gerçek veri tarihinden başla
+      // (collector geç başladıysa eski günlerin 0 çizilmesini engeller)
+      safeQuery(`with first_data as (
+        select greatest(
           (now() - make_interval(days => $2))::date,
-          current_date,
-          '1 day'::interval
-        )::date as day
+          coalesce(
+            (select min(sample_ts)::date from fact.pg_wal_snapshot where instance_pk = $1),
+            (select min(sample_ts)::date from fact.pg_cluster_delta where instance_pk = $1 and metric_family = 'pg_stat_wal'),
+            (now() - make_interval(days => $2))::date
+          )
+        ) as start_day
+      ),
+      days_series as (
+        select generate_series((select start_day from first_data), current_date, '1 day'::interval)::date as day
       ),
       snap_agg as (
         select date_trunc('day', sample_ts)::date as day,
