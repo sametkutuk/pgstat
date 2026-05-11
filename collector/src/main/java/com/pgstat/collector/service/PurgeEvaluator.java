@@ -517,6 +517,137 @@ public class PurgeEvaluator {
             log.warn("Archiver hourly rollup hatası: {}", e.getMessage());
         }
 
+        // === Activity hourly rollup (state bazlı sayım + max duration) ===
+        try {
+            int n = jdbc.update("""
+                insert into agg.pg_activity_hourly
+                  (hour_ts, instance_pk, sample_count, active_count_max, idle_count_max,
+                   idle_in_tx_count_max, waiting_count_max, total_sessions_max,
+                   max_query_duration_seconds, max_xact_duration_seconds)
+                select date_trunc('hour', snapshot_ts) as hour_ts, instance_pk,
+                       count(distinct snapshot_ts)::int as sample_count,
+                       max(active_count)::int, max(idle_count)::int,
+                       max(idle_in_tx_count)::int, max(waiting_count)::int,
+                       max(total_sessions)::int,
+                       max(max_query_duration_seconds)::int,
+                       max(max_xact_duration_seconds)::int
+                from (
+                  select snapshot_ts, instance_pk,
+                    count(*) filter (where state = 'active') as active_count,
+                    count(*) filter (where state = 'idle') as idle_count,
+                    count(*) filter (where state = 'idle in transaction') as idle_in_tx_count,
+                    count(*) filter (where wait_event is not null) as waiting_count,
+                    count(*) as total_sessions,
+                    extract(epoch from coalesce(now() - min(query_start), '0'::interval))::int as max_query_duration_seconds,
+                    extract(epoch from coalesce(now() - min(xact_start), '0'::interval))::int as max_xact_duration_seconds
+                  from fact.pg_activity_snapshot
+                  where snapshot_ts < now() - interval '1 hour'
+                    and snapshot_ts >= now() - interval '48 hours'
+                    and backend_type = 'client backend'
+                  group by snapshot_ts, instance_pk
+                ) per_sample
+                where not exists (
+                  select 1 from agg.pg_activity_hourly h
+                  where h.hour_ts = date_trunc('hour', per_sample.snapshot_ts)
+                    and h.instance_pk = per_sample.instance_pk)
+                group by 1, 2
+                on conflict (hour_ts, instance_pk) do nothing
+                """);
+            if (n > 0) log.info("Activity hourly rollup: {} satır", n);
+        } catch (Exception e) {
+            log.warn("Activity hourly rollup hatası: {}", e.getMessage());
+        }
+
+        // === Lock hourly rollup (waiting count + max wait duration) ===
+        try {
+            int n = jdbc.update("""
+                insert into agg.pg_lock_hourly
+                  (hour_ts, instance_pk, sample_count, waiting_locks_max, granted_locks_max, max_wait_seconds)
+                select date_trunc('hour', snapshot_ts), instance_pk,
+                       count(distinct snapshot_ts)::int,
+                       max(waiting)::int, max(granted)::int,
+                       max(wait_sec)::int
+                from (
+                  select snapshot_ts, instance_pk,
+                    count(*) filter (where not granted) as waiting,
+                    count(*) filter (where granted) as granted,
+                    extract(epoch from coalesce(now() - min(waitstart), '0'::interval))::int as wait_sec
+                  from fact.pg_lock_snapshot
+                  where snapshot_ts < now() - interval '1 hour'
+                    and snapshot_ts >= now() - interval '48 hours'
+                  group by snapshot_ts, instance_pk
+                ) per_sample
+                where not exists (
+                  select 1 from agg.pg_lock_hourly h
+                  where h.hour_ts = date_trunc('hour', per_sample.snapshot_ts)
+                    and h.instance_pk = per_sample.instance_pk)
+                group by 1, 2
+                on conflict (hour_ts, instance_pk) do nothing
+                """);
+            if (n > 0) log.info("Lock hourly rollup: {} satır", n);
+        } catch (Exception e) {
+            log.warn("Lock hourly rollup hatası: {}", e.getMessage());
+        }
+
+        // === Replication hourly rollup (max lag) ===
+        try {
+            int n = jdbc.update("""
+                insert into agg.pg_replication_hourly
+                  (hour_ts, instance_pk, sample_count, standby_count_max,
+                   max_replay_lag_bytes, max_replay_lag_seconds)
+                select date_trunc('hour', snapshot_ts), instance_pk,
+                       count(distinct snapshot_ts)::int,
+                       max(standby_cnt)::int, max(lag_bytes)::bigint, max(lag_sec)::numeric
+                from (
+                  select snapshot_ts, instance_pk,
+                    count(*) as standby_cnt,
+                    max(replay_lag_bytes) as lag_bytes,
+                    extract(epoch from max(replay_lag)) as lag_sec
+                  from fact.pg_replication_snapshot
+                  where snapshot_ts < now() - interval '1 hour'
+                    and snapshot_ts >= now() - interval '48 hours'
+                  group by snapshot_ts, instance_pk
+                ) per_sample
+                where not exists (
+                  select 1 from agg.pg_replication_hourly h
+                  where h.hour_ts = date_trunc('hour', per_sample.snapshot_ts)
+                    and h.instance_pk = per_sample.instance_pk)
+                group by 1, 2
+                on conflict (hour_ts, instance_pk) do nothing
+                """);
+            if (n > 0) log.info("Replication hourly rollup: {} satır", n);
+        } catch (Exception e) {
+            log.warn("Replication hourly rollup hatası: {}", e.getMessage());
+        }
+
+        // === SLRU hourly rollup (per name, kümülatif sayaçlardan delta) ===
+        try {
+            int n = jdbc.update("""
+                insert into agg.pg_slru_hourly
+                  (hour_ts, instance_pk, name, sample_count, blks_hit_delta,
+                   blks_read_delta, blks_written_delta, flushes_delta)
+                select date_trunc('hour', sample_ts), instance_pk, name,
+                       count(*)::int,
+                       greatest(max(blks_hit) - min(blks_hit), 0)::bigint,
+                       greatest(max(blks_read) - min(blks_read), 0)::bigint,
+                       greatest(max(blks_written) - min(blks_written), 0)::bigint,
+                       greatest(max(flushes) - min(flushes), 0)::bigint
+                from fact.pg_slru_snapshot
+                where sample_ts < now() - interval '1 hour'
+                  and sample_ts >= now() - interval '48 hours'
+                  and not exists (
+                    select 1 from agg.pg_slru_hourly h
+                    where h.hour_ts = date_trunc('hour', fact.pg_slru_snapshot.sample_ts)
+                      and h.instance_pk = fact.pg_slru_snapshot.instance_pk
+                      and h.name = fact.pg_slru_snapshot.name)
+                group by 1, 2, 3
+                on conflict (hour_ts, instance_pk, name) do nothing
+                """);
+            if (n > 0) log.info("SLRU hourly rollup: {} satır", n);
+        } catch (Exception e) {
+            log.warn("SLRU hourly rollup hatası: {}", e.getMessage());
+        }
+
         // === Eski hourly rollup'ları temizle (hourly_snapshot_retention_days) ===
         try {
             int retDays = 90;
@@ -529,7 +660,13 @@ public class PurgeEvaluator {
 
             int n1 = jdbc.update("delete from agg.pg_wal_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
             int n2 = jdbc.update("delete from agg.pg_archiver_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
-            if (n1 + n2 > 0) log.info("Eski hourly rollup temizlendi: wal={}, archiver={} (>{} gün)", n1, n2, retDays);
+            int n3 = jdbc.update("delete from agg.pg_activity_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            int n4 = jdbc.update("delete from agg.pg_lock_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            int n5 = jdbc.update("delete from agg.pg_replication_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            int n6 = jdbc.update("delete from agg.pg_slru_hourly where hour_ts < now() - make_interval(days => ?)", retDays);
+            int total = n1 + n2 + n3 + n4 + n5 + n6;
+            if (total > 0) log.info("Eski hourly rollup temizlendi: wal={}, archiver={}, activity={}, lock={}, replication={}, slru={} (>{} gün)",
+                n1, n2, n3, n4, n5, n6, retDays);
         } catch (Exception e) {
             log.debug("Hourly rollup retention atlandı: {}", e.getMessage());
         }

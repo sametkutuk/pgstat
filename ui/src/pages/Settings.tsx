@@ -335,12 +335,12 @@ function RetentionTab() {
                         <strong>hourly_retention</strong> sonra <strong>daily</strong>'ye iner.
                     </li>
                     <li>
-                        <strong>Snapshot tabloları</strong> (pg_wal_snapshot, pg_archiver_snapshot,
-                        pg_activity/lock/slru/replication_snapshot) — her cycle 1 kayıt.
+                        <strong>Snapshot tabloları</strong> (pg_wal, pg_archiver, pg_activity,
+                        pg_lock, pg_replication, pg_slru) — her cycle 1 kayıt.
                         <strong>snapshot_retention_hours</strong> (default 24h) sonra
-                        WAL & Archiver için <strong>hourly rollup</strong>'a iner
+                        her biri için <strong>hourly rollup</strong>'a iner
                         (<strong>hourly_snapshot_retention_days</strong>, default 90g).
-                        Diğer snapshot'lar şu an sadece raw.
+                        UTC 02:00 daily cleanup'ta otomatik agregat alınır.
                     </li>
                     <li>
                         <strong>Health Report</strong> ve uzun-vade grafikler hem raw hem hourly hem
