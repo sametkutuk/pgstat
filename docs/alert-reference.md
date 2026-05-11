@@ -48,9 +48,12 @@ template secimi metric tipine gore yapilir.
 
 ## Work Mem Notu
 
-`high_temp_files`, `high_temp_files_daily` ve `high_temp_sqls_daily` global
-`ALTER SYSTEM SET work_mem` onermez. Guvenli yaklasim once query/session
-seviyesinde `SET LOCAL work_mem` ile test etmektir. Global deger icin host RAM,
-`shared_buffers`, `max_connections` ve eszamanli sort/hash sayisi bilinmelidir.
-`high_temp_sqls_daily` icin SQL basina minimum temp yazimi ilk fazda sabit
-100MB'dir; `threshold_value` sadece kac SQL'den sonra alert uretilecegini belirler.
+`high_temp_files` query/session seviyesinde `SET LOCAL work_mem` onerisi verir.
+Oneri once temp yazan sorgu ihtiyacindan hesaplanir, sonra `max_connections`,
+`shared_buffers` ve `effective_cache_size` ile konservatif ust sinira cekilir:
+`(effective_cache_size - shared_buffers) / max_connections / 2`.
+`effective_cache_size` gercek host RAM degil, PostgreSQL planner cache tahmini/proxy
+degeridir; bu nedenle global `ALTER SYSTEM SET work_mem` degisikligi otomatik
+onerilmez. `high_temp_sqls_daily` icin SQL basina minimum temp yazimi ilk fazda
+sabit 100MB'dir; `threshold_value` sadece kac SQL'den sonra alert uretilecegini
+belirler.

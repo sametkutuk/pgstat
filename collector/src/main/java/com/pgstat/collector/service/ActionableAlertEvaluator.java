@@ -18,12 +18,12 @@ import java.util.Map;
  *
  * Alert'ler:
  * 1. INDEX_SUSPECT_MISSING — seq_scan/idx_scan > 100, tablo > 10MB
- * 2. INDEX_UNUSED — 30g idx_scan=0, index > 100MB
+ * 2. INDEX_UNUSED — 30g idx_scan=0
  * 3. HIGH_TEMP_FILES — temp_files > 100/saat
  * 4. IDLE_IN_TX_TIME_HIGH — idle_in_tx / session > 30% (PG14+)
  * 5. REPLICATION_SLOT_INACTIVE — 1h inactive, lag > 1GB
  *
- * Her alert somut SQL aksiyon onerisi icerir (V040 template'leri).
+ * Her alert somut SQL aksiyon onerisi icerir.
  */
 @Service
 public class ActionableAlertEvaluator {
@@ -183,7 +183,7 @@ public class ActionableAlertEvaluator {
     }
 
     // =========================================================================
-    // 2. INDEX_UNUSED — 30g idx_scan=0, index > 100MB
+    // 2. INDEX_UNUSED — 30g idx_scan=0, size informational only
     // =========================================================================
 
     private int checkIndexUnused() {
@@ -199,6 +199,8 @@ public class ActionableAlertEvaluator {
             ),
             per_inst as (
               select i.instance_pk, i.dbid, i.schemaname,
+                     coalesce(dbr.datname, i.dbid::text) as database_key,
+                     coalesce(dbr.datname, '?') as datname,
                      i.index_relname as indexrelname, i.table_relname,
                      sum(i.idx_scan_delta) as total_scans,
                      min(i.sample_ts) as observed_since,
@@ -207,26 +209,28 @@ public class ActionableAlertEvaluator {
                       and max(i.sample_ts) >= b.window_end - b.tolerance) as full_window_covered
               from fact.pg_index_stat_delta i
               cross join bounds b
+              left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid
               where i.sample_ts >= b.window_start
-              group by i.instance_pk, i.dbid, i.schemaname, i.index_relname, i.table_relname,
+              group by i.instance_pk, i.dbid, i.schemaname, dbr.datname, i.index_relname, i.table_relname,
                        b.window_start, b.window_end, b.tolerance
             ),
             cluster_idx as (
               -- aynı küme + aynı index ismi (tüm replikalar dahil)
-              select vic.cluster_id, p.schemaname, p.indexrelname,
+              select vic.cluster_id, p.database_key, p.schemaname, p.indexrelname,
                      sum(p.total_scans) as cluster_total_scans,
                      bool_and(p.full_window_covered) as cluster_window_covered
               from per_inst p
               join control.v_instance_cluster vic on vic.instance_pk = p.instance_pk
               where vic.cluster_id is not null
-              group by vic.cluster_id, p.schemaname, p.indexrelname
+              group by vic.cluster_id, p.database_key, p.schemaname, p.indexrelname
             )
-            select p.*, rs.total_size_bytes, inst.display_name, dbr.datname,
+            select p.*, rs.total_size_bytes, inst.display_name,
                    vic.cluster_id, ci.cluster_total_scans
             from per_inst p
             join control.instance_inventory inst on inst.instance_pk = p.instance_pk
             left join control.v_instance_cluster vic on vic.instance_pk = p.instance_pk
             left join cluster_idx ci on ci.cluster_id = vic.cluster_id
+                  and ci.database_key = p.database_key
                   and ci.schemaname = p.schemaname and ci.indexrelname = p.indexrelname
             left join lateral (
               select total_size_bytes from fact.pg_relation_size_snapshot rs
@@ -235,7 +239,6 @@ public class ActionableAlertEvaluator {
                 and rs.relkind = 'i'
               order by snapshot_ts desc limit 1
             ) rs on true
-            left join dim.database_ref dbr on dbr.instance_pk = p.instance_pk and dbr.dbid = p.dbid
             where p.total_scans = 0
               and p.full_window_covered
               and (
@@ -382,8 +385,14 @@ public class ActionableAlertEvaluator {
 
             String alertKey = "actionable:high_temp_files:" + instancePk + ":" + r.get("dbid");
 
-            String workMem = readSetting(instancePk, "work_mem");
-            String maxConnections = readSetting(instancePk, "max_connections");
+            SettingInfo workMemInfo = readSettingInfo(instancePk, "work_mem");
+            SettingInfo maxConnectionsInfo = readSettingInfo(instancePk, "max_connections");
+            SettingInfo sharedBuffersInfo = readSettingInfo(instancePk, "shared_buffers");
+            SettingInfo effectiveCacheInfo = readSettingInfo(instancePk, "effective_cache_size");
+            String workMem = formatSetting(workMemInfo, "?");
+            String maxConnections = formatSetting(maxConnectionsInfo, "?");
+            String sharedBuffers = formatSetting(sharedBuffersInfo, "?");
+            String effectiveCacheSize = formatSetting(effectiveCacheInfo, "?");
 
             // Top 3 temp ureten sorgu
             List<Map<String, Object>> topTempQueries = getTopTempQueries(instancePk);
@@ -393,8 +402,15 @@ public class ActionableAlertEvaluator {
             for (Map<String, Object> q : topTempQueries) {
                 maxQueryTempBytes = Math.max(maxQueryTempBytes, toLong(q.get("temp_bytes")));
             }
-            String suggested = suggestQueryLocalWorkMem(maxQueryTempBytes);
-            String workMemGuidance = buildWorkMemGuidance(suggested, maxConnections);
+            WorkMemAdvice advice = buildWorkMemAdvice(
+                maxQueryTempBytes,
+                parseSettingBytes(workMemInfo, 4L * 1024L * 1024L),
+                parseSettingLong(maxConnectionsInfo, 0),
+                parseSettingBytes(sharedBuffersInfo, 0),
+                parseSettingBytes(effectiveCacheInfo, 0)
+            );
+            String suggested = advice.suggestedWorkMem();
+            String workMemGuidance = advice.guidance();
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -404,6 +420,9 @@ public class ActionableAlertEvaluator {
             ctx.put("temp_bytes_human", humanBytes(tempBytes));
             ctx.put("work_mem", workMem);
             ctx.put("max_connections", maxConnections);
+            ctx.put("shared_buffers", sharedBuffers);
+            ctx.put("effective_cache_size", effectiveCacheSize);
+            ctx.put("safe_global_work_mem", advice.safeGlobalWorkMem());
             ctx.put("top_temp_queries", formatTopTempQueriesToText(topTempQueries));
             ctx.put("suggested_work_mem", suggested);
             ctx.put("work_mem_guidance", workMemGuidance);
@@ -417,7 +436,10 @@ public class ActionableAlertEvaluator {
                 .setKind("temp_files")
                 .addContext("work_mem", workMem)
                 .addContext("max_connections", maxConnections)
+                .addContext("shared_buffers", sharedBuffers)
+                .addContext("effective_cache_size", effectiveCacheSize)
                 .addContext("suggested_work_mem", suggested)
+                .addContext("safe_global_work_mem", advice.safeGlobalWorkMem())
                 .addContext("work_mem_guidance", workMemGuidance)
                 .addContext("temp_files", r.get("temp_files"))
                 .addContext("temp_bytes", tempBytes)
@@ -1139,34 +1161,131 @@ public class ActionableAlertEvaluator {
         return formatTopTempQueriesToText(getTopTempQueries(instancePk));
     }
 
-    private String readSetting(long instancePk, String settingName) {
+    private record SettingInfo(String value, String unit) {}
+    private record WorkMemAdvice(String suggestedWorkMem, String safeGlobalWorkMem, String guidance) {}
+
+    private SettingInfo readSettingInfo(long instancePk, String settingName) {
         try {
-            return jdbc.queryForObject(
-                "select setting_value from fact.pg_settings_snapshot " +
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "select setting_value, unit from fact.pg_settings_snapshot " +
                 "where instance_pk = ? and setting_name = ? " +
                 "order by snapshot_ts desc limit 1",
-                String.class, instancePk, settingName);
+                instancePk, settingName);
+            if (rows.isEmpty()) return null;
+            Map<String, Object> row = rows.get(0);
+            return new SettingInfo(
+                row.get("setting_value") != null ? row.get("setting_value").toString() : null,
+                row.get("unit") != null ? row.get("unit").toString() : null
+            );
         } catch (Exception ignore) {
-            return "?";
+            return null;
         }
     }
 
-    private String buildWorkMemGuidance(String queryLocalWorkMem, String maxConnections) {
-        return "Query bazli oner: SET LOCAL work_mem = '" + queryLocalWorkMem + "'. " +
-            "Global work_mem icin host RAM bilinmeden deger onermiyoruz. " +
-            "Formul: (RAM - shared_buffers - OS payi) / max_connections(" + maxConnections +
-            ") / eszamanli sort-hash katsayisi.";
+    private WorkMemAdvice buildWorkMemAdvice(long tempBytes, long currentWorkMemBytes,
+                                             long maxConnections, long sharedBuffersBytes,
+                                             long effectiveCacheBytes) {
+        long queryNeedBytes = suggestQueryLocalWorkMemBytes(tempBytes, currentWorkMemBytes);
+        long safeGlobalBytes = estimateSafeGlobalWorkMemBytes(
+            maxConnections, sharedBuffersBytes, effectiveCacheBytes);
+
+        long suggestedBytes = queryNeedBytes;
+        if (safeGlobalBytes > 0 && suggestedBytes > safeGlobalBytes) {
+            suggestedBytes = safeGlobalBytes;
+        }
+        if (currentWorkMemBytes > 0 && suggestedBytes < currentWorkMemBytes) {
+            suggestedBytes = currentWorkMemBytes;
+        }
+
+        String suggested = humanWorkMem(roundWorkMemBytes(suggestedBytes, false));
+        String safeGlobal = safeGlobalBytes > 0 ? humanWorkMem(roundWorkMemBytes(safeGlobalBytes, false)) : "?";
+
+        String guidance = safeGlobalBytes > 0
+            ? "Query/session onerisi: SET LOCAL work_mem = '" + suggested + "'. " +
+              "Konservatif global ust sinir ~= " + safeGlobal +
+              " (effective_cache_size proxy; (effective_cache_size - shared_buffers) / max_connections / 2). " +
+              "effective_cache_size gercek RAM degildir, planner cache tahminidir."
+            : "Query/session onerisi: SET LOCAL work_mem = '" + suggested + "'. " +
+              "Global ust sinir hesaplanamadi; max_connections/shared_buffers/effective_cache_size snapshot eksik.";
+        return new WorkMemAdvice(suggested, safeGlobal, guidance);
     }
 
-    /** Query/session scope icin guvenli baslangic onerisi; global ALTER SYSTEM onerisi degildir. */
-    private String suggestQueryLocalWorkMem(long tempBytes) {
-        long mb = Math.max(16, tempBytes / 1048576 / 10);
-        if (mb <= 16) return "16MB";
-        if (mb <= 32) return "32MB";
-        if (mb <= 64) return "64MB";
-        if (mb <= 128) return "128MB";
-        if (mb <= 256) return "256MB";
-        return "512MB";
+    private long suggestQueryLocalWorkMemBytes(long tempBytes, long currentWorkMemBytes) {
+        long tempBasedBytes = Math.max(16L * 1024L * 1024L, tempBytes / 10L);
+        long base = Math.max(currentWorkMemBytes, tempBasedBytes);
+        return Math.min(base, 512L * 1024L * 1024L);
+    }
+
+    private long estimateSafeGlobalWorkMemBytes(long maxConnections, long sharedBuffersBytes,
+                                                long effectiveCacheBytes) {
+        if (maxConnections <= 0 || effectiveCacheBytes <= 0) return 0;
+        // effective_cache_size usually includes shared_buffers; subtract it to avoid double counting.
+        long memoryProxy = effectiveCacheBytes > sharedBuffersBytes
+            ? effectiveCacheBytes - sharedBuffersBytes
+            : effectiveCacheBytes / 2L;
+        if (memoryProxy <= 0) return 0;
+        long perConnection = memoryProxy / maxConnections;
+        long sortHashConcurrencyFactor = 2L;
+        long safe = perConnection / sortHashConcurrencyFactor;
+        if (safe < 1L * 1024L * 1024L) return 0;
+        return Math.min(safe, 512L * 1024L * 1024L);
+    }
+
+    private static String formatSetting(SettingInfo setting, String fallback) {
+        if (setting == null || setting.value() == null || setting.value().isBlank()) return fallback;
+        String unit = setting.unit() != null ? setting.unit().trim() : "";
+        return unit.isBlank() ? setting.value() : setting.value() + unit;
+    }
+
+    private static long parseSettingLong(SettingInfo setting, long fallback) {
+        if (setting == null || setting.value() == null) return fallback;
+        try {
+            return Long.parseLong(setting.value().trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private static long parseSettingBytes(SettingInfo setting, long fallbackBytes) {
+        if (setting == null || setting.value() == null) return fallbackBytes;
+        try {
+            BigDecimal n = new BigDecimal(setting.value().trim());
+            String u = setting.unit() != null ? setting.unit().trim().toLowerCase() : "kb";
+            BigDecimal multiplier = switch (u) {
+                case "b", "byte", "bytes" -> BigDecimal.ONE;
+                case "8kb" -> new BigDecimal(8192);
+                case "mb" -> new BigDecimal(1_048_576);
+                case "gb" -> new BigDecimal(1_073_741_824);
+                default -> new BigDecimal(1024);
+            };
+            return n.multiply(multiplier).longValue();
+        } catch (Exception e) {
+            return fallbackBytes;
+        }
+    }
+
+    private static long roundWorkMemBytes(long bytes, boolean roundUp) {
+        long mb = Math.max(1, bytes / 1_048_576L);
+        long[] steps = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512};
+        long selected = steps[0];
+        for (long step : steps) {
+            if (roundUp) {
+                if (mb <= step) return step * 1_048_576L;
+            } else if (mb >= step) {
+                selected = step;
+            }
+        }
+        return selected * 1_048_576L;
+    }
+
+    private static String humanWorkMem(long bytes) {
+        if (bytes >= 1_073_741_824L && bytes % 1_073_741_824L == 0) {
+            return (bytes / 1_073_741_824L) + "GB";
+        }
+        if (bytes >= 1_048_576L && bytes % 1_048_576L == 0) {
+            return (bytes / 1_048_576L) + "MB";
+        }
+        return Math.max(1, bytes / 1024L) + "kB";
     }
 
     private static String humanBytes(long bytes) {

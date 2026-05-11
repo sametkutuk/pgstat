@@ -436,6 +436,9 @@ public class AlertRuleEvaluator {
                     workMemRow = rows.get(0);
                 }
             } catch (Exception ignore) {}
+            Map<String, Object> maxConnectionsRow = fetchSettingRow(instancePk, "max_connections");
+            Map<String, Object> sharedBuffersRow = fetchSettingRow(instancePk, "shared_buffers");
+            Map<String, Object> effectiveCacheRow = fetchSettingRow(instancePk, "effective_cache_size");
 
             long currentWorkMemBytes = parseSettingBytes(
                 workMemRow != null ? workMemRow.get("setting_value") : null,
@@ -445,6 +448,18 @@ public class AlertRuleEvaluator {
                 workMemRow != null ? workMemRow.get("setting_value") : null,
                 workMemRow != null ? workMemRow.get("unit") : null,
                 humanBytes(currentWorkMemBytes));
+            String maxConnections = formatSetting(
+                maxConnectionsRow != null ? maxConnectionsRow.get("setting_value") : null,
+                maxConnectionsRow != null ? maxConnectionsRow.get("unit") : null,
+                "?");
+            String sharedBuffers = formatSetting(
+                sharedBuffersRow != null ? sharedBuffersRow.get("setting_value") : null,
+                sharedBuffersRow != null ? sharedBuffersRow.get("unit") : null,
+                "?");
+            String effectiveCacheSize = formatSetting(
+                effectiveCacheRow != null ? effectiveCacheRow.get("setting_value") : null,
+                effectiveCacheRow != null ? effectiveCacheRow.get("unit") : null,
+                "?");
 
             // Fallback pencere: 15 dk'da boşsa 60 dk, sonra 1440 dk dene.
             // Sebep: pgss collection ~5 dk frekansta, statement-level temp attribution
@@ -477,7 +492,20 @@ public class AlertRuleEvaluator {
                 maxTempBytesPerCall = Math.max(maxTempBytesPerCall, toLong(q.get("avg_temp_bytes_per_call")));
             }
 
-            String suggestedWorkMem = suggestWorkMem(currentWorkMemBytes, maxTempBytesPerCall);
+            WorkMemAdvice workMemAdvice = buildWorkMemAdvice(
+                currentWorkMemBytes,
+                maxTempBytesPerCall,
+                parseSettingLong(maxConnectionsRow != null ? maxConnectionsRow.get("setting_value") : null, 0),
+                parseSettingBytes(
+                    sharedBuffersRow != null ? sharedBuffersRow.get("setting_value") : null,
+                    sharedBuffersRow != null ? sharedBuffersRow.get("unit") : null,
+                    0),
+                parseSettingBytes(
+                    effectiveCacheRow != null ? effectiveCacheRow.get("setting_value") : null,
+                    effectiveCacheRow != null ? effectiveCacheRow.get("unit") : null,
+                    0)
+            );
+            String suggestedWorkMem = workMemAdvice.suggestedWorkMem();
             long suggestedWorkMemBytes = parseWorkMemText(suggestedWorkMem, currentWorkMemBytes);
 
             StringBuilder summary = new StringBuilder();
@@ -502,11 +530,13 @@ public class AlertRuleEvaluator {
                         .append("\n");
                 }
             }
-            summary.append("🧠 Mevcut `work_mem`: **").append(workMem).append("**\n");
+            summary.append("Mevcut `work_mem`: **").append(workMem)
+                .append("**, max_connections=").append(maxConnections)
+                .append(", shared_buffers=").append(sharedBuffers)
+                .append(", effective_cache_size=").append(effectiveCacheSize).append("\n");
             summary.append("🎯 Query-level öneri: **SET LOCAL work_mem = '").append(suggestedWorkMem).append("'**");
             summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
-            summary.append("Global work_mem için host RAM bilinmeden değer önermiyoruz; work_mem connection ve sort/hash node başına ayrılır. ");
-            summary.append("Güvenli global hesap: (RAM - shared_buffers - OS payı) / max_connections / eşzamanlı sort/hash katsayısı.");
+            summary.append(workMemAdvice.guidance());
 
             StringBuilder json = new StringBuilder();
             json.append("{\"kind\":\"temp_files\"");
@@ -520,6 +550,10 @@ public class AlertRuleEvaluator {
             json.append(",\"window_extended\":").append(windowExtended);
             json.append(",\"work_mem\":\"").append(escapeJson(workMem)).append("\"");
             json.append(",\"work_mem_bytes\":").append(currentWorkMemBytes);
+            json.append(",\"max_connections\":\"").append(escapeJson(maxConnections)).append("\"");
+            json.append(",\"shared_buffers\":\"").append(escapeJson(sharedBuffers)).append("\"");
+            json.append(",\"effective_cache_size\":\"").append(escapeJson(effectiveCacheSize)).append("\"");
+            json.append(",\"safe_global_work_mem\":\"").append(escapeJson(workMemAdvice.safeGlobalWorkMem())).append("\"");
             json.append(",\"suggested_work_mem\":\"").append(escapeJson(suggestedWorkMem)).append("\"");
             json.append(",\"suggested_work_mem_bytes\":").append(suggestedWorkMemBytes);
             json.append(",\"max_temp_bytes_per_call\":").append(maxTempBytesPerCall);
@@ -1937,6 +1971,70 @@ public class AlertRuleEvaluator {
         }
     }
 
+    private Map<String, Object> fetchSettingRow(long instancePk, String settingName) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList("""
+                select setting_value, unit
+                from fact.pg_settings_snapshot
+                where instance_pk = ? and setting_name = ?
+                order by snapshot_ts desc
+                limit 1
+                """, instancePk, settingName);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private record WorkMemAdvice(String suggestedWorkMem, String safeGlobalWorkMem, String guidance) {}
+
+    private static WorkMemAdvice buildWorkMemAdvice(long currentWorkMemBytes, long maxTempBytesPerCall,
+                                                    long maxConnections, long sharedBuffersBytes,
+                                                    long effectiveCacheBytes) {
+        String tempBasedText = suggestWorkMem(currentWorkMemBytes, maxTempBytesPerCall);
+        long queryNeedBytes = parseWorkMemText(tempBasedText, currentWorkMemBytes);
+        long safeGlobalBytes = estimateSafeGlobalWorkMemBytes(
+            maxConnections, sharedBuffersBytes, effectiveCacheBytes);
+
+        long suggestedBytes = queryNeedBytes;
+        if (safeGlobalBytes > 0 && suggestedBytes > safeGlobalBytes) {
+            suggestedBytes = safeGlobalBytes;
+        }
+        if (currentWorkMemBytes > 0 && suggestedBytes < currentWorkMemBytes) {
+            suggestedBytes = currentWorkMemBytes;
+        }
+
+        String suggested = humanWorkMem(roundWorkMemBytes(suggestedBytes));
+        String safeGlobal = safeGlobalBytes > 0 ? humanWorkMem(roundWorkMemBytes(safeGlobalBytes)) : "?";
+        String guidance = safeGlobalBytes > 0
+            ? "Konservatif global ust sinir ~= " + safeGlobal +
+              " (effective_cache_size proxy; (effective_cache_size - shared_buffers) / max_connections / 2). " +
+              "effective_cache_size gercek RAM degil, planner cache tahminidir."
+            : "Global ust sinir hesaplanamadi; max_connections/shared_buffers/effective_cache_size snapshot eksik.";
+        return new WorkMemAdvice(suggested, safeGlobal, guidance);
+    }
+
+    private static long estimateSafeGlobalWorkMemBytes(long maxConnections, long sharedBuffersBytes,
+                                                       long effectiveCacheBytes) {
+        if (maxConnections <= 0 || effectiveCacheBytes <= 0) return 0;
+        long memoryProxy = effectiveCacheBytes > sharedBuffersBytes
+            ? effectiveCacheBytes - sharedBuffersBytes
+            : effectiveCacheBytes / 2L;
+        if (memoryProxy <= 0) return 0;
+        long safe = (memoryProxy / maxConnections) / 2L;
+        if (safe < 1L * 1024L * 1024L) return 0;
+        return Math.min(safe, 512L * 1024L * 1024L);
+    }
+
+    private static long parseSettingLong(Object value, long fallback) {
+        if (value == null) return fallback;
+        try {
+            return Long.parseLong(value.toString().trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
     private static String suggestWorkMem(long currentWorkMemBytes, long maxTempBytesPerCall) {
         if (maxTempBytesPerCall <= 0) {
             return humanWorkMem(currentWorkMemBytes);
@@ -1951,6 +2049,16 @@ public class AlertRuleEvaluator {
         else if (mb <= 256) roundedMb = 256;
         else roundedMb = 512;
         return roundedMb + "MB";
+    }
+
+    private static long roundWorkMemBytes(long bytes) {
+        long mb = Math.max(1, bytes / 1_048_576L);
+        long[] steps = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512};
+        long selected = steps[0];
+        for (long step : steps) {
+            if (mb >= step) selected = step;
+        }
+        return selected * 1_048_576L;
     }
 
     private static long parseWorkMemText(String text, long fallbackBytes) {
