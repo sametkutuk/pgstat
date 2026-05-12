@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPatch } from '../api/client';
+import { apiGet, apiPatch, apiPost } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
@@ -72,6 +72,15 @@ export default function Alerts() {
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['alerts'] }); toast.success('Alert çözüldü.'); },
     });
 
+    const evaluateNowMut = useMutation({
+        mutationFn: () => apiPost('/alerts/evaluate-now', {}),
+        onSuccess: () => {
+            toast.success('Alert kuralları yeniden değerlendiriliyor (5-10s)');
+            window.setTimeout(() => queryClient.invalidateQueries({ queryKey: ['alerts'] }), 8000);
+        },
+        onError: () => toast.error('Komut gönderilemedi'),
+    });
+
     const [expandedId, setExpandedId] = useState<number | null>(null);
 
     // /alerts/:id ile gelindiğinde data yüklendikten sonra ilgili row'u otomatik aç.
@@ -142,6 +151,12 @@ export default function Alerts() {
                     <InfoTip text="Collector her 5 saniyede alert kurallarını değerlendirir. Açık alert'ler otomatik tekrar sayısı artar. Onayla = farkındayım, Çöz = sorun giderildi. Snooze ve bakım penceresi ayarları Adaptive Alerting sayfasından yapılır." />
                 </div>
                 <div className="flex items-center gap-3">
+                    <button onClick={() => evaluateNowMut.mutate()}
+                        disabled={evaluateNowMut.isPending}
+                        title="Tüm alert kurallarını şimdi yeniden değerlendir — parametre/sorgu değişimi sonrası alert'lerin güncellenmesi için"
+                        className="px-3 py-1.5 text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded disabled:opacity-50">
+                        {evaluateNowMut.isPending ? 'Gönderildi...' : '🔄 Şimdi Değerlendir'}
+                    </button>
                     <LastUpdated dataUpdatedAt={dataUpdatedAt} />
                     <PrintButton title="Alerts" />
                 </div>

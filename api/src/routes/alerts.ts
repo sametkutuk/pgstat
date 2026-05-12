@@ -88,6 +88,19 @@ router.patch('/:id/acknowledge', async (req, res, next) => {
   }
 });
 
+// POST /api/alerts/evaluate-now — Tüm alert kurallarını hemen değerlendir
+// Kullanıcı parametre değiştirip alert'in kapanmasını bekliyorsa 5-10s
+// içinde re-evaluation tetiklenir (collector command queue üzerinden).
+router.post('/evaluate-now', async (_req, res, next) => {
+  try {
+    const r = await pool.query(
+      `insert into control.collector_command (command) values ('evaluate_alerts')
+       returning command_id, status, requested_at`
+    );
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
 // PATCH /api/alerts/:id/resolve — Alert'i çöz
 router.patch('/:id/resolve', async (req, res, next) => {
   try {

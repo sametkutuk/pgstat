@@ -515,6 +515,11 @@ public class JobOrchestrator {
                         if ("refresh_settings".equals(cmd) && instancePk != null) {
                             com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
                             if (inst != null) nightlySnapshotCollector.collectHotSettings(inst);
+                        } else if ("evaluate_alerts".equals(cmd)) {
+                            // Tüm acute + rolling actionable + user-defined rule'ları hemen değerlendir
+                            actionableAlertEvaluator.evaluateAcute();
+                            actionableAlertEvaluator.evaluateFrequent();
+                            alertRuleEvaluator.evaluate();
                         }
                         jdbc.update("update control.collector_command set status='done', processed_at=now() where command_id=?", cmdId);
                     } catch (Exception cex) {
