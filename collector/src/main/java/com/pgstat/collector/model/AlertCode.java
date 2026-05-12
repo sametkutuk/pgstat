@@ -17,6 +17,7 @@ public enum AlertCode {
     HIGH_BLOAT_RATIO("high_bloat_ratio", "info", "instance"),
     STALE_DATA("stale_data", "warning", "instance"),
     STATS_RESET_DETECTED("stats_reset_detected", "info", "instance"),
+    PARAMETER_CHANGED("parameter_changed", "info", "instance"),
     BOOTSTRAP_FAILED("bootstrap_failed", "error", "instance"),
     SECRET_REF_ERROR("secret_ref_error", "critical", "instance"),
     LOCK_CONTENTION("lock_contention", "warning", "instance"),

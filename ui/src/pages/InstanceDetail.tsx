@@ -12,7 +12,7 @@ import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRa
 import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings' | 'settings_diff';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -94,8 +94,7 @@ export default function InstanceDetail() {
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
         { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
-        { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir (alert\'lerin eski değer görmesini engeller).' },
-        { key: 'settings_diff', label: 'Yapılandırma Değişiklikleri', tip: 'pg_settings_snapshot tablosundan ardışık snapshot\'lar arasında değişen postgresql.conf parametreleri. shared_buffers, work_mem gibi önemli parametreler vurgulanır.' },
+        { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir. Parametre değiştiğinde otomatik PARAMETER_CHANGED INFO alert tetiklenir (bildirim kanallarına da gönderilir).' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
     ];
@@ -172,7 +171,6 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
-            {tab === 'settings_diff' && <SettingsDiffTab data={settingsDiff.data} loading={settingsDiff.isLoading} days={settingsDiffDays} onDaysChange={setSettingsDiffDays} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
         </div >
