@@ -12,7 +12,7 @@ import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRa
 import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings_diff';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings' | 'settings_diff';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -94,6 +94,7 @@ export default function InstanceDetail() {
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
         { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
+        { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir (alert\'lerin eski değer görmesini engeller).' },
         { key: 'settings_diff', label: 'Yapılandırma Değişiklikleri', tip: 'pg_settings_snapshot tablosundan ardışık snapshot\'lar arasında değişen postgresql.conf parametreleri. shared_buffers, work_mem gibi önemli parametreler vurgulanır.' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
@@ -117,12 +118,6 @@ export default function InstanceDetail() {
                     className="px-3 py-1 text-xs rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200">
                     📋 Sağlık Raporu
                 </Link>
-                <button onClick={() => refreshSettingsMut.mutate()}
-                    disabled={refreshSettingsMut.isPending}
-                    title="pg_settings'i şimdi yenile — ALTER SYSTEM sonrası alert'lerin eski değer görmesini engeller"
-                    className="px-3 py-1 text-xs rounded bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 disabled:opacity-50">
-                    {refreshSettingsMut.isPending ? 'Gönderildi...' : '🔄 Parametreleri Yenile'}
-                </button>
             </div>
 
             <BootstrapBanner inst={inst} cap={cap} instanceId={id!} />
@@ -176,6 +171,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
+            {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'settings_diff' && <SettingsDiffTab data={settingsDiff.data} loading={settingsDiff.isLoading} days={settingsDiffDays} onDaysChange={setSettingsDiffDays} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
@@ -1892,6 +1888,81 @@ interface SettingsDiffData {
     period_days: number;
     total_changes: number;
     changes: SettingChange[];
+}
+
+function SettingsTab({ instanceId, onRefresh, refreshing }: {
+    instanceId: string; onRefresh: () => void; refreshing: boolean;
+}) {
+    const [filter, setFilter] = useState('');
+    const { data, isLoading, refetch } = useQuery({
+        queryKey: ['inst-settings', instanceId],
+        queryFn: () => apiGet<{ settings: any[]; last_snapshot_ts: string | null }>(`/instances/${instanceId}/settings`),
+        refetchInterval: 30_000,
+    });
+
+    if (isLoading) return <div className="bg-white rounded-lg shadow-sm p-4"><SkeletonTable rows={10} cols={4} /></div>;
+    if (!data || data.settings.length === 0) {
+        return <EmptyState icon="⚙" title="Parametre snapshot'ı yok"
+            description="Nightly snapshot henüz alınmamış veya pg_settings_snapshot tablosu boş. 'Şimdi Yenile' butonuyla hemen tetikleyebilirsin." />;
+    }
+
+    const filtered = filter
+        ? data.settings.filter(s => s.setting_name.toLowerCase().includes(filter.toLowerCase()))
+        : data.settings;
+    const lastTs = data.last_snapshot_ts ? new Date(data.last_snapshot_ts) : null;
+    const ageSec = lastTs ? Math.round((Date.now() - lastTs.getTime()) / 1000) : 0;
+    const ageStr = ageSec < 60 ? `${ageSec}s` : ageSec < 3600 ? `${Math.round(ageSec / 60)} dk` :
+                   ageSec < 86400 ? `${Math.round(ageSec / 3600)} sa` : `${Math.round(ageSec / 86400)} g`;
+
+    return (
+        <div className="space-y-3">
+            <div className="bg-white rounded-lg shadow-sm p-4 flex flex-wrap items-center gap-3">
+                <input type="text" value={filter} onChange={e => setFilter(e.target.value)}
+                    placeholder="Filtre (örn: work_mem, vacuum)"
+                    className="flex-1 min-w-[200px] border border-[#CBD5E1] rounded px-3 py-1.5 text-sm" />
+                <div className="text-xs text-[#64748B]">
+                    Son snapshot: <strong>{ageStr} önce</strong>
+                    {lastTs && <span className="ml-1 text-[#94A3B8]">({lastTs.toLocaleString('tr-TR')})</span>}
+                </div>
+                <button
+                    onClick={() => { onRefresh(); setTimeout(() => refetch(), 8000); }}
+                    disabled={refreshing}
+                    className="px-3 py-1.5 text-sm bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-50">
+                    {refreshing ? 'Yenileniyor...' : '🔄 Şimdi Yenile'}
+                </button>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <table className="w-full text-sm">
+                    <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                        <tr>
+                            <th className="text-left py-2 px-3 font-medium text-[#475569]">Parametre</th>
+                            <th className="text-left py-2 px-3 font-medium text-[#475569]">Değer</th>
+                            <th className="text-left py-2 px-3 font-medium text-[#475569]">Birim</th>
+                            <th className="text-left py-2 px-3 font-medium text-[#475569]">Context</th>
+                            <th className="text-left py-2 px-3 font-medium text-[#475569]">Source</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {filtered.map((s, i) => (
+                            <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                <td className="py-1.5 px-3 font-mono text-xs text-[#1E293B]">{s.setting_name}</td>
+                                <td className="py-1.5 px-3 font-mono text-xs">{s.setting_value}</td>
+                                <td className="py-1.5 px-3 text-xs text-[#64748B]">{s.unit || '—'}</td>
+                                <td className="py-1.5 px-3 text-xs text-[#64748B]">{s.context || '—'}</td>
+                                <td className="py-1.5 px-3 text-xs text-[#64748B]">{s.source || '—'}</td>
+                            </tr>
+                        ))}
+                        {filtered.length === 0 && (
+                            <tr><td colSpan={5} className="py-6 text-center text-[#94A3B8]">Filtreyle eşleşen parametre yok</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            <p className="text-[11px] text-[#94A3B8]">
+                Toplam {data.settings.length} parametre · Nightly (03:00 UTC) tüm parametreler, her 3 saatte 11 kritik parametre otomatik yenilenir.
+            </p>
+        </div>
+    );
 }
 
 function SettingsDiffTab({ data, loading, days, onDaysChange }: {

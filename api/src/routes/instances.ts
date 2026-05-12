@@ -1084,6 +1084,24 @@ router.get('/:id/health-report', async (req, res, next) => {
 // Mantik: her setting icin ardisik snapshot'lar arasinda LAG() ile degisim tespit
 // Sadece setting_value degisen satirlari donder (degisim zamani = setting'in
 // yeni degerle ilk gorundugu snapshot)
+// GET /api/instances/:id/settings — En son snapshot'taki tüm pg_settings
+router.get('/:id/settings', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const r = await pool.query(`
+            with latest as (select max(snapshot_ts) as ts from fact.pg_settings_snapshot where instance_pk = $1)
+            select setting_name, setting_value, unit, context, source, snapshot_ts
+            from fact.pg_settings_snapshot
+            where instance_pk = $1 and snapshot_ts = (select ts from latest)
+            order by setting_name
+        `, [id]);
+        res.json({
+            settings: r.rows,
+            last_snapshot_ts: r.rows[0]?.snapshot_ts || null,
+        });
+    } catch (err) { next(err); }
+});
+
 router.get('/:id/settings/diff', async (req, res, next) => {
   try {
     const { id } = req.params;
