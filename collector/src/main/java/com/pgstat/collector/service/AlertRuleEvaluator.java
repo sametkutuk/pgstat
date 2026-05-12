@@ -646,14 +646,18 @@ public class AlertRuleEvaluator {
 
     private String topQueriesText(List<Map<String, Object>> topQueries) {
         if (topQueries.isEmpty()) return "(sorgu bazli temp veri yok)";
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder("En çok diske yazan sorgular (çağrı başına temp):\n");
         for (int i = 0; i < Math.min(3, topQueries.size()); i++) {
             if (i > 0) sb.append("\n");
             Map<String, Object> q = topQueries.get(i);
-            sb.append(i + 1).append(". `")
-                .append(trimText((String) q.get("query_text"), 100)).append("`")
-                .append(" - ").append(humanBytes(toLong(q.get("temp_bytes"))))
-                .append(", calls=").append(q.get("calls_window"));
+            long perCall = toLong(q.get("avg_temp_bytes_per_call"));
+            long calls = toLong(q.get("calls_window"));
+            long total = toLong(q.get("temp_bytes"));
+            sb.append(i + 1).append(". ")
+                .append(humanBytes(perCall)).append("/çağrı × ")
+                .append(calls).append(" çağrı = ")
+                .append(humanBytes(total)).append(" toplam\n   `")
+                .append(trimText((String) q.get("query_text"), 120)).append("`");
         }
         return sb.toString();
     }
