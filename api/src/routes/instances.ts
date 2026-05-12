@@ -1084,21 +1084,24 @@ router.get('/:id/health-report', async (req, res, next) => {
 // Mantik: her setting icin ardisik snapshot'lar arasinda LAG() ile degisim tespit
 // Sadece setting_value degisen satirlari donder (degisim zamani = setting'in
 // yeni degerle ilk gorundugu snapshot)
-// GET /api/instances/:id/settings — En son snapshot'taki tüm pg_settings
+// GET /api/instances/:id/settings — Her parametrenin EN SON değeri
+// Nightly (27 param, UTC 03:00) ve hot refresh (11 kritik, 3 saatte bir) farklı
+// snapshot_ts'lerde olduğundan max(snapshot_ts) filtrelemek 16'yı kaybediyordu.
+// distinct on ile her parametrenin son değeri döner.
 router.get('/:id/settings', async (req, res, next) => {
     try {
         const { id } = req.params;
         const r = await pool.query(`
-            with latest as (select max(snapshot_ts) as ts from fact.pg_settings_snapshot where instance_pk = $1)
-            select setting_name, setting_value, unit, context, source, snapshot_ts
+            select distinct on (setting_name)
+                   setting_name, setting_value, unit, context, source, snapshot_ts
             from fact.pg_settings_snapshot
-            where instance_pk = $1 and snapshot_ts = (select ts from latest)
-            order by setting_name
+            where instance_pk = $1
+            order by setting_name, snapshot_ts desc
         `, [id]);
-        res.json({
-            settings: r.rows,
-            last_snapshot_ts: r.rows[0]?.snapshot_ts || null,
-        });
+        // En son snapshot_ts (göstermek için)
+        const lastTs = r.rows.reduce((acc: string | null, row: any) =>
+            !acc || row.snapshot_ts > acc ? row.snapshot_ts : acc, null);
+        res.json({ settings: r.rows, last_snapshot_ts: lastTs });
     } catch (err) { next(err); }
 });
 
