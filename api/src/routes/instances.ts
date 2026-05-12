@@ -311,6 +311,21 @@ router.patch('/:id/toggle', async (req, res, next) => {
   }
 });
 
+// POST /api/instances/:id/refresh-settings — pg_settings'i hemen yenile
+// (kullanıcı ALTER SYSTEM yaptığında alert'in eski değer görmemesi için)
+// Collector polling'de pending komutu görür ve hot settings çeker.
+router.post('/:id/refresh-settings', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        if (Number.isNaN(id) || id <= 0) { res.status(400).json({ error: 'Geçersiz id' }); return; }
+        const r = await pool.query(
+            `insert into control.collector_command (command, instance_pk)
+             values ('refresh_settings', $1) returning command_id, status, requested_at`,
+            [id]);
+        res.json(r.rows[0]);
+    } catch (err) { next(err); }
+});
+
 // PATCH /api/instances/:id/retry — Bootstrap'ı pending'e döndür, yeniden dene
 router.patch('/:id/retry', async (req, res, next) => {
   try {

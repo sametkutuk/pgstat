@@ -89,6 +89,8 @@ public class JobOrchestrator {
     private volatile java.time.LocalDate lastNightlySnapshotDate = null;
     private volatile java.time.LocalDate lastDailyReportDate = null;
     private volatile java.time.LocalDate lastWeeklyReportDate = null;
+    // Hot settings refresh: 3 saatte bir, en son tetikleme saati izlenir
+    private volatile int lastHotSettingsHourUtc = -1;
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -496,6 +498,56 @@ public class JobOrchestrator {
                 } catch (Exception e) {
                     log.warn("Daily cleanup hatasi: {}", e.getMessage());
                     lastJobPurgeDate = null;
+                }
+            }
+
+            // 3c1. Manuel komutları işle (UI → API → DB → buradan execute)
+            try {
+                java.util.List<java.util.Map<String, Object>> cmds = jdbc.queryForList(
+                    "select command_id, command, instance_pk from control.collector_command " +
+                    "where status = 'pending' order by command_id limit 20");
+                for (java.util.Map<String, Object> c : cmds) {
+                    long cmdId = ((Number) c.get("command_id")).longValue();
+                    String cmd = (String) c.get("command");
+                    Long instancePk = c.get("instance_pk") != null ? ((Number) c.get("instance_pk")).longValue() : null;
+                    jdbc.update("update control.collector_command set status='running' where command_id=?", cmdId);
+                    try {
+                        if ("refresh_settings".equals(cmd) && instancePk != null) {
+                            com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
+                            if (inst != null) nightlySnapshotCollector.collectHotSettings(inst);
+                        }
+                        jdbc.update("update control.collector_command set status='done', processed_at=now() where command_id=?", cmdId);
+                    } catch (Exception cex) {
+                        jdbc.update("update control.collector_command set status='failed', processed_at=now(), error_message=? where command_id=?",
+                            cex.getMessage(), cmdId);
+                    }
+                }
+            } catch (Exception ignore) {
+                // V057 yoksa veya hata: sessiz geç
+            }
+
+            // 3c2. Hot settings refresh — UTC her 3 saatte bir (00/03/06/09/12/15/18/21)
+            // 11 kritik parametre (work_mem, max_connections, vb.) tekrar çekilir
+            // → kullanıcı ALTER SYSTEM yaptığında alert'ler eski değer görmez.
+            // Nightly snapshot 03:00'de zaten tüm parametreleri alır; bu 3 saatlik
+            // çalışma onun kısa-vade tamamlayıcısıdır. Ek yük: ~11 SELECT/instance/3sa.
+            if (currentUtcHour % 3 == 0 && currentUtcHour != lastHotSettingsHourUtc
+                    && currentUtcHour != 3) {  // 03:00 zaten nightly full snapshot var
+                lastHotSettingsHourUtc = currentUtcHour;
+                try {
+                    java.util.List<com.pgstat.collector.model.InstanceInfo> ready = inventoryRepo.findAllReady();
+                    long total = 0;
+                    for (com.pgstat.collector.model.InstanceInfo i : ready) {
+                        try {
+                            total += nightlySnapshotCollector.collectHotSettings(i);
+                        } catch (Exception e) {
+                            log.debug("Hot settings hatası {}: {}", i.instanceId(), e.getMessage());
+                        }
+                    }
+                    if (total > 0) log.info("Hot settings refresh: {} parametre, {} instance", total, ready.size());
+                } catch (Exception e) {
+                    log.warn("Hot settings refresh genel hatası: {}", e.getMessage());
+                    lastHotSettingsHourUtc = -1;
                 }
             }
 

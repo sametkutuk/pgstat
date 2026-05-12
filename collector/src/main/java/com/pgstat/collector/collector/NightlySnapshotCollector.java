@@ -95,9 +95,50 @@ public class NightlySnapshotCollector {
         where datallowconn and not datistemplate
         """;
 
+    // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 11 parametre.
+    // 3 saatte bir yenilenir → ALTER SYSTEM sonrası alert eski değer görmesin.
+    private static final String HOT_SETTINGS_QUERY = """
+        select name, setting, unit, context, source from pg_settings
+        where name in (
+          'work_mem', 'maintenance_work_mem', 'shared_buffers',
+          'effective_cache_size', 'max_connections',
+          'max_wal_size', 'checkpoint_timeout', 'checkpoint_completion_target',
+          'autovacuum_vacuum_scale_factor', 'autovacuum_max_workers',
+          'random_page_cost'
+        )
+        """;
+
     public NightlySnapshotCollector(JdbcTemplate jdbc, SourceConnectionFactory connFactory) {
         this.jdbc = jdbc;
         this.connFactory = connFactory;
+    }
+
+    /**
+     * Sadece kritik 11 parametreyi yeniler — 3 saatte bir veya manuel tetiklemeyle.
+     * Tüm nightly snapshot yerine hızlı + düşük yük yol.
+     */
+    public long collectHotSettings(InstanceInfo instance) {
+        long instancePk = instance.instancePk();
+        OffsetDateTime now = OffsetDateTime.now(java.time.ZoneOffset.UTC);
+        try (Connection conn = connFactory.connect(instance)) {
+            long rows = 0;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(HOT_SETTINGS_QUERY)) {
+                while (rs.next()) {
+                    jdbc.update(
+                        "insert into fact.pg_settings_snapshot (snapshot_ts, instance_pk, setting_name, setting_value, unit, context, source) " +
+                        "values (?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+                        now, instancePk, rs.getString("name"), rs.getString("setting"),
+                        rs.getString("unit"), rs.getString("context"), rs.getString("source"));
+                    rows++;
+                }
+            }
+            log.debug("Hot settings refresh {}: {} parametre", instance.instanceId(), rows);
+            return rows;
+        } catch (Exception e) {
+            log.warn("Hot settings refresh hatası {}: {}", instance.instanceId(), e.getMessage());
+            return 0;
+        }
     }
 
     /**

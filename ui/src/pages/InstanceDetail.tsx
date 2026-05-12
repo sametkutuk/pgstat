@@ -1,6 +1,6 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPatch } from '../api/client';
+import { apiGet, apiPatch, apiPost } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
@@ -28,6 +28,12 @@ export default function InstanceDetail() {
     const retryMutation = useMutation({
         mutationFn: () => apiPatch(`/instances/${id}/retry`),
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['instance', id] }); toast.success('Yeniden bağlanılıyor...'); },
+    });
+
+    const refreshSettingsMut = useMutation({
+        mutationFn: () => apiPost(`/instances/${id}/refresh-settings`, {}),
+        onSuccess: () => toast.success('Parametreler yenileniyor (5-10s içinde tamam)'),
+        onError: () => toast.error('Komut gönderilemedi'),
     });
 
     // Global tarih aralığı — tüm tab'lardaki zaman-serisi sorguları bu aralığa göre çekilir.
@@ -111,6 +117,12 @@ export default function InstanceDetail() {
                     className="px-3 py-1 text-xs rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200">
                     📋 Sağlık Raporu
                 </Link>
+                <button onClick={() => refreshSettingsMut.mutate()}
+                    disabled={refreshSettingsMut.isPending}
+                    title="pg_settings'i şimdi yenile — ALTER SYSTEM sonrası alert'lerin eski değer görmesini engeller"
+                    className="px-3 py-1 text-xs rounded bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 disabled:opacity-50">
+                    {refreshSettingsMut.isPending ? 'Gönderildi...' : '🔄 Parametreleri Yenile'}
+                </button>
             </div>
 
             <BootstrapBanner inst={inst} cap={cap} instanceId={id!} />
