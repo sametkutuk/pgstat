@@ -469,6 +469,45 @@
                     "format": "table"
                 }
             ]
+        },
+        {
+            "id": 23,
+            "title": "WAL Üretimi — Günlük Toplam (son 3 ay)",
+            "type": "barchart",
+            "description": "Her gün için instance bazında toplam WAL üretimi. Kaynak: agg.pg_wal_daily (365g retention). Trend ve kapasite planlama için.",
+            "gridPos": {
+                "h": 9,
+                "w": 24,
+                "x": 0,
+                "y": 50
+            },
+            "datasource": {
+                "type": "postgres",
+                "uid": "pgstat"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "bytes",
+                    "custom": {
+                        "lineWidth": 1,
+                        "fillOpacity": 80
+                    }
+                }
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "rawSql": "select day_ts::date as time, i.display_name as metric, sum(d.wal_bytes_total)::bigint as value\n                from agg.pg_wal_daily d\n                join control.instance_inventory i on i.instance_pk = d.instance_pk\n                where day_ts >= now() - interval '90 days'\n                  and (i.instance_pk::text in ($instance) or 'All' in ($instance))\n                  and (i.service_group in ($service_group) or 'All' in ($service_group) or i.service_group is null)\n                group by 1, i.display_name\n                order by 1",
+                    "format": "time_series"
+                }
+            ],
+            "options": {
+                "xField": "time",
+                "orientation": "vertical",
+                "stacking": {
+                    "mode": "normal"
+                }
+            }
         }
     ]
 }
