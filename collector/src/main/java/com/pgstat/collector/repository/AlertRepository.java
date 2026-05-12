@@ -165,6 +165,32 @@ public class AlertRepository {
         );
     }
 
+    /**
+     * Auto-resolve: transient (dinamik koşullara bağlı) açık alert'ler son tetiklemeden
+     * sonra X dakika boyunca yeniden tetiklenmediyse otomatik 'resolved' olur.
+     *
+     * Bootstrap/auth/extension gibi PERSISTENT (durum düzelene kadar açık kalmalı)
+     * alert kodları DAHIL EDİLMEZ.
+     *
+     * @param staleMinutes son tetiklemeden bu kadar süre geçtiyse kapat (default 120)
+     * @return resolved edilen alert sayısı
+     */
+    public int autoResolveStale(int staleMinutes) {
+        return jdbc.update("""
+            update ops.alert
+            set status = 'resolved',
+                resolved_at = now()
+            where status = 'open'
+              and last_seen_at < now() - make_interval(mins => ?)
+              and alert_code in (
+                'high_temp_files', 'idle_in_tx_time_high', 'replication_slot_inactive',
+                'high_connection_usage', 'long_running_query', 'lock_contention',
+                'replication_lag', 'high_bloat_ratio', 'index_suspect_missing',
+                'index_unused', 'stats_reset_detected', 'stale_data'
+              )
+            """, staleMinutes);
+    }
+
     /** Bildirim servisine async olarak iletir. Hata olursa alert akışını bozmaz. */
     private void fireNotification(long alertId, String alertKey, String alertCode, String severity,
                                    Long instancePk, String title, String message) {

@@ -75,8 +75,30 @@ export default function Alerts() {
     const evaluateNowMut = useMutation({
         mutationFn: () => apiPost('/alerts/evaluate-now', {}),
         onSuccess: () => {
-            toast.success('Alert kuralları yeniden değerlendiriliyor (5-10s)');
-            window.setTimeout(() => queryClient.invalidateQueries({ queryKey: ['alerts'] }), 8000);
+            toast.success('Alert kuralları yeniden değerlendiriliyor...');
+            // Önceki açık alert sayısı (mevcut data'dan)
+            const beforeOpen = (data || []).filter(a => a.status === 'open').length;
+            const beforeIds = new Set((data || []).filter(a => a.status === 'open').map(a => a.alert_id));
+            // 8s sonra yeni durumu çek, diff hesapla
+            window.setTimeout(async () => {
+                const fresh = await queryClient.fetchQuery<Alert[]>({
+                    queryKey: ['alerts', statusFilter, severityFilter],
+                    queryFn: () => apiGet<Alert[]>(`/alerts?${params.toString()}`),
+                });
+                const afterOpen = fresh.filter(a => a.status === 'open');
+                const afterIds = new Set(afterOpen.map(a => a.alert_id));
+                const closed = [...beforeIds].filter(id => !afterIds.has(id)).length;
+                const opened = afterOpen.filter(a => !beforeIds.has(a.alert_id)).length;
+                queryClient.invalidateQueries({ queryKey: ['alerts'] });
+                if (closed === 0 && opened === 0) {
+                    toast.success(`Değerlendirme tamam — değişiklik yok (${afterOpen.length} açık alert)`);
+                } else {
+                    const parts: string[] = [];
+                    if (closed > 0) parts.push(`✓ ${closed} kapandı`);
+                    if (opened > 0) parts.push(`⚠ ${opened} yeni açıldı`);
+                    toast.success(`Değerlendirme tamam — ${parts.join(', ')}`);
+                }
+            }, 8000);
         },
         onError: () => toast.error('Komut gönderilemedi'),
     });

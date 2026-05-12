@@ -33,6 +33,11 @@ public class AlertService {
         this.configCache = configCache;
     }
 
+    /** Transient alert'leri staleMinutes sonra otomatik kapat (proxy). */
+    public int autoResolveStale(int staleMinutes) {
+        return alertRepo.autoResolveStale(staleMinutes);
+    }
+
     /**
      * Sablon render yardimcisi. Hata durumunda fallback metinler donulur.
      */

@@ -495,6 +495,13 @@ public class JobOrchestrator {
                     purgeEvaluator.purgeReportsAndNotifications();
                     // Snapshot raw → hourly rollup (24h+ olanları taşır, raw'ı 24h'a iner)
                     purgeEvaluator.rollupSnapshotsHourly();
+                    // Auto-resolve: 2 saatten beri tetiklenmeyen transient alert'ler kapanır
+                    try {
+                        int closed = alertService.autoResolveStale(120);
+                        if (closed > 0) log.info("Auto-resolved {} stale alert (>2h)", closed);
+                    } catch (Exception e) {
+                        log.warn("Auto-resolve hatası: {}", e.getMessage());
+                    }
                 } catch (Exception e) {
                     log.warn("Daily cleanup hatasi: {}", e.getMessage());
                     lastJobPurgeDate = null;
@@ -520,6 +527,12 @@ public class JobOrchestrator {
                             actionableAlertEvaluator.evaluateAcute();
                             actionableAlertEvaluator.evaluateFrequent();
                             alertRuleEvaluator.evaluate();
+                            // Manuel tetik sonrası: 30 dk'dan beri tetiklenmemiş transient'ları kapat
+                            // (daily 120dk'dan agresif — kullanıcı sonucu hemen görmek istiyor)
+                            try {
+                                int closed = alertService.autoResolveStale(30);
+                                if (closed > 0) log.info("Manuel evaluate sonrası {} alert auto-resolved (>30dk)", closed);
+                            } catch (Exception ignore) {}
                         }
                         jdbc.update("update control.collector_command set status='done', processed_at=now() where command_id=?", cmdId);
                     } catch (Exception cex) {
