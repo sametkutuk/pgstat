@@ -648,6 +648,43 @@ public class PurgeEvaluator {
             log.warn("SLRU hourly rollup hatası: {}", e.getMessage());
         }
 
+        // === WAL daily rollup (hourly → daily, 365 gün) ===
+        try {
+            int n = jdbc.update("""
+                insert into agg.pg_wal_daily (day_ts, instance_pk, sample_count,
+                    wal_bytes_total, wal_directory_size_avg, wal_file_count_avg)
+                select date_trunc('day', hour_ts), instance_pk,
+                       sum(sample_count)::int,
+                       sum(wal_bytes_total)::bigint,
+                       avg(wal_directory_size_avg)::bigint,
+                       avg(wal_file_count_avg)::int
+                from agg.pg_wal_hourly
+                where hour_ts < date_trunc('day', now())
+                  and hour_ts >= date_trunc('day', now() - interval '3 days')
+                  and not exists (
+                    select 1 from agg.pg_wal_daily d
+                    where d.day_ts = date_trunc('day', agg.pg_wal_hourly.hour_ts)
+                      and d.instance_pk = agg.pg_wal_hourly.instance_pk)
+                group by 1, 2
+                on conflict (day_ts, instance_pk) do nothing
+                """);
+            if (n > 0) log.info("WAL daily rollup: {} satır", n);
+
+            // Daily retention
+            int retDailyDays = 365;
+            try {
+                Integer cfg = jdbc.queryForObject(
+                    "select max(daily_snapshot_retention_days) from control.retention_policy where is_active",
+                    Integer.class);
+                if (cfg != null && cfg > 0) retDailyDays = cfg;
+            } catch (Exception ignore) {}
+            int purged = jdbc.update(
+                "delete from agg.pg_wal_daily where day_ts < now() - make_interval(days => ?)", retDailyDays);
+            if (purged > 0) log.info("Eski WAL daily temizlendi: {} satır", purged);
+        } catch (Exception e) {
+            log.warn("WAL daily rollup hatası: {}", e.getMessage());
+        }
+
         // === Eski hourly rollup'ları temizle (hourly_snapshot_retention_days) ===
         try {
             int retDays = 90;
