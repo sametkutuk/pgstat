@@ -1893,12 +1893,37 @@ interface SettingsDiffData {
 function SettingsTab({ instanceId, onRefresh, refreshing }: {
     instanceId: string; onRefresh: () => void; refreshing: boolean;
 }) {
+    const toast = useToast();
     const [filter, setFilter] = useState('');
+    const [polling, setPolling] = useState(false);
     const { data, isLoading, refetch } = useQuery({
         queryKey: ['inst-settings', instanceId],
         queryFn: () => apiGet<{ settings: any[]; last_snapshot_ts: string | null }>(`/instances/${instanceId}/settings`),
-        refetchInterval: 30_000,
+        refetchInterval: polling ? 2_000 : 30_000,
     });
+
+    // Refresh butonuna basıldığında: command kuyruğa atılır, sonra polling moduna geç.
+    // last_snapshot_ts değişene veya 30s timeout'a kadar 2s aralıkla refetch.
+    const triggerRefresh = () => {
+        const prevTs = data?.last_snapshot_ts;
+        onRefresh();
+        setPolling(true);
+        const startedAt = Date.now();
+        const timer = window.setInterval(async () => {
+            const res = await refetch();
+            const newTs = res.data?.last_snapshot_ts;
+            const elapsed = Date.now() - startedAt;
+            if (newTs && newTs !== prevTs) {
+                clearInterval(timer);
+                setPolling(false);
+                toast.success('Parametreler güncellendi');
+            } else if (elapsed > 30_000) {
+                clearInterval(timer);
+                setPolling(false);
+                toast.error('Yenileme zaman aşımı — collector yanıt vermedi');
+            }
+        }, 2_000);
+    };
 
     if (isLoading) return <div className="bg-white rounded-lg shadow-sm p-4"><SkeletonTable rows={10} cols={4} /></div>;
     if (!data || data.settings.length === 0) {
@@ -1925,10 +1950,10 @@ function SettingsTab({ instanceId, onRefresh, refreshing }: {
                     {lastTs && <span className="ml-1 text-[#94A3B8]">({lastTs.toLocaleString('tr-TR')})</span>}
                 </div>
                 <button
-                    onClick={() => { onRefresh(); setTimeout(() => refetch(), 8000); }}
-                    disabled={refreshing}
+                    onClick={triggerRefresh}
+                    disabled={refreshing || polling}
                     className="px-3 py-1.5 text-sm bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-50">
-                    {refreshing ? 'Yenileniyor...' : '🔄 Şimdi Yenile'}
+                    {polling ? 'Bekleniyor...' : refreshing ? 'Gönderildi...' : '🔄 Şimdi Yenile'}
                 </button>
             </div>
             <div className="bg-white rounded-lg shadow-sm overflow-hidden">
