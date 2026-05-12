@@ -72,6 +72,20 @@ export default function Alerts() {
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['alerts'] }); toast.success('Alert çözüldü.'); },
     });
 
+    // Per-alert değerlendirme — alert_id verirse aynı endpoint'i çağırır, mesaj farklı
+    const [evaluatingAlertId, setEvaluatingAlertId] = useState<number | null>(null);
+    const evaluatePerAlertMut = useMutation({
+        mutationFn: () => apiPost('/alerts/evaluate-now', {}),
+        onSuccess: () => {
+            toast.success('Bu alert için yeniden değerlendirme tetiklendi...');
+            window.setTimeout(() => {
+                queryClient.invalidateQueries({ queryKey: ['alerts'] });
+                setEvaluatingAlertId(null);
+            }, 8000);
+        },
+        onError: () => { toast.error('Komut gönderilemedi'); setEvaluatingAlertId(null); },
+    });
+
     const evaluateNowMut = useMutation({
         mutationFn: () => apiPost('/alerts/evaluate-now', {}),
         onSuccess: () => {
@@ -203,59 +217,91 @@ export default function Alerts() {
                 </select>
             </div>
 
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <DataTable columns={columns} data={data || []}
-                    loading={isLoading}
-                    onRowClick={(r) => setExpandedId(expandedId === r.alert_id ? null : r.alert_id)}
-                    emptyState={
-                        <EmptyState
-                            icon="✅"
-                            title="Açık alert bulunmuyor"
-                            description="Tüm sistemler sağlıklı çalışıyor. Yeni bir alert oluşursa burada görünecek."
-                        />
-                    } />
-            </div>
-
-            {/* Detay paneli */}
-            {expandedId && data && (() => {
-                const alert = data.find((a) => a.alert_id === expandedId);
-                if (!alert) return null;
-                return (
-                    <div className="mt-4 bg-white rounded-lg shadow-sm p-5 space-y-3">
-                        <h3 className="text-sm font-semibold text-[#64748B]">Alert Detayı</h3>
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                            <div><span className="text-[#64748B]">Alert Key:</span> <span className="font-mono text-xs">{alert.alert_key}</span></div>
-                            <div><span className="text-[#64748B]">İlk Görülme:</span> <TimeAgo date={alert.first_seen_at} /></div>
-                            {alert.rule_name && (
-                                <div><span className="text-[#64748B]">Kaynak Kural:</span> {alert.rule_name}
-                                    {alert.evaluation_type && (
-                                        <span className="ml-1 text-xs text-[#94A3B8]">({EVAL_TYPE_LABELS[alert.evaluation_type] || alert.evaluation_type})</span>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {isLoading ? (
+                    <div className="p-4">Yükleniyor...</div>
+                ) : !data || data.length === 0 ? (
+                    <EmptyState icon="✅" title="Açık alert bulunmuyor"
+                        description="Tüm sistemler sağlıklı çalışıyor." />
+                ) : (
+                    <table className="w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                {columns.map(c => (
+                                    <th key={c.key} className={`text-left py-2 px-3 font-medium text-[#475569] ${c.className || ''}`}>
+                                        {c.header}
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.map((r) => (
+                                <React.Fragment key={r.alert_id}>
+                                    <tr
+                                        onClick={() => setExpandedId(expandedId === r.alert_id ? null : r.alert_id)}
+                                        className={`border-b border-[#F1F5F9] cursor-pointer hover:bg-[#F8FAFC] ${expandedId === r.alert_id ? 'bg-blue-50' : ''}`}
+                                    >
+                                        {columns.map(c => (
+                                            <td key={c.key} className={`py-2 px-3 ${c.className || ''}`}>
+                                                {c.render ? c.render(r) : (r as any)[c.key]}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                    {expandedId === r.alert_id && (
+                                        <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                                            <td colSpan={columns.length} className="p-0">
+                                                <div className="p-5 space-y-3">
+                                                    <div className="flex items-center justify-between">
+                                                        <h3 className="text-sm font-semibold text-[#64748B]">Alert Detayı</h3>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setEvaluatingAlertId(r.alert_id);
+                                                                evaluatePerAlertMut.mutate();
+                                                            }}
+                                                            disabled={evaluatingAlertId === r.alert_id}
+                                                            className="px-2 py-1 text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded disabled:opacity-50"
+                                                            title="Bu alert için yeniden değerlendir (tüm kurallar çalışır, alert hâlâ geçerliyse açık kalır)">
+                                                            {evaluatingAlertId === r.alert_id ? '⏳ Bekleniyor...' : '🔄 Şimdi Değerlendir'}
+                                                        </button>
+                                                    </div>
+                                                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                                                        <div><span className="text-[#64748B]">Alert Key:</span> <span className="font-mono text-xs">{r.alert_key}</span></div>
+                                                        <div><span className="text-[#64748B]">İlk Görülme:</span> <TimeAgo date={r.first_seen_at} /></div>
+                                                        {r.rule_name && (
+                                                            <div><span className="text-[#64748B]">Kaynak Kural:</span> {r.rule_name}
+                                                                {r.evaluation_type && (<span className="ml-1 text-xs text-[#94A3B8]">({EVAL_TYPE_LABELS[r.evaluation_type] || r.evaluation_type})</span>)}
+                                                            </div>
+                                                        )}
+                                                        {r.acknowledged_at && (
+                                                            <div><span className="text-[#64748B]">Onaylanma:</span> <TimeAgo date={r.acknowledged_at} /></div>
+                                                        )}
+                                                    </div>
+                                                    <div className="text-sm">
+                                                        <span className="text-[#64748B]">Mesaj:</span>
+                                                        <div className="mt-1 bg-white rounded px-4 py-3 text-[#334155] border border-[#E2E8F0]">
+                                                            <FormattedMessage text={r.message} />
+                                                        </div>
+                                                    </div>
+                                                    {r.acknowledge_note && (
+                                                        <div className="text-sm">
+                                                            <span className="text-[#64748B]">Onay Notu:</span>
+                                                            <p className="mt-1 bg-[#FFFBEB] border border-[#FDE68A] rounded px-3 py-2 text-[#92400E]">{r.acknowledge_note}</p>
+                                                        </div>
+                                                    )}
+                                                    {r.details_json && (
+                                                        <AlertDetails details={typeof r.details_json === 'string' ? JSON.parse(r.details_json) : r.details_json} />
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
                                     )}
-                                </div>
-                            )}
-                            {alert.acknowledged_at && (
-                                <div><span className="text-[#64748B]">Onaylanma:</span> <TimeAgo date={alert.acknowledged_at} /></div>
-                            )}
-                        </div>
-                        <div className="text-sm">
-                            <span className="text-[#64748B]">Mesaj:</span>
-                            <div className="mt-1 bg-[#F8FAFC] rounded px-4 py-3 text-[#334155]">
-                                <FormattedMessage text={alert.message} />
-                            </div>
-                        </div>
-                        {alert.acknowledge_note && (
-                            <div className="text-sm">
-                                <span className="text-[#64748B]">Onay Notu:</span>
-                                <p className="mt-1 bg-[#FFFBEB] border border-[#FDE68A] rounded px-3 py-2 text-[#92400E]">{alert.acknowledge_note}</p>
-                            </div>
-                        )}
-                        {alert.details_json && (
-                            <AlertDetails details={typeof alert.details_json === 'string' ? JSON.parse(alert.details_json) : alert.details_json} />
-                        )}
-                    </div>
-                );
-            })()
-            }
+                                </React.Fragment>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
 
             {/* Acknowledge modal */}
             {
