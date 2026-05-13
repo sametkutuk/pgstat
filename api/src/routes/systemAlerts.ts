@@ -69,7 +69,10 @@ router.get('/config', async (_req, res, next) => {
                     threshold_value: g.global.threshold_value,
                     cooldown_minutes: g.global.cooldown_minutes,
                     window_minutes: g.global.window_minutes,
-                } : { is_enabled: true, threshold_value: null, cooldown_minutes: 60, window_minutes: null },
+                    is_event_type: g.global.is_event_type === true,
+                    include_in_daily_report: g.global.include_in_daily_report !== false,
+                } : { is_enabled: true, threshold_value: null, cooldown_minutes: 60, window_minutes: null,
+                      is_event_type: false, include_in_daily_report: true },
                 overrides: (g?.overrides || []).map((o: any) => ({
                     instance_pk: o.instance_pk,
                     display_name: o.display_name,
@@ -91,14 +94,24 @@ router.get('/config', async (_req, res, next) => {
 router.put('/config/:alert_code', async (req, res, next) => {
     try {
         const { alert_code } = req.params;
-        const { is_enabled, threshold_value, cooldown_minutes, window_minutes } = req.body;
+        const { is_enabled, threshold_value, cooldown_minutes, window_minutes,
+                is_event_type, include_in_daily_report } = req.body;
 
         await pool.query(
-            `insert into control.system_alert_config (alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes, window_minutes, updated_at, updated_by)
-       values ($1, null, $2, $3, $4, $5, now(), 'admin')
-       on conflict (alert_code) where instance_pk is null
-       do update set is_enabled = $2, threshold_value = $3, cooldown_minutes = $4, window_minutes = $5, updated_at = now(), updated_by = 'admin'`,
-            [alert_code, is_enabled, threshold_value || null, cooldown_minutes || 60, window_minutes ?? null]
+            `insert into control.system_alert_config
+                (alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes,
+                 window_minutes, is_event_type, include_in_daily_report, updated_at, updated_by)
+             values ($1, null, $2, $3, $4, $5, $6, $7, now(), 'admin')
+             on conflict (alert_code) where instance_pk is null
+             do update set is_enabled = $2, threshold_value = $3, cooldown_minutes = $4,
+                           window_minutes = $5,
+                           is_event_type = coalesce($6, control.system_alert_config.is_event_type),
+                           include_in_daily_report = coalesce($7, control.system_alert_config.include_in_daily_report),
+                           updated_at = now(), updated_by = 'admin'`,
+            [alert_code, is_enabled, threshold_value || null, cooldown_minutes || 60,
+             window_minutes ?? null,
+             is_event_type ?? null,
+             include_in_daily_report ?? null]
         );
 
         res.json({ message: 'Config güncellendi. 60 saniye içinde etkili olacak.' });
@@ -138,6 +151,57 @@ router.delete('/config/:alert_code/instances/:instance_pk', async (req, res, nex
         );
 
         res.json({ message: 'Override silindi, global default geçerli.' });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// =========================================================================
+// Siklik ayarlari (__system_intervals meta-satiri)
+// =========================================================================
+
+// GET /api/system-alerts/intervals
+router.get('/intervals', async (_req, res, next) => {
+    try {
+        const r = await pool.query(
+            `select threshold_value as acute_seconds,
+                    cooldown_minutes as frequent_seconds,
+                    window_minutes as daily_hours
+             from control.system_alert_config
+             where alert_code = '__system_intervals' and instance_pk is null`
+        );
+        if (r.rows.length === 0) {
+            return res.json({ acute_seconds: 5, frequent_seconds: 900, daily_hours: 24 });
+        }
+        res.json(r.rows[0]);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// PUT /api/system-alerts/intervals
+router.put('/intervals', async (req, res, next) => {
+    try {
+        const { acute_seconds, frequent_seconds, daily_hours } = req.body;
+        // Aralık kontrolu
+        if (acute_seconds < 5 || acute_seconds > 300)
+            return res.status(400).json({ error: 'acute_seconds 5-300 arasi olmali' });
+        if (frequent_seconds < 60 || frequent_seconds > 3600)
+            return res.status(400).json({ error: 'frequent_seconds 60-3600 arasi olmali' });
+        if (daily_hours < 1 || daily_hours > 168)
+            return res.status(400).json({ error: 'daily_hours 1-168 arasi olmali' });
+
+        await pool.query(
+            `insert into control.system_alert_config
+                (alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes,
+                 window_minutes, updated_at, updated_by)
+             values ('__system_intervals', null, true, $1, $2, $3, now(), 'admin')
+             on conflict (alert_code) where instance_pk is null
+             do update set threshold_value = $1, cooldown_minutes = $2, window_minutes = $3,
+                           updated_at = now(), updated_by = 'admin'`,
+            [acute_seconds, frequent_seconds, daily_hours]
+        );
+        res.json({ message: 'Sıklık ayarları güncellendi. 60 saniye içinde etkili olacak.' });
     } catch (err) {
         next(err);
     }

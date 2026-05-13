@@ -68,14 +68,17 @@ public class JobOrchestrator {
     private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
     private final com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver;
+    private final com.pgstat.collector.service.SystemAlertConfigCache systemAlertConfigCache;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
     private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
 
+    // Acute alert dispatch frekansi — son tetikleme zamani.
+    private volatile long lastAcuteEvalMs = 0;
+
     // Rolling alert evaluation — 15 dakikada bir (temp files, idle in tx, inactive slot)
     // Her 5 saniyede calistirmak gereksiz yuk, 15dk yeterli.
     private volatile long lastRollingEvalMs = 0;
-    private static final long ROLLING_EVAL_INTERVAL_MS = 15 * 60 * 1000; // 15 dakika
 
     // Saat-bazli job idempotency — saat eslesmesi 1 saat surdugu icin her 5s'de
     // tekrar tetiklenmesin diye gun bazinda guard tutuyoruz. UTC saatleri:
@@ -114,6 +117,7 @@ public class JobOrchestrator {
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
                            com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
                            com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver,
+                           com.pgstat.collector.service.SystemAlertConfigCache systemAlertConfigCache,
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
                            com.pgstat.collector.service.WorkloadClassifier workloadClassifier) {
@@ -138,6 +142,7 @@ public class JobOrchestrator {
         this.nightlySnapshotCollector = nightlySnapshotCollector;
         this.actionableAlertEvaluator = actionableAlertEvaluator;
         this.alertEvidenceResolver = alertEvidenceResolver;
+        this.systemAlertConfigCache = systemAlertConfigCache;
         this.jdbc = jdbc;
         this.reportGenerator = reportGenerator;
         this.workloadClassifier = workloadClassifier;
@@ -686,15 +691,20 @@ public class JobOrchestrator {
             // 4. Alert kurallarini degerlendir (user-defined rules — her cycle)
             alertRuleEvaluator.evaluate();
 
-            // 4b. Acute alert'ler — her cycle'da (5s)
-            // LONG_RUNNING_QUERY, HIGH_CONNECTION_USAGE, STALE_DATA
-            actionableAlertEvaluator.evaluateAcute();
-
-            // 4c. Rolling alert'ler — 15 dakikada bir
-            // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
-            // Her 5s'de calistirmak gereksiz (1h pencere kullaniyorlar), 15dk yeterli.
             long now = System.currentTimeMillis();
-            if (now - lastRollingEvalMs >= ROLLING_EVAL_INTERVAL_MS) {
+
+            // 4b. Acute alert'ler — siklik UI'dan ayarlanabilir (default 5s, 5-300s arasi).
+            // LONG_RUNNING_QUERY, HIGH_CONNECTION_USAGE, STALE_DATA
+            long acuteIntervalMs = systemAlertConfigCache.getAcuteIntervalSeconds(5) * 1000L;
+            if (now - lastAcuteEvalMs >= acuteIntervalMs) {
+                lastAcuteEvalMs = now;
+                actionableAlertEvaluator.evaluateAcute();
+            }
+
+            // 4c. Frequent (Rolling) alert'ler — UI'dan ayarlanabilir (default 900s = 15dk).
+            // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
+            long frequentIntervalMs = systemAlertConfigCache.getFrequentIntervalSeconds(900) * 1000L;
+            if (now - lastRollingEvalMs >= frequentIntervalMs) {
                 lastRollingEvalMs = now;
                 actionableAlertEvaluator.evaluateFrequent();
             }

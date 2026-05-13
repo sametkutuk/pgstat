@@ -51,7 +51,9 @@ public class SystemAlertConfigCache {
         try {
             List<Map<String, Object>> rows = jdbc.queryForList(
                 "select alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes, " +
-                "       window_minutes " +
+                "       window_minutes, " +
+                "       coalesce(is_event_type, false) as is_event_type, " +
+                "       coalesce(include_in_daily_report, true) as include_in_daily_report " +
                 "from control.system_alert_config");
 
             Map<String, ConfigEntry> newGlobal = new HashMap<>();
@@ -67,8 +69,10 @@ public class SystemAlertConfigCache {
                     ? ((Number) row.get("cooldown_minutes")).intValue() : 60;
                 Integer window = row.get("window_minutes") != null
                     ? ((Number) row.get("window_minutes")).intValue() : null;
+                boolean isEvent = Boolean.TRUE.equals(row.get("is_event_type"));
+                boolean includeReport = Boolean.TRUE.equals(row.get("include_in_daily_report"));
 
-                ConfigEntry entry = new ConfigEntry(enabled, threshold, cooldown, window);
+                ConfigEntry entry = new ConfigEntry(enabled, threshold, cooldown, window, isEvent, includeReport);
 
                 if (ipk == null) {
                     newGlobal.put(code, entry);
@@ -161,7 +165,44 @@ public class SystemAlertConfigCache {
         return hardcodedDefault;
     }
 
+    /** Event-tipi alert mi (otomatik kapanmaz, cooldown uzun). */
+    public boolean isEventType(String alertCode) {
+        ConfigEntry e = globalConfigs.get(alertCode);
+        return e != null && e.isEventType;
+    }
+
+    /** Gunluk raporda gosterilsin mi. */
+    public boolean includeInDailyReport(String alertCode) {
+        ConfigEntry e = globalConfigs.get(alertCode);
+        return e == null || e.includeInDailyReport;  // default true
+    }
+
+    /** Sistem siklik ayarlari (__system_intervals meta-satiri). */
+    public int getAcuteIntervalSeconds(int fallback) {
+        ConfigEntry e = globalConfigs.get("__system_intervals");
+        if (e != null && e.threshold != null) {
+            int v = e.threshold.intValue();
+            if (v >= 5 && v <= 300) return v;
+        }
+        return fallback;
+    }
+    public int getFrequentIntervalSeconds(int fallback) {
+        ConfigEntry e = globalConfigs.get("__system_intervals");
+        if (e != null && e.cooldownMinutes >= 60 && e.cooldownMinutes <= 3600) {
+            return e.cooldownMinutes;
+        }
+        return fallback;
+    }
+    public int getDailyIntervalHours(int fallback) {
+        ConfigEntry e = globalConfigs.get("__system_intervals");
+        if (e != null && e.windowMinutes != null) {
+            int v = e.windowMinutes;
+            if (v >= 1 && v <= 168) return v;
+        }
+        return fallback;
+    }
+
     /** İç veri yapısı */
     private record ConfigEntry(boolean enabled, BigDecimal threshold, int cooldownMinutes,
-                                Integer windowMinutes) {}
+                                Integer windowMinutes, boolean isEventType, boolean includeInDailyReport) {}
 }

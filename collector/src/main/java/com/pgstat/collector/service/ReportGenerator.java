@@ -241,6 +241,48 @@ public class ReportGenerator {
             sb.append("Instance bilgileri alinamadi: ").append(e.getMessage()).append("\n");
         }
 
+        // Olay bildirileri — is_event_type=true ve include_in_daily_report=true olan
+        // son 24 saatte first_seen veya last_seen geçen alert'ler.
+        sb.append("\n**Olay Bildirileri (son 24 saat):**\n");
+        try {
+            List<Map<String, Object>> events = jdbc.queryForList("""
+                select a.alert_id, a.alert_code, a.severity, a.alert_key, a.status,
+                       a.first_seen_at, a.last_seen_at, a.title, a.message,
+                       i.display_name as instance_name
+                from ops.alert a
+                left join control.instance_inventory i on i.instance_pk = a.instance_pk
+                join control.system_alert_config c
+                  on c.alert_code = a.alert_code and c.instance_pk is null
+                where c.is_event_type = true
+                  and c.include_in_daily_report = true
+                  and (a.first_seen_at > now() - interval '24 hours'
+                       or a.last_seen_at > now() - interval '24 hours')
+                order by a.last_seen_at desc
+                limit 20
+                """);
+            if (events.isEmpty()) {
+                sb.append("Son 24 saatte olay bildirisi yok.\n\n");
+            } else {
+                for (Map<String, Object> e : events) {
+                    String when = e.get("last_seen_at").toString().substring(0, 19);
+                    sb.append("• ").append(when)
+                      .append(" [").append(e.get("severity")).append("] ")
+                      .append(e.get("alert_code"));
+                    if (e.get("instance_name") != null) {
+                        sb.append(" — ").append(e.get("instance_name"));
+                    }
+                    String title = (String) e.get("title");
+                    if (title != null && !title.isBlank()) {
+                        sb.append(" — ").append(title.length() > 80 ? title.substring(0, 80) + "..." : title);
+                    }
+                    sb.append(" [").append(e.get("status")).append("]\n");
+                }
+                sb.append("\n");
+            }
+        } catch (Exception e) {
+            sb.append("Olay bildirileri alinamadi: ").append(e.getMessage()).append("\n\n");
+        }
+
         return sb.toString();
     }
 

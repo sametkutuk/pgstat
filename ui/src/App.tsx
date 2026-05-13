@@ -6,6 +6,7 @@ import AppLayout from './components/layout/AppLayout';
 import Dashboard from './pages/Dashboard';
 import Instances from './pages/Instances';
 import InstanceDetail from './pages/InstanceDetail';
+import DatabaseCleanup from './pages/DatabaseCleanup';
 import Statements from './pages/Statements';
 import StatementDetail from './pages/StatementDetail';
 import Alerts from './pages/Alerts';
@@ -49,6 +50,7 @@ function App() {
               <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/instances" element={<Instances />} />
+                <Route path="/instances/cleanup" element={<DatabaseCleanup />} />
                 <Route path="/instances/:id" element={<InstanceDetail />} />
                 <Route path="/statements" element={<Statements />} />
                 <Route path="/statements/:seriesId" element={<StatementDetail />} />

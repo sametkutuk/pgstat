@@ -253,17 +253,27 @@ export default function Alerts() {
                                                 <div className="p-5 space-y-3">
                                                     <div className="flex items-center justify-between">
                                                         <h3 className="text-sm font-semibold text-[#64748B]">Alert Detayı</h3>
-                                                        <button
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setEvaluatingAlertId(r.alert_id);
-                                                                evaluatePerAlertMut.mutate();
-                                                            }}
-                                                            disabled={evaluatingAlertId === r.alert_id}
-                                                            className="px-2 py-1 text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded disabled:opacity-50"
-                                                            title="Bu alert için yeniden değerlendir (tüm kurallar çalışır, alert hâlâ geçerliyse açık kalır)">
-                                                            {evaluatingAlertId === r.alert_id ? '⏳ Bekleniyor...' : '🔄 Şimdi Değerlendir'}
-                                                        </button>
+                                                        <div className="flex items-center gap-2">
+                                                            {/* "does not exist" tespit edilirse Database Cleanup'a yönlendir */}
+                                                            {(r.message || '').toLowerCase().includes('does not exist') && (
+                                                                <Link to={`/instances/cleanup?alert_id=${r.alert_id}`}
+                                                                    className="px-2 py-1 text-xs bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 rounded"
+                                                                    title="Database silinmiş gibi görünüyor — Database Cleanup sayfasında incele">
+                                                                    🗑️ İncele
+                                                                </Link>
+                                                            )}
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    setEvaluatingAlertId(r.alert_id);
+                                                                    evaluatePerAlertMut.mutate();
+                                                                }}
+                                                                disabled={evaluatingAlertId === r.alert_id}
+                                                                className="px-2 py-1 text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded disabled:opacity-50"
+                                                                title="Bu alert için yeniden değerlendir (tüm kurallar çalışır, alert hâlâ geçerliyse açık kalır)">
+                                                                {evaluatingAlertId === r.alert_id ? '⏳ Bekleniyor...' : '🔄 Şimdi Değerlendir'}
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                     <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
                                                         <div><span className="text-[#64748B]">Alert Key:</span> <span className="font-mono text-xs">{r.alert_key}</span></div>

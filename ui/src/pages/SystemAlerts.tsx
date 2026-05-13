@@ -14,8 +14,21 @@ interface SystemAlertConfig {
     windowDesc: string | null;
     severity: string;
     description: string;
-    global: { is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number; window_minutes: number | null };
+    global: {
+        is_enabled: boolean;
+        threshold_value: number | null;
+        cooldown_minutes: number;
+        window_minutes: number | null;
+        is_event_type: boolean;
+        include_in_daily_report: boolean;
+    };
     overrides: { instance_pk: number; display_name: string; is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number; window_minutes: number | null }[];
+}
+
+interface Intervals {
+    acute_seconds: number;
+    frequent_seconds: number;
+    daily_hours: number;
 }
 
 interface Instance { instance_pk: number; display_name: string; }
@@ -45,10 +58,28 @@ export default function SystemAlerts() {
     });
 
     const toggleMut = useMutation({
-        mutationFn: ({ code, enabled, threshold, cooldown, window }: { code: string; enabled: boolean; threshold: number | null; cooldown: number; window: number | null }) =>
-            apiPut(`/system-alerts/config/${code}`, { is_enabled: enabled, threshold_value: threshold, cooldown_minutes: cooldown, window_minutes: window }),
+        mutationFn: (args: { code: string; enabled: boolean; threshold: number | null; cooldown: number; window: number | null; isEventType?: boolean; includeInDailyReport?: boolean; }) =>
+            apiPut(`/system-alerts/config/${args.code}`, {
+                is_enabled: args.enabled,
+                threshold_value: args.threshold,
+                cooldown_minutes: args.cooldown,
+                window_minutes: args.window,
+                is_event_type: args.isEventType,
+                include_in_daily_report: args.includeInDailyReport,
+            }),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['system-alert-config'] }); toast.success('Güncellendi (60sn içinde etkili)'); },
         onError: () => toast.error('Güncelleme başarısız'),
+    });
+
+    // Siklik ayarlari
+    const { data: intervals } = useQuery<Intervals>({
+        queryKey: ['system-intervals'],
+        queryFn: () => apiGet('/system-alerts/intervals'),
+    });
+    const intervalsMut = useMutation({
+        mutationFn: (args: Intervals) => apiPut('/system-alerts/intervals', args),
+        onSuccess: () => { qc.invalidateQueries({ queryKey: ['system-intervals'] }); toast.success('Sıklık ayarları güncellendi'); },
+        onError: (e: any) => toast.error(e.message || 'Hata'),
     });
 
     const deleteOverrideMut = useMutation({
@@ -76,6 +107,9 @@ export default function SystemAlerts() {
                     Değişiklikler 60 saniye içinde etkili olur.
                 </div>
             </div>
+
+            {/* Genel siklik ayarlari */}
+            {intervals && <IntervalsCard intervals={intervals} onSave={(v) => intervalsMut.mutate(v)} saving={intervalsMut.isPending} />}
 
             {CATEGORIES.map(cat => {
                 const items = configs.filter(c => c.category === cat.key);
@@ -121,6 +155,22 @@ export default function SystemAlerts() {
                                     })}
                                     onAddOverride={() => setOverrideModal({ alertCode: cfg.alert_code, label: cfg.label, windowDesc: cfg.windowDesc })}
                                     onDeleteOverride={(instancePk) => deleteOverrideMut.mutate({ code: cfg.alert_code, instancePk })}
+                                    onEventTypeChange={(v) => toggleMut.mutate({
+                                        code: cfg.alert_code,
+                                        enabled: cfg.global.is_enabled,
+                                        threshold: cfg.global.threshold_value,
+                                        cooldown: cfg.global.cooldown_minutes,
+                                        window: cfg.global.window_minutes,
+                                        isEventType: v,
+                                    })}
+                                    onReportChange={(v) => toggleMut.mutate({
+                                        code: cfg.alert_code,
+                                        enabled: cfg.global.is_enabled,
+                                        threshold: cfg.global.threshold_value,
+                                        cooldown: cfg.global.cooldown_minutes,
+                                        window: cfg.global.window_minutes,
+                                        includeInDailyReport: v,
+                                    })}
                                 />
                             ))}
                         </div>
@@ -141,7 +191,7 @@ export default function SystemAlerts() {
     );
 }
 
-function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldownChange, onWindowChange, onAddOverride, onDeleteOverride }: {
+function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldownChange, onWindowChange, onAddOverride, onDeleteOverride, onEventTypeChange, onReportChange }: {
     config: SystemAlertConfig;
     isJob: boolean;
     onToggle: (enabled: boolean) => void;
@@ -150,6 +200,8 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
     onWindowChange: (val: number | null) => void;
     onAddOverride: () => void;
     onDeleteOverride: (instancePk: number) => void;
+    onEventTypeChange: (val: boolean) => void;
+    onReportChange: (val: boolean) => void;
 }) {
     const [editThreshold, setEditThreshold] = useState(false);
     const [editCooldown, setEditCooldown] = useState(false);
@@ -250,6 +302,28 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
                 )}
             </div>
 
+            {/* Olay tipi + gunluk rapor checkbox'lari */}
+            <div className="flex items-center gap-4 mt-3 pl-13 text-xs">
+                <label className="flex items-center gap-1 cursor-pointer text-[#475569]">
+                    <input type="checkbox"
+                        checked={config.global.is_event_type}
+                        onChange={e => onEventTypeChange(e.target.checked)}
+                        className="w-3.5 h-3.5" />
+                    <span title="Olay tipi alert otomatik kapanmaz, cooldown uzun olur (min 24h önerilir).">
+                        Olay tipi
+                    </span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer text-[#475569]">
+                    <input type="checkbox"
+                        checked={config.global.include_in_daily_report}
+                        onChange={e => onReportChange(e.target.checked)}
+                        className="w-3.5 h-3.5" />
+                    <span title="True ise günlük raporda 'Olay Bildirileri' bölümünde gösterilir.">
+                        Günlük raporda göster
+                    </span>
+                </label>
+            </div>
+
             {/* Instance override'lar */}
             {config.overrides.length > 0 && (
                 <div className="mt-3 pl-13 space-y-1">
@@ -266,6 +340,86 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
                                 className="ml-auto text-[#DC2626] hover:text-[#B91C1C]">Sil</button>
                         </div>
                     ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function IntervalsCard({ intervals, onSave, saving }: { intervals: Intervals; onSave: (v: Intervals) => void; saving: boolean; }) {
+    const [acute, setAcute] = useState(String(intervals.acute_seconds));
+    const [frequent, setFrequent] = useState(String(intervals.frequent_seconds));
+    const [daily, setDaily] = useState(String(intervals.daily_hours));
+    const [edit, setEdit] = useState(false);
+
+    const dirty = Number(acute) !== intervals.acute_seconds
+        || Number(frequent) !== intervals.frequent_seconds
+        || Number(daily) !== intervals.daily_hours;
+
+    return (
+        <div className="bg-white border border-[#E2E8F0] rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-semibold text-[#1E293B]">⚙️ Genel Sıklık Ayarları</h2>
+                {!edit && (
+                    <button onClick={() => setEdit(true)} className="text-xs text-[#3B82F6] hover:underline">Düzenle</button>
+                )}
+            </div>
+            <div className="grid grid-cols-3 gap-4 text-xs">
+                <div>
+                    <label className="block text-[#64748B] mb-1">Acute (5–300 sn)</label>
+                    {edit ? (
+                        <input value={acute} onChange={e => setAcute(e.target.value)}
+                            type="number" min={5} max={300}
+                            className="w-full border border-[#CBD5E1] rounded px-2 py-1" />
+                    ) : (
+                        <div className="text-[#1E293B] font-mono">{intervals.acute_seconds} sn</div>
+                    )}
+                    <div className="text-[10px] text-[#94A3B8] mt-1">long_running_query, high_connection_usage, stale_data</div>
+                </div>
+                <div>
+                    <label className="block text-[#64748B] mb-1">Frequent (60–3600 sn)</label>
+                    {edit ? (
+                        <input value={frequent} onChange={e => setFrequent(e.target.value)}
+                            type="number" min={60} max={3600}
+                            className="w-full border border-[#CBD5E1] rounded px-2 py-1" />
+                    ) : (
+                        <div className="text-[#1E293B] font-mono">{intervals.frequent_seconds} sn ({Math.round(intervals.frequent_seconds / 60)} dk)</div>
+                    )}
+                    <div className="text-[10px] text-[#94A3B8] mt-1">high_temp_files, idle_in_tx, replication_slot_inactive</div>
+                </div>
+                <div>
+                    <label className="block text-[#64748B] mb-1">Daily (1–168 saat)</label>
+                    {edit ? (
+                        <input value={daily} onChange={e => setDaily(e.target.value)}
+                            type="number" min={1} max={168}
+                            className="w-full border border-[#CBD5E1] rounded px-2 py-1" />
+                    ) : (
+                        <div className="text-[#1E293B] font-mono">{intervals.daily_hours} saat</div>
+                    )}
+                    <div className="text-[10px] text-[#94A3B8] mt-1">index_*, high_bloat_ratio, daily snapshot işleri</div>
+                </div>
+            </div>
+            {edit && (
+                <div className="flex justify-end gap-2 mt-3">
+                    <button onClick={() => {
+                            setAcute(String(intervals.acute_seconds));
+                            setFrequent(String(intervals.frequent_seconds));
+                            setDaily(String(intervals.daily_hours));
+                            setEdit(false);
+                        }}
+                        className="px-3 py-1 text-xs text-[#475569]">İptal</button>
+                    <button onClick={() => {
+                            onSave({
+                                acute_seconds: Number(acute),
+                                frequent_seconds: Number(frequent),
+                                daily_hours: Number(daily),
+                            });
+                            setEdit(false);
+                        }}
+                        disabled={!dirty || saving}
+                        className="px-3 py-1 text-xs bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] disabled:opacity-50">
+                        {saving ? 'Kaydediliyor...' : 'Kaydet'}
+                    </button>
                 </div>
             )}
         </div>
