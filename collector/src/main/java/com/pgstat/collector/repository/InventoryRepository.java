@@ -312,6 +312,7 @@ public class InventoryRepository {
             join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
             join dim.database_ref dr on dr.instance_pk = ds.instance_pk and dr.dbid = ds.dbid
             where i.is_active
+              and dr.is_active  -- takipten cikarilan DB'leri atla (V065 cleanup feature)
               and i.bootstrap_state in ('ready', 'degraded')
               and (ds.backoff_until is null or ds.backoff_until <= now())
               and coalesce(ds.next_db_objects_collect_at, '-infinity'::timestamptz) <= now()
