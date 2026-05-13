@@ -11,10 +11,11 @@ interface SystemAlertConfig {
     category: string;
     thresholdUnit: string | null;
     thresholdDesc: string | null;
+    windowDesc: string | null;
     severity: string;
     description: string;
-    global: { is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number };
-    overrides: { instance_pk: number; display_name: string; is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number }[];
+    global: { is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number; window_minutes: number | null };
+    overrides: { instance_pk: number; display_name: string; is_enabled: boolean; threshold_value: number | null; cooldown_minutes: number; window_minutes: number | null }[];
 }
 
 interface Instance { instance_pk: number; display_name: string; }
@@ -31,7 +32,7 @@ const CATEGORIES: { key: string; label: string; icon: string }[] = [
 export default function SystemAlerts() {
     const toast = useToast();
     const qc = useQueryClient();
-    const [overrideModal, setOverrideModal] = useState<{ alertCode: string; label: string } | null>(null);
+    const [overrideModal, setOverrideModal] = useState<{ alertCode: string; label: string; windowDesc: string | null } | null>(null);
 
     const { data: configs = [], isLoading } = useQuery<SystemAlertConfig[]>({
         queryKey: ['system-alert-config'],
@@ -44,8 +45,8 @@ export default function SystemAlerts() {
     });
 
     const toggleMut = useMutation({
-        mutationFn: ({ code, enabled, threshold, cooldown }: { code: string; enabled: boolean; threshold: number | null; cooldown: number }) =>
-            apiPut(`/system-alerts/config/${code}`, { is_enabled: enabled, threshold_value: threshold, cooldown_minutes: cooldown }),
+        mutationFn: ({ code, enabled, threshold, cooldown, window }: { code: string; enabled: boolean; threshold: number | null; cooldown: number; window: number | null }) =>
+            apiPut(`/system-alerts/config/${code}`, { is_enabled: enabled, threshold_value: threshold, cooldown_minutes: cooldown, window_minutes: window }),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['system-alert-config'] }); toast.success('Güncellendi (60sn içinde etkili)'); },
         onError: () => toast.error('Güncelleme başarısız'),
     });
@@ -95,20 +96,30 @@ export default function SystemAlerts() {
                                         enabled,
                                         threshold: cfg.global.threshold_value,
                                         cooldown: cfg.global.cooldown_minutes,
+                                        window: cfg.global.window_minutes,
                                     })}
                                     onThresholdChange={(val) => toggleMut.mutate({
                                         code: cfg.alert_code,
                                         enabled: cfg.global.is_enabled,
                                         threshold: val,
                                         cooldown: cfg.global.cooldown_minutes,
+                                        window: cfg.global.window_minutes,
                                     })}
                                     onCooldownChange={(val) => toggleMut.mutate({
                                         code: cfg.alert_code,
                                         enabled: cfg.global.is_enabled,
                                         threshold: cfg.global.threshold_value,
                                         cooldown: val,
+                                        window: cfg.global.window_minutes,
                                     })}
-                                    onAddOverride={() => setOverrideModal({ alertCode: cfg.alert_code, label: cfg.label })}
+                                    onWindowChange={(val) => toggleMut.mutate({
+                                        code: cfg.alert_code,
+                                        enabled: cfg.global.is_enabled,
+                                        threshold: cfg.global.threshold_value,
+                                        cooldown: cfg.global.cooldown_minutes,
+                                        window: val,
+                                    })}
+                                    onAddOverride={() => setOverrideModal({ alertCode: cfg.alert_code, label: cfg.label, windowDesc: cfg.windowDesc })}
                                     onDeleteOverride={(instancePk) => deleteOverrideMut.mutate({ code: cfg.alert_code, instancePk })}
                                 />
                             ))}
@@ -121,6 +132,7 @@ export default function SystemAlerts() {
                 <OverrideModal
                     alertCode={overrideModal.alertCode}
                     label={overrideModal.label}
+                    windowDesc={overrideModal.windowDesc}
                     instances={instances}
                     onClose={() => setOverrideModal(null)}
                 />
@@ -129,19 +141,22 @@ export default function SystemAlerts() {
     );
 }
 
-function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldownChange, onAddOverride, onDeleteOverride }: {
+function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldownChange, onWindowChange, onAddOverride, onDeleteOverride }: {
     config: SystemAlertConfig;
     isJob: boolean;
     onToggle: (enabled: boolean) => void;
     onThresholdChange: (val: number | null) => void;
     onCooldownChange: (val: number) => void;
+    onWindowChange: (val: number | null) => void;
     onAddOverride: () => void;
     onDeleteOverride: (instancePk: number) => void;
 }) {
     const [editThreshold, setEditThreshold] = useState(false);
     const [editCooldown, setEditCooldown] = useState(false);
+    const [editWindow, setEditWindow] = useState(false);
     const [thresholdInput, setThresholdInput] = useState(String(config.global.threshold_value ?? ''));
     const [cooldownInput, setCooldownInput] = useState(String(config.global.cooldown_minutes));
+    const [windowInput, setWindowInput] = useState(String(config.global.window_minutes ?? ''));
 
     return (
         <div className={`bg-white border rounded-lg p-4 transition-colors ${config.global.is_enabled ? 'border-[#E2E8F0]' : 'border-[#E2E8F0] opacity-60'}`}>
@@ -179,6 +194,28 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
                                 className="text-xs bg-[#F1F5F9] px-2 py-1 rounded hover:bg-[#E2E8F0]"
                                 title={config.thresholdDesc || ''}>
                                 Eşik: {config.global.threshold_value ?? '—'} {config.thresholdUnit}
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {/* Eval penceresi */}
+                {config.windowDesc && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                        {editWindow ? (
+                            <form onSubmit={(e) => { e.preventDefault(); onWindowChange(windowInput ? Number(windowInput) : null); setEditWindow(false); }}
+                                className="flex items-center gap-1">
+                                <input value={windowInput} onChange={e => setWindowInput(e.target.value)}
+                                    className="w-14 border border-[#CBD5E1] rounded px-2 py-1 text-xs" autoFocus />
+                                <span className="text-[10px] text-[#94A3B8]">dk</span>
+                                <button type="submit" className="text-xs text-[#22C55E]">✓</button>
+                                <button type="button" onClick={() => setEditWindow(false)} className="text-xs text-[#94A3B8]">✕</button>
+                            </form>
+                        ) : (
+                            <button onClick={() => { setWindowInput(String(config.global.window_minutes ?? '')); setEditWindow(true); }}
+                                className="text-xs bg-[#FEF3C7] px-2 py-1 rounded hover:bg-[#FDE68A]"
+                                title={config.windowDesc}>
+                                ⏲ Pencere: {config.global.window_minutes ?? '—'}dk
                             </button>
                         )}
                     </div>
@@ -223,6 +260,7 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
                             <span className="text-[#94A3B8]">
                                 {o.is_enabled ? '✓ Aktif' : '✕ Devre dışı'}
                                 {o.threshold_value != null && ` · Eşik: ${o.threshold_value}`}
+                                {o.window_minutes != null && ` · Pencere: ${o.window_minutes}dk`}
                             </span>
                             <button onClick={() => onDeleteOverride(o.instance_pk)}
                                 className="ml-auto text-[#DC2626] hover:text-[#B91C1C]">Sil</button>
@@ -234,8 +272,8 @@ function AlertConfigCard({ config, isJob, onToggle, onThresholdChange, onCooldow
     );
 }
 
-function OverrideModal({ alertCode, label, instances, onClose }: {
-    alertCode: string; label: string; instances: Instance[]; onClose: () => void;
+function OverrideModal({ alertCode, label, windowDesc, instances, onClose }: {
+    alertCode: string; label: string; windowDesc: string | null; instances: Instance[]; onClose: () => void;
 }) {
     const toast = useToast();
     const qc = useQueryClient();
@@ -243,12 +281,14 @@ function OverrideModal({ alertCode, label, instances, onClose }: {
     const [enabled, setEnabled] = useState(false);
     const [threshold, setThreshold] = useState('');
     const [cooldown, setCooldown] = useState('60');
+    const [windowMin, setWindowMin] = useState('');
 
     const saveMut = useMutation({
         mutationFn: () => apiPut(`/system-alerts/config/${alertCode}/instances/${instancePk}`, {
             is_enabled: enabled,
             threshold_value: threshold ? Number(threshold) : null,
             cooldown_minutes: Number(cooldown) || 60,
+            window_minutes: windowMin ? Number(windowMin) : null,
         }),
         onSuccess: () => { qc.invalidateQueries({ queryKey: ['system-alert-config'] }); toast.success('Override kaydedildi'); onClose(); },
         onError: () => toast.error('Kayıt başarısız'),
@@ -287,6 +327,13 @@ function OverrideModal({ alertCode, label, instances, onClose }: {
                         <input value={cooldown} onChange={e => setCooldown(e.target.value)}
                             className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
                     </div>
+                    {windowDesc && (
+                        <div>
+                            <label className="block text-xs font-medium text-[#475569] mb-1">Eval penceresi (dk, boş = global)</label>
+                            <input value={windowMin} onChange={e => setWindowMin(e.target.value)}
+                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" placeholder={windowDesc} />
+                        </div>
+                    )}
                 </div>
                 <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2">
                     <button onClick={onClose} className="px-4 py-2 text-sm text-[#475569]">İptal</button>
