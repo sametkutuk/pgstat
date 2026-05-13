@@ -183,12 +183,9 @@ public class AlertRepository {
             where status = 'open'
               and last_seen_at < now() - make_interval(mins => ?)
               and alert_code in (
-                -- AlertEvidenceResolver Faz 1+2 kapsamindakiler bu listeden cikti:
-                --   high_temp_files, idle_in_tx_time_high, replication_slot_inactive,
-                --   high_connection_usage, replication_lag, stale_data, index_unused
-                -- Faz 3'te (sonraki turlarda) eklenecek olanlar bu listede kaliyor:
-                'long_running_query', 'lock_contention',
-                'high_bloat_ratio', 'index_suspect_missing',
+                -- AlertEvidenceResolver tum transient alert kodlarini kanit-bazli kapatiyor.
+                -- Burada sadece stats_reset_detected kaldi: event tipi, manuel ACK daha
+                -- mantikli ama stale fallback gelecekte istenirse kapatabilir.
                 'stats_reset_detected'
               )
             """, staleMinutes);

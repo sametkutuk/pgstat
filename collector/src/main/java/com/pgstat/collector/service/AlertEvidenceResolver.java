@@ -20,11 +20,11 @@ import java.util.Map;
  * hassas: alert tetiklenmesinin nedeni hala mevcut mu degil mi gercek datay ile bakar.
  *
  * Faz 1: high_temp_files + temp-related user_defined_rule
- * Faz 2 (bu commit): idle_in_tx, replication_slot_inactive, high_connection_usage,
- *                    replication_lag, stale_data, index_unused
+ * Faz 2: idle_in_tx, replication_slot_inactive, high_connection_usage,
+ *        replication_lag, stale_data, index_unused
+ * Faz 3 (bu commit): long_running_query, lock_contention, high_bloat_ratio,
+ *                    index_suspect_missing
  * Kapsam disi: stats_reset_detected (event tipi, manuel ACK)
- * Faz 3 (sonra): long_running_query, lock_contention, high_bloat_ratio,
- *                index_suspect_missing
  *
  * Diger alert kodlari icin autoResolveStale fallback olarak calismaya devam eder.
  */
@@ -70,6 +70,10 @@ public class AlertEvidenceResolver {
         resolved += safe("repl_lag", this::resolveReplicationLag);
         resolved += safe("stale_data", this::resolveStaleData);
         resolved += safe("index_unused", this::resolveIndexUnused);
+        resolved += safe("long_running_query", this::resolveLongRunningQuery);
+        resolved += safe("lock_contention", this::resolveLockContention);
+        resolved += safe("high_bloat_ratio", this::resolveHighBloatRatio);
+        resolved += safe("index_suspect_missing", this::resolveIndexSuspectMissing);
         return resolved;
     }
 
@@ -518,6 +522,292 @@ public class AlertEvidenceResolver {
                 }
             } catch (Exception e) {
                 log.debug("index_unused resolver alert={} hatasi: {}", alertId, e.getMessage());
+            }
+        }
+        return resolved;
+    }
+
+    // =========================================================================
+    // Faz 3 — 4 yeni alert kodu icin evidence resolver
+    // =========================================================================
+
+    /**
+     * long_running_query: ayni pid + query_start hala 'active' ve duration > threshold mi?
+     * Pid kaybolduysa, state degistiyse, query_start degistiyse, duration eski_ig_ise -> resolve.
+     */
+    private int resolveLongRunningQuery() {
+        int resolved = 0;
+        List<Map<String, Object>> openAlerts = jdbc.queryForList("""
+            select alert_id, alert_key, instance_pk, last_seen_at, details_json
+            from ops.alert
+            where status = 'open'
+              and alert_code = 'long_running_query'
+              and last_seen_at > now() - make_interval(hours => ?)
+            """, MAX_AGE_HOURS);
+
+        for (Map<String, Object> a : openAlerts) {
+            if (!ageAtLeast(a, MIN_AGE_MINUTES)) continue;
+            long alertId = ((Number) a.get("alert_id")).longValue();
+            long instancePk = ((Number) a.get("instance_pk")).longValue();
+            String alertKey = (String) a.get("alert_key");
+            String detailsJson = a.get("details_json") != null ? a.get("details_json").toString() : null;
+
+            // pid: details.context.pid, yoksa alert_key parse
+            // alert_key format: "actionable:long_running_query:<instance_pk>:<pid>"
+            String pidStr = readContextString(detailsJson, "pid");
+            if (pidStr == null) {
+                String[] parts = alertKey.split(":");
+                if (parts.length >= 4) pidStr = parts[3];
+            }
+            if (pidStr == null) continue;
+            Integer pid;
+            try { pid = Integer.parseInt(pidStr); } catch (Exception e) { continue; }
+
+            // query_start: yeni format'tan oku (eski alert'lerde olmayabilir, fallback yok)
+            String queryStartStr = readContextString(detailsJson, "query_start");
+
+            try {
+                Map<String, Object> row = jdbc.queryForMap("""
+                    with latest as (
+                      select max(snapshot_ts) as ts
+                      from fact.pg_activity_snapshot
+                      where instance_pk = ?
+                    )
+                    select a.pid, a.state, a.query_start,
+                           extract(epoch from (l.ts - a.query_start))::bigint as duration_sec
+                    from fact.pg_activity_snapshot a, latest l
+                    where a.instance_pk = ? and a.snapshot_ts = l.ts and a.pid = ?
+                    union all
+                    select null, null, null, null
+                    order by pid nulls last
+                    limit 1
+                    """, instancePk, instancePk, pid);
+
+                boolean shouldResolve = false;
+                String reason = null;
+                if (row.get("pid") == null) {
+                    shouldResolve = true; reason = "pid kayboldu";
+                } else {
+                    String state = (String) row.get("state");
+                    if (!"active".equals(state)) {
+                        shouldResolve = true; reason = "state=" + state;
+                    } else if (queryStartStr != null) {
+                        // query_start kontrolu: degisti ise baska sorguya atandi
+                        String currentQs = String.valueOf(row.get("query_start"));
+                        if (!queryStartStr.equals(currentQs)
+                                && !currentQs.startsWith(queryStartStr.substring(0, Math.min(queryStartStr.length(), 19)))) {
+                            shouldResolve = true; reason = "query_start degisti";
+                        }
+                    }
+                    if (!shouldResolve) {
+                        long durationSec = ((Number) row.get("duration_sec")).longValue();
+                        java.math.BigDecimal threshold = configCache.getThreshold(
+                            "long_running_query", instancePk, new java.math.BigDecimal("300"));
+                        if (durationSec < threshold.longValue()) {
+                            shouldResolve = true;
+                            reason = "duration (" + durationSec + ") < threshold (" + threshold + ")";
+                        }
+                    }
+                }
+                if (shouldResolve) {
+                    alertRepo.resolve(alertKey);
+                    log.info("Evidence resolver: long_running_query alert {} kapatildi ({})", alertId, reason);
+                    resolved++;
+                }
+            } catch (Exception e) {
+                log.debug("long_running_query resolver alert={} hatasi: {}", alertId, e.getMessage());
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * lock_contention: son 5dk snapshot'ta hala uzun bekleyen lock var mi?
+     * Alert anahtarı pid-bagimsiz (instance bazinda) — yani "instance'ta lock contention var" diyor.
+     */
+    private int resolveLockContention() {
+        int resolved = 0;
+        List<Map<String, Object>> openAlerts = jdbc.queryForList("""
+            select alert_id, alert_key, instance_pk, last_seen_at
+            from ops.alert
+            where status = 'open'
+              and alert_code = 'lock_contention'
+              and last_seen_at > now() - make_interval(hours => ?)
+            """, MAX_AGE_HOURS);
+
+        for (Map<String, Object> a : openAlerts) {
+            if (!ageAtLeast(a, MIN_AGE_MINUTES)) continue;
+            long alertId = ((Number) a.get("alert_id")).longValue();
+            long instancePk = ((Number) a.get("instance_pk")).longValue();
+
+            try {
+                java.math.BigDecimal thresholdSec = configCache.getThreshold(
+                    "lock_contention", instancePk, new java.math.BigDecimal("300"));
+                List<Map<String, Object>> contention = jdbc.queryForList("""
+                    with latest as (
+                      select max(snapshot_ts) as ts
+                      from fact.pg_lock_snapshot
+                      where instance_pk = ? and snapshot_ts > now() - interval '5 minutes'
+                    )
+                    select 1 as has_contention
+                    from fact.pg_lock_snapshot s, latest l
+                    where s.instance_pk = ?
+                      and s.snapshot_ts = l.ts
+                      and s.waitstart is not null
+                      and (now() - s.waitstart) > make_interval(secs => ?)
+                    limit 1
+                    """, instancePk, instancePk, thresholdSec.intValue());
+                // Son 5dk snapshot yoksa latest.ts null -> join sonuc bos -> contention bos.
+                // Bu durumda Felsefe A (acik tut) yerine Felsefe B uygulamak yanlis olur:
+                // "snapshot yok" => "lock yok" demeyiz. Atla.
+                Long latestTs = jdbc.queryForObject("""
+                    select extract(epoch from max(snapshot_ts))::bigint
+                    from fact.pg_lock_snapshot
+                    where instance_pk = ? and snapshot_ts > now() - interval '5 minutes'
+                    """, Long.class, instancePk);
+                if (latestTs == null) continue;  // snapshot yok, acik tut
+                if (contention.isEmpty()) {
+                    alertRepo.resolve((String) a.get("alert_key"));
+                    log.info("Evidence resolver: lock_contention alert {} kapatildi — son 5dk'da bekleyen lock yok",
+                        alertId);
+                    resolved++;
+                }
+            } catch (Exception e) {
+                log.debug("lock_contention resolver alert={} hatasi: {}", alertId, e.getMessage());
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * high_bloat_ratio: son snapshot'ta dead_pct < threshold mi?
+     * Eski format alert'lerde context.relation = "schema.relname" parse fallback.
+     */
+    private int resolveHighBloatRatio() {
+        int resolved = 0;
+        List<Map<String, Object>> openAlerts = jdbc.queryForList("""
+            select alert_id, alert_key, instance_pk, last_seen_at, details_json
+            from ops.alert
+            where status = 'open'
+              and alert_code = 'high_bloat_ratio'
+              and last_seen_at > now() - make_interval(hours => ?)
+            """, MAX_AGE_HOURS);
+
+        for (Map<String, Object> a : openAlerts) {
+            if (!ageAtLeast(a, MIN_AGE_MINUTES)) continue;
+            long alertId = ((Number) a.get("alert_id")).longValue();
+            long instancePk = ((Number) a.get("instance_pk")).longValue();
+            String detailsJson = a.get("details_json") != null ? a.get("details_json").toString() : null;
+
+            String schemaname = readContextString(detailsJson, "schemaname");
+            String relname = readContextString(detailsJson, "relname");
+            if (schemaname == null || relname == null) {
+                String rel = readContextString(detailsJson, "relation");
+                if (rel != null && rel.contains(".")) {
+                    int dot = rel.indexOf('.');
+                    schemaname = rel.substring(0, dot);
+                    relname = rel.substring(dot + 1);
+                }
+            }
+            if (schemaname == null || relname == null) continue;
+
+            try {
+                java.math.BigDecimal deadPct = jdbc.queryForObject("""
+                    select round(100.0 * t.n_dead_tup_estimate::numeric
+                           / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0), 1)
+                    from fact.pg_table_stat_delta t
+                    where t.instance_pk = ?
+                      and t.schemaname = ? and t.relname = ?
+                      and t.sample_ts = (
+                        select max(sample_ts) from fact.pg_table_stat_delta
+                        where instance_pk = ? and schemaname = ? and relname = ?
+                      )
+                    """, java.math.BigDecimal.class,
+                    instancePk, schemaname, relname, instancePk, schemaname, relname);
+                if (deadPct == null) continue;  // veri yok, acik tut
+                java.math.BigDecimal threshold = configCache.getThreshold(
+                    "high_bloat_ratio", instancePk, new java.math.BigDecimal("20"));
+                if (deadPct.compareTo(threshold) < 0) {
+                    alertRepo.resolve((String) a.get("alert_key"));
+                    log.info("Evidence resolver: high_bloat_ratio alert {} kapatildi (dead_pct={} < {})",
+                        alertId, deadPct, threshold);
+                    resolved++;
+                }
+            } catch (Exception e) {
+                log.debug("high_bloat_ratio resolver alert={} hatasi: {}", alertId, e.getMessage());
+            }
+        }
+        return resolved;
+    }
+
+    /**
+     * index_suspect_missing: son 24h ratio < threshold mi VEYA seq_tup_read cok dustu mu?
+     * Eski format alert'lerde context.table = "schema.relname" parse fallback.
+     */
+    private int resolveIndexSuspectMissing() {
+        int resolved = 0;
+        List<Map<String, Object>> openAlerts = jdbc.queryForList("""
+            select alert_id, alert_key, instance_pk, last_seen_at, details_json
+            from ops.alert
+            where status = 'open'
+              and alert_code = 'index_suspect_missing'
+              and last_seen_at > now() - make_interval(hours => ?)
+            """, MAX_AGE_HOURS);
+
+        for (Map<String, Object> a : openAlerts) {
+            if (!ageAtLeast(a, MIN_AGE_MINUTES)) continue;
+            long alertId = ((Number) a.get("alert_id")).longValue();
+            long instancePk = ((Number) a.get("instance_pk")).longValue();
+            String detailsJson = a.get("details_json") != null ? a.get("details_json").toString() : null;
+
+            String schemaname = readContextString(detailsJson, "schemaname");
+            String relname = readContextString(detailsJson, "relname");
+            if (schemaname == null || relname == null) {
+                String tbl = readContextString(detailsJson, "table");
+                if (tbl != null && tbl.contains(".")) {
+                    int dot = tbl.indexOf('.');
+                    schemaname = tbl.substring(0, dot);
+                    relname = tbl.substring(dot + 1);
+                }
+            }
+            if (schemaname == null || relname == null) continue;
+
+            try {
+                Map<String, Object> row = jdbc.queryForMap("""
+                    select coalesce(sum(seq_scan_delta), 0) as seq_scans,
+                           coalesce(sum(idx_scan_delta), 0) as idx_scans,
+                           coalesce(sum(seq_tup_read_delta), 0) as seq_tup_read,
+                           round(case when sum(idx_scan_delta) > 0
+                                      then sum(seq_scan_delta)::numeric / sum(idx_scan_delta)
+                                      else 9999 end, 1) as ratio
+                    from fact.pg_table_stat_delta
+                    where instance_pk = ?
+                      and schemaname = ? and relname = ?
+                      and sample_ts > now() - interval '24 hours'
+                    """, instancePk, schemaname, relname);
+                long seqTupRead = ((Number) row.get("seq_tup_read")).longValue();
+                java.math.BigDecimal ratio = (java.math.BigDecimal) row.get("ratio");
+                if (ratio == null) continue;  // veri yok, acik tut
+                java.math.BigDecimal threshold = configCache.getThreshold(
+                    "index_suspect_missing", instancePk, new java.math.BigDecimal("100"));
+
+                boolean shouldResolve = false;
+                String reason = null;
+                if (ratio.compareTo(threshold) < 0) {
+                    shouldResolve = true;
+                    reason = "ratio (" + ratio + ") < threshold (" + threshold + ")";
+                } else if (seqTupRead < 100000) {
+                    shouldResolve = true;
+                    reason = "seq_tup_read (" + seqTupRead + ") < 100K";
+                }
+                if (shouldResolve) {
+                    alertRepo.resolve((String) a.get("alert_key"));
+                    log.info("Evidence resolver: index_suspect_missing alert {} kapatildi ({})",
+                        alertId, reason);
+                    resolved++;
+                }
+            } catch (Exception e) {
+                log.debug("index_suspect_missing resolver alert={} hatasi: {}", alertId, e.getMessage());
             }
         }
         return resolved;

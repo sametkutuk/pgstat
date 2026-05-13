@@ -176,7 +176,28 @@ public class ActionableAlertEvaluator {
                 "Index gerekiyor: " + r.get("schemaname") + "." + r.get("relname"),
                 "seq_scan/idx_scan oranı çok yüksek");
 
-            String detailsJson = buildDetailsJson(relatedQueries);
+            // Context'e schemaname/relname ekle — evidence resolver bunlari kullanir.
+            AlertDetailsBuilder details = new AlertDetailsBuilder()
+                .setKind("usage_summary")
+                .addContext("schemaname", r.get("schemaname"))
+                .addContext("relname", r.get("relname"))
+                .addContext("table", r.get("schemaname") + "." + r.get("relname"))
+                .addContext("database", r.get("datname"))
+                .addContext("seq_scans", r.get("seq_scans"))
+                .addContext("idx_scans", r.get("idx_scans"))
+                .addContext("ratio", r.get("ratio"))
+                .addContext("seq_tup_read", r.get("seq_tup_read"));
+            for (Map<String, Object> q : relatedQueries) {
+                details.addRecord(Map.of(
+                    "statement_series_id", q.get("statement_series_id") != null ? q.get("statement_series_id") : 0,
+                    "queryid", q.get("queryid") != null ? q.get("queryid") : 0,
+                    "query_text", q.get("query_text") != null ? q.get("query_text") : "?",
+                    "datname", q.get("datname") != null ? q.get("datname") : "?",
+                    "current_val", toLong(q.get("exec_ms")),
+                    "label", "exec_ms"
+                ));
+            }
+            String detailsJson = details.build();
             alertRepo.upsert(alertKey, AlertCode.INDEX_SUSPECT_MISSING,
                 toLong(r.get("instance_pk")), null, null,
                 rendered[0], rendered[1], detailsJson);
@@ -792,7 +813,7 @@ public class ActionableAlertEvaluator {
               group by instance_pk
             )
             select a.instance_pk, i.display_name, a.pid, a.datname, a.usename,
-                   a.application_name, a.state,
+                   a.application_name, a.state, a.query_start,
                    extract(epoch from (l.ts - a.query_start))::bigint as duration_seconds,
                    left(a.query, 200) as query_text
             from fact.pg_activity_snapshot a
@@ -832,6 +853,7 @@ public class ActionableAlertEvaluator {
             String detailsJson = new AlertDetailsBuilder()
                 .setKind("connection_diag")
                 .addContext("pid", r.get("pid"))
+                .addContext("query_start", r.get("query_start"))
                 .addContext("database", r.get("datname"))
                 .addContext("user", r.get("usename"))
                 .addContext("application", r.get("application_name"))
@@ -1035,6 +1057,8 @@ public class ActionableAlertEvaluator {
             String detailsJson = new AlertDetailsBuilder()
                 .setKind("usage_summary")
                 .addContext("relation", relation)
+                .addContext("schemaname", r.get("schemaname"))
+                .addContext("relname", r.get("relname"))
                 .addContext("database", r.get("datname"))
                 .addContext("live_tup", r.get("live_tup"))
                 .addContext("dead_tup", r.get("dead_tup"))
