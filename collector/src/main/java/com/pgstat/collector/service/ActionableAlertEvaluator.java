@@ -424,15 +424,31 @@ public class ActionableAlertEvaluator {
             for (Map<String, Object> q : topTempQueries) {
                 maxQueryTempBytes = Math.max(maxQueryTempBytes, toLong(q.get("temp_bytes")));
             }
+            long workMemBytes = parseSettingBytes(workMemInfo, 4L * 1024L * 1024L);
             WorkMemAdvice advice = buildWorkMemAdvice(
                 maxQueryTempBytes,
-                parseSettingBytes(workMemInfo, 4L * 1024L * 1024L),
+                workMemBytes,
                 parseSettingLong(maxConnectionsInfo, 0),
                 parseSettingBytes(sharedBuffersInfo, 0),
                 parseSettingBytes(effectiveCacheInfo, 0)
             );
             String suggested = advice.suggestedWorkMem();
             String workMemGuidance = advice.guidance();
+            // Ortalama temp/call mevcut work_mem'in altindaysa work_mem yetersizligi degil,
+            // planner kararidir. Mesajda yaniltici "work_mem dusur" cikmamali.
+            long avgTempPerCall = 0;
+            for (Map<String, Object> q : topTempQueries) {
+                long perCall = toLong(q.get("avg_temp_bytes_per_call"));
+                if (perCall > avgTempPerCall) avgTempPerCall = perCall;
+            }
+            boolean workMemSufficient = workMemBytes > 0 && avgTempPerCall > 0
+                && avgTempPerCall < workMemBytes;
+            String rootCauseHint = workMemSufficient
+                ? "ℹ️ Ortalama temp/call (" + humanBytes(avgTempPerCall) + ") mevcut work_mem'in altında. "
+                    + "work_mem yetersizliği değil, planner kararından (parallel hash, kötü row estimate) kaynaklı. "
+                    + "EXPLAIN (ANALYZE, BUFFERS) ile spill node'u inceleyin."
+                : "🎯 Öneri: SET LOCAL work_mem = '" + suggested + "' (en yüksek ort. temp/call: "
+                    + humanBytes(avgTempPerCall) + "). " + workMemGuidance;
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -448,6 +464,8 @@ public class ActionableAlertEvaluator {
             ctx.put("top_temp_queries", formatTopTempQueriesToText(topTempQueries));
             ctx.put("suggested_work_mem", suggested);
             ctx.put("work_mem_guidance", workMemGuidance);
+            ctx.put("root_cause_hint", rootCauseHint);
+            ctx.put("work_mem_sufficient", workMemSufficient);
 
             String[] rendered = renderer.renderForCode("high_temp_files", ctx,
                 "Yüksek temp file: " + r.get("datname"),
@@ -1300,8 +1318,13 @@ public class ActionableAlertEvaluator {
 
     private static String formatSetting(SettingInfo setting, String fallback) {
         if (setting == null || setting.value() == null || setting.value().isBlank()) return fallback;
+        String val = setting.value().trim();
         String unit = setting.unit() != null ? setting.unit().trim() : "";
-        return unit.isBlank() ? setting.value() : setting.value() + unit;
+        // value zaten birim icerirse (ornek: "10485kB") unit'i ekleme
+        if (!unit.isBlank() && val.matches("^[0-9]+(?:\\.[0-9]+)?\\s*[a-zA-Z]+$")) {
+            return val;
+        }
+        return unit.isBlank() ? val : val + unit;
     }
 
     private static long parseSettingLong(SettingInfo setting, long fallback) {
@@ -1316,10 +1339,22 @@ public class ActionableAlertEvaluator {
     private static long parseSettingBytes(SettingInfo setting, long fallbackBytes) {
         if (setting == null || setting.value() == null) return fallbackBytes;
         try {
-            BigDecimal n = new BigDecimal(setting.value().trim());
-            String u = setting.unit() != null ? setting.unit().trim().toLowerCase() : "kb";
+            String raw = setting.value().trim();
+            String numericPart = raw;
+            String inlineUnit = null;
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^([0-9]+(?:\\.[0-9]+)?)\\s*([a-zA-Z]+)?$").matcher(raw);
+            if (m.matches()) {
+                numericPart = m.group(1);
+                if (m.group(2) != null && !m.group(2).isBlank()) inlineUnit = m.group(2);
+            }
+            BigDecimal n = new BigDecimal(numericPart);
+            String u = inlineUnit != null
+                ? inlineUnit.trim().toLowerCase()
+                : (setting.unit() != null ? setting.unit().trim().toLowerCase() : "kb");
             BigDecimal multiplier = switch (u) {
                 case "b", "byte", "bytes" -> BigDecimal.ONE;
+                case "kb" -> new BigDecimal(1024);
                 case "8kb" -> new BigDecimal(8192);
                 case "mb" -> new BigDecimal(1_048_576);
                 case "gb" -> new BigDecimal(1_073_741_824);

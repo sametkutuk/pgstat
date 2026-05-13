@@ -1962,8 +1962,12 @@ public class AlertRuleEvaluator {
 
     private static String formatSetting(Object value, Object unit, String fallback) {
         if (value == null) return fallback;
-        String val = value.toString();
-        String u = unit != null ? unit.toString() : "";
+        String val = value.toString().trim();
+        String u = unit != null ? unit.toString().trim() : "";
+        // value zaten birim icerirse (ornek: "10485kB") unit'i ekleme
+        if (!u.isBlank() && val.matches("^[0-9]+(?:\\.[0-9]+)?\\s*[a-zA-Z]+$")) {
+            return val;
+        }
         return u.isBlank() ? val : val + u;
     }
 
