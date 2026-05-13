@@ -534,9 +534,19 @@ public class AlertRuleEvaluator {
                 .append("**, max_connections=").append(maxConnections)
                 .append(", shared_buffers=").append(sharedBuffers)
                 .append(", effective_cache_size=").append(effectiveCacheSize).append("\n");
-            summary.append("🎯 Query-level öneri: **SET LOCAL work_mem = '").append(suggestedWorkMem).append("'**");
-            summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
-            summary.append(workMemAdvice.guidance());
+            // Eger ortalama temp/call mevcut work_mem'in altindaysa work_mem yetersizligi degil,
+            // planner kararindan kaynakli temp olabilir (parallel hash, sort spill estimate sapmasi vb.)
+            if (maxTempBytesPerCall > 0 && currentWorkMemBytes > 0
+                    && maxTempBytesPerCall < currentWorkMemBytes) {
+                summary.append("ℹ️ Ortalama temp/call (").append(humanBytes(maxTempBytesPerCall))
+                    .append(") mevcut work_mem'in (").append(workMem).append(") altinda. ")
+                    .append("Bu sorgu work_mem yetersizliginden degil planner kararindan disk kullaniyor ")
+                    .append("(parallel hash, kotu row estimate, vb.). EXPLAIN (ANALYZE, BUFFERS) ile spill node'u inceleyin.");
+            } else {
+                summary.append("🎯 Query-level öneri: **SET LOCAL work_mem = '").append(suggestedWorkMem).append("'**");
+                summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
+                summary.append(workMemAdvice.guidance());
+            }
 
             StringBuilder json = new StringBuilder();
             json.append("{\"kind\":\"temp_files\"");
@@ -1960,10 +1970,24 @@ public class AlertRuleEvaluator {
     private static long parseSettingBytes(Object value, Object unit, long fallbackBytes) {
         if (value == null) return fallbackBytes;
         try {
-            BigDecimal n = new BigDecimal(value.toString());
-            String u = unit != null ? unit.toString().trim().toLowerCase() : "kb";
+            // value bazi durumlarda "10485kB" gibi composite gelebilir; sayi/unit ayrimi
+            // yapilmamissa elle ayikla.
+            String raw = value.toString().trim();
+            String numericPart = raw;
+            String inlineUnit = null;
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^([0-9]+(?:\\.[0-9]+)?)\\s*([a-zA-Z]+)?$").matcher(raw);
+            if (m.matches()) {
+                numericPart = m.group(1);
+                if (m.group(2) != null && !m.group(2).isBlank()) inlineUnit = m.group(2);
+            }
+            BigDecimal n = new BigDecimal(numericPart);
+            String u = inlineUnit != null
+                ? inlineUnit.trim().toLowerCase()
+                : (unit != null ? unit.toString().trim().toLowerCase() : "kb");
             BigDecimal multiplier = switch (u) {
                 case "b", "byte", "bytes" -> BigDecimal.ONE;
+                case "kb" -> new BigDecimal(1024);
                 case "8kb" -> new BigDecimal(8192);
                 case "mb" -> new BigDecimal(1_048_576);
                 case "gb" -> new BigDecimal(1_073_741_824);
