@@ -105,6 +105,7 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkIndexSuspectMissing() {
+        int windowMin = configCache.getWindowMinutes("index_suspect_missing", null, 1440);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             with t as (
               select t.instance_pk, t.dbid, t.schemaname, t.relname,
@@ -112,7 +113,7 @@ public class ActionableAlertEvaluator {
                      sum(t.idx_scan_delta) as idx_scans,
                      sum(t.seq_tup_read_delta) as seq_tup_read
               from fact.pg_table_stat_delta t
-              where t.sample_ts > now() - interval '24 hours'
+              where t.sample_ts > now() - make_interval(mins => ?)
               group by t.instance_pk, t.dbid, t.schemaname, t.relname
             ), sized as (
               select t.*,
@@ -139,7 +140,7 @@ public class ActionableAlertEvaluator {
               and s.total_size_bytes > 10485760
             order by s.seq_tup_read desc
             limit 20
-            """);
+            """, windowMin);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -380,8 +381,9 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkHighTempFiles() {
-        // Pencere 15 dakika — job F4 (rolling, 15dk) dispatch'inde çalışıyor.
-        // Daha uzun pencere kullanmak iyileştirme sonrası alert'in geç sönmesine neden olur.
+        // Pencere artik control.system_alert_config.window_minutes'tan okunuyor.
+        // Default 15dk (job F4 = 15dk dispatch ile uyumlu).
+        int windowMin = configCache.getWindowMinutes("high_temp_files", null, 15);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             select d.instance_pk, d.dbid, d.datname,
                    sum(d.temp_files_delta) as temp_files,
@@ -389,10 +391,10 @@ public class ActionableAlertEvaluator {
                    i.display_name
             from fact.pg_database_delta d
             join control.instance_inventory i on i.instance_pk = d.instance_pk
-            where d.sample_ts > now() - interval '15 minutes'
+            where d.sample_ts > now() - make_interval(mins => ?)
             group by d.instance_pk, d.dbid, d.datname, i.display_name
             having sum(d.temp_files_delta) > 0
-            """);
+            """, windowMin);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -491,6 +493,7 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkHighTempFilesDaily() {
+        int windowMin = configCache.getWindowMinutes("high_temp_files_daily", null, 1440);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             select d.instance_pk, d.dbid, d.datname,
                    sum(d.temp_files_delta) as temp_files,
@@ -498,10 +501,10 @@ public class ActionableAlertEvaluator {
                    i.display_name
             from fact.pg_database_delta d
             join control.instance_inventory i on i.instance_pk = d.instance_pk
-            where d.sample_ts > now() - interval '24 hours'
+            where d.sample_ts > now() - make_interval(mins => ?)
             group by d.instance_pk, d.dbid, d.datname, i.display_name
             having sum(d.temp_files_delta) > 0
-            """);
+            """, windowMin);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -541,6 +544,7 @@ public class ActionableAlertEvaluator {
     }
 
     private int checkHighTempSqlsDaily() {
+        int windowMin = configCache.getWindowMinutes("high_temp_sqls_daily", null, 1440);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             with per_sql as (
               select d.instance_pk,
@@ -554,7 +558,7 @@ public class ActionableAlertEvaluator {
               join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
               left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
               left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-              where d.sample_ts > now() - interval '24 hours'
+              where d.sample_ts > now() - make_interval(mins => ?)
                 and coalesce(d.temp_blks_written_delta, 0) > 0
               group by d.instance_pk, ss.dbid, dbr.datname, ss.statement_series_id, ss.queryid, qt.query_text
               having sum(coalesce(d.temp_blks_written_delta, 0)) * 8192 >= ?
@@ -585,7 +589,7 @@ public class ActionableAlertEvaluator {
             from agg a
             join control.instance_inventory i on i.instance_pk = a.instance_pk
             left join top_queries tq on tq.instance_pk = a.instance_pk and tq.dbid = a.dbid
-            """, DAILY_TEMP_SQL_MIN_BYTES);
+            """, windowMin, DAILY_TEMP_SQL_MIN_BYTES);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -636,6 +640,7 @@ public class ActionableAlertEvaluator {
     private int checkIdleInTxTimeHigh() {
         // idle_in_transaction_time_ms_delta kolonu PG14+ icin var
         // Kolon yoksa sorgu hata verir → graceful skip (safeEval yakalar)
+        int windowMin = configCache.getWindowMinutes("idle_in_tx_time_high", null, 60);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             select d.instance_pk, d.dbid, d.datname,
                    sum(d.idle_in_transaction_time_ms_delta) as idle_ms,
@@ -645,10 +650,10 @@ public class ActionableAlertEvaluator {
                    i.display_name
             from fact.pg_database_delta d
             join control.instance_inventory i on i.instance_pk = d.instance_pk
-            where d.sample_ts > now() - interval '1 hour'
+            where d.sample_ts > now() - make_interval(mins => ?)
             group by d.instance_pk, d.dbid, d.datname, i.display_name
             having sum(d.session_time_ms_delta) > 60000
-            """);
+            """, windowMin);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -694,11 +699,14 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkReplicationSlotInactive() {
+        // Pencere = "kac dakikadir slot inactive". Latest snapshot lookup ve
+        // "bu pencerede aktif degil mi" kontrolu ayni pencereyi kullanir.
+        int windowMin = configCache.getWindowMinutes("replication_slot_inactive", null, 60);
         List<Map<String, Object>> rows = jdbc.queryForList("""
             with latest as (
               select instance_pk, slot_name, max(sample_ts) as ts
               from fact.pg_replication_slot_snapshot
-              where sample_ts > now() - interval '1 hour'
+              where sample_ts > now() - make_interval(mins => ?)
               group by instance_pk, slot_name
             )
             select s.instance_pk, s.slot_name, s.slot_type, s.wal_status, s.slot_lag_bytes,
@@ -711,10 +719,10 @@ public class ActionableAlertEvaluator {
               and not exists (
                 select 1 from fact.pg_replication_slot_snapshot s2
                 where s2.instance_pk = s.instance_pk and s2.slot_name = s.slot_name
-                  and s2.sample_ts > now() - interval '1 hour'
+                  and s2.sample_ts > now() - make_interval(mins => ?)
                   and s2.active = true
               )
-            """);
+            """, windowMin, windowMin);
 
         int count = 0;
         for (Map<String, Object> r : rows) {
@@ -826,7 +834,8 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkHighConnectionUsage() {
-        // Son snapshot'taki backend sayisi vs max_connections
+        // Son snapshot'taki backend sayisi vs max_connections.
+        // "5 minutes" pencere DEGIL — son taze snapshot'i bulan sentinel (veri yoksa skip).
         List<Map<String, Object>> rows = jdbc.queryForList("""
             with latest as (
               select instance_pk, max(sample_ts) as ts
@@ -1150,6 +1159,7 @@ public class ActionableAlertEvaluator {
 
     /** Top temp kullanıcısı sorguları — structured records */
     private List<Map<String, Object>> getTopTempQueries(long instancePk) {
+        int windowMin = configCache.getWindowMinutes("high_temp_files", instancePk, 15);
         try {
             return jdbc.queryForList("""
                 with window_q as (
@@ -1162,7 +1172,7 @@ public class ActionableAlertEvaluator {
                     from fact.pgss_delta d
                     join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
                     left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-                    where d.instance_pk = ? and d.sample_ts > now() - interval '15 minutes'
+                    where d.instance_pk = ? and d.sample_ts > now() - make_interval(mins => ?)
                       and d.temp_blks_written_delta > 0
                     group by ss.statement_series_id, ss.queryid, ss.dbid, qt.query_text
                     order by temp_bytes desc limit 3
@@ -1187,7 +1197,7 @@ public class ActionableAlertEvaluator {
                 left join hist h using (statement_series_id)
                 left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = w.dbid
                 order by w.temp_bytes desc
-                """, instancePk, instancePk, instancePk);
+                """, instancePk, windowMin, instancePk, instancePk);
         } catch (Exception e) {
             return java.util.Collections.emptyList();
         }

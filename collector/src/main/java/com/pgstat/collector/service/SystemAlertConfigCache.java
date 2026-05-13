@@ -50,7 +50,8 @@ public class SystemAlertConfigCache {
     public void reload() {
         try {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                "select alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes " +
+                "select alert_code, instance_pk, is_enabled, threshold_value, cooldown_minutes, " +
+                "       window_minutes " +
                 "from control.system_alert_config");
 
             Map<String, ConfigEntry> newGlobal = new HashMap<>();
@@ -64,8 +65,10 @@ public class SystemAlertConfigCache {
                     ? new BigDecimal(row.get("threshold_value").toString()) : null;
                 int cooldown = row.get("cooldown_minutes") != null
                     ? ((Number) row.get("cooldown_minutes")).intValue() : 60;
+                Integer window = row.get("window_minutes") != null
+                    ? ((Number) row.get("window_minutes")).intValue() : null;
 
-                ConfigEntry entry = new ConfigEntry(enabled, threshold, cooldown);
+                ConfigEntry entry = new ConfigEntry(enabled, threshold, cooldown, window);
 
                 if (ipk == null) {
                     newGlobal.put(code, entry);
@@ -141,6 +144,24 @@ public class SystemAlertConfigCache {
         return 60; // default
     }
 
+    /**
+     * Eval pencere uzunlugu (dakika). Onclik: instance override > global > hardcoded default.
+     * Alert'in "son N dakikadaki olaylari kontrol et" sorgusunda kullanilir.
+     */
+    public int getWindowMinutes(String alertCode, Long instancePk, int hardcodedDefault) {
+        if (instancePk != null) {
+            Map<Long, ConfigEntry> overrides = instanceOverrides.get(alertCode);
+            if (overrides != null) {
+                ConfigEntry override = overrides.get(instancePk);
+                if (override != null && override.windowMinutes != null) return override.windowMinutes;
+            }
+        }
+        ConfigEntry global = globalConfigs.get(alertCode);
+        if (global != null && global.windowMinutes != null) return global.windowMinutes;
+        return hardcodedDefault;
+    }
+
     /** İç veri yapısı */
-    private record ConfigEntry(boolean enabled, BigDecimal threshold, int cooldownMinutes) {}
+    private record ConfigEntry(boolean enabled, BigDecimal threshold, int cooldownMinutes,
+                                Integer windowMinutes) {}
 }
