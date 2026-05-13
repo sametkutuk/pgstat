@@ -64,8 +64,12 @@ public class AlertRepository {
             on conflict (alert_key) do update
             set severity = excluded.severity,
                 status = case
-                  when ops.alert.status = 'resolved' then 'open'
+                  when ops.alert.status in ('resolved', 'acknowledged') then 'open'
                   else ops.alert.status
+                end,
+                acknowledged_at = case
+                  when ops.alert.status = 'acknowledged' then null
+                  else ops.alert.acknowledged_at
                 end,
                 instance_pk = coalesce(excluded.instance_pk, ops.alert.instance_pk),
                 service_group = coalesce(excluded.service_group, ops.alert.service_group),
@@ -126,8 +130,12 @@ public class AlertRepository {
             on conflict (alert_key) do update
             set severity = excluded.severity,
                 status = case
-                  when ops.alert.status = 'resolved' then 'open'
+                  when ops.alert.status in ('resolved', 'acknowledged') then 'open'
                   else ops.alert.status
+                end,
+                acknowledged_at = case
+                  when ops.alert.status = 'acknowledged' then null
+                  else ops.alert.acknowledged_at
                 end,
                 instance_pk = coalesce(excluded.instance_pk, ops.alert.instance_pk),
                 service_group = coalesce(excluded.service_group, ops.alert.service_group),
