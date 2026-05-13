@@ -749,8 +749,19 @@ public class AlertRuleEvaluator {
                 continue;
             }
 
-            String severity = (upperCritical != null && currentVal.compareTo(upperCritical) > 0)
-                ? "critical" : "warning";
+            // Severity oncelikle SQL'den gelen auto_severity (Gate E frekans).
+            // auto_severity yoksa (eski path, table/index) z-score esikleri.
+            String autoSev = top.get("auto_severity") != null ? top.get("auto_severity").toString() : null;
+            String severity;
+            if (autoSev != null) {
+                severity = autoSev;
+            } else if (upperCritical != null && currentVal.compareTo(upperCritical) > 0) {
+                severity = "critical";
+            } else {
+                severity = "warning";
+            }
+            long recurCount = top.get("recur_count_7d") != null
+                ? ((Number) top.get("recur_count_7d")).longValue() : 0;
 
             Map<String, Object> ctx = baseContext(rule, instancePk, severity);
             ctx.put("value", currentVal);
@@ -762,6 +773,7 @@ public class AlertRuleEvaluator {
             ctx.put("baseline_hour", currentHour);
             ctx.put("sensitivity", sensitivity);
             ctx.put("window", windowMinutes);
+            ctx.put("recur_count_7d", recurCount);
             populateRecordCtx(ctx, top, metricType);
             ctx.put("top_queries_summary", buildTopSummaryText(anomalies, metricType));
 
@@ -856,17 +868,24 @@ public class AlertRuleEvaluator {
     private String buildPerRecordAdaptiveMessage(String metricType, String metricName,
                                                   Map<String, Object> rec, BigDecimal current,
                                                   BigDecimal baseline, String severity, int hour) {
+        long recurCount = rec.get("recur_count_7d") != null
+            ? ((Number) rec.get("recur_count_7d")).longValue() : 0;
+        String recurSuffix = recurCount >= 2
+            ? String.format(" [son 7 günde %d kez eşik aşıldı — %s]", recurCount,
+                recurCount >= 5 ? "sürekli sorun" : "pattern başlıyor")
+            : "";
         return switch (metricType) {
             case "statement_metric" -> String.format(
-                "Sorgu anomali: %s = %s (saat %02d:00 baseline avg=%s, %s). DB=%s User=%s Q=%s",
+                "Sorgu anomali: %s = %s (saat %02d:00 baseline median=%s, %s). DB=%s User=%s Q=%s%s",
                 metricName, current, hour, baseline, severity,
                 rec.get("datname"), rec.get("rolname"),
-                trimText((String) rec.get("query_text"), 80));
+                trimText((String) rec.get("query_text"), 80),
+                recurSuffix);
             case "table_metric" -> String.format(
-                "Tablo anomali: %s = %s (saat %02d:00 baseline avg=%s). Tablo=%s.%s",
+                "Tablo anomali: %s = %s (saat %02d:00 baseline median=%s). Tablo=%s.%s",
                 metricName, current, hour, baseline, rec.get("schemaname"), rec.get("relname"));
             case "index_metric" -> String.format(
-                "Index anomali: %s = %s (saat %02d:00 baseline avg=%s). Index=%s.%s",
+                "Index anomali: %s = %s (saat %02d:00 baseline median=%s). Index=%s.%s",
                 metricName, current, hour, baseline, rec.get("schemaname"), rec.get("indexrelname"));
             default -> "Anomali tespit edildi";
         };
@@ -2083,18 +2102,36 @@ public class AlertRuleEvaluator {
             "  from hist_med hm" +
             "  join hist_raw hr using (queryid, dbid, userid)" +
             "  group by hm.queryid, hm.dbid, hm.userid, hm.baseline_median" +
+            "), recurrence as (" +
+            // Son 7 gunde bu sorgu kac kez MAD esigini gecmis? (Gate E icin sayac)
+            "  select hr.queryid, hr.dbid, hr.userid, count(*) as recur_count_7d" +
+            "  from hist_raw hr" +
+            "  join hist_mad h using (queryid, dbid, userid)" +
+            "  where hr.hour_bucket > now() - interval '7 days'" +
+            "    and hr.window_sum > (h.baseline_median + 2.0 * h.baseline_mad)" +
+            "  group by hr.queryid, hr.dbid, hr.userid" +
             ")" +
             "select c.statement_series_id, c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
             "       h.baseline_median as baseline_avg, h.baseline_mad as baseline_stddev," +
             "       (h.baseline_median + ?::numeric * h.baseline_mad) as upper_warning," +
-            "       (h.baseline_median + 1.5 * ?::numeric * h.baseline_mad) as upper_critical" +
+            "       (h.baseline_median + 1.5 * ?::numeric * h.baseline_mad) as upper_critical," +
+            "       coalesce(r.recur_count_7d, 0) as recur_count_7d," +
+            // Frekans-bazli auto severity (Gate E):
+            //   0-1 kez -> null (alert ATILMAZ, gurultu olabilir)
+            //   2-4 kez -> warning (pattern olusuyor)
+            //   5+ kez  -> critical (surekli sorun)
+            "       case when coalesce(r.recur_count_7d, 0) >= 5 then 'critical'" +
+            "            when coalesce(r.recur_count_7d, 0) >= 2 then 'warning'" +
+            "            else null end as auto_severity" +
             "  from current_window c" +
             "  join hist_mad h using (queryid, dbid, userid)" +
+            "  left join recurrence r using (queryid, dbid, userid)" +
             "  where h.baseline_median >= ?::numeric" +                        // Gate A
             "    and c.current_val >= ?::numeric" +                             // Gate B
             "    and (c.current_val - h.baseline_median) >= ?::numeric * h.baseline_median" +  // Gate C
             "    and (c.current_val - h.baseline_median) / h.baseline_mad > ?::numeric" +      // Gate D MAD-z
-            "  order by (c.current_val - h.baseline_median) / h.baseline_mad desc nulls last" +
+            "    and coalesce(r.recur_count_7d, 0) >= 2" +                                      // Gate E frekans
+            "  order by coalesce(r.recur_count_7d, 0) desc, (c.current_val - h.baseline_median) / h.baseline_mad desc nulls last" +
             "  limit 10";
     }
 

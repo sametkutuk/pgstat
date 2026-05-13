@@ -1021,7 +1021,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                     Baseline gece hesaplanır. Bu instance için en az 7 gün veri yoksa kural atlanır.
                   </p>
                   <div className="mt-2 bg-[#F0F9FF] border border-[#BAE6FD] rounded-md px-3 py-2 text-[11px] text-[#0369A1]">
-                    <div className="font-medium mb-1">ℹ️ Adaptive alert dört kapı kullanır:</div>
+                    <div className="font-medium mb-1">ℹ️ Adaptive alert beş kapı kullanır:</div>
                     <ul className="list-disc pl-4 space-y-0.5">
                       <li><b>Pratik anlam kapısı:</b> Metric türüne göre otomatik gürültü eşiği uygulanır
                         (örn. <code>avg_exec_time_ms</code> &lt; 10ms, <code>calls</code> &lt; 50,
@@ -1030,6 +1030,9 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                       <li><b>%50 değişim kapısı:</b> Mutlak değer eşiği geçse bile baseline'a göre en az %50 artış aranır.</li>
                       <li><b>MAD z-score:</b> Ortalama + stddev yerine medyan + MAD (outlier'a dayanıklı).</li>
                       <li><b>Sensitivity:</b> robust z-score eşiği (1.5σ / 2σ / 3σ).</li>
+                      <li><b>Frekans kapısı (sadece statement):</b> Bir sorgu son 7 günde
+                        en az <b>2 kez</b> eşik aşmamışsa alert atılmaz (tek seferlik gürültü).
+                        2-4 kez → warning, <b>5+ kez → critical</b> (sürekli sorun). Mesajda bu sayı gösterilir.</li>
                     </ul>
                   </div>
                 </div>
