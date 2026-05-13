@@ -1020,6 +1020,18 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                   <p className="text-xs text-[#64748B] mt-1">
                     Baseline gece hesaplanır. Bu instance için en az 7 gün veri yoksa kural atlanır.
                   </p>
+                  <div className="mt-2 bg-[#F0F9FF] border border-[#BAE6FD] rounded-md px-3 py-2 text-[11px] text-[#0369A1]">
+                    <div className="font-medium mb-1">ℹ️ Adaptive alert dört kapı kullanır:</div>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      <li><b>Pratik anlam kapısı:</b> Metric türüne göre otomatik gürültü eşiği uygulanır
+                        (örn. <code>avg_exec_time_ms</code> &lt; 10ms, <code>calls</code> &lt; 50,
+                        <code> temp_files</code> &lt; 5, <code>temp_bytes</code> &lt; 1MB, vb.).
+                        Kullanıcı <b>Warning Threshold</b> alanına değer girerse otomatik eşik yerine onu kullanır.</li>
+                      <li><b>%50 değişim kapısı:</b> Mutlak değer eşiği geçse bile baseline'a göre en az %50 artış aranır.</li>
+                      <li><b>MAD z-score:</b> Ortalama + stddev yerine medyan + MAD (outlier'a dayanıklı).</li>
+                      <li><b>Sensitivity:</b> robust z-score eşiği (1.5σ / 2σ / 3σ).</li>
+                    </ul>
+                  </div>
                 </div>
               )}
 

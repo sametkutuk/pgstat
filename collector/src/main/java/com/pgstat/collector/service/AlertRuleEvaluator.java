@@ -724,8 +724,10 @@ public class AlertRuleEvaluator {
             if (isInCooldown(ruleId, instancePk, cooldownMinutes)) continue;
 
             // Per-record anomaly tespiti: baseline asan record'lari bul
+            // user warning_threshold varsa class_floor yerine kullanilir.
+            BigDecimal userThreshold = toBD(rule.get("warning_threshold"));
             List<Map<String, Object>> anomalies = findAnomalousRecords(
-                instancePk, metricType, metricName, windowMinutes, currentHour, kMultiplier);
+                instancePk, metricType, metricName, windowMinutes, currentHour, kMultiplier, userThreshold);
             enrichStatementRecords(instancePk, anomalies, metricType, windowMinutes);
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
@@ -784,144 +786,61 @@ public class AlertRuleEvaluator {
      * son N dk degeri vs 4 haftalik ayni saat baseline (avg + k*stddev).
      * Esigi asanlari doner.
      */
+    /**
+     * MAD-tabanli adaptive anomaly tespiti — 4 kapilik filtre:
+     *   Gate A: baseline_median >= class_floor (gurultu degil)
+     *   Gate B: current_val >= effective_floor (max class_floor, rule.warning_threshold)
+     *   Gate C: (current - baseline) / baseline >= 0.50 (%50 artis)
+     *   Gate D: robust_z = 0.6745 * (current - median) / mad > sensitivity_k
+     *
+     * MAD outlier'a dayanikli; tek bir spike baseline'i bozmaz.
+     * class_floor: metric_name'e gore otomatik (gurultu seviyesi).
+     * warning_threshold: kullanici override; varsa floor yerine kullanilir.
+     */
     private List<Map<String, Object>> findAnomalousRecords(long instancePk,
                                                             String metricType, String metricName,
                                                             int windowMinutes, int currentHour,
                                                             BigDecimal kMultiplier) {
+        return findAnomalousRecords(instancePk, metricType, metricName, windowMinutes,
+            currentHour, kMultiplier, null);
+    }
+
+    private List<Map<String, Object>> findAnomalousRecords(long instancePk,
+                                                            String metricType, String metricName,
+                                                            int windowMinutes, int currentHour,
+                                                            BigDecimal kMultiplier,
+                                                            BigDecimal userThreshold) {
         try {
             String col = toFactColumn(metricName, metricType);
+            BigDecimal classFloor = getMetricClassFloor(metricName);
+            // Effective floor: kullanici warning_threshold yazdiysa onu kullan, yoksa class default.
+            BigDecimal effectiveFloor = (userThreshold != null && userThreshold.signum() > 0)
+                ? userThreshold : classFloor;
+            BigDecimal pctChangeGate = new BigDecimal("0.50");  // %50 artis kapisi
+            BigDecimal madScale = new BigDecimal("0.6745");      // MAD -> stddev esdegerleme
             return switch (metricType) {
-                case "statement_metric" -> jdbc.queryForList(
-                    "with current_window as (" +
-                    "  select ss.statement_series_id, ss.queryid, ss.dbid, ss.userid," +
-                    "         sum(d." + col + ")::numeric as current_val," +
-                    "         left(coalesce(qt.query_text, '?'), 300) as query_text," +
-                    "         dbr.datname, rr.rolname" +
-                    "  from fact.pgss_delta d" +
-                    "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
-                    "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
-                    "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
-                    "  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid" +
-                    "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
-                    "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
-                    "), historical as (" +
-                    "  select queryid, dbid, userid," +
-                    "         avg(window_sum) as baseline_avg," +
-                    "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
-                    "  from (" +
-                    "    select ss.queryid, ss.dbid, ss.userid," +
-                    "           date_trunc('hour', d.sample_ts) as hour_bucket," +
-                    "           sum(d." + col + ")::numeric as window_sum" +
-                    "    from fact.pgss_delta d" +
-                    "    join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
-                    "    where d.instance_pk = ?" +
-                    "      and d.sample_ts > now() - interval '28 days'" +
-                    "      and d.sample_ts <= now() - ?::interval" +
-                    "      and extract(hour from d.sample_ts) = ?" +
-                    "    group by ss.queryid, ss.dbid, ss.userid, date_trunc('hour', d.sample_ts)" +
-                    "  ) sub" +
-                    "  group by queryid, dbid, userid" +
-                    "  having count(*) >= 3" +  // en az 3 veri noktasi olsun (anlamli stddev icin)
-                    ")" +
-                    "select c.statement_series_id, c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
-                    "       h.baseline_avg, h.baseline_stddev," +
-                    "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
-                    "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
-                    "  from current_window c" +
-                    "  join historical h on h.queryid = c.queryid and h.dbid = c.dbid and h.userid = c.userid" +
-                    "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
-                    "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
-                    "  limit 10",
+                case "statement_metric" -> jdbc.queryForList(buildStatementAdaptiveSql(col),
                     instancePk, windowMinutes + " minutes",
                     instancePk, windowMinutes + " minutes", currentHour,
-                    kMultiplier, kMultiplier, kMultiplier);
+                    kMultiplier, kMultiplier,                            // upper_warning/critical: median + k*MAD (1.5σ approx)
+                    classFloor, effectiveFloor, pctChangeGate, kMultiplier);   // Gates A/B/C/D
 
                 case "table_metric" -> {
                     String tCol = toFactColumn(metricName, "table_metric");
-                    yield jdbc.queryForList(
-                        "with current_window as (" +
-                        "  select t.schemaname, t.relname, t.dbid," +
-                        "         sum(t." + tCol + ")::numeric as current_val," +
-                        "         max(t.n_dead_tup_estimate) as dead_tup," +
-                        "         max(t.n_live_tup_estimate) as live_tup," +
-                        "         dbr.datname" +
-                        "  from fact.pg_table_stat_delta t" +
-                        "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
-                        "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
-                        "  group by t.schemaname, t.relname, t.dbid, dbr.datname" +
-                        "), historical as (" +
-                        "  select schemaname, relname, dbid," +
-                        "         avg(window_sum) as baseline_avg," +
-                        "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
-                        "  from (" +
-                        "    select t.schemaname, t.relname, t.dbid," +
-                        "           date_trunc('hour', t.sample_ts) as hour_bucket," +
-                        "           sum(t." + tCol + ")::numeric as window_sum" +
-                        "    from fact.pg_table_stat_delta t" +
-                        "    where t.instance_pk = ?" +
-                        "      and t.sample_ts > now() - interval '28 days'" +
-                        "      and t.sample_ts <= now() - ?::interval" +
-                        "      and extract(hour from t.sample_ts) = ?" +
-                        "    group by t.schemaname, t.relname, t.dbid, date_trunc('hour', t.sample_ts)" +
-                        "  ) sub" +
-                        "  group by schemaname, relname, dbid" +
-                        "  having count(*) >= 3" +
-                        ")" +
-                        "select c.schemaname, c.relname, c.dbid, c.current_val, c.datname," +
-                        "       c.dead_tup, c.live_tup," +
-                        "       h.baseline_avg, h.baseline_stddev," +
-                        "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
-                        "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
-                        "  from current_window c" +
-                        "  join historical h on h.schemaname = c.schemaname and h.relname = c.relname and h.dbid = c.dbid" +
-                        "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
-                        "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
-                        "  limit 10",
+                    yield jdbc.queryForList(buildTableAdaptiveSql(tCol),
                         instancePk, windowMinutes + " minutes",
                         instancePk, windowMinutes + " minutes", currentHour,
-                        kMultiplier, kMultiplier, kMultiplier);
+                        kMultiplier, kMultiplier,
+                        classFloor, effectiveFloor, pctChangeGate, kMultiplier);
                 }
 
                 case "index_metric" -> {
                     String iCol = toFactColumn(metricName, "index_metric");
-                    yield jdbc.queryForList(
-                        "with current_window as (" +
-                        "  select i.schemaname, i.indexrelname, i.table_relname, i.dbid," +
-                        "         sum(i." + iCol + ")::numeric as current_val, dbr.datname" +
-                        "  from fact.pg_index_stat_delta i" +
-                        "  left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid" +
-                        "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
-                        "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid, dbr.datname" +
-                        "), historical as (" +
-                        "  select schemaname, indexrelname, dbid," +
-                        "         avg(window_sum) as baseline_avg," +
-                        "         coalesce(stddev_samp(window_sum), 0) as baseline_stddev" +
-                        "  from (" +
-                        "    select i.schemaname, i.indexrelname, i.dbid," +
-                        "           date_trunc('hour', i.sample_ts) as hour_bucket," +
-                        "           sum(i." + iCol + ")::numeric as window_sum" +
-                        "    from fact.pg_index_stat_delta i" +
-                        "    where i.instance_pk = ?" +
-                        "      and i.sample_ts > now() - interval '28 days'" +
-                        "      and i.sample_ts <= now() - ?::interval" +
-                        "      and extract(hour from i.sample_ts) = ?" +
-                        "    group by i.schemaname, i.indexrelname, i.dbid, date_trunc('hour', i.sample_ts)" +
-                        "  ) sub" +
-                        "  group by schemaname, indexrelname, dbid" +
-                        "  having count(*) >= 3" +
-                        ")" +
-                        "select c.schemaname, c.indexrelname, c.table_relname, c.dbid, c.current_val, c.datname," +
-                        "       h.baseline_avg, h.baseline_stddev," +
-                        "       (h.baseline_avg + ?::numeric * h.baseline_stddev) as upper_warning," +
-                        "       (h.baseline_avg + 1.5 * ?::numeric * h.baseline_stddev) as upper_critical" +
-                        "  from current_window c" +
-                        "  join historical h on h.schemaname = c.schemaname and h.indexrelname = c.indexrelname and h.dbid = c.dbid" +
-                        "  where c.current_val > (h.baseline_avg + ?::numeric * h.baseline_stddev)" +
-                        "  order by (c.current_val - h.baseline_avg) / nullif(h.baseline_stddev, 0) desc nulls last" +
-                        "  limit 10",
+                    yield jdbc.queryForList(buildIndexAdaptiveSql(iCol),
                         instancePk, windowMinutes + " minutes",
                         instancePk, windowMinutes + " minutes", currentHour,
-                        kMultiplier, kMultiplier, kMultiplier);
+                        kMultiplier, kMultiplier,
+                        classFloor, effectiveFloor, pctChangeGate, kMultiplier);
                 }
 
                 default -> java.util.Collections.emptyList();
@@ -2085,6 +2004,186 @@ public class AlertRuleEvaluator {
             if (mb >= step) selected = step;
         }
         return selected * 1_048_576L;
+    }
+
+    // =========================================================================
+    // Adaptive — metric-class noise floor + SQL builder'lar (MAD + 4 kapi)
+    // =========================================================================
+
+    /**
+     * Metric adi -> gurultu seviyesinin altinda kalan "noise floor" degeri.
+     * Bu deger altinda baseline veya current oldugunda alert hic tetiklenmez.
+     * Kullanici kuralda warning_threshold yazarsa onun yerine bu kullanilir.
+     *
+     * Datadog/pganalyze/Grafana pattern'i: istatistik sapma + pratik anlam kapisi.
+     */
+    private BigDecimal getMetricClassFloor(String metricName) {
+        return switch (metricName == null ? "" : metricName) {
+            case "avg_exec_time_ms"   -> new BigDecimal("10");          // 10ms alti hizli
+            case "total_exec_time_ms" -> new BigDecimal("1000");        // 1s toplam
+            case "calls"              -> new BigDecimal("50");           // 50 cagri
+            case "rows"               -> new BigDecimal("100");
+            case "temp_files"         -> new BigDecimal("5");
+            case "temp_bytes"         -> new BigDecimal("1048576");     // 1MB
+            case "blks_read"          -> new BigDecimal("1000");
+            case "shared_blks_read"   -> new BigDecimal("1000");
+            case "blks_hit"           -> new BigDecimal("10000");
+            case "numbackends"        -> new BigDecimal("5");
+            case "xact_commit", "xact_rollback" -> new BigDecimal("50");
+            case "deadlocks", "conflicts"        -> new BigDecimal("1");
+            case "tup_returned", "tup_fetched"   -> new BigDecimal("1000");
+            case "tup_inserted", "tup_updated", "tup_deleted" -> new BigDecimal("100");
+            case "seq_scan"           -> new BigDecimal("10");
+            case "idx_scan"           -> new BigDecimal("100");
+            case "n_dead_tup_estimate" -> new BigDecimal("1000");
+            default                   -> new BigDecimal("1");
+        };
+    }
+
+    /**
+     * Statement-level adaptive SQL — 4 kapi:
+     *   Gate A: baseline_median >= class_floor (param)
+     *   Gate B: current_val >= effective_floor (param)
+     *   Gate C: (current - baseline) / baseline >= pct_change (param)
+     *   Gate D: robust_z = (current - median) / MAD > k_multiplier (param)
+     *
+     * Tum gate'ler AND ile baglanir. MAD outlier'a dayanikli.
+     */
+    private String buildStatementAdaptiveSql(String col) {
+        return "with current_window as (" +
+            "  select ss.statement_series_id, ss.queryid, ss.dbid, ss.userid," +
+            "         sum(d." + col + ")::numeric as current_val," +
+            "         left(coalesce(qt.query_text, '?'), 300) as query_text," +
+            "         dbr.datname, rr.rolname" +
+            "  from fact.pgss_delta d" +
+            "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+            "  left join dim.query_text qt on qt.query_text_id = ss.query_text_id" +
+            "  left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid" +
+            "  left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid" +
+            "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
+            "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
+            "), hist_raw as (" +
+            "  select ss.queryid, ss.dbid, ss.userid," +
+            "         date_trunc('hour', d.sample_ts) as hour_bucket," +
+            "         sum(d." + col + ")::numeric as window_sum" +
+            "  from fact.pgss_delta d" +
+            "  join dim.statement_series ss on ss.statement_series_id = d.statement_series_id" +
+            "  where d.instance_pk = ?" +
+            "    and d.sample_ts > now() - interval '28 days'" +
+            "    and d.sample_ts <= now() - ?::interval" +
+            "    and extract(hour from d.sample_ts) = ?" +
+            "  group by ss.queryid, ss.dbid, ss.userid, date_trunc('hour', d.sample_ts)" +
+            "), hist_med as (" +
+            "  select queryid, dbid, userid," +
+            "         percentile_cont(0.5) within group (order by window_sum) as baseline_median" +
+            "  from hist_raw group by queryid, dbid, userid having count(*) >= 3" +
+            "), hist_mad as (" +
+            "  select hm.queryid, hm.dbid, hm.userid, hm.baseline_median," +
+            "         greatest(percentile_cont(0.5) within group (order by abs(hr.window_sum - hm.baseline_median)), 0.0001) as baseline_mad" +
+            "  from hist_med hm" +
+            "  join hist_raw hr using (queryid, dbid, userid)" +
+            "  group by hm.queryid, hm.dbid, hm.userid, hm.baseline_median" +
+            ")" +
+            "select c.statement_series_id, c.queryid, c.dbid, c.userid, c.current_val, c.query_text, c.datname, c.rolname," +
+            "       h.baseline_median as baseline_avg, h.baseline_mad as baseline_stddev," +
+            "       (h.baseline_median + ?::numeric * h.baseline_mad) as upper_warning," +
+            "       (h.baseline_median + 1.5 * ?::numeric * h.baseline_mad) as upper_critical" +
+            "  from current_window c" +
+            "  join hist_mad h using (queryid, dbid, userid)" +
+            "  where h.baseline_median >= ?::numeric" +                        // Gate A
+            "    and c.current_val >= ?::numeric" +                             // Gate B
+            "    and (c.current_val - h.baseline_median) >= ?::numeric * h.baseline_median" +  // Gate C
+            "    and (c.current_val - h.baseline_median) / h.baseline_mad > ?::numeric" +      // Gate D MAD-z
+            "  order by (c.current_val - h.baseline_median) / h.baseline_mad desc nulls last" +
+            "  limit 10";
+    }
+
+    private String buildTableAdaptiveSql(String tCol) {
+        return "with current_window as (" +
+            "  select t.schemaname, t.relname, t.dbid," +
+            "         sum(t." + tCol + ")::numeric as current_val," +
+            "         max(t.n_dead_tup_estimate) as dead_tup," +
+            "         max(t.n_live_tup_estimate) as live_tup, dbr.datname" +
+            "  from fact.pg_table_stat_delta t" +
+            "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+            "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
+            "  group by t.schemaname, t.relname, t.dbid, dbr.datname" +
+            "), hist_raw as (" +
+            "  select t.schemaname, t.relname, t.dbid," +
+            "         date_trunc('hour', t.sample_ts) as hour_bucket," +
+            "         sum(t." + tCol + ")::numeric as window_sum" +
+            "  from fact.pg_table_stat_delta t" +
+            "  where t.instance_pk = ?" +
+            "    and t.sample_ts > now() - interval '28 days'" +
+            "    and t.sample_ts <= now() - ?::interval" +
+            "    and extract(hour from t.sample_ts) = ?" +
+            "  group by t.schemaname, t.relname, t.dbid, date_trunc('hour', t.sample_ts)" +
+            "), hist_med as (" +
+            "  select schemaname, relname, dbid," +
+            "         percentile_cont(0.5) within group (order by window_sum) as baseline_median" +
+            "  from hist_raw group by schemaname, relname, dbid having count(*) >= 3" +
+            "), hist_mad as (" +
+            "  select hm.schemaname, hm.relname, hm.dbid, hm.baseline_median," +
+            "         greatest(percentile_cont(0.5) within group (order by abs(hr.window_sum - hm.baseline_median)), 0.0001) as baseline_mad" +
+            "  from hist_med hm" +
+            "  join hist_raw hr using (schemaname, relname, dbid)" +
+            "  group by hm.schemaname, hm.relname, hm.dbid, hm.baseline_median" +
+            ")" +
+            "select c.schemaname, c.relname, c.dbid, c.current_val, c.datname, c.dead_tup, c.live_tup," +
+            "       h.baseline_median as baseline_avg, h.baseline_mad as baseline_stddev," +
+            "       (h.baseline_median + ?::numeric * h.baseline_mad) as upper_warning," +
+            "       (h.baseline_median + 1.5 * ?::numeric * h.baseline_mad) as upper_critical" +
+            "  from current_window c" +
+            "  join hist_mad h using (schemaname, relname, dbid)" +
+            "  where h.baseline_median >= ?::numeric" +
+            "    and c.current_val >= ?::numeric" +
+            "    and (c.current_val - h.baseline_median) >= ?::numeric * h.baseline_median" +
+            "    and (c.current_val - h.baseline_median) / h.baseline_mad > ?::numeric" +
+            "  order by (c.current_val - h.baseline_median) / h.baseline_mad desc nulls last" +
+            "  limit 10";
+    }
+
+    private String buildIndexAdaptiveSql(String iCol) {
+        return "with current_window as (" +
+            "  select i.schemaname, i.indexrelname, i.table_relname, i.dbid," +
+            "         sum(i." + iCol + ")::numeric as current_val, dbr.datname" +
+            "  from fact.pg_index_stat_delta i" +
+            "  left join dim.database_ref dbr on dbr.instance_pk = i.instance_pk and dbr.dbid = i.dbid" +
+            "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
+            "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid, dbr.datname" +
+            "), hist_raw as (" +
+            "  select i.schemaname, i.indexrelname, i.dbid," +
+            "         date_trunc('hour', i.sample_ts) as hour_bucket," +
+            "         sum(i." + iCol + ")::numeric as window_sum" +
+            "  from fact.pg_index_stat_delta i" +
+            "  where i.instance_pk = ?" +
+            "    and i.sample_ts > now() - interval '28 days'" +
+            "    and i.sample_ts <= now() - ?::interval" +
+            "    and extract(hour from i.sample_ts) = ?" +
+            "  group by i.schemaname, i.indexrelname, i.dbid, date_trunc('hour', i.sample_ts)" +
+            "), hist_med as (" +
+            "  select schemaname, indexrelname, dbid," +
+            "         percentile_cont(0.5) within group (order by window_sum) as baseline_median" +
+            "  from hist_raw group by schemaname, indexrelname, dbid having count(*) >= 3" +
+            "), hist_mad as (" +
+            "  select hm.schemaname, hm.indexrelname, hm.dbid, hm.baseline_median," +
+            "         greatest(percentile_cont(0.5) within group (order by abs(hr.window_sum - hm.baseline_median)), 0.0001) as baseline_mad" +
+            "  from hist_med hm" +
+            "  join hist_raw hr using (schemaname, indexrelname, dbid)" +
+            "  group by hm.schemaname, hm.indexrelname, hm.dbid, hm.baseline_median" +
+            ")" +
+            "select c.schemaname, c.indexrelname, c.table_relname, c.dbid, c.current_val, c.datname," +
+            "       h.baseline_median as baseline_avg, h.baseline_mad as baseline_stddev," +
+            "       (h.baseline_median + ?::numeric * h.baseline_mad) as upper_warning," +
+            "       (h.baseline_median + 1.5 * ?::numeric * h.baseline_mad) as upper_critical" +
+            "  from current_window c" +
+            "  join hist_mad h using (schemaname, indexrelname, dbid)" +
+            "  where h.baseline_median >= ?::numeric" +
+            "    and c.current_val >= ?::numeric" +
+            "    and (c.current_val - h.baseline_median) >= ?::numeric * h.baseline_median" +
+            "    and (c.current_val - h.baseline_median) / h.baseline_mad > ?::numeric" +
+            "  order by (c.current_val - h.baseline_median) / h.baseline_mad desc nulls last" +
+            "  limit 10";
     }
 
     private static long parseWorkMemText(String text, long fallbackBytes) {
