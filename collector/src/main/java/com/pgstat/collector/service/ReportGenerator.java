@@ -333,13 +333,9 @@ public class ReportGenerator {
             sb.append("• Temp files: ").append(thisWeek.get("temp_files")).append(" (geçen: ").append(lastWeek.get("temp_files")).append(")\n");
             sb.append("• Deadlock: ").append(thisWeek.get("deadlocks")).append(" (geçen: ").append(lastWeek.get("deadlocks")).append(")\n\n");
 
-            // WAL trendi
-            Map<String, Object> walThis = jdbc.queryForMap(
-                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > ? and sample_ts <= ?",
-                weekStart, end);
-            Map<String, Object> walLast = jdbc.queryForMap(
-                "select coalesce(sum(period_wal_size_byte), 0) as wal from fact.pg_wal_snapshot where sample_ts > ? and sample_ts <= ?",
-                previousWeekStart, weekStart);
+            // WAL trendi — uzun aralıklar için snapshot (7g) → hourly (90g) → daily (365g) fallback
+            Map<String, Object> walThis = sumWalForRange(weekStart, end);
+            Map<String, Object> walLast = sumWalForRange(previousWeekStart, weekStart);
             sb.append("• WAL/hafta: ").append(humanBytes(toLong(walThis.get("wal"))))
               .append(" (geçen: ").append(humanBytes(toLong(walLast.get("wal")))).append(")\n\n");
 
@@ -504,6 +500,35 @@ public class ReportGenerator {
     // =========================================================================
     // Yardimci
     // =========================================================================
+
+    /**
+     * Verilen aralık için toplam WAL üretimini döndürür.
+     * Raw snapshot 7 gün, hourly rollup 90 gün, daily rollup 365 gün tutulduğu
+     * için aralığın uzunluğuna göre uygun katmandan okur.
+     */
+    private Map<String, Object> sumWalForRange(OffsetDateTime from, OffsetDateTime to) {
+        long daysSpan = java.time.Duration.between(from, to).toDays();
+        try {
+            if (daysSpan <= 6) {
+                return jdbc.queryForMap(
+                    "select coalesce(sum(period_wal_size_byte), 0) as wal " +
+                    "from fact.pg_wal_snapshot where sample_ts > ? and sample_ts <= ?",
+                    from, to);
+            } else if (daysSpan <= 89) {
+                return jdbc.queryForMap(
+                    "select coalesce(sum(wal_bytes_total), 0) as wal " +
+                    "from agg.pg_wal_hourly where hour_ts > ? and hour_ts <= ?",
+                    from, to);
+            } else {
+                return jdbc.queryForMap(
+                    "select coalesce(sum(wal_bytes_total), 0) as wal " +
+                    "from agg.pg_wal_daily where day_ts > ? and day_ts <= ?",
+                    from, to);
+            }
+        } catch (Exception e) {
+            return Map.of("wal", 0L);
+        }
+    }
 
     private static long toLong(Object val) {
         if (val == null) return 0;

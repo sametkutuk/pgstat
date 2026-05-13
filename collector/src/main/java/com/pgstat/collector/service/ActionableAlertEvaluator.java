@@ -462,11 +462,18 @@ public class ActionableAlertEvaluator {
                 .addContext("temp_bytes", tempBytes)
                 .addContext("database", r.get("datname"));
             for (Map<String, Object> q : topTempQueries) {
-                details.addRecord(Map.of(
-                    "query_text", q.get("query_text") != null ? q.get("query_text") : "?",
-                    "current_val", toLong(q.get("temp_bytes")),
-                    "label", "temp_bytes"
-                ));
+                Map<String, Object> rec = new java.util.LinkedHashMap<>();
+                rec.put("query_text", q.get("query_text") != null ? q.get("query_text") : "?");
+                rec.put("queryid", q.get("queryid"));
+                rec.put("statement_series_id", q.get("statement_series_id"));
+                rec.put("datname", q.get("datname"));
+                rec.put("temp_bytes", toLong(q.get("temp_bytes")));
+                rec.put("calls_window", toLong(q.get("calls_window")));
+                rec.put("calls_28d", toLong(q.get("calls_28d")));
+                rec.put("avg_temp_bytes_per_call", toLong(q.get("avg_temp_bytes_per_call")));
+                rec.put("current_val", toLong(q.get("temp_bytes")));
+                rec.put("label", "temp_bytes");
+                details.addRecord(rec);
             }
 
             alertRepo.upsert(alertKey, AlertCode.HIGH_TEMP_FILES,
@@ -1142,18 +1149,42 @@ public class ActionableAlertEvaluator {
     private List<Map<String, Object>> getTopTempQueries(long instancePk) {
         try {
             return jdbc.queryForList("""
-                select ss.statement_series_id,
-                       ss.queryid,
-                       qt.query_text,
-                       sum(d.temp_blks_written_delta) * 8192 as temp_bytes
-                from fact.pgss_delta d
-                join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
-                left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-                where d.instance_pk = ? and d.sample_ts > now() - interval '1 hour'
-                  and d.temp_blks_written_delta > 0
-                group by ss.statement_series_id, ss.queryid, qt.query_text
-                order by temp_bytes desc limit 3
-                """, instancePk);
+                with window_q as (
+                    select ss.statement_series_id,
+                           ss.queryid,
+                           ss.dbid,
+                           qt.query_text,
+                           sum(d.temp_blks_written_delta) * 8192 as temp_bytes,
+                           sum(d.calls_delta) as calls_window
+                    from fact.pgss_delta d
+                    join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+                    left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+                    where d.instance_pk = ? and d.sample_ts > now() - interval '1 hour'
+                      and d.temp_blks_written_delta > 0
+                    group by ss.statement_series_id, ss.queryid, ss.dbid, qt.query_text
+                    order by temp_bytes desc limit 3
+                ),
+                hist as (
+                    select ss.statement_series_id,
+                           sum(d.calls_delta) as calls_28d
+                    from fact.pgss_delta d
+                    join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+                    where d.instance_pk = ?
+                      and ss.statement_series_id in (select statement_series_id from window_q)
+                      and d.sample_ts > now() - interval '28 days'
+                    group by ss.statement_series_id
+                )
+                select w.statement_series_id, w.queryid, w.query_text,
+                       w.temp_bytes, w.calls_window,
+                       coalesce(h.calls_28d, 0) as calls_28d,
+                       dbr.datname,
+                       case when w.calls_window > 0
+                            then w.temp_bytes / w.calls_window else 0 end as avg_temp_bytes_per_call
+                from window_q w
+                left join hist h using (statement_series_id)
+                left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = w.dbid
+                order by w.temp_bytes desc
+                """, instancePk, instancePk, instancePk);
         } catch (Exception e) {
             return java.util.Collections.emptyList();
         }
@@ -1165,11 +1196,17 @@ public class ActionableAlertEvaluator {
         for (int i = 0; i < queries.size(); i++) {
             if (i > 0) sb.append("\n");
             String queryText = (String) queries.get(i).get("query_text");
-            if (queryText != null && queryText.length() > 80) {
-                queryText = queryText.substring(0, 80) + "...";
+            if (queryText != null && queryText.length() > 120) {
+                queryText = queryText.substring(0, 120) + "...";
             }
-            sb.append(i + 1).append(". `").append(queryText)
-              .append("` → ").append(humanBytes(toLong(queries.get(i).get("temp_bytes"))));
+            long total = toLong(queries.get(i).get("temp_bytes"));
+            long calls = toLong(queries.get(i).get("calls_window"));
+            long perCall = calls > 0 ? total / calls : 0;
+            sb.append(i + 1).append(". ")
+              .append(humanBytes(perCall)).append("/çağrı × ")
+              .append(calls).append(" çağrı = ")
+              .append(humanBytes(total)).append(" toplam\n   `")
+              .append(queryText).append("`");
         }
         return sb.toString();
     }
