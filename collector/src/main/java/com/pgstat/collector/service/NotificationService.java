@@ -53,47 +53,31 @@ public class NotificationService {
     public void notifyIfNeeded(long alertId, String alertKey, String alertCode, String severity,
                                 Long instancePk, String title, String message) {
         try {
-            // Spam koruma: ayni alert_id tekrar tetiklendiginde bildirim gonderme.
-            // Sadece YENI alert (notification_log'da kayit yok) veya severity
-            // yukseldi (eski yuksek severity zaten gonderildi) ise bildirim git.
+            // Spam koruma — TEK MANTIK:
+            // "Cooldown icinde, ayni veya daha yuksek severity'de SENT kayit varsa atla."
+            // - Severity yukselirse otomatik bypass (daha yuksek kayit yok -> suppress yok)
+            // - Cooldown gectikten sonra ayni severity tekrar bildirim alir (periyodik hatirlatma)
+            // - Hem actionable hem user_defined_rule ayni yolu kullanir, cooldown kaynagi farkli.
             try {
-                Long previousNotifications = jdbc.queryForObject(
-                    "select count(*) from ops.notification_log where alert_id = ? and status = 'sent'",
-                    Long.class, alertId);
-                if (previousNotifications != null && previousNotifications > 0) {
-                    boolean actionableSystemAlert = alertKey != null && alertKey.startsWith("actionable:");
-                    int cooldownMinutes = actionableSystemAlert
-                        ? Math.max(0, systemAlertConfigCache.getCooldownMinutes(alertCode, instancePk))
-                        : -1;
+                int cooldownMinutes = resolveCooldownMinutes(alertId, alertKey, alertCode, instancePk);
+                if (cooldownMinutes > 0) {
                     String rank = "(case %s when 'info' then 0 when 'warning' then 1 " +
                         "when 'error' then 2 when 'critical' then 3 " +
                         "when 'emergency' then 4 else 0 end)";
-
-                    Long suppressingNotifications;
-                    if (actionableSystemAlert && cooldownMinutes > 0) {
-                        suppressingNotifications = jdbc.queryForObject(
-                            "select count(*) from ops.notification_log nl " +
-                            "where nl.alert_id = ? and nl.status = 'sent' " +
-                            "  and nl.sent_at >= now() - (? * interval '1 minute') " +
-                            "  and " + rank.formatted("nl.severity") + " >= " + rank.formatted("?"),
-                            Long.class, alertId, cooldownMinutes, severity);
-                    } else if (actionableSystemAlert) {
-                        suppressingNotifications = 0L;
-                    } else {
-                        suppressingNotifications = jdbc.queryForObject(
-                            "select count(*) from ops.notification_log nl " +
-                            "where nl.alert_id = ? and nl.status = 'sent' " +
-                            "  and " + rank.formatted("nl.severity") + " >= " + rank.formatted("?"),
-                            Long.class, alertId, severity);
-                    }
-
-                    if (suppressingNotifications != null && suppressingNotifications > 0) {
-                        log.debug("Spam koruma: alert_id={} cooldown/severity nedeniyle atlandi", alertId);
+                    Long suppressing = jdbc.queryForObject(
+                        "select count(*) from ops.notification_log nl " +
+                        "where nl.alert_id = ? and nl.status = 'sent' " +
+                        "  and nl.sent_at >= now() - (? * interval '1 minute') " +
+                        "  and " + rank.formatted("nl.severity") + " >= " + rank.formatted("?"),
+                        Long.class, alertId, cooldownMinutes, severity);
+                    if (suppressing != null && suppressing > 0) {
+                        log.debug("Spam koruma: alert_id={} cooldown {} dk icinde ayni/yuksek severity var",
+                            alertId, cooldownMinutes);
                         return;
                     }
                 }
             } catch (Exception ignore) {
-                // Log query hatasi olursa devam et, yine bildirim gonder
+                // Spam sorgusu hata verirse engellemeyelim, bildirim gitsin
             }
 
             // Snooze kontrolü
@@ -135,14 +119,16 @@ public class NotificationService {
         String testMessage = "Bu bir test bildirimidir. Kanal: " + channel.get("channel_name");
 
         try {
-            switch (type) {
+            boolean ok = switch (type) {
                 case "email" -> sendEmail(config, testTitle, testMessage, "info");
                 case "teams" -> sendTeams(config, testTitle, testMessage, "info");
                 case "telegram" -> sendTelegram(config, testTitle, testMessage, "info");
                 case "webhook" -> sendWebhook(config, 0, "info", null, testTitle, testMessage);
-                default -> { return "Desteklenmeyen kanal tipi: " + type; }
-            }
-            return "OK";
+                default -> {
+                    yield false;
+                }
+            };
+            return ok ? "OK" : "Gonderim basarisiz (collector log'una bakin)";
         } catch (Exception e) {
             return "Hata: " + e.getMessage();
         }
@@ -157,24 +143,35 @@ public class NotificationService {
         String type = (String) channel.get("channel_type");
         String config = channel.get("config") != null ? channel.get("config").toString() : "{}";
 
-        switch (type) {
-            case "email"    -> sendEmail(config, title, message, severity);
-            case "teams"    -> sendTeams(config, title, message, severity);
-            case "telegram" -> sendTelegram(config, title, message, severity);
-            case "webhook"  -> sendWebhook(config, alertId, severity, instancePk, title, message);
-            default -> log.warn("Desteklenmeyen kanal tipi: {}", type);
+        boolean ok = false;
+        String error = null;
+        try {
+            ok = switch (type) {
+                case "email"    -> sendEmail(config, title, message, severity);
+                case "teams"    -> sendTeams(config, title, message, severity);
+                case "telegram" -> sendTelegram(config, title, message, severity);
+                case "webhook"  -> sendWebhook(config, alertId, severity, instancePk, title, message);
+                default -> {
+                    log.warn("Desteklenmeyen kanal tipi: {}", type);
+                    yield false;
+                }
+            };
+        } catch (Exception e) {
+            error = e.getMessage();
+            log.error("Bildirim gonderme istisna channel_id={} type={}: {}",
+                channel.get("channel_id"), type, error);
         }
 
-        // Gönderim logla — severity de yazilir (escalation karsilastirmasi icin
-        // ops.alert.severity yerine bu kolon kullanilir; alert.severity upsert
-        // sonrasi yeni severity olur, escalation tespiti icin gecmis severity gerekli).
+        // notification_log'a GERCEK durumu yaz — sent veya failed.
+        // Daha onceki bug: HTTP 4xx sessizce yutuluyor + her durumda 'sent' yaziliyordu.
+        String status = ok ? "sent" : "failed";
         try {
             jdbc.update(
-                "insert into ops.notification_log (alert_id, channel_id, channel_type, status, severity, sent_at) " +
-                "values (?, ?, ?, 'sent', ?, now())",
-                alertId, channel.get("channel_id"), type, severity);
+                "insert into ops.notification_log (alert_id, channel_id, channel_type, status, severity, error_message, sent_at) " +
+                "values (?, ?, ?, ?, ?, ?, now())",
+                alertId, channel.get("channel_id"), type, status, severity, error);
         } catch (Exception e) {
-            log.debug("Notification log yazma hatası: {}", e.getMessage());
+            log.debug("Notification log yazma hatasi: {}", e.getMessage());
         }
     }
 
@@ -182,10 +179,10 @@ public class NotificationService {
     // Email
     // =========================================================================
 
-    private void sendEmail(String configJson, String title, String message, String severity) {
+    private boolean sendEmail(String configJson, String title, String message, String severity) {
         if (mailSender == null) {
             log.warn("Email gönderilemedi: SMTP ayarları yapılandırılmamış (PGSTAT_SMTP_HOST)");
-            return;
+            return false;
         }
         // config: {"recipients": [...], "from": "...", "subject_template": "...", "body_template": "..."}
         // Template'lerde {{title}} {{message}} {{severity}} {{severity_upper}} kullanilabilir.
@@ -194,7 +191,7 @@ public class NotificationService {
         List<String> recipients = (List<String>) config.get("recipients");
         if (recipients == null || recipients.isEmpty()) {
             log.warn("Email kanalında alıcı tanımlı değil");
-            return;
+            return false;
         }
 
         String from = config.containsKey("from") ? (String) config.get("from") : "pgstat@localhost";
@@ -217,8 +214,14 @@ public class NotificationService {
         mail.setSubject(subject);
         mail.setText(body);
 
-        mailSender.send(mail);
-        log.info("Email gönderildi: {} alıcıya, konu: {}", recipients.size(), subject);
+        try {
+            mailSender.send(mail);
+            log.info("Email gönderildi: {} alıcıya, konu: {}", recipients.size(), subject);
+            return true;
+        } catch (Exception e) {
+            log.error("Email gonderme hatasi: {}", e.getMessage());
+            return false;
+        }
     }
 
     /** Email subject/body template render — basit {{var}} replace */
@@ -234,12 +237,12 @@ public class NotificationService {
     // Microsoft Teams (Incoming Webhook)
     // =========================================================================
 
-    private void sendTeams(String configJson, String title, String message, String severity) {
+    private boolean sendTeams(String configJson, String title, String message, String severity) {
         Map<String, Object> config = parseJson(configJson);
         String webhookUrl = (String) config.get("webhook_url");
         if (webhookUrl == null || webhookUrl.isBlank()) {
             log.warn("Teams kanalında webhook_url tanımlı değil");
-            return;
+            return false;
         }
 
         // Kullanıcı theme_color verdi mi? Yoksa severity'ye göre default
@@ -285,22 +288,23 @@ public class NotificationService {
                     escapeJson(title), severity, escapeJson(message));
         }
 
-        postWebhook(webhookUrl, payload);
-        log.info("Teams bildirimi gönderildi: {}", title);
+        boolean ok = postWebhook(webhookUrl, payload);
+        if (ok) log.info("Teams bildirimi gönderildi: {}", title);
+        return ok;
     }
 
     // =========================================================================
     // Telegram (Bot API)
     // =========================================================================
 
-    private void sendTelegram(String configJson, String title, String message, String severity) {
+    private boolean sendTelegram(String configJson, String title, String message, String severity) {
         Map<String, Object> config = parseJson(configJson);
         String botToken = (String) config.get("bot_token");
         String chatId = config.get("chat_id") != null ? config.get("chat_id").toString() : null;
 
         if (botToken == null || chatId == null) {
             log.warn("Telegram kanalında bot_token veya chat_id tanımlı değil");
-            return;
+            return false;
         }
 
         String emoji = switch (severity) {
@@ -310,30 +314,47 @@ public class NotificationService {
             default -> "🔵";
         };
 
-        String text = emoji + " *pgstat Alert — " + severity.toUpperCase() + "*\n\n"
-                + "*" + escapeMarkdown(title) + "*\n"
-                + escapeMarkdown(message);
+        // HTML parse_mode: Markdown'a gore cok daha guvenilir — sadece &, <, > escape gerekli.
+        // Eski Markdown parse_mode'da _ * ` [ ( ) ] # + - = . ! gibi cok karakter problemli;
+        // alert mesajlarinda sik karsilasilan SQL/regex/dolar isaretleri Telegram'da 400 hata
+        // dondurdugu icin bildirim sessizce kayboluyordu.
+        String text = emoji + " <b>pgstat Alert — " + escapeHtml(severity.toUpperCase()) + "</b>\n\n"
+                + "<b>" + escapeHtml(title) + "</b>\n"
+                + escapeHtml(message);
+
+        // Telegram mesaj limiti 4096 char. HTML tag'leri sayilir ama yaklasik kalsin.
+        // Truncate olduguna dair belirti birak.
+        if (text.length() > 4000) {
+            text = text.substring(0, 3950) + "\n\n... (mesaj kesildi)";
+        }
 
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
         String payload = """
-            {"chat_id": "%s", "text": "%s", "parse_mode": "Markdown", "disable_web_page_preview": true}
+            {"chat_id": "%s", "text": "%s", "parse_mode": "HTML", "disable_web_page_preview": true}
             """.formatted(chatId, escapeJson(text));
 
-        postWebhook(url, payload);
-        log.info("Telegram bildirimi gönderildi: chat_id={}", chatId);
+        boolean ok = postWebhook(url, payload);
+        if (ok) log.info("Telegram bildirimi gönderildi: chat_id={}", chatId);
+        return ok;
+    }
+
+    /** HTML parse_mode icin Telegram'da yeterli — sadece 3 karakter. */
+    private String escapeHtml(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     // =========================================================================
     // Generic Webhook (body template destekli)
     // =========================================================================
 
-    private void sendWebhook(String configJson, long alertId, String severity,
-                              Long instancePk, String title, String message) {
+    private boolean sendWebhook(String configJson, long alertId, String severity,
+                                 Long instancePk, String title, String message) {
         Map<String, Object> config = parseJson(configJson);
         String url = (String) config.get("url");
         if (url == null || url.isBlank()) {
             log.warn("Webhook kanalında url tanımlı değil");
-            return;
+            return false;
         }
 
         String method = config.containsKey("method") ? (String) config.get("method") : "POST";
@@ -390,11 +411,13 @@ public class NotificationService {
 
             if (response.statusCode() >= 400) {
                 log.error("Webhook hatası: HTTP {} — {}", response.statusCode(), response.body());
-            } else {
-                log.info("Webhook bildirimi gönderildi: {} {}", method, url);
+                return false;
             }
+            log.info("Webhook bildirimi gönderildi: {} {}", method, url);
+            return true;
         } catch (Exception e) {
             log.error("Webhook gönderme hatası: {}", e.getMessage());
+            return false;
         }
     }
 
@@ -409,18 +432,22 @@ public class NotificationService {
      * Alert bildiriminden farkli: severity yok, sadece baslik + body.
      */
     public void sendReport(String channelType, String configJson, String title, String body) {
-        switch (channelType) {
+        boolean ok = switch (channelType) {
             case "email"    -> sendEmail(configJson, title, body, "info");
             case "teams"    -> sendTeams(configJson, title, body, "info");
             case "telegram" -> sendTelegram(configJson, title, body, "info");
             case "webhook"  -> sendWebhook(configJson, 0, "info", null, title, body);
-            default -> log.debug("Rapor gonderimi desteklenmeyen kanal: {}", channelType);
-        }
+            default -> {
+                log.debug("Rapor gonderimi desteklenmeyen kanal: {}", channelType);
+                yield false;
+            }
+        };
+        if (!ok) log.warn("Rapor gonderilemedi kanal={}", channelType);
     }
 
     // =========================================================================
 
-    private void postWebhook(String url, String jsonPayload) {
+    private boolean postWebhook(String url, String jsonPayload) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -433,13 +460,19 @@ public class NotificationService {
 
             if (response.statusCode() >= 400) {
                 log.error("Webhook hatası: HTTP {} — {}", response.statusCode(), response.body());
+                return false;
             }
+            return true;
         } catch (Exception e) {
             log.error("Webhook gönderme hatası: {}", e.getMessage());
+            return false;
         }
     }
 
     private List<Map<String, Object>> loadEnabledChannels(String severity) {
+        // 5 severity seviyesi: info < warning < error < critical < emergency.
+        // Onceki bug: 'error' siralamada yoktu -> error severity alert'leri (job_failed gibi)
+        // bircok kanal filtresinden gecemiyordu.
         return jdbc.queryForList(
             "select channel_id, channel_name, channel_type, config::text as config, min_severity " +
             "from control.notification_channel " +
@@ -447,10 +480,12 @@ public class NotificationService {
             "  and (min_severity is null or " +
             "       case min_severity " +
             "         when 'info' then 0 when 'warning' then 1 " +
-            "         when 'critical' then 2 when 'emergency' then 3 else 0 end " +
+            "         when 'error' then 2 when 'critical' then 3 " +
+            "         when 'emergency' then 4 else 0 end " +
             "       <= case ? " +
             "         when 'info' then 0 when 'warning' then 1 " +
-            "         when 'critical' then 2 when 'emergency' then 3 else 0 end)",
+            "         when 'error' then 2 when 'critical' then 3 " +
+            "         when 'emergency' then 4 else 0 end)",
             severity);
     }
 
@@ -527,5 +562,40 @@ public class NotificationService {
     private String escapeMarkdown(String s) {
         if (s == null) return "";
         return s.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("`", "\\`");
+    }
+
+    /**
+     * Cooldown dakikasini cozumler:
+     *   actionable:* alert'ler -> system_alert_config[alert_code]
+     *   user_defined_rule -> alert_rule.cooldown_minutes (per-rule)
+     *                     -> system_alert_config['user_defined_rule'] (global default)
+     *                     -> 60 (hard-code fallback)
+     *   diger -> 60 (varsayilan)
+     *
+     * @return cooldown dakika; 0 -> spam koruma yok
+     */
+    private int resolveCooldownMinutes(long alertId, String alertKey, String alertCode, Long instancePk) {
+        try {
+            if (alertKey != null && alertKey.startsWith("actionable:")) {
+                return Math.max(0, systemAlertConfigCache.getCooldownMinutes(alertCode, instancePk));
+            }
+            if ("user_defined_rule".equals(alertCode)) {
+                // Per-rule cooldown (alert.rule_id -> alert_rule.cooldown_minutes)
+                try {
+                    Integer perRule = jdbc.queryForObject(
+                        "select ar.cooldown_minutes from ops.alert a " +
+                        "join control.alert_rule ar on ar.rule_id = a.rule_id " +
+                        "where a.alert_id = ?",
+                        Integer.class, alertId);
+                    if (perRule != null && perRule > 0) return perRule;
+                } catch (Exception ignore) {}
+                // Global default user_defined_rule
+                int global = systemAlertConfigCache.getCooldownMinutes("user_defined_rule", null);
+                return global > 0 ? global : 60;
+            }
+            return 60;
+        } catch (Exception e) {
+            return 60;
+        }
     }
 }
