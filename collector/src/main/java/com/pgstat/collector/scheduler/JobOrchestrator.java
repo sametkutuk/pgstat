@@ -67,6 +67,7 @@ public class JobOrchestrator {
     // Gece snapshot + aksiyon-odakli alert'ler
     private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
     private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
+    private final com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
     private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
@@ -112,6 +113,7 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.PgssResetTracker resetTracker,
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
                            com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
+                           com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver,
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
                            com.pgstat.collector.service.WorkloadClassifier workloadClassifier) {
@@ -135,6 +137,7 @@ public class JobOrchestrator {
         this.resetTracker = resetTracker;
         this.nightlySnapshotCollector = nightlySnapshotCollector;
         this.actionableAlertEvaluator = actionableAlertEvaluator;
+        this.alertEvidenceResolver = alertEvidenceResolver;
         this.jdbc = jdbc;
         this.reportGenerator = reportGenerator;
         this.workloadClassifier = workloadClassifier;
@@ -495,7 +498,16 @@ public class JobOrchestrator {
                     purgeEvaluator.purgeReportsAndNotifications();
                     // Snapshot raw → hourly rollup (24h+ olanları taşır, raw'ı 24h'a iner)
                     purgeEvaluator.rollupSnapshotsHourly();
-                    // Auto-resolve: 2 saatten beri tetiklenmeyen transient alert'ler kapanır
+                    // Auto-resolve katmanlari:
+                    // 1) Evidence-based — alert'i tetikleyen sorgu hala temp yaziyor mu?
+                    //    Sadece high_temp_files + temp-related user_defined_rule.
+                    try {
+                        int closedEv = alertEvidenceResolver.resolveByEvidence();
+                        if (closedEv > 0) log.info("Evidence-resolved {} alert (saatlik)", closedEv);
+                    } catch (Exception e) {
+                        log.warn("Evidence resolver hatasi: {}", e.getMessage());
+                    }
+                    // 2) Stale fallback: 2 saatten beri tetiklenmeyen diger transient alert'ler.
                     try {
                         int closed = alertService.autoResolveStale(120);
                         if (closed > 0) log.info("Auto-resolved {} stale alert (>2h)", closed);
@@ -527,13 +539,16 @@ public class JobOrchestrator {
                             actionableAlertEvaluator.evaluateAcute();
                             actionableAlertEvaluator.evaluateFrequent();
                             alertRuleEvaluator.evaluate();
-                            // Manuel tetik sonrası: bu evaluate'te yeniden tetiklenmeyen
-                            // (yani last_seen_at su andan onceki) transient alert'leri hemen kapat.
-                            // Kullanici "simdi degerlendir" diyorsa niyeti: "su an gecerli mi
-                            // diye bak, gecersizse kapat". 1dk grace evaluate'in islem suresini tolere eder.
+                            // 1) Kanit-bazli auto-resolve (high_temp_files + temp-related user_defined_rule).
+                            // "Alert'i tetikleyen sorgu hala temp yaziyor mu?" sorusunu sorar.
+                            try {
+                                int closedEv = alertEvidenceResolver.resolveByEvidence();
+                                if (closedEv > 0) log.info("Manuel evaluate sonrası {} alert evidence-resolved", closedEv);
+                            } catch (Exception ignore) {}
+                            // 2) Stale fallback (high_temp_files HARIC diger 11 alert kodu icin).
                             try {
                                 int closed = alertService.autoResolveStale(1);
-                                if (closed > 0) log.info("Manuel evaluate sonrası {} alert auto-resolved", closed);
+                                if (closed > 0) log.info("Manuel evaluate sonrası {} alert stale-resolved", closed);
                             } catch (Exception ignore) {}
                         }
                         jdbc.update("update control.collector_command set status='done', processed_at=now() where command_id=?", cmdId);
