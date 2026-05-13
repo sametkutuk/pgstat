@@ -380,6 +380,8 @@ public class ActionableAlertEvaluator {
     // =========================================================================
 
     private int checkHighTempFiles() {
+        // Pencere 15 dakika — job F4 (rolling, 15dk) dispatch'inde çalışıyor.
+        // Daha uzun pencere kullanmak iyileştirme sonrası alert'in geç sönmesine neden olur.
         List<Map<String, Object>> rows = jdbc.queryForList("""
             select d.instance_pk, d.dbid, d.datname,
                    sum(d.temp_files_delta) as temp_files,
@@ -387,7 +389,7 @@ public class ActionableAlertEvaluator {
                    i.display_name
             from fact.pg_database_delta d
             join control.instance_inventory i on i.instance_pk = d.instance_pk
-            where d.sample_ts > now() - interval '1 hour'
+            where d.sample_ts > now() - interval '15 minutes'
             group by d.instance_pk, d.dbid, d.datname, i.display_name
             having sum(d.temp_files_delta) > 0
             """);
@@ -396,8 +398,9 @@ public class ActionableAlertEvaluator {
         for (Map<String, Object> r : rows) {
             long instancePk = toLong(r.get("instance_pk"));
             if (!configCache.isEnabled("high_temp_files", instancePk)) continue;
+            // Default eşik: 15dk içinde 25 temp file (eski 100/saat'in 1/4'ü)
             BigDecimal threshold = configCache.getThreshold(
-                "high_temp_files", instancePk, new BigDecimal("100"));
+                "high_temp_files", instancePk, new BigDecimal("25"));
             if (toBD(r.get("temp_files")).compareTo(threshold) <= 0) continue;
 
             String alertKey = "actionable:high_temp_files:" + instancePk + ":" + r.get("dbid");
@@ -1159,7 +1162,7 @@ public class ActionableAlertEvaluator {
                     from fact.pgss_delta d
                     join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
                     left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-                    where d.instance_pk = ? and d.sample_ts > now() - interval '1 hour'
+                    where d.instance_pk = ? and d.sample_ts > now() - interval '15 minutes'
                       and d.temp_blks_written_delta > 0
                     group by ss.statement_series_id, ss.queryid, ss.dbid, qt.query_text
                     order by temp_bytes desc limit 3
