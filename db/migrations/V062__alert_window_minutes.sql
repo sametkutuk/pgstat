@@ -20,3 +20,5 @@ update control.system_alert_config set window_minutes = 1440
     where alert_code = 'high_temp_files_daily'     and instance_pk is null and window_minutes is null;
 update control.system_alert_config set window_minutes = 1440
     where alert_code = 'high_temp_sqls_daily'      and instance_pk is null and window_minutes is null;
+update control.system_alert_config set window_minutes = 10
+    where alert_code = 'stale_data'                and instance_pk is null and window_minutes is null;

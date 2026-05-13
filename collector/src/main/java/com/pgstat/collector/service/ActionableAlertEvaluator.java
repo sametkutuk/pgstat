@@ -918,8 +918,8 @@ public class ActionableAlertEvaluator {
             where i.is_active
               and i.bootstrap_state = 'ready'
               and s.last_cluster_collect_at is not null
-              and s.last_cluster_collect_at < now() - interval '10 minutes'
-            """);
+              and s.last_cluster_collect_at < now() - make_interval(mins => ?)
+            """, configCache.getWindowMinutes("stale_data", null, 10));
 
         int count = 0;
         for (Map<String, Object> r : rows) {
