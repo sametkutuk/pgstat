@@ -329,6 +329,10 @@ export default function Instances() {
                     className={`px-4 py-1.5 text-sm rounded ${view === 'clusters' ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0] hover:bg-[#F8FAFC]'}`}>
                     🗂️ Kümeler
                 </button>
+                <Link to="/instances/cleanup"
+                    className="px-4 py-1.5 text-sm rounded bg-white text-[#64748B] border border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                    🗑️ Sorunlu DB'ler
+                </Link>
             </div>
 
             {/* Form sadece liste view'ında */}
