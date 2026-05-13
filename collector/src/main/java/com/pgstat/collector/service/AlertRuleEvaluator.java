@@ -534,19 +534,13 @@ public class AlertRuleEvaluator {
                 .append("**, max_connections=").append(maxConnections)
                 .append(", shared_buffers=").append(sharedBuffers)
                 .append(", effective_cache_size=").append(effectiveCacheSize).append("\n");
-            // Eger ortalama temp/call mevcut work_mem'in altindaysa work_mem yetersizligi degil,
-            // planner kararindan kaynakli temp olabilir (parallel hash, sort spill estimate sapmasi vb.)
-            if (maxTempBytesPerCall > 0 && currentWorkMemBytes > 0
-                    && maxTempBytesPerCall < currentWorkMemBytes) {
-                summary.append("ℹ️ Ortalama temp/call (").append(humanBytes(maxTempBytesPerCall))
-                    .append(") mevcut work_mem'in (").append(workMem).append(") altinda. ")
-                    .append("Bu sorgu work_mem yetersizliginden degil planner kararindan disk kullaniyor ")
-                    .append("(parallel hash, kotu row estimate, vb.). EXPLAIN (ANALYZE, BUFFERS) ile spill node'u inceleyin.");
-            } else {
-                summary.append("🎯 Query-level öneri: **SET LOCAL work_mem = '").append(suggestedWorkMem).append("'**");
-                summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
-                summary.append(workMemAdvice.guidance());
-            }
+            // Temp yazildi -> bu sorgu icin work_mem yetmedi. Sebepler farkli olabilir;
+            // mesaj kesin tesis koymadan ihtimalleri listeler.
+            summary.append("🎯 Query-level öneri: **SET LOCAL work_mem >= '").append(suggestedWorkMem).append("'**");
+            summary.append(" (en yüksek ort. temp/call: ").append(humanBytes(maxTempBytesPerCall)).append("). ");
+            summary.append("Olası sebepler: kötü row estimate, parallel hash spill, index eksikliği, ");
+            summary.append("yetersiz parallel worker. EXPLAIN (ANALYZE, BUFFERS) ile root cause tespit edin. ");
+            summary.append(workMemAdvice.guidance());
 
             StringBuilder json = new StringBuilder();
             json.append("{\"kind\":\"temp_files\"");

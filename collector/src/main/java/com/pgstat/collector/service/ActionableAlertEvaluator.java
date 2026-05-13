@@ -434,21 +434,19 @@ public class ActionableAlertEvaluator {
             );
             String suggested = advice.suggestedWorkMem();
             String workMemGuidance = advice.guidance();
-            // Ortalama temp/call mevcut work_mem'in altindaysa work_mem yetersizligi degil,
-            // planner kararidir. Mesajda yaniltici "work_mem dusur" cikmamali.
+            // Temp yazildi -> bu sorgu icin work_mem yetmedi (olgu). Sebepler
+            // farkli olabilir (kotu row estimate, parallel hash spill, index eksikligi,
+            // yetersiz parallel worker). Mesaj kesin tesis koymadan ihtimalleri listeler.
             long avgTempPerCall = 0;
             for (Map<String, Object> q : topTempQueries) {
                 long perCall = toLong(q.get("avg_temp_bytes_per_call"));
                 if (perCall > avgTempPerCall) avgTempPerCall = perCall;
             }
-            boolean workMemSufficient = workMemBytes > 0 && avgTempPerCall > 0
-                && avgTempPerCall < workMemBytes;
-            String rootCauseHint = workMemSufficient
-                ? "ℹ️ Ortalama temp/call (" + humanBytes(avgTempPerCall) + ") mevcut work_mem'in altında. "
-                    + "work_mem yetersizliği değil, planner kararından (parallel hash, kötü row estimate) kaynaklı. "
-                    + "EXPLAIN (ANALYZE, BUFFERS) ile spill node'u inceleyin."
-                : "🎯 Öneri: SET LOCAL work_mem = '" + suggested + "' (en yüksek ort. temp/call: "
-                    + humanBytes(avgTempPerCall) + "). " + workMemGuidance;
+            String rootCauseHint = "🎯 Öneri: SET LOCAL work_mem >= '" + suggested + "' "
+                + "(en yüksek ort. temp/call: " + humanBytes(avgTempPerCall) + "). "
+                + "Olası sebepler: kötü row estimate, parallel hash spill, index eksikliği, "
+                + "yetersiz parallel worker. EXPLAIN (ANALYZE, BUFFERS) ile root cause tespit edin. "
+                + workMemGuidance;
 
             Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("instance", r.get("display_name"));
@@ -465,7 +463,6 @@ public class ActionableAlertEvaluator {
             ctx.put("suggested_work_mem", suggested);
             ctx.put("work_mem_guidance", workMemGuidance);
             ctx.put("root_cause_hint", rootCauseHint);
-            ctx.put("work_mem_sufficient", workMemSufficient);
 
             String[] rendered = renderer.renderForCode("high_temp_files", ctx,
                 "Yüksek temp file: " + r.get("datname"),
