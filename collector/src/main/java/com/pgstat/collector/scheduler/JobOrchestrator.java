@@ -527,11 +527,13 @@ public class JobOrchestrator {
                             actionableAlertEvaluator.evaluateAcute();
                             actionableAlertEvaluator.evaluateFrequent();
                             alertRuleEvaluator.evaluate();
-                            // Manuel tetik sonrası: 30 dk'dan beri tetiklenmemiş transient'ları kapat
-                            // (daily 120dk'dan agresif — kullanıcı sonucu hemen görmek istiyor)
+                            // Manuel tetik sonrası: bu evaluate'te yeniden tetiklenmeyen
+                            // (yani last_seen_at su andan onceki) transient alert'leri hemen kapat.
+                            // Kullanici "simdi degerlendir" diyorsa niyeti: "su an gecerli mi
+                            // diye bak, gecersizse kapat". 1dk grace evaluate'in islem suresini tolere eder.
                             try {
-                                int closed = alertService.autoResolveStale(30);
-                                if (closed > 0) log.info("Manuel evaluate sonrası {} alert auto-resolved (>30dk)", closed);
+                                int closed = alertService.autoResolveStale(1);
+                                if (closed > 0) log.info("Manuel evaluate sonrası {} alert auto-resolved", closed);
                             } catch (Exception ignore) {}
                         }
                         jdbc.update("update control.collector_command set status='done', processed_at=now() where command_id=?", cmdId);
