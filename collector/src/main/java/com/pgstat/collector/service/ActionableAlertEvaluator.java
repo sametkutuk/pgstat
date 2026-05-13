@@ -276,6 +276,8 @@ public class ActionableAlertEvaluator {
             String detailsJson = new AlertDetailsBuilder()
                 .setKind("usage_summary")
                 .addContext("index", r.get("schemaname") + "." + r.get("indexrelname"))
+                .addContext("schemaname", r.get("schemaname"))
+                .addContext("indexrelname", r.get("indexrelname"))
                 .addContext("table", r.get("table_relname"))
                 .addContext("index_size_bytes", toLong(r.get("total_size_bytes")))
                 .addContext("index_size_human", humanBytes(toLong(r.get("total_size_bytes"))))
