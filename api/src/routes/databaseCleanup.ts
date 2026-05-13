@@ -16,7 +16,10 @@ router.get('/candidates', async (_req, res, next) => {
         // bootstrap_state degisiklikleri.
         const result = await pool.query(`
             with alert_hits as (
-                select a.instance_pk,
+                select coalesce(
+                           a.instance_pk,
+                           nullif(substring(a.message from 'pk=([0-9]+)'), '')::bigint
+                       ) as instance_pk,
                        a.alert_id,
                        a.first_seen_at,
                        a.last_seen_at,
@@ -45,10 +48,11 @@ router.get('/candidates', async (_req, res, next) => {
                        count(*) over (partition by ah.instance_pk, ah.datname_match) as error_count,
                        max(ah.alert_id) over (partition by ah.instance_pk, ah.datname_match) as latest_alert_id
                 from alert_hits ah
-                join control.instance_inventory i on i.instance_pk = ah.instance_pk
+                left join control.instance_inventory i on i.instance_pk = ah.instance_pk
                 left join dim.database_ref dr
                     on dr.instance_pk = ah.instance_pk and dr.datname = ah.datname_match
                 where ah.datname_match is not null
+                  and ah.instance_pk is not null
             )
             select distinct instance_pk, instance_name, instance_host, datname, dbid,
                             is_active, disabled_at, disabled_reason,
