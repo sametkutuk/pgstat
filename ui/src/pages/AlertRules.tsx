@@ -1020,6 +1020,23 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                   <p className="text-xs text-[#64748B] mt-1">
                     Baseline gece hesaplanır. Bu instance için en az 7 gün veri yoksa kural atlanır.
                   </p>
+
+                  {/* Adaptive için min absolute floor — opsiyonel override */}
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                      <span className="inline-block w-2 h-2 bg-[#FBBF24] rounded-full mr-1"></span>
+                      Mutlak Alt Eşik {METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit ? `(${METRIC_TYPES[form.metric_type].metrics[form.metric_name].unit})` : ''} <span className="text-[#94A3B8] font-normal">— opsiyonel</span>
+                    </label>
+                    <input type="number" value={form.warning_threshold} onChange={e => set('warning_threshold', e.target.value)}
+                      className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                      placeholder="Boş bırakırsan otomatik gürültü eşiği uygulanır" />
+                    <p className="text-xs text-[#64748B] mt-1">
+                      Adaptive baseline'ı geçse bile current değer bu eşiğin altındaysa alert atılmaz.
+                      Boş bırakırsan metric türüne göre otomatik default kullanılır
+                      ({METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.unit || 'birim'}).
+                    </p>
+                  </div>
+
                   <div className="mt-2 bg-[#F0F9FF] border border-[#BAE6FD] rounded-md px-3 py-2 text-[11px] text-[#0369A1]">
                     <div className="font-medium mb-1">ℹ️ Adaptive alert beş kapı kullanır:</div>
                     <ul className="list-disc pl-4 space-y-0.5">
