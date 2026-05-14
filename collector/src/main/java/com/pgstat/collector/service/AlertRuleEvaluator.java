@@ -288,6 +288,32 @@ public class AlertRuleEvaluator {
                 continue;
             }
 
+            // Gate A/B/C — istatistik sinyali + pratik anlam kontrolu
+            // (database_metric icin loadBaseline'dan gelen avg/stddev kullanilir,
+            //  MAD CTE'lerine cevirmiyoruz cunku baseline tablosu zaten nightly hesaplaniyor)
+            BigDecimal classFloor = getMetricClassFloor(metricName);
+            BigDecimal userThreshold = toBD(rule.get("warning_threshold"));
+            BigDecimal effectiveFloor = (userThreshold != null && userThreshold.signum() > 0)
+                ? userThreshold : classFloor;
+            BigDecimal pctChangeGate = new BigDecimal("0.50");
+
+            // Gate A: baseline >= class floor (gurultu degil)
+            if (avg.compareTo(classFloor) < 0) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+            // Gate B: current >= effective floor
+            if (current.compareTo(effectiveFloor) < 0) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+            // Gate C: en az %50 artis
+            BigDecimal diff = current.subtract(avg);
+            if (avg.signum() > 0 && diff.compareTo(avg.multiply(pctChangeGate)) < 0) {
+                updateLastEval(ruleId, instancePk, current, null);
+                continue;
+            }
+
             String severity = null;
             if (current.compareTo(upperCritical) > 0) severity = "critical";
             else if (current.compareTo(upperWarning) > 0) severity = "warning";
