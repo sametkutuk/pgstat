@@ -78,14 +78,18 @@ public class Pg17_18Queries extends Pg14_16Queries {
               coalesce(temp_blk_read_time, 0)  as temp_blk_read_time,
               coalesce(temp_blk_write_time, 0) as temp_blk_write_time,
               wal_records, wal_fpi, wal_bytes,
-              coalesce(wal_buffers_full, 0) as wal_buffers_full,
+              -- wal_buffers_full pg_stat_statements'e PG18'de eklendi; PG17'de yok.
+              -- to_jsonb safe-lookup ile kolon yoksa 0.
+              coalesce((j->>'wal_buffers_full')::bigint, 0) as wal_buffers_full,
               jit_functions,
               jit_generation_time,
               jit_inlining_time,
               jit_optimization_time,
               jit_emission_time,
-              coalesce(jit_deform_count, 0)         as jit_deform_count,
-              coalesce(jit_deform_time, 0)          as jit_deform_time,
+              -- jit_deform_count/time PG16'da view kolonu olarak var ama PG17'de
+              -- bazi dagitimlarda eksik olabilir — safe-lookup.
+              coalesce((j->>'jit_deform_count')::bigint, 0)         as jit_deform_count,
+              coalesce((j->>'jit_deform_time')::double precision, 0) as jit_deform_time,
               stats_since,
               minmax_stats_since,
               coalesce((j->>'parallel_workers_to_launch')::bigint, 0) as parallel_workers_to_launch,

@@ -28,17 +28,22 @@ public class Pg13Queries extends Pg11_12Queries {
 
     @Override
     public String walQuery() {
+        // pg_stat_wal PG14'te eklendi (PG13'te yok). Bazi kolonlar PG sürümleri
+        // arasinda eklendi/cikti — to_jsonb safe-lookup ile kolon yoksa NULL/0.
         return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_wal s
+            )
             select
               wal_records,
               wal_fpi,
               wal_bytes,
-              wal_buffers_full,
-              wal_write,
-              wal_sync,
-              wal_write_time,
-              wal_sync_time
-            from pg_stat_wal
+              coalesce((j->>'wal_buffers_full')::bigint, 0) as wal_buffers_full,
+              coalesce((j->>'wal_write')::bigint, 0)        as wal_write,
+              coalesce((j->>'wal_sync')::bigint, 0)         as wal_sync,
+              coalesce((j->>'wal_write_time')::double precision, 0) as wal_write_time,
+              coalesce((j->>'wal_sync_time')::double precision, 0)  as wal_sync_time
+            from src
             """;
     }
 
