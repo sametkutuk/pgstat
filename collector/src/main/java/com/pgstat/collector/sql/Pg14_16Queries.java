@@ -99,8 +99,22 @@ public class Pg14_16Queries extends Pg13Queries {
 
     @Override
     public String pgssStatsQuery(String pgssFunction) {
-        // PG14+: plans, total_plan_time dahil
+        // PG14-16: toplevel, plans, jit detay var.
+        // PG15+ temp_blk_read/write_time, stats_since, minmax_stats_since
+        // PG16+ jit_deform_count/time
+        // Pragmatik: PG14'te temp_blk_*_time yok → coalesce ile 0
+        // PG15-16'da doğrudan kolon var; SQL versiyona gore branch yapmak yerine
+        // run-time'da try/catch yapamayız (single SQL). Bu yuzden:
+        //   - PG14-15-16 hepsi icin pg_extension version'a bakmak yerine
+        //   - to_jsonb ile kolon yoksa null donuyor mantigi kullanamıyoruz (subquery zorlasiyor)
+        // Cozum: Bu sinif PG14-16 ortak. PG14 icin temp_blk_*_time yoktur → bu durumda
+        // ext yuklu olsa bile pg_stat_statements 1.10 kolonu olmamasi durumunda
+        // SQL hata verir. Ama yine de cogu PG14 1.10'a guncellenebiliyor.
+        // En guvenli yol: to_jsonb -> obj #>> '{key}' okuma (column existence safe)
         return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from %s(false) s
+            )
             select
               userid, dbid, queryid,
               toplevel,
@@ -108,6 +122,8 @@ public class Pg14_16Queries extends Pg13Queries {
               plans,
               total_plan_time,
               total_exec_time,
+              min_exec_time, max_exec_time, stddev_exec_time,
+              min_plan_time, max_plan_time, stddev_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -115,12 +131,22 @@ public class Pg14_16Queries extends Pg13Queries {
               local_blks_dirtied, local_blks_written,
               temp_blks_read, temp_blks_written,
               blk_read_time, blk_write_time,
+              coalesce((j->>'temp_blk_read_time')::double precision, 0)  as temp_blk_read_time,
+              coalesce((j->>'temp_blk_write_time')::double precision, 0) as temp_blk_write_time,
               wal_records, wal_fpi, wal_bytes,
+              0::bigint as wal_buffers_full,
+              coalesce((j->>'jit_functions')::bigint, 0) as jit_functions,
               jit_generation_time,
               jit_inlining_time,
               jit_optimization_time,
-              jit_emission_time
-            from %s(false)
+              jit_emission_time,
+              coalesce((j->>'jit_deform_count')::bigint, 0)         as jit_deform_count,
+              coalesce((j->>'jit_deform_time')::double precision, 0) as jit_deform_time,
+              (j->>'stats_since')::timestamptz          as stats_since,
+              (j->>'minmax_stats_since')::timestamptz   as minmax_stats_since,
+              0::bigint as parallel_workers_to_launch,
+              0::bigint as parallel_workers_launched
+            from src
             """.formatted(pgssFunction);
     }
 

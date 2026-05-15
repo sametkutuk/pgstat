@@ -307,7 +307,19 @@ public class StatementsCollector {
                             orZeroD(deltaCalc.deltaDouble(sample.jitGenerationTime(), prev.jitGenerationTime())),
                             orZeroD(deltaCalc.deltaDouble(sample.jitInliningTime(), prev.jitInliningTime())),
                             orZeroD(deltaCalc.deltaDouble(sample.jitOptimizationTime(), prev.jitOptimizationTime())),
-                            orZeroD(deltaCalc.deltaDouble(sample.jitEmissionTime(), prev.jitEmissionTime()))
+                            orZeroD(deltaCalc.deltaDouble(sample.jitEmissionTime(), prev.jitEmissionTime())),
+                            // V055 yeni alanlar — min/max/stddev SNAPSHOT (son deger), digerleri delta
+                            sample.minExecTime(), sample.maxExecTime(), sample.stddevExecTime(),
+                            sample.minPlanTime(), sample.maxPlanTime(), sample.stddevPlanTime(),
+                            orZeroD(deltaCalc.deltaDouble(sample.tempBlkReadTime(), prev.tempBlkReadTime())),
+                            orZeroD(deltaCalc.deltaDouble(sample.tempBlkWriteTime(), prev.tempBlkWriteTime())),
+                            orZeroL(deltaCalc.deltaLong(sample.walBuffersFull(), prev.walBuffersFull())),
+                            orZeroL(deltaCalc.deltaLong(sample.jitFunctions(), prev.jitFunctions())),
+                            orZeroL(deltaCalc.deltaLong(sample.jitDeformCount(), prev.jitDeformCount())),
+                            orZeroD(deltaCalc.deltaDouble(sample.jitDeformTime(), prev.jitDeformTime())),
+                            sample.statsSince(), sample.minmaxStatsSince(),
+                            orZeroL(deltaCalc.deltaLong(sample.parallelWorkersToLaunch(), prev.parallelWorkersToLaunch())),
+                            orZeroL(deltaCalc.deltaLong(sample.parallelWorkersLaunched(), prev.parallelWorkersLaunched()))
                         );
                         rowsWritten++;
                     }
@@ -338,7 +350,15 @@ public class StatementsCollector {
                         sample.jitGenerationTime(),
                         sample.jitInliningTime(),
                         sample.jitOptimizationTime(),
-                        sample.jitEmissionTime()
+                        sample.jitEmissionTime(),
+                        // V055 yeni alanlar — epoch reset sonrasi degerler oldugu gibi delta'dir
+                        sample.minExecTime(), sample.maxExecTime(), sample.stddevExecTime(),
+                        sample.minPlanTime(), sample.maxPlanTime(), sample.stddevPlanTime(),
+                        sample.tempBlkReadTime(), sample.tempBlkWriteTime(),
+                        sample.walBuffersFull(),
+                        sample.jitFunctions(), sample.jitDeformCount(), sample.jitDeformTime(),
+                        sample.statsSince(), sample.minmaxStatsSince(),
+                        sample.parallelWorkersToLaunch(), sample.parallelWorkersLaunched()
                     );
                     rowsWritten++;
                 } else {
@@ -370,6 +390,12 @@ public class StatementsCollector {
             rs.getLong("plans"),
             rs.getDouble("total_plan_time"),
             rs.getDouble("total_exec_time"),
+            rs.getDouble("min_exec_time"),
+            rs.getDouble("max_exec_time"),
+            rs.getDouble("stddev_exec_time"),
+            rs.getDouble("min_plan_time"),
+            rs.getDouble("max_plan_time"),
+            rs.getDouble("stddev_plan_time"),
             rs.getLong("rows"),
             rs.getLong("shared_blks_hit"),
             rs.getLong("shared_blks_read"),
@@ -383,13 +409,23 @@ public class StatementsCollector {
             rs.getLong("temp_blks_written"),
             rs.getDouble("blk_read_time"),
             rs.getDouble("blk_write_time"),
+            rs.getDouble("temp_blk_read_time"),
+            rs.getDouble("temp_blk_write_time"),
             rs.getLong("wal_records"),
             rs.getLong("wal_fpi"),
             rs.getLong("wal_bytes"),
+            rs.getLong("wal_buffers_full"),
+            rs.getLong("jit_functions"),
             rs.getDouble("jit_generation_time"),
             rs.getDouble("jit_inlining_time"),
             rs.getDouble("jit_optimization_time"),
-            rs.getDouble("jit_emission_time")
+            rs.getDouble("jit_emission_time"),
+            rs.getLong("jit_deform_count"),
+            rs.getDouble("jit_deform_time"),
+            rs.getObject("stats_since", java.time.OffsetDateTime.class),
+            rs.getObject("minmax_stats_since", java.time.OffsetDateTime.class),
+            rs.getLong("parallel_workers_to_launch"),
+            rs.getLong("parallel_workers_launched")
         );
     }
 

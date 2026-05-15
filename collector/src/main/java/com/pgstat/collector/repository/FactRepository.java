@@ -221,7 +221,15 @@ public class FactRepository {
                                 long walRecordsDelta, long walFpiDelta,
                                 long walBytesDelta,
                                 double jitGenTimeMsDelta, double jitInlTimeMsDelta,
-                                double jitOptTimeMsDelta, double jitEmitTimeMsDelta) {
+                                double jitOptTimeMsDelta, double jitEmitTimeMsDelta,
+                                // Yeni: V055 ile eklenen kolonlar
+                                double minExecTimeMs, double maxExecTimeMs, double stddevExecTimeMs,
+                                double minPlanTimeMs, double maxPlanTimeMs, double stddevPlanTimeMs,
+                                double tempBlkReadTimeMsDelta, double tempBlkWriteTimeMsDelta,
+                                long walBuffersFullDelta,
+                                long jitFunctionsDelta, long jitDeformCountDelta, double jitDeformTimeMsDelta,
+                                OffsetDateTime statsSince, OffsetDateTime minmaxStatsSince,
+                                long parallelWorkersToLaunchDelta, long parallelWorkersLaunchedDelta) {
         jdbc.update("""
             insert into fact.pgss_delta (
               sample_ts, instance_pk, statement_series_id,
@@ -236,9 +244,17 @@ public class FactRepository {
               blk_read_time_ms_delta, blk_write_time_ms_delta,
               wal_records_delta, wal_fpi_delta, wal_bytes_delta,
               jit_generation_time_ms_delta, jit_inlining_time_ms_delta,
-              jit_optimization_time_ms_delta, jit_emission_time_ms_delta
+              jit_optimization_time_ms_delta, jit_emission_time_ms_delta,
+              min_exec_time_ms, max_exec_time_ms, stddev_exec_time_ms,
+              min_plan_time_ms, max_plan_time_ms, stddev_plan_time_ms,
+              temp_blk_read_time_ms_delta, temp_blk_write_time_ms_delta,
+              wal_buffers_full_delta,
+              jit_functions_delta, jit_deform_count_delta, jit_deform_time_ms_delta,
+              stats_since, minmax_stats_since,
+              parallel_workers_to_launch_delta, parallel_workers_launched_delta
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, statementSeriesId,
@@ -253,7 +269,14 @@ public class FactRepository {
             blkReadTimeMsDelta, blkWriteTimeMsDelta,
             walRecordsDelta, walFpiDelta, walBytesDelta,
             jitGenTimeMsDelta, jitInlTimeMsDelta,
-            jitOptTimeMsDelta, jitEmitTimeMsDelta
+            jitOptTimeMsDelta, jitEmitTimeMsDelta,
+            minExecTimeMs, maxExecTimeMs, stddevExecTimeMs,
+            minPlanTimeMs, maxPlanTimeMs, stddevPlanTimeMs,
+            tempBlkReadTimeMsDelta, tempBlkWriteTimeMsDelta,
+            walBuffersFullDelta,
+            jitFunctionsDelta, jitDeformCountDelta, jitDeformTimeMsDelta,
+            statsSince, minmaxStatsSince,
+            parallelWorkersToLaunchDelta, parallelWorkersLaunchedDelta
         );
     }
 

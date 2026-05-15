@@ -198,7 +198,8 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String pgssStatsQuery(String pgssFunction) {
-        // PG11-12: toplevel, plans, wal, jit yok
+        // PG11-12: toplevel, plans, wal, jit yok; min/max/stddev sadece exec icin var
+        // (plan ayrimi PG13'te eklendi). Yeni alanlar 0 ya da null doner.
         return """
             select
               userid, dbid, queryid,
@@ -207,6 +208,12 @@ public class Pg11_12Queries implements SourceQueries {
               0::bigint as plans,
               0::double precision as total_plan_time,
               total_time as total_exec_time,
+              min_time as min_exec_time,
+              max_time as max_exec_time,
+              stddev_time as stddev_exec_time,
+              0::double precision as min_plan_time,
+              0::double precision as max_plan_time,
+              0::double precision as stddev_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -214,13 +221,23 @@ public class Pg11_12Queries implements SourceQueries {
               local_blks_dirtied, local_blks_written,
               temp_blks_read, temp_blks_written,
               blk_read_time, blk_write_time,
+              0::double precision as temp_blk_read_time,
+              0::double precision as temp_blk_write_time,
               0::bigint as wal_records,
               0::bigint as wal_fpi,
               0::bigint as wal_bytes,
+              0::bigint as wal_buffers_full,
+              0::bigint as jit_functions,
               0::double precision as jit_generation_time,
               0::double precision as jit_inlining_time,
               0::double precision as jit_optimization_time,
-              0::double precision as jit_emission_time
+              0::double precision as jit_emission_time,
+              0::bigint as jit_deform_count,
+              0::double precision as jit_deform_time,
+              null::timestamptz as stats_since,
+              null::timestamptz as minmax_stats_since,
+              0::bigint as parallel_workers_to_launch,
+              0::bigint as parallel_workers_launched
             from %s(false)
             """.formatted(pgssFunction);
     }
