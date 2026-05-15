@@ -5,7 +5,8 @@
 #   ./pgstat setup        İlk kurulum (interaktif)
 #   ./pgstat up           Başlat
 #   ./pgstat down         Durdur
-#   ./pgstat upgrade      Güncelle (migration + rebuild)
+#   ./pgstat upgrade      Güncelle (git pull + migration + image pull + rebuild)
+#   ./pgstat rebuild      Sadece container'ları yeniden inşa et (build hatasından sonra retry için)
 #   ./pgstat logs [srv]   Loglar
 #   ./pgstat status       Durum
 #   ./pgstat backup       DB backup
@@ -131,11 +132,18 @@ do_migrate() {
         -c "INSERT INTO public.schema_migrations (version) VALUES ('$version')" > /dev/null 2>&1
       applied=$((applied + 1))
     else
-      warn "  $fname uygulanırken hata — kontrol edin"
+      # Gerçek psql hatasını göster (sessiz başarısızlık olmasın)
+      err_msg=$(PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
+        -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
+        -d "$PGSTAT_DB_NAME" -U "$PGSTAT_DB_USER" \
+        -f "$f" -v ON_ERROR_STOP=1 2>&1 | tail -3 | tr '\n' ' ')
+      warn "  $fname HATA: $err_msg"
       failed=$((failed + 1))
     fi
   done
   ok "Migration tamamlandı ($applied yeni, $skipped atlandı, $failed hatalı)"
+  # Migration başarısızlığını çağırana bildir — upgrade akışı build'e geçmesin
+  [ "$failed" -gt 0 ] && return 1 || return 0
 
   # Grafana grants — rol varsa V031 SQL'ini her zaman re-apply et
   # Sebep: V031 migration ilk calistiginda rol henuz yoksa grant'ler atlanir,
@@ -338,11 +346,79 @@ EOF
 
   upgrade)
     load_env
-    [ -d "$DIR/.git" ] && git -C "$DIR" pull --ff-only 2>/dev/null || true
-    do_migrate
-    $COMPOSE up -d --build 2>&1 | tail -5
+
+    # 1) Git pull (varsa)
+    if [ -d "$DIR/.git" ]; then
+      echo -e "${C}Kod güncelleniyor...${N}"
+      git -C "$DIR" pull --ff-only 2>&1 | tail -3 || warn "git pull başarısız (yerel kod kullanılacak)"
+    fi
+
+    # 2) Migration — DB tarafı; başarısız olursa build'e geçme
+    if ! do_migrate; then
+      fail "Migration başarısız oldu — upgrade durduruldu (DB veya bağlantı sorununu çöz)"
+    fi
+
+    # 3) Docker base image'ları önceden çek — network sorunu varsa build aşamasında patlamasın.
+    #    nginx:alpine + node:20-alpine + maven base image. Retry mantığı ile.
+    echo -e "${C}Docker image'lar hazırlanıyor (ağ kontrol ediliyor)...${N}"
+    base_images="nginx:alpine node:20-alpine"
+    # Compose dosyasında başka base image varsa onları da ekle
+    if command -v grep > /dev/null && [ -f "$DIR/collector/Dockerfile" ]; then
+      maven_img=$(grep -oE "^FROM [a-z0-9./:-]+" "$DIR/collector/Dockerfile" 2>/dev/null | awk '{print $2}' | head -1)
+      [ -n "$maven_img" ] && base_images="$base_images $maven_img"
+    fi
+    if command -v grep > /dev/null && [ -f "$DIR/api/Dockerfile" ]; then
+      api_img=$(grep -oE "^FROM [a-z0-9./:-]+" "$DIR/api/Dockerfile" 2>/dev/null | awk '{print $2}' | head -1)
+      [ -n "$api_img" ] && base_images="$base_images $api_img"
+    fi
+
+    pull_ok=0
+    for img in $base_images; do
+      pulled=0
+      for attempt in 1 2 3; do
+        if docker pull "$img" > /dev/null 2>&1; then
+          pulled=1
+          break
+        fi
+        warn "  $img pull denemesi $attempt/3 başarısız, 5 sn sonra tekrar..."
+        sleep 5
+      done
+      if [ $pulled -eq 1 ]; then
+        ok "  $img hazır"
+      else
+        warn "  $img çekilemedi (build local cache'ten dener)"
+        pull_ok=1
+      fi
+    done
+
+    if [ $pull_ok -ne 0 ]; then
+      warn "Bazı image'lar çekilemedi. Network sorununa rağmen build deneniyor (local cache varsa çalışır)."
+      warn "Çözüm önerileri:"
+      warn "  • Network: curl -I https://registry-1.docker.io/v2/  (TLS handshake çalışıyor mu?)"
+      warn "  • DNS:     nslookup registry-1.docker.io"
+      warn "  • Proxy:   docker daemon proxy ayarlarını kontrol et"
+    fi
+
+    # 4) Build — başarısız olursa net mesaj
+    echo -e "${C}Container'lar yeniden inşa ediliyor...${N}"
+    if ! $COMPOSE up -d --build 2>&1 | tail -8; then
+      echo ""
+      fail "Build başarısız. Detay: ./pgstat logs   |   Tekrar: ./pgstat upgrade"
+    fi
+
     do_health
     ok "Upgrade tamamlandı"
+    ;;
+
+  # Sadece container'ları yeniden inşa et (migration zaten geçti, build başarısız olduysa retry için)
+  rebuild)
+    load_env
+    echo -e "${C}Sadece build yeniden deneniyor (migration atlanır)...${N}"
+    if ! $COMPOSE up -d --build 2>&1 | tail -8; then
+      fail "Build başarısız. Logları kontrol edin: ./pgstat logs"
+    fi
+    do_health
+    ok "Rebuild tamamlandı"
     ;;
 
   logs)   load_env; $COMPOSE logs -f --tail 50 ${2:-} ;;
@@ -455,7 +531,8 @@ EOF
     echo -e "  ${G}up${N}          Başlat"
     echo -e "  ${G}down${N}        Durdur"
     echo -e "  ${G}restart${N}     Yeniden başlat"
-    echo -e "  ${G}upgrade${N}     Güncelle (git pull + rebuild)"
+    echo -e "  ${G}upgrade${N}     Güncelle (git pull + migration + image pull + rebuild)"
+    echo -e "  ${G}rebuild${N}     Sadece container'ları yeniden inşa et (build hatasından sonra retry)"
     echo -e "  ${G}logs${N} [srv]  Loglar (./pgstat logs collector)"
     echo -e "  ${G}status${N}      Container durumları"
     echo -e "  ${G}passwd${N}      Admin şifresini değiştir"
