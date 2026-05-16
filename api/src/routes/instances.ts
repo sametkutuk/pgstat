@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
 import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
+import { PGSS_COLUMNS, parseRequestedColumns } from './statements';
 
 const router = Router();
 
@@ -404,32 +405,28 @@ router.get('/:id/statements', async (req, res, next) => {
     const datname = (req.query.datname as string) || null;
     const rolname = (req.query.rolname as string) || null;
 
-    const orderMap: Record<string, string> = {
-      exec_time: 'total_exec_time_ms',
-      avg_time: 'avg_exec_time_ms',
-      calls: 'total_calls',
-      rows: 'total_rows',
-      blks_read: 'total_shared_blks_read',
-      temp_blks: 'total_temp_blks_written',
-    };
-    const orderCol = orderMap[(req.query.order_by as string) || ''] || 'total_exec_time_ms';
+    // Dinamik kolon destegi — statements.ts ile ayni whitelist
+    const requestedCols = parseRequestedColumns(req.query.columns as string | undefined);
+    const orderColRaw = (req.query.order_by as string) || 'total_exec_time_ms';
+    const orderCol = requestedCols.includes(orderColRaw) ? orderColRaw
+                     : (requestedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms'
+                        : requestedCols[0]);
 
     const params: any[] = [id, fromIso, toIso, limit];
     let whereExtra = '';
     if (datname) { params.push(datname); whereExtra += ` and dbr.datname = $${params.length}`; }
     if (rolname) { params.push(rolname); whereExtra += ` and rr.rolname = $${params.length}`; }
 
+    const selectCols = requestedCols
+      .map(c => `${PGSS_COLUMNS[c].sql} as ${c}`)
+      .join(',\n        ');
+
     const result = await pool.query(`
       select ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
-        left(qt.query_text, 500) as query_text, rr.rolname, dbr.datname,
-        sum(d.calls_delta) as total_calls,
-        sum(d.total_exec_time_ms_delta) as total_exec_time_ms,
-        sum(d.rows_delta) as total_rows,
-        sum(d.shared_blks_hit_delta) as total_shared_blks_hit,
-        sum(d.shared_blks_read_delta) as total_shared_blks_read,
-        sum(d.temp_blks_written_delta) as total_temp_blks_written,
-        case when sum(d.calls_delta) > 0
-          then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta) else 0 end as avg_exec_time_ms
+        ss.query_text_id,
+        left(qt.query_text, 80) as query_text_short,
+        rr.rolname, dbr.datname,
+        ${selectCols}
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
       left join dim.query_text qt on qt.query_text_id = ss.query_text_id
@@ -439,7 +436,7 @@ router.get('/:id/statements', async (req, res, next) => {
         and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${whereExtra}
       group by ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
-               qt.query_text, rr.rolname, dbr.datname
+               ss.query_text_id, qt.query_text, rr.rolname, dbr.datname
       order by ${orderCol} desc nulls last
       limit $4
     `, params);

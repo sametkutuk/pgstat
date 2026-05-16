@@ -8,6 +8,127 @@ function emptyClusterQueryTotals() {
   return { calls: 0, exec_ms: 0, rows_delta: 0, blks_hit: 0, blks_read: 0, temp_blks_written: 0, wal_bytes: 0 };
 }
 
+// ============================================================================
+// pg_stat_statements metric whitelist — versiyon-agnostik default + opsiyonel
+// Anahtar: API'nin response alani (camelCase yok, snake_case)
+// Deger: SQL aggregate expression (group icin)
+// since: ilk var oldugu PG surumu (UI'da rozet gostermek icin)
+// ============================================================================
+export type PgssCol = { sql: string; since: number; label: string };
+export const PGSS_COLUMNS: Record<string, PgssCol> = {
+  // Tum surumlerde olan (default) — 11+ olarak isaretlenmesi PG13'te rename'li
+  // ama collector tek isime normalize ediyor (mean_time -> mean_exec_time vs.)
+  total_calls:                { sql: 'sum(d.calls_delta)', since: 11, label: 'Calls' },
+  total_exec_time_ms:         { sql: 'sum(d.total_exec_time_ms_delta)', since: 11, label: 'Toplam Süre (ms)' },
+  total_rows:                 { sql: 'sum(d.rows_delta)', since: 11, label: 'Satır' },
+  total_shared_blks_hit:      { sql: 'sum(d.shared_blks_hit_delta)', since: 11, label: 'Shared Blk Hit' },
+  total_shared_blks_read:     { sql: 'sum(d.shared_blks_read_delta)', since: 11, label: 'Shared Blk Read' },
+  total_shared_blks_dirtied:  { sql: 'sum(d.shared_blks_dirtied_delta)', since: 11, label: 'Shared Blk Dirtied' },
+  total_shared_blks_written:  { sql: 'sum(d.shared_blks_written_delta)', since: 11, label: 'Shared Blk Written' },
+  total_local_blks_hit:       { sql: 'sum(d.local_blks_hit_delta)', since: 11, label: 'Local Blk Hit' },
+  total_local_blks_read:      { sql: 'sum(d.local_blks_read_delta)', since: 11, label: 'Local Blk Read' },
+  total_local_blks_dirtied:   { sql: 'sum(d.local_blks_dirtied_delta)', since: 11, label: 'Local Blk Dirtied' },
+  total_local_blks_written:   { sql: 'sum(d.local_blks_written_delta)', since: 11, label: 'Local Blk Written' },
+  total_temp_blks_read:       { sql: 'sum(d.temp_blks_read_delta)', since: 11, label: 'Temp Blk Read' },
+  total_temp_blks_written:    { sql: 'sum(d.temp_blks_written_delta)', since: 11, label: 'Temp Blk Written' },
+  total_blk_read_time:        { sql: 'sum(d.blk_read_time_ms_delta)', since: 11, label: 'Blk Read Time (ms)' },
+  total_blk_write_time:       { sql: 'sum(d.blk_write_time_ms_delta)', since: 11, label: 'Blk Write Time (ms)' },
+  // mean/min/max/stddev SNAPSHOT (PG ham deger, delta degil)
+  mean_exec_time_ms:          { sql: 'avg(d.mean_exec_time_ms)', since: 11, label: 'Ort. Exec (ms)' },
+  min_exec_time_ms:           { sql: 'min(d.min_exec_time_ms)', since: 11, label: 'Min Exec (ms)' },
+  max_exec_time_ms:           { sql: 'max(d.max_exec_time_ms)', since: 11, label: 'Max Exec (ms)' },
+  stddev_exec_time_ms:        { sql: 'avg(d.stddev_exec_time_ms)', since: 11, label: 'Stddev Exec (ms)' },
+  // PG13+ — wal
+  total_wal_records:          { sql: 'sum(d.wal_records_delta)', since: 13, label: 'WAL Records' },
+  total_wal_fpi:              { sql: 'sum(d.wal_fpi_delta)', since: 13, label: 'WAL FPI' },
+  total_wal_bytes:            { sql: 'sum(d.wal_bytes_delta::numeric)', since: 13, label: 'WAL Bytes' },
+  // PG13+ — plan metrics
+  total_plans:                { sql: 'sum(d.plans_delta)', since: 13, label: 'Plans' },
+  total_plan_time_ms:         { sql: 'sum(d.total_plan_time_ms_delta)', since: 13, label: 'Toplam Plan (ms)' },
+  mean_plan_time_ms:          { sql: 'avg(d.mean_plan_time_ms)', since: 13, label: 'Ort. Plan (ms)' },
+  min_plan_time_ms:           { sql: 'min(d.min_plan_time_ms)', since: 13, label: 'Min Plan (ms)' },
+  max_plan_time_ms:           { sql: 'max(d.max_plan_time_ms)', since: 13, label: 'Max Plan (ms)' },
+  stddev_plan_time_ms:        { sql: 'avg(d.stddev_plan_time_ms)', since: 13, label: 'Stddev Plan (ms)' },
+  // PG15+ — temp blk time, jit count
+  total_temp_blk_read_time:   { sql: 'sum(d.temp_blk_read_time_ms_delta)', since: 15, label: 'Temp Blk Read Time (ms)' },
+  total_temp_blk_write_time:  { sql: 'sum(d.temp_blk_write_time_ms_delta)', since: 15, label: 'Temp Blk Write Time (ms)' },
+  total_jit_functions:        { sql: 'sum(d.jit_functions_delta)', since: 15, label: 'JIT Functions' },
+  total_jit_generation_time:  { sql: 'sum(d.jit_generation_time_ms_delta)', since: 15, label: 'JIT Gen (ms)' },
+  total_jit_inlining_time:    { sql: 'sum(d.jit_inlining_time_ms_delta)', since: 15, label: 'JIT Inl (ms)' },
+  total_jit_optimization_time:{ sql: 'sum(d.jit_optimization_time_ms_delta)', since: 15, label: 'JIT Opt (ms)' },
+  total_jit_emission_time:    { sql: 'sum(d.jit_emission_time_ms_delta)', since: 15, label: 'JIT Emit (ms)' },
+  total_jit_inlining_count:   { sql: 'sum(d.jit_inlining_count)', since: 15, label: 'JIT Inl Count' },
+  total_jit_optimization_count:{ sql: 'sum(d.jit_optimization_count)', since: 15, label: 'JIT Opt Count' },
+  total_jit_emission_count:   { sql: 'sum(d.jit_emission_count)', since: 15, label: 'JIT Emit Count' },
+  // PG16+ — jit deform
+  total_jit_deform_count:     { sql: 'sum(d.jit_deform_count_delta)', since: 16, label: 'JIT Deform Count' },
+  total_jit_deform_time:      { sql: 'sum(d.jit_deform_time_ms_delta)', since: 16, label: 'JIT Deform (ms)' },
+  // PG17+ — blk time split
+  total_shared_blk_read_time: { sql: 'sum(d.shared_blk_read_time_ms_delta)', since: 17, label: 'Shared Blk Read Time (ms)' },
+  total_shared_blk_write_time:{ sql: 'sum(d.shared_blk_write_time_ms_delta)', since: 17, label: 'Shared Blk Write Time (ms)' },
+  total_local_blk_read_time:  { sql: 'sum(d.local_blk_read_time_ms_delta)', since: 17, label: 'Local Blk Read Time (ms)' },
+  total_local_blk_write_time: { sql: 'sum(d.local_blk_write_time_ms_delta)', since: 17, label: 'Local Blk Write Time (ms)' },
+  // PG18+ — wal_buffers_full, parallel workers
+  total_wal_buffers_full:     { sql: 'sum(d.wal_buffers_full_delta)', since: 18, label: 'WAL Buffers Full' },
+  total_parallel_to_launch:   { sql: 'sum(d.parallel_workers_to_launch_delta)', since: 18, label: 'Parallel To Launch' },
+  total_parallel_launched:    { sql: 'sum(d.parallel_workers_launched_delta)', since: 18, label: 'Parallel Launched' },
+};
+
+// Versiyon-agnostik default kolonlar (PG11+ hepsinde dolar)
+export const DEFAULT_COLUMNS: string[] = [
+  'total_calls',
+  'total_exec_time_ms',
+  'mean_exec_time_ms',
+  'min_exec_time_ms',
+  'max_exec_time_ms',
+  'stddev_exec_time_ms',
+  'total_rows',
+  'total_shared_blks_hit',
+  'total_shared_blks_read',
+  'total_temp_blks_written',
+  'total_blk_read_time',
+];
+
+export function parseRequestedColumns(raw: string | undefined): string[] {
+  if (!raw) return DEFAULT_COLUMNS;
+  const list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  // Whitelist filtresi — bilinmeyen kolon adlarini sessizce at
+  const safe = list.filter(c => Object.prototype.hasOwnProperty.call(PGSS_COLUMNS, c));
+  return safe.length > 0 ? safe : DEFAULT_COLUMNS;
+}
+
+// Whitelist meta endpoint — UI sutun yonet modali bunu kullanir
+router.get('/columns', (_req, res) => {
+  res.json({
+    defaults: DEFAULT_COLUMNS,
+    available: Object.entries(PGSS_COLUMNS).map(([key, v]) => ({
+      key, label: v.label, since: v.since,
+    })),
+  });
+});
+
+// Tek SQL fetch — DB rahatlatma (UI React Query cache'ler)
+router.get('/text/:queryTextId', async (req, res, next) => {
+  try {
+    const id = parseId(req.params.queryTextId);
+    if (!id) {
+      res.status(400).json({ error: 'invalid queryTextId' });
+      return;
+    }
+    const r = await pool.query(
+      'select query_text from dim.query_text where query_text_id = $1',
+      [id]
+    );
+    if (r.rows.length === 0) {
+      res.status(404).json({ error: 'not found' });
+      return;
+    }
+    res.json({ query_text: r.rows[0].query_text });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/statements/top — Tüm instance'lar genelinde top statement'lar
 // Filtreler: hours, limit, order_by, instance_pk, datname, rolname
 router.get('/top', async (req, res, next) => {
@@ -19,15 +140,14 @@ router.get('/top', async (req, res, next) => {
     const rolname = (req.query.rolname as string) || null;
     const queryid = (req.query.queryid as string) || null;
 
-    const orderMap: Record<string, string> = {
-      exec_time: 'total_exec_time_ms',
-      avg_time: 'avg_exec_time_ms',
-      calls: 'total_calls',
-      rows: 'total_rows',
-      blks_read: 'total_shared_blks_read',
-      temp_blks: 'total_temp_blks_written',
-    };
-    const orderCol = parseOrderBy(req.query.order_by, orderMap, 'total_exec_time_ms');
+    // Kullanici secimi: ?columns=col1,col2,... ; bos -> default 11 kolon
+    const requestedCols = parseRequestedColumns(req.query.columns as string | undefined);
+
+    // Order by — sadece secilen kolonlardan biri olabilir (whitelist guvenligi)
+    const orderColRaw = (req.query.order_by as string) || 'total_exec_time_ms';
+    const orderCol = requestedCols.includes(orderColRaw) ? orderColRaw
+                     : (requestedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms'
+                        : requestedCols[0]);
 
     const params: any[] = [hours, limit];
     let whereExtra = '';
@@ -49,24 +169,22 @@ router.get('/top', async (req, res, next) => {
       whereExtra += ` and ss.queryid = $${params.length}`;
     }
 
+    // Dinamik SELECT — kullanicinin istedigi kolonlari ekle
+    const selectCols = requestedCols
+      .map(c => `${PGSS_COLUMNS[c].sql} as ${c}`)
+      .join(',\n        ');
+
     const result = await pool.query(`
       select
         d.instance_pk,
         inv.display_name as instance_name,
         ss.statement_series_id,
-        ss.dbid, ss.queryid,
+        ss.queryid,
+        ss.query_text_id,
         dbr.datname,
         rr.rolname,
-        left(qt.query_text, 500) as query_text_short,
-        sum(d.calls_delta) as total_calls,
-        sum(d.total_exec_time_ms_delta) as total_exec_time_ms,
-        sum(d.rows_delta) as total_rows,
-        sum(d.shared_blks_hit_delta) as total_shared_blks_hit,
-        sum(d.shared_blks_read_delta) as total_shared_blks_read,
-        sum(d.temp_blks_written_delta) as total_temp_blks_written,
-        case when sum(d.calls_delta) > 0
-          then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta)
-          else 0 end as avg_exec_time_ms
+        left(qt.query_text, 80) as query_text_short,
+        ${selectCols}
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
       join control.instance_inventory inv on inv.instance_pk = d.instance_pk
@@ -76,7 +194,7 @@ router.get('/top', async (req, res, next) => {
       where d.sample_ts >= now() - make_interval(hours => $1)
       ${whereExtra}
       group by d.instance_pk, inv.display_name, ss.statement_series_id,
-               ss.dbid, ss.queryid, dbr.datname, rr.rolname, qt.query_text
+               ss.queryid, ss.query_text_id, dbr.datname, rr.rolname, qt.query_text
       order by ${orderCol} desc nulls last
       limit $2
     `, params);

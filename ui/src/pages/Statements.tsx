@@ -1,11 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import PrintButton from '../components/common/PrintButton';
 import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
+import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
+import StatementSqlCell from '../components/statements/StatementSqlCell';
 
+// Dinamik kolon destegi — Statement satiri Record<string, any> olarak gelir.
+// Sabit alanlar (instance_name, datname, queryid, query_text_short, query_text_id)
+// her zaman doner; metric kolonlari kullanicinin secimine gore.
 interface Statement {
   statement_series_id: number;
   instance_pk: number;
@@ -13,14 +18,11 @@ interface Statement {
   datname: string | null;
   rolname: string | null;
   queryid: string | null;
+  query_text_id: number | null;
   query_text_short: string | null;
-  total_calls: number;
-  total_exec_time_ms: number;
-  avg_exec_time_ms: number;
-  total_rows: number;
-  total_shared_blks_read: number;
-  total_temp_blks_written: number;
   no_delta_data?: boolean;
+  // Metric kolonlari index ile erisilir (number, kullanici secimine bagli)
+  [key: string]: any;
 }
 
 interface Instance {
@@ -30,33 +32,29 @@ interface Instance {
   port: number;
 }
 
-const ORDER_OPTIONS = [
-  { v: 'exec_time', l: 'Toplam Süre' },
-  { v: 'avg_time', l: 'Ort. Süre' },
-  { v: 'calls', l: 'Çağrı Sayısı' },
-  { v: 'rows', l: 'Satır Sayısı' },
-  { v: 'blks_read', l: 'Blok Okuma' },
-  { v: 'temp_blks', l: 'Temp Blok' },
+// Siralama secenekleri — kolon key'leri ile birebir uyumlu
+// (API param: ?order_by=<col_key>) — secili kolonlardan biri olmali
+const ORDER_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: 'total_exec_time_ms', label: 'Toplam Süre' },
+  { key: 'mean_exec_time_ms', label: 'Ort. Süre' },
+  { key: 'max_exec_time_ms', label: 'Max Süre' },
+  { key: 'total_calls', label: 'Çağrı' },
+  { key: 'total_rows', label: 'Satır' },
+  { key: 'total_shared_blks_read', label: 'Blk Read' },
+  { key: 'total_temp_blks_written', label: 'Temp' },
+  { key: 'total_wal_bytes', label: 'WAL' },
 ];
-
-function fmtMs(ms: number): string {
-  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}dk`;
-  if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)}s`;
-  return `${ms.toFixed(1)}ms`;
-}
-
-function fmtNum(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(Math.round(n));
-}
 
 export default function Statements() {
   const navigate = useNavigate();
 
   const [hours, setHours] = useState(1);
-  const [orderBy, setOrderBy] = useState('exec_time');
+  const [orderBy, setOrderBy] = useState('total_exec_time_ms');
   const [instancePk, setInstancePk] = useState('');
+  const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+
+  // Kullanici secimi kolonlar (LocalStorage) + meta (API'den)
+  const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
   const [datname, setDatname] = useState('');
   const [rolname, setRolname] = useState('');
   const [sqlSearch, setSqlSearch] = useState('');
@@ -68,21 +66,30 @@ export default function Statements() {
     staleTime: 60_000,
   });
 
-  // 1) Top statements (fact.pgss_delta)
+  // 1) Top statements (fact.pgss_delta) — secili kolonlar dinamik gonderilir
   const topParams = new URLSearchParams({
     hours: String(hours),
     limit: '100',
     order_by: orderBy,
+    columns: selectedCols.join(','),
     ...(instancePk ? { instance_pk: instancePk } : {}),
     ...(datname ? { datname } : {}),
     ...(rolname ? { rolname } : {}),
   });
 
   const { data: topData, isLoading: topLoading, isFetching, refetch } = useQuery({
-    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname],
+    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname, selectedCols.join(',')],
     queryFn: () => apiGet<Statement[]>(`/statements/top?${topParams}`),
     refetchInterval: 30_000,
   });
+
+  // Secili kolonlar degisirse order_by hala secili kolonlardan biri olsun
+  useEffect(() => {
+    if (!selectedCols.includes(orderBy)) {
+      // exec_time fallback, yoksa ilk kolon
+      setOrderBy(selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0]);
+    }
+  }, [selectedCols, orderBy]);
 
   // 2) Deep search (dim.statement_series) — 3+ karakter yazıldığında otomatik
   const searchTrimmed = sqlSearch.trim();
@@ -126,7 +133,11 @@ export default function Statements() {
     return merged.filter(r => {
       // Deep search aktifse zaten filtrelenmiş, değilse client-side filtrele
       if (q && !deepSearchEnabled && !(r.query_text_short ?? '').toLowerCase().includes(q)) return false;
-      if (minMs > 0 && Number(r.avg_exec_time_ms) < minMs) return false;
+      // mean_exec_time_ms artik secili kolonlardan birinde varsa filtre uygulanir
+      if (minMs > 0) {
+        const mean = Number(r.mean_exec_time_ms ?? r.avg_exec_time_ms ?? 0);
+        if (mean < minMs) return false;
+      }
       return true;
     });
   }, [merged, searchTrimmed, minAvgMs, deepSearchEnabled]);
@@ -154,6 +165,12 @@ export default function Statements() {
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl font-bold">Top Statements</h1>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setColumnsModalOpen(true)}
+            className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors print:hidden"
+            title="Görmek istediğiniz kolonları seçin">
+            ⚙️ Sütun Yönet ({selectedCols.length})
+          </button>
           <PrintButton title="Top Statements" />
           <button
             onClick={() => refetch()}
@@ -181,7 +198,8 @@ export default function Statements() {
             <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
             <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
               className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-              {ORDER_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+              {ORDER_OPTIONS.filter(o => selectedCols.includes(o.key))
+                .map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
             </select>
           </div>
           <div>
@@ -259,55 +277,58 @@ export default function Statements() {
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
                   <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Calls</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam Süre</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort. Süre</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Rows</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blks Read</th>
-                  <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Blks</th>
+                  {selectedCols.map(col => {
+                    const meta = colsMeta?.available.find(c => c.key === col);
+                    return (
+                      <th key={col} className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide whitespace-nowrap">
+                        {meta?.label ?? col}
+                        {meta && meta.since > 11 && (
+                          <span className="ml-1 text-[9px] font-normal text-[#94A3B8]">PG{meta.since}+</span>
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((r) => {
-                  const avgMs = Number(r.avg_exec_time_ms);
-                  const avgColor = avgMs >= 1000 ? 'text-red-600 font-semibold'
-                    : avgMs >= 100 ? 'text-amber-600 font-semibold'
-                      : 'text-[#64748B]';
+                  const meanMs = Number(r.mean_exec_time_ms ?? 0);
                   return (
                     <tr key={r.statement_series_id}
                       onClick={() => navigate(`/statements/${r.statement_series_id}`)}
                       className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors ${r.no_delta_data ? 'opacity-60' : ''}`}>
-                      <td className="py-2.5 px-3 text-xs text-[#64748B]">{r.instance_name}</td>
-                      <td className="py-2.5 px-3 text-xs">
+                      <td className="py-2.5 px-3 text-xs text-[#64748B] whitespace-nowrap">{r.instance_name}</td>
+                      <td className="py-2.5 px-3 text-xs whitespace-nowrap">
                         <div className="text-[#1E293B]">{r.datname ?? '—'}</div>
                         <div className="text-[#94A3B8]">{r.rolname ?? '—'}</div>
                       </td>
-                      <td className="py-2.5 px-3 text-xs font-mono text-[#94A3B8]">
+                      <td className="py-2.5 px-3 text-xs font-mono text-[#94A3B8] whitespace-nowrap">
                         {r.queryid ? String(r.queryid) : '—'}
                       </td>
                       <td className="py-2.5 px-3 max-w-sm">
-                        <div className="flex items-center gap-1.5">
-                          <div className="truncate text-xs font-mono text-[#1E293B]" title={r.query_text_short ?? ''}>
-                            {r.query_text_short || <span className="text-[#94A3B8] italic">metin yok</span>}
-                          </div>
-                          {r.no_delta_data && (
-                            <span className="flex-shrink-0 text-[10px] bg-[#FEF3C7] text-[#D97706] px-1.5 py-0.5 rounded"
-                              title="Collector bu sorguyu gördü ama delta verisi yok. Sorgu nadir çalışıyor veya pg_stat_statements reset sonrası henüz 2 cycle geçmemiş.">
-                              delta yok
-                            </span>
-                          )}
-                        </div>
+                        <StatementSqlCell
+                          queryTextId={r.query_text_id ?? null}
+                          short={r.query_text_short ?? null}
+                          showDeltaBadge={!!r.no_delta_data}
+                        />
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_calls))}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtMs(Number(r.total_exec_time_ms))}</td>
-                      <td className={`py-2.5 px-3 text-right font-mono text-xs ${avgColor}`}>{fmtMs(avgMs)}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_rows))}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_shared_blks_read))}</td>
-                      <td className="py-2.5 px-3 text-right font-mono text-xs">
-                        {Number(r.total_temp_blks_written) > 0
-                          ? <span className="text-amber-600 font-semibold">{fmtNum(Number(r.total_temp_blks_written))}</span>
-                          : <span className="text-[#94A3B8]">0</span>}
-                      </td>
+                      {selectedCols.map(col => {
+                        const v = r[col];
+                        // mean_exec_time icin renklendirme
+                        let cls = 'text-[#64748B]';
+                        if (col === 'mean_exec_time_ms') {
+                          cls = meanMs >= 1000 ? 'text-red-600 font-semibold'
+                            : meanMs >= 100 ? 'text-amber-600 font-semibold' : 'text-[#64748B]';
+                        }
+                        if (col === 'total_temp_blks_written' && Number(v) > 0) {
+                          cls = 'text-amber-600 font-semibold';
+                        }
+                        return (
+                          <td key={col} className={`py-2.5 px-3 text-right font-mono text-xs whitespace-nowrap ${cls}`}>
+                            {fmtStmtValue(col, v)}
+                          </td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
@@ -316,6 +337,14 @@ export default function Statements() {
           </div>
         )}
       </div>
+
+      <StatementColumnsModal
+        open={columnsModalOpen}
+        onClose={() => setColumnsModalOpen(false)}
+        selected={selectedCols}
+        onChange={setSelectedCols}
+        meta={colsMeta}
+      />
     </div>
   );
 }

@@ -11,6 +11,8 @@ import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRangePicker';
 import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
+import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
+import StatementSqlCell from '../components/statements/StatementSqlCell';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings';
 
@@ -359,26 +361,37 @@ function fmtNum(n: number): string {
 
 function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeRange }) {
     const navigate = useNavigate();
-    const [orderBy, setOrderBy] = useState('exec_time');
+    const [orderBy, setOrderBy] = useState('total_exec_time_ms');
     const [datname, setDatname] = useState('');
     const [rolname, setRolname] = useState('');
     const [sqlSearch, setSqlSearch] = useState('');
     const [minAvgMs, setMinAvgMs] = useState('');
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+
+    const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
 
     const qp = new URLSearchParams({
         from: range.fromIso,
         to: range.toIso,
         limit: '100',
         order_by: orderBy,
+        columns: selectedCols.join(','),
         ...(datname ? { datname } : {}),
         ...(rolname ? { rolname } : {}),
     });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-top-stmts', instancePk, range.fromIso, range.toIso, orderBy, datname, rolname],
+        queryKey: ['instance-top-stmts', instancePk, range.fromIso, range.toIso, orderBy, datname, rolname, selectedCols.join(',')],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/statements?${qp}`),
         enabled: Number.isFinite(instancePk),
     });
+
+    // Secili kolonlar degisirse order_by hala secili kolonlardan biri olsun
+    useEffect(() => {
+        if (!selectedCols.includes(orderBy)) {
+            setOrderBy(selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0]);
+        }
+    }, [selectedCols, orderBy]);
 
     const datnames = useMemo(() => {
         const s = new Set((data ?? []).map((r: any) => r.datname).filter(Boolean));
@@ -394,8 +407,11 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
         const minMs = parseFloat(minAvgMs) || 0;
         const q = sqlSearch.trim().toLowerCase();
         return (data ?? []).filter((r: any) => {
-            if (q && !(r.query_text ?? '').toLowerCase().includes(q)) return false;
-            if (minMs > 0 && Number(r.avg_exec_time_ms) < minMs) return false;
+            if (q && !(r.query_text_short ?? r.query_text ?? '').toLowerCase().includes(q)) return false;
+            if (minMs > 0) {
+                const mean = Number(r.mean_exec_time_ms ?? r.avg_exec_time_ms ?? 0);
+                if (mean < minMs) return false;
+            }
             return true;
         });
     }, [data, sqlSearch, minAvgMs]);
@@ -415,12 +431,17 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
                         <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
                         <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
                             className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                            <option value="exec_time">Toplam Süre</option>
-                            <option value="avg_time">Ort. Süre</option>
-                            <option value="calls">Çağrı Sayısı</option>
-                            <option value="rows">Satır Sayısı</option>
-                            <option value="blks_read">Blok Okuma</option>
-                            <option value="temp_blks">Temp Blok</option>
+                            {[
+                                { key: 'total_exec_time_ms', label: 'Toplam Süre' },
+                                { key: 'mean_exec_time_ms', label: 'Ort. Süre' },
+                                { key: 'max_exec_time_ms', label: 'Max Süre' },
+                                { key: 'total_calls', label: 'Çağrı' },
+                                { key: 'total_rows', label: 'Satır' },
+                                { key: 'total_shared_blks_read', label: 'Blk Read' },
+                                { key: 'total_temp_blks_written', label: 'Temp' },
+                                { key: 'total_wal_bytes', label: 'WAL' },
+                            ].filter(o => selectedCols.includes(o.key))
+                                .map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                         </select>
                     </div>
                     <div>
@@ -458,6 +479,11 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
                                 Temizle
                             </button>
                         )}
+                        <button onClick={() => setColumnsModalOpen(true)}
+                            className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]"
+                            title="Görmek istediğiniz kolonları seçin">
+                            ⚙️ Sütun ({selectedCols.length})
+                        </button>
                         <button onClick={() => refetch()}
                             className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                             {isFetching ? 'Yenileniyor...' : 'Yenile'}
@@ -481,43 +507,53 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                                     <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
                                     <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Calls</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort.</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Rows</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blks R</th>
-                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp</th>
+                                    {selectedCols.map(col => {
+                                        const meta = colsMeta?.available.find(c => c.key === col);
+                                        return (
+                                            <th key={col} className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide whitespace-nowrap">
+                                                {meta?.label ?? col}
+                                                {meta && meta.since > 11 && (
+                                                    <span className="ml-1 text-[9px] font-normal text-[#94A3B8]">PG{meta.since}+</span>
+                                                )}
+                                            </th>
+                                        );
+                                    })}
                                 </tr>
                             </thead>
                             <tbody>
                                 {filtered.map((r: any, i: number) => {
-                                    const avgMs = Number(r.avg_exec_time_ms);
-                                    const avgColor = avgMs >= 1000 ? 'text-red-600 font-semibold'
-                                        : avgMs >= 100 ? 'text-amber-600 font-semibold' : 'text-[#64748B]';
+                                    const meanMs = Number(r.mean_exec_time_ms ?? 0);
                                     const canOpen = Boolean(r.statement_series_id);
                                     return (
                                         <tr key={r.statement_series_id ?? i}
                                             onClick={() => canOpen && navigate(`/statements/${r.statement_series_id}`)}
                                             className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${canOpen ? 'cursor-pointer' : ''}`}>
-                                            <td className="py-2.5 px-3 text-xs">
+                                            <td className="py-2.5 px-3 text-xs whitespace-nowrap">
                                                 <div className="text-[#1E293B]">{r.datname ?? '-'}</div>
                                                 <div className="text-[#94A3B8]">{r.rolname ?? '-'}</div>
                                             </td>
                                             <td className="py-2.5 px-3 max-w-xs">
-                                                <div className="truncate text-xs font-mono text-[#1E293B]" title={r.query_text}>
-                                                    {r.query_text || <span className="text-[#94A3B8] italic not-italic">metin yok</span>}
-                                                </div>
+                                                <StatementSqlCell
+                                                    queryTextId={r.query_text_id ?? null}
+                                                    short={r.query_text_short ?? r.query_text ?? null}
+                                                />
                                             </td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_calls))}</td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtMs(Number(r.total_exec_time_ms))}</td>
-                                            <td className={`py-2.5 px-3 text-right font-mono text-xs ${avgColor}`}>{fmtMs(avgMs)}</td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_rows))}</td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(Number(r.total_shared_blks_read))}</td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                {Number(r.total_temp_blks_written) > 0
-                                                    ? <span className="text-amber-600 font-semibold">{fmtNum(Number(r.total_temp_blks_written))}</span>
-                                                    : <span className="text-[#94A3B8]">0</span>}
-                                            </td>
+                                            {selectedCols.map(col => {
+                                                const v = r[col];
+                                                let cls = 'text-[#64748B]';
+                                                if (col === 'mean_exec_time_ms') {
+                                                    cls = meanMs >= 1000 ? 'text-red-600 font-semibold'
+                                                        : meanMs >= 100 ? 'text-amber-600 font-semibold' : 'text-[#64748B]';
+                                                }
+                                                if (col === 'total_temp_blks_written' && Number(v) > 0) {
+                                                    cls = 'text-amber-600 font-semibold';
+                                                }
+                                                return (
+                                                    <td key={col} className={`py-2.5 px-3 text-right font-mono text-xs whitespace-nowrap ${cls}`}>
+                                                        {fmtStmtValue(col, v)}
+                                                    </td>
+                                                );
+                                            })}
                                         </tr>
                                     );
                                 })}
@@ -526,6 +562,14 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
                     </div>
                 )}
             </div>
+
+            <StatementColumnsModal
+                open={columnsModalOpen}
+                onClose={() => setColumnsModalOpen(false)}
+                selected={selectedCols}
+                onChange={setSelectedCols}
+                meta={colsMeta}
+            />
         </div>
     );
 }
