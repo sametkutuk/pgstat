@@ -161,7 +161,7 @@ Seçim localStorage'da hatırlanır.`} />
 
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
-            {tab === 'statements' && <StatementsTab instancePk={Number(id)} range={range} />}
+            {tab === 'statements' && <StatementsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
             {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
@@ -359,7 +359,7 @@ function fmtNum(n: number): string {
     return String(Math.round(n));
 }
 
-function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeRange }) {
+function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const navigate = useNavigate();
     const [orderBy, setOrderBy] = useState('total_exec_time_ms');
     const [datname, setDatname] = useState('');
@@ -569,6 +569,7 @@ function StatementsTab({ instancePk, range }: { instancePk: number; range: TimeR
                 selected={selectedCols}
                 onChange={setSelectedCols}
                 meta={colsMeta}
+                pgMajor={pgMajor}
             />
         </div>
     );

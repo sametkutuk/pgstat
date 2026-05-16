@@ -98,9 +98,12 @@ interface ModalProps {
     selected: string[];
     onChange: (cols: string[]) => void;
     meta: ColumnsMeta | undefined;
+    // Verildiyse sadece bu PG surumunde mevcut kolonlar listelenir.
+    // Verilmediyse (global /statements sayfasi) tum kolonlar gosterilir.
+    pgMajor?: number;
 }
 
-export default function StatementColumnsModal({ open, onClose, selected, onChange, meta }: ModalProps) {
+export default function StatementColumnsModal({ open, onClose, selected, onChange, meta, pgMajor }: ModalProps) {
     const [draft, setDraft] = useState<Set<string>>(new Set(selected));
 
     useEffect(() => {
@@ -125,13 +128,10 @@ export default function StatementColumnsModal({ open, onClose, selected, onChang
         setDraft(new Set(meta!.defaults));
     }
 
-    // Surume gore grupla
-    const groups: Record<number, AvailableColumn[]> = {};
-    meta.available.forEach(c => {
-        if (!groups[c.since]) groups[c.since] = [];
-        groups[c.since].push(c);
-    });
-    const sinceList = Object.keys(groups).map(Number).sort();
+    // PG surumune gore filtre (instance sayfasinda). Global sayfada hepsi gosterilir.
+    const cols = pgMajor != null
+        ? meta.available.filter(c => c.since <= pgMajor)
+        : meta.available;
 
     return (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -143,32 +143,26 @@ export default function StatementColumnsModal({ open, onClose, selected, onChang
                 <div className="px-6 py-4 overflow-y-auto flex-1">
                     <div className="text-xs text-[#64748B] mb-3">
                         Sadece seçtiğiniz kolonlar API'den çekilir — DB ve network tasarrufu.
-                        Tercih tarayıcıda kaydedilir. <b>{draft.size}</b> kolon seçili.
+                        Tercih tarayıcıda kaydedilir. <b>{draft.size}</b> kolon seçili
+                        {pgMajor != null && <> · PG {pgMajor} için uygun {cols.length} kolon listeleniyor</>}.
                     </div>
-                    {sinceList.map(since => (
-                        <div key={since} className="mb-4">
-                            <div className="text-xs font-semibold text-[#475569] mb-2 uppercase tracking-wide">
-                                PG {since}+ {since === 11 ? '(tüm sürümlerde var)' : '(opsiyonel — eski sürümlerde NULL)'}
-                            </div>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                                {groups[since].map(c => (
-                                    <label key={c.key}
-                                        className="flex items-center gap-2 text-xs cursor-pointer py-1 px-2 rounded hover:bg-[#F8FAFC]">
-                                        <input
-                                            type="checkbox"
-                                            checked={draft.has(c.key)}
-                                            onChange={() => toggle(c.key)}
-                                            className="w-3.5 h-3.5"
-                                        />
-                                        <span className={draft.has(c.key) ? 'text-[#1E293B] font-medium' : 'text-[#64748B]'}>
-                                            {c.label}
-                                        </span>
-                                        <span className="text-[10px] text-[#94A3B8] font-mono ml-auto">{c.key}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                        {cols.map(c => (
+                            <label key={c.key}
+                                className="flex items-center gap-2 text-xs cursor-pointer py-1 px-2 rounded hover:bg-[#F8FAFC]">
+                                <input
+                                    type="checkbox"
+                                    checked={draft.has(c.key)}
+                                    onChange={() => toggle(c.key)}
+                                    className="w-3.5 h-3.5"
+                                />
+                                <span className={draft.has(c.key) ? 'text-[#1E293B] font-medium' : 'text-[#64748B]'}>
+                                    {c.label}
+                                </span>
+                                <span className="text-[10px] text-[#94A3B8] font-mono ml-auto">{c.key}</span>
+                            </label>
+                        ))}
+                    </div>
                 </div>
                 <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-between gap-2">
                     <button onClick={resetDefaults}
