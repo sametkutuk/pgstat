@@ -103,36 +103,40 @@ public class Pg14_16Queries extends Pg13Queries {
     // Table stats — PG16+ last_seq_scan, last_idx_scan, n_tup_newpage_upd (to_jsonb safe-lookup)
     @Override
     public String tableStatsQuery() {
+        // pg_stat_user_tables ve pg_statio_user_tables her ikisi de "relid" kolonuna
+        // sahip; "select ..., s.*, io.*" yapinca "relid" ambiguous oluyor. Kolonlari
+        // alias'lariyla qualify edip cakismayi onleriz.
         return """
             with src as (
-              select to_jsonb(s.*) as j, s.*, io.*
+              select to_jsonb(s.*) as j, s.*
               from pg_stat_user_tables s
-              left join pg_statio_user_tables io on io.relid = s.relid
             )
             select
-              relid, schemaname, relname,
-              seq_scan, seq_tup_read,
-              coalesce(idx_scan, 0) as idx_scan,
-              coalesce(idx_tup_fetch, 0) as idx_tup_fetch,
-              n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd,
-              vacuum_count, autovacuum_count,
-              analyze_count, autoanalyze_count,
-              coalesce(heap_blks_read, 0) as heap_blks_read,
-              coalesce(heap_blks_hit, 0) as heap_blks_hit,
-              coalesce(idx_blks_read, 0) as idx_blks_read,
-              coalesce(idx_blks_hit, 0) as idx_blks_hit,
-              coalesce(toast_blks_read, 0) as toast_blks_read,
-              coalesce(toast_blks_hit, 0) as toast_blks_hit,
-              coalesce(tidx_blks_read, 0) as tidx_blks_read,
-              coalesce(tidx_blks_hit, 0) as tidx_blks_hit,
-              n_live_tup, n_dead_tup, n_mod_since_analyze,
-              last_vacuum, last_autovacuum,
-              last_analyze, last_autoanalyze,
-              n_ins_since_vacuum,
-              (j->>'last_seq_scan')::timestamptz as last_seq_scan,
-              (j->>'last_idx_scan')::timestamptz as last_idx_scan,
-              coalesce((j->>'n_tup_newpage_upd')::bigint, 0) as n_tup_newpage_upd
-            from src
+              s.relid, s.schemaname, s.relname,
+              s.seq_scan, s.seq_tup_read,
+              coalesce(s.idx_scan, 0) as idx_scan,
+              coalesce(s.idx_tup_fetch, 0) as idx_tup_fetch,
+              s.n_tup_ins, s.n_tup_upd, s.n_tup_del, s.n_tup_hot_upd,
+              s.vacuum_count, s.autovacuum_count,
+              s.analyze_count, s.autoanalyze_count,
+              coalesce(io.heap_blks_read, 0) as heap_blks_read,
+              coalesce(io.heap_blks_hit, 0) as heap_blks_hit,
+              coalesce(io.idx_blks_read, 0) as idx_blks_read,
+              coalesce(io.idx_blks_hit, 0) as idx_blks_hit,
+              coalesce(io.toast_blks_read, 0) as toast_blks_read,
+              coalesce(io.toast_blks_hit, 0) as toast_blks_hit,
+              coalesce(io.tidx_blks_read, 0) as tidx_blks_read,
+              coalesce(io.tidx_blks_hit, 0) as tidx_blks_hit,
+              s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze,
+              s.last_vacuum, s.last_autovacuum,
+              s.last_analyze, s.last_autoanalyze,
+              s.n_ins_since_vacuum,
+              (src.j->>'last_seq_scan')::timestamptz as last_seq_scan,
+              (src.j->>'last_idx_scan')::timestamptz as last_idx_scan,
+              coalesce((src.j->>'n_tup_newpage_upd')::bigint, 0) as n_tup_newpage_upd
+            from pg_stat_user_tables s
+            join src on src.relid = s.relid
+            left join pg_statio_user_tables io on io.relid = s.relid
             """;
     }
 
