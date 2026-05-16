@@ -44,6 +44,31 @@ public class Pg14_16Queries extends Pg13Queries {
     }
 
     // =========================================================================
+    // Cluster — pg_stat_wal PG14+ var
+    // =========================================================================
+
+    @Override
+    public String walQuery() {
+        // pg_stat_wal PG14'te eklendi. stats_reset PG14'te var.
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_wal s
+            )
+            select
+              wal_records,
+              wal_fpi,
+              wal_bytes,
+              coalesce((j->>'wal_buffers_full')::bigint, 0) as wal_buffers_full,
+              coalesce((j->>'wal_write')::bigint, 0)        as wal_write,
+              coalesce((j->>'wal_sync')::bigint, 0)         as wal_sync,
+              coalesce((j->>'wal_write_time')::double precision, 0) as wal_write_time,
+              coalesce((j->>'wal_sync_time')::double precision, 0)  as wal_sync_time,
+              (j->>'stats_reset')::timestamptz as stats_reset
+            from src
+            """;
+    }
+
+    // =========================================================================
     // Cluster — pg_stat_io eklendi (PG16+)
     // =========================================================================
 

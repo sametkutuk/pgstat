@@ -684,7 +684,7 @@ public class ActionableAlertEvaluator {
                    sum(d.idle_in_transaction_time_ms_delta) as idle_ms,
                    sum(d.session_time_ms_delta) as session_ms,
                    round(100.0 * sum(d.idle_in_transaction_time_ms_delta)::numeric /
-                         nullif(sum(d.session_time_ms_delta), 0), 1) as idle_pct,
+                         nullif(sum(d.session_time_ms_delta)::numeric, 0), 1) as idle_pct,
                    i.display_name
             from fact.pg_database_delta d
             join control.instance_inventory i on i.instance_pk = d.instance_pk
@@ -898,7 +898,7 @@ public class ActionableAlertEvaluator {
             )
             select c.instance_pk, i.display_name, c.total_backends,
                    m.max_connections,
-                   round(100.0 * c.total_backends / nullif(m.max_connections, 0), 1) as usage_pct
+                   round((100.0 * c.total_backends / nullif(m.max_connections, 0))::numeric, 1) as usage_pct
             from conn_count c
             join control.instance_inventory i on i.instance_pk = c.instance_pk
             join max_conn m on m.instance_pk = c.instance_pk

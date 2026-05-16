@@ -1596,7 +1596,7 @@ public class AlertRuleEvaluator {
                         ")" +
                         "select c.schemaname, c.relname, c.dbid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
                         "       case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
-                        "            else round((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0), 1) end as change_pct," +
+                        "            else round(((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0))::numeric, 1) end as change_pct," +
                         "       dbr.datname" +
                         "  from curr c" +
                         "  left join prev p on p.schemaname = c.schemaname and p.relname = c.relname and p.dbid = c.dbid" +
@@ -1626,7 +1626,7 @@ public class AlertRuleEvaluator {
                         ")" +
                         "select c.schemaname, c.indexrelname, c.table_relname, c.dbid, c.current_val, coalesce(p.prev_val, 0) as prev_val," +
                         "       case when coalesce(p.prev_val, 0) = 0 and c.current_val > 0 then 9999.0" +
-                        "            else round((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0), 1) end as change_pct," +
+                        "            else round(((c.current_val - p.prev_val) * 100.0 / nullif(p.prev_val, 0))::numeric, 1) end as change_pct," +
                         "       dbr.datname" +
                         "  from curr c" +
                         "  left join prev p on p.schemaname = c.schemaname and p.indexrelname = c.indexrelname and p.dbid = c.dbid" +

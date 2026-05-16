@@ -357,7 +357,7 @@ public class AlertEvidenceResolver {
                       order by snapshot_ts desc limit 1
                     )
                     select (select ts from latest) as latest_ts,
-                           round(100.0 * (select total from conn) / nullif((select max_conn from mc), 0), 1) as usage_pct
+                           round((100.0 * (select total from conn) / nullif((select max_conn from mc), 0))::numeric, 1) as usage_pct
                     """, instancePk, instancePk, instancePk);
                 if (row.get("latest_ts") == null) continue;  // 10dk'da snapshot yok, stale_data alarm versin
                 java.math.BigDecimal usagePct = (java.math.BigDecimal) row.get("usage_pct");
