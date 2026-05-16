@@ -7,7 +7,7 @@ import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
-import ResizableTh, { useColumnWidths } from '../components/statements/ResizableTh';
+import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 
 // Dinamik kolon destegi — Statement satiri Record<string, any> olarak gelir.
 // Sabit alanlar (instance_name, datname, queryid, query_text_short, query_text_id)
@@ -33,24 +33,14 @@ interface Instance {
   port: number;
 }
 
-// Siralama secenekleri — kolon key'leri ile birebir uyumlu
-// (API param: ?order_by=<col_key>) — secili kolonlardan biri olmali
-const ORDER_OPTIONS: Array<{ key: string; label: string }> = [
-  { key: 'total_exec_time_ms', label: 'Toplam Süre' },
-  { key: 'mean_exec_time_ms', label: 'Ort. Süre' },
-  { key: 'max_exec_time_ms', label: 'Max Süre' },
-  { key: 'total_calls', label: 'Çağrı' },
-  { key: 'total_rows', label: 'Satır' },
-  { key: 'total_shared_blks_read', label: 'Blk Read' },
-  { key: 'total_temp_blks_written', label: 'Temp' },
-  { key: 'total_wal_bytes', label: 'WAL' },
-];
 
 export default function Statements() {
   const navigate = useNavigate();
 
   const [hours, setHours] = useState(1);
-  const [orderBy, setOrderBy] = useState('total_exec_time_ms');
+  const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'total_exec_time_ms', dir: 'desc' }]);
+  const orderParam = sortKeysToParam(sortKeys);
+  const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
   const [instancePk, setInstancePk] = useState('');
   const [columnsModalOpen, setColumnsModalOpen] = useState(false);
 
@@ -72,7 +62,7 @@ export default function Statements() {
   const topParams = new URLSearchParams({
     hours: String(hours),
     limit: '100',
-    order_by: orderBy,
+    order_by: orderParam,
     columns: selectedCols.join(','),
     ...(instancePk ? { instance_pk: instancePk } : {}),
     ...(datname ? { datname } : {}),
@@ -80,18 +70,20 @@ export default function Statements() {
   });
 
   const { data: topData, isLoading: topLoading, isFetching, refetch } = useQuery({
-    queryKey: ['top-statements', hours, orderBy, instancePk, datname, rolname, selectedCols.join(',')],
+    queryKey: ['top-statements', hours, orderParam, instancePk, datname, rolname, selectedCols.join(',')],
     queryFn: () => apiGet<Statement[]>(`/statements/top?${topParams}`),
     refetchInterval: 30_000,
   });
 
-  // Secili kolonlar degisirse order_by hala secili kolonlardan biri olsun
+  // Secili kolonlar degisirse sort kriterlerinden secili olmayanlari at
   useEffect(() => {
-    if (!selectedCols.includes(orderBy)) {
-      // exec_time fallback, yoksa ilk kolon
-      setOrderBy(selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0]);
-    }
-  }, [selectedCols, orderBy]);
+    setSortKeys(prev => {
+      const filtered = prev.filter(s => selectedCols.includes(s.col));
+      if (filtered.length > 0) return filtered;
+      const fallback = selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0];
+      return [{ col: fallback, dir: 'desc' }];
+    });
+  }, [selectedCols]);
 
   // 2) Deep search (dim.statement_series) — 3+ karakter yazıldığında otomatik
   const searchTrimmed = sqlSearch.trim();
@@ -202,14 +194,6 @@ export default function Statements() {
             </select>
           </div>
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
-            <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
-              className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-              {ORDER_OPTIONS.filter(o => selectedCols.includes(o.key))
-                .map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-            </select>
-          </div>
-          <div>
             <label className="block text-xs text-[#64748B] mb-1">Instance</label>
             <select value={instancePk} onChange={e => { setInstancePk(e.target.value); setDatname(''); }}
               className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[180px]">
@@ -292,6 +276,7 @@ export default function Statements() {
                     const meta = colsMeta?.available.find(c => c.key === col);
                     return (
                       <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align="right"
+                        sortKeys={sortKeys} onSortToggle={sortToggle}
                         className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                         {meta?.label ?? col}
                         {meta && meta.since > 11 && (

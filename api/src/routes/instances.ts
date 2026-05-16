@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
 import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
-import { PGSS_COLUMNS, parseRequestedColumns } from './statements';
+import { PGSS_COLUMNS, parseRequestedColumns, parseStatementsOrderBy } from './statements';
 
 const router = Router();
 
@@ -407,10 +407,7 @@ router.get('/:id/statements', async (req, res, next) => {
 
     // Dinamik kolon destegi — statements.ts ile ayni whitelist
     const requestedCols = parseRequestedColumns(req.query.columns as string | undefined);
-    const orderColRaw = (req.query.order_by as string) || 'total_exec_time_ms';
-    const orderCol = requestedCols.includes(orderColRaw) ? orderColRaw
-                     : (requestedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms'
-                        : requestedCols[0]);
+    const orderClause = parseStatementsOrderBy(req.query.order_by as string | undefined, requestedCols);
 
     const params: any[] = [id, fromIso, toIso, limit];
     let whereExtra = '';
@@ -437,7 +434,7 @@ router.get('/:id/statements', async (req, res, next) => {
         ${whereExtra}
       group by ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
                ss.query_text_id, qt.query_text, rr.rolname, dbr.datname
-      order by ${orderCol} desc nulls last
+      order by ${orderClause}
       limit $4
     `, params);
     res.json(result.rows);

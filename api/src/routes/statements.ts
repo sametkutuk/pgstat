@@ -97,6 +97,24 @@ export function parseRequestedColumns(raw: string | undefined): string[] {
   return safe.length > 0 ? safe : DEFAULT_COLUMNS;
 }
 
+// Multi-sort order by — "col1:desc,col2:asc" formatini parse eder, max 3 kriter,
+// sadece requestedCols icindeki kolonlara izin verilir (SQL injection guvenligi).
+// Hicbir gecerli kriter yoksa default "total_exec_time_ms desc" donulur.
+export function parseStatementsOrderBy(raw: string | undefined, requestedCols: string[]): string {
+  const fallback = (requestedCols.includes('total_exec_time_ms')
+    ? 'total_exec_time_ms' : requestedCols[0]) + ' desc nulls last';
+  if (!raw) return fallback;
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean).slice(0, 3);
+  const clauses: string[] = [];
+  for (const p of parts) {
+    const [col, dirRaw] = p.split(':').map(s => s.trim());
+    if (!requestedCols.includes(col)) continue;
+    const dir = (dirRaw || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+    clauses.push(`${col} ${dir} nulls last`);
+  }
+  return clauses.length > 0 ? clauses.join(', ') : fallback;
+}
+
 // Whitelist meta endpoint — UI sutun yonet modali bunu kullanir
 router.get('/columns', (_req, res) => {
   res.json({
@@ -143,11 +161,9 @@ router.get('/top', async (req, res, next) => {
     // Kullanici secimi: ?columns=col1,col2,... ; bos -> default 11 kolon
     const requestedCols = parseRequestedColumns(req.query.columns as string | undefined);
 
-    // Order by — sadece secilen kolonlardan biri olabilir (whitelist guvenligi)
-    const orderColRaw = (req.query.order_by as string) || 'total_exec_time_ms';
-    const orderCol = requestedCols.includes(orderColRaw) ? orderColRaw
-                     : (requestedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms'
-                        : requestedCols[0]);
+    // Order by — multi-sort destekli: "col1:desc,col2:asc,col3:desc"
+    // Maksimum 3 kriter, sadece secilen kolonlardan biri olabilir (whitelist guvenligi)
+    const orderClause = parseStatementsOrderBy(req.query.order_by as string | undefined, requestedCols);
 
     const params: any[] = [hours, limit];
     let whereExtra = '';
@@ -195,7 +211,7 @@ router.get('/top', async (req, res, next) => {
       ${whereExtra}
       group by d.instance_pk, inv.display_name, ss.statement_series_id,
                ss.queryid, ss.query_text_id, dbr.datname, rr.rolname, qt.query_text
-      order by ${orderCol} desc nulls last
+      order by ${orderClause}
       limit $2
     `, params);
     res.json(result.rows);

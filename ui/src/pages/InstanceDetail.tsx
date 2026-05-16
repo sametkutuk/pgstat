@@ -13,7 +13,7 @@ import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
-import ResizableTh, { useColumnWidths } from '../components/statements/ResizableTh';
+import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings';
 
@@ -362,7 +362,9 @@ function fmtNum(n: number): string {
 
 function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const navigate = useNavigate();
-    const [orderBy, setOrderBy] = useState('total_exec_time_ms');
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'total_exec_time_ms', dir: 'desc' }]);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const [datname, setDatname] = useState('');
     const [rolname, setRolname] = useState('');
     const [sqlSearch, setSqlSearch] = useState('');
@@ -376,24 +378,27 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
         from: range.fromIso,
         to: range.toIso,
         limit: '100',
-        order_by: orderBy,
+        order_by: orderParam,
         columns: selectedCols.join(','),
         ...(datname ? { datname } : {}),
         ...(rolname ? { rolname } : {}),
     });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-top-stmts', instancePk, range.fromIso, range.toIso, orderBy, datname, rolname, selectedCols.join(',')],
+        queryKey: ['instance-top-stmts', instancePk, range.fromIso, range.toIso, orderParam, datname, rolname, selectedCols.join(',')],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/statements?${qp}`),
         enabled: Number.isFinite(instancePk),
     });
 
-    // Secili kolonlar degisirse order_by hala secili kolonlardan biri olsun
+    // Secili kolonlar degisirse sort kriterlerini temizle
     useEffect(() => {
-        if (!selectedCols.includes(orderBy)) {
-            setOrderBy(selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0]);
-        }
-    }, [selectedCols, orderBy]);
+        setSortKeys(prev => {
+            const filtered = prev.filter(s => selectedCols.includes(s.col));
+            if (filtered.length > 0) return filtered;
+            const fallback = selectedCols.includes('total_exec_time_ms') ? 'total_exec_time_ms' : selectedCols[0];
+            return [{ col: fallback, dir: 'desc' }];
+        });
+    }, [selectedCols]);
 
     const datnames = useMemo(() => {
         const s = new Set((data ?? []).map((r: any) => r.datname).filter(Boolean));
@@ -428,23 +433,6 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
                 <div className="flex flex-wrap gap-3 items-end">
                     <div className="text-[10px] text-[#94A3B8]">
                         Zaman aralığı sayfanın üstündeki seçicidir.
-                    </div>
-                    <div>
-                        <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
-                        <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
-                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                            {[
-                                { key: 'total_exec_time_ms', label: 'Toplam Süre' },
-                                { key: 'mean_exec_time_ms', label: 'Ort. Süre' },
-                                { key: 'max_exec_time_ms', label: 'Max Süre' },
-                                { key: 'total_calls', label: 'Çağrı' },
-                                { key: 'total_rows', label: 'Satır' },
-                                { key: 'total_shared_blks_read', label: 'Blk Read' },
-                                { key: 'total_temp_blks_written', label: 'Temp' },
-                                { key: 'total_wal_bytes', label: 'WAL' },
-                            ].filter(o => selectedCols.includes(o.key))
-                                .map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-                        </select>
                     </div>
                     <div>
                         <label className="block text-xs text-[#64748B] mb-1">Database</label>
@@ -520,6 +508,7 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
                                         const meta = colsMeta?.available.find(c => c.key === col);
                                         return (
                                             <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align="right"
+                                                sortKeys={sortKeys} onSortToggle={sortToggle}
                                                 className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                                 {meta?.label ?? col}
                                                 {meta && meta.since > 11 && (
