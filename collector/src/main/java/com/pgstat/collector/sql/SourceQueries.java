@@ -283,11 +283,11 @@ public interface SourceQueries {
     /** pg_stat_progress_vacuum — full kolonlar (Madde 8). PG version-safe. */
     default String progressVacuumFullQuery() {
         // to_jsonb safe-lookup ile PG14+ ve PG17+ kolonlari
+        // Not: pg_stat_progress_vacuum zaten datname iceriyor; pg_database join'ine gerek yok
         return """
             with src as (
-              select to_jsonb(p.*) as j, p.*, d.datname
+              select to_jsonb(p.*) as j, p.*
               from pg_stat_progress_vacuum p
-              left join pg_database d on d.oid = p.datid
             )
             select
               pid, datid::bigint, datname, relid::bigint, phase,

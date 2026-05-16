@@ -388,7 +388,8 @@ public class Pg14_16Queries extends Pg13Queries {
               p.pid, p.datid::bigint, d.datname, p.relid::bigint,
               p.command::text, p.type as copy_type,
               p.bytes_processed, p.bytes_total,
-              p.tuples_processed, p.tuples_excluded, p.tuples_skipped
+              p.tuples_processed, p.tuples_excluded,
+              null::bigint as tuples_skipped
             from pg_stat_progress_copy p
             left join pg_database d on d.oid = p.datid
             """;
