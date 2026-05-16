@@ -67,6 +67,9 @@ public class ClusterCollector {
     /** In-memory cache: instancePk → onceki WAL LSN (period_wal_size_byte icin) */
     private final ConcurrentHashMap<Long, String> previousWalLsn = new ConcurrentHashMap<>();
 
+    /** Subscription conflict delta cache: "instancePk:subid" → 7 conflict counter'lar */
+    private final ConcurrentHashMap<String, long[]> previousSubConflicts = new ConcurrentHashMap<>();
+
     public ClusterCollector(SourceConnectionFactory connectionFactory,
                             SqlFamilyResolver familyResolver,
                             FactRepository factRepo,
@@ -960,9 +963,33 @@ public class ClusterCollector {
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
+                long subid = rs.getLong("subid");
+
+                // Conflict counter'lar — kumulatif, delta hesapla
+                long[] currConfl = {
+                    rs.getLong("confl_insert_exists"),
+                    rs.getLong("confl_update_origin_differs"),
+                    rs.getLong("confl_update_exists"),
+                    rs.getLong("confl_update_missing"),
+                    rs.getLong("confl_delete_origin_differs"),
+                    rs.getLong("confl_delete_missing"),
+                    rs.getLong("confl_multiple_unique_conflicts")
+                };
+                String conflKey = instancePk + ":" + subid;
+                long[] prevConfl = previousSubConflicts.put(conflKey, currConfl);
+
+                // Delta: prev yoksa 0 (baseline)
+                long[] conflDeltas = new long[7];
+                if (prevConfl != null) {
+                    for (int i = 0; i < 7; i++) {
+                        Long d = deltaCalc.deltaLong(currConfl[i], prevConfl[i]);
+                        conflDeltas[i] = d != null ? d : 0L;
+                    }
+                }
+
                 factRepo.insertSubscriptionSnapshot(
                     now, instancePk,
-                    rs.getLong("subid"),
+                    subid,
                     rs.getString("subname"),
                     (Integer) rs.getObject("pid"),
                     toLongSafe(rs.getObject("relid")),
@@ -975,16 +1002,10 @@ public class ClusterCollector {
                     toLongSafe(rs.getObject("apply_error_count")),
                     toLongSafe(rs.getObject("sync_error_count")),
                     rs.getObject("stats_reset", OffsetDateTime.class),
-                    // V067: leader_pid, worker_type, 7 conflict kolonlari
                     (Integer) rs.getObject("leader_pid"),
                     rs.getString("worker_type"),
-                    rs.getLong("confl_insert_exists"),
-                    rs.getLong("confl_update_origin_differs"),
-                    rs.getLong("confl_update_exists"),
-                    rs.getLong("confl_update_missing"),
-                    rs.getLong("confl_delete_origin_differs"),
-                    rs.getLong("confl_delete_missing"),
-                    rs.getLong("confl_multiple_unique_conflicts")
+                    conflDeltas[0], conflDeltas[1], conflDeltas[2],
+                    conflDeltas[3], conflDeltas[4], conflDeltas[5], conflDeltas[6]
                 );
                 rows++;
             }

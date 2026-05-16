@@ -54,6 +54,9 @@ public class DbObjectsCollector {
     /** Database stats delta cache: "instancePk:dbid" → metrik map */
     private final ConcurrentHashMap<String, Map<String, Double>> previousDbStats = new ConcurrentHashMap<>();
 
+    /** Table vacuum_time delta cache: "instancePk:dbid:relid:vt" → [vacuum, autovacuum, analyze, autoanalyze] */
+    private final ConcurrentHashMap<String, double[]> previousTableVacuumTime = new ConcurrentHashMap<>();
+
     public DbObjectsCollector(SourceConnectionFactory connectionFactory,
                               SqlFamilyResolver familyResolver,
                               CapabilityRepository capabilityRepo,
@@ -267,17 +270,25 @@ public class DbObjectsCollector {
                 long nTupNewpageUpd = rs.getLong("n_tup_newpage_upd");
 
                 // V067 Madde 4: PG18 vacuum/analyze time (monotonik counter → delta)
+                // double precision — Map<String,Long>'a koymuyoruz, precision kaybi olur
                 double totalVacuumTime = rs.getDouble("total_vacuum_time");
                 double totalAutovacuumTime = rs.getDouble("total_autovacuum_time");
                 double totalAnalyzeTime = rs.getDouble("total_analyze_time");
                 double totalAutoanalyzeTime = rs.getDouble("total_autoanalyze_time");
-                current.put("total_vacuum_time", (long) totalVacuumTime);
-                current.put("total_autovacuum_time", (long) totalAutovacuumTime);
-                current.put("total_analyze_time", (long) totalAnalyzeTime);
-                current.put("total_autoanalyze_time", (long) totalAutoanalyzeTime);
 
                 Map<String, Long> prev = previousTableStats.put(cacheKey, current);
                 if (prev == null) continue; // Baseline
+
+                // vacuum_time delta: onceki deger ayri double map'ten
+                String vtKey = cacheKey + ":vt";
+                double[] prevVt = previousTableVacuumTime.get(vtKey);
+                double[] currVt = {totalVacuumTime, totalAutovacuumTime, totalAnalyzeTime, totalAutoanalyzeTime};
+                previousTableVacuumTime.put(vtKey, currVt);
+
+                double vtDelta0 = prevVt != null ? orZeroD(deltaCalc.deltaDouble(currVt[0], prevVt[0])) : 0;
+                double vtDelta1 = prevVt != null ? orZeroD(deltaCalc.deltaDouble(currVt[1], prevVt[1])) : 0;
+                double vtDelta2 = prevVt != null ? orZeroD(deltaCalc.deltaDouble(currVt[2], prevVt[2])) : 0;
+                double vtDelta3 = prevVt != null ? orZeroD(deltaCalc.deltaDouble(currVt[3], prevVt[3])) : 0;
 
                 factRepo.insertTableStatDelta(now, instancePk, dbid, relid, schemaname, relname,
                     d(prev, current, "seq_scan"), d(prev, current, "seq_tup_read"),
@@ -293,10 +304,7 @@ public class DbObjectsCollector {
                     nLiveTup, nDeadTup, nModSinceAnalyze,
                     lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
                     nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd,
-                    orZeroD(deltaCalc.deltaDouble(totalVacuumTime, prev.get("total_vacuum_time") != null ? prev.get("total_vacuum_time").doubleValue() : null)),
-                    orZeroD(deltaCalc.deltaDouble(totalAutovacuumTime, prev.get("total_autovacuum_time") != null ? prev.get("total_autovacuum_time").doubleValue() : null)),
-                    orZeroD(deltaCalc.deltaDouble(totalAnalyzeTime, prev.get("total_analyze_time") != null ? prev.get("total_analyze_time").doubleValue() : null)),
-                    orZeroD(deltaCalc.deltaDouble(totalAutoanalyzeTime, prev.get("total_autoanalyze_time") != null ? prev.get("total_autoanalyze_time").doubleValue() : null))
+                    vtDelta0, vtDelta1, vtDelta2, vtDelta3
                 );
                 rows++;
             }
