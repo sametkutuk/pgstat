@@ -79,7 +79,7 @@ export default function ResizableTh({ colKey, width, onResize, className, align 
                     height: '100%',
                     cursor: 'col-resize',
                     userSelect: 'none',
-                    background: dragging ? '#3B82F6' : 'transparent',
+                    borderRight: dragging ? '2px solid #3B82F6' : '1px solid #1E293B',
                 }}
             />
         </th>
