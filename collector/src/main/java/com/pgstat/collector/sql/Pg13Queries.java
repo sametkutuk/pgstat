@@ -28,8 +28,7 @@ public class Pg13Queries extends Pg11_12Queries {
 
     @Override
     public String walQuery() {
-        // pg_stat_wal PG14'te eklendi (PG13'te yok). Bazi kolonlar PG sürümleri
-        // arasinda eklendi/cikti — to_jsonb safe-lookup ile kolon yoksa NULL/0.
+        // pg_stat_wal PG14'te eklendi. stats_reset PG14'te eklendi — to_jsonb safe-lookup.
         return """
             with src as (
               select to_jsonb(s.*) as j, s.* from pg_stat_wal s
@@ -42,14 +41,73 @@ public class Pg13Queries extends Pg11_12Queries {
               coalesce((j->>'wal_write')::bigint, 0)        as wal_write,
               coalesce((j->>'wal_sync')::bigint, 0)         as wal_sync,
               coalesce((j->>'wal_write_time')::double precision, 0) as wal_write_time,
-              coalesce((j->>'wal_sync_time')::double precision, 0)  as wal_sync_time
+              coalesce((j->>'wal_sync_time')::double precision, 0)  as wal_sync_time,
+              (j->>'stats_reset')::timestamptz as stats_reset
             from src
             """;
     }
 
     // =========================================================================
-    // Progress — analyze eklendi
+    // Activity — leader_pid eklendi (PG13+)
     // =========================================================================
+
+    @Override
+    public String activityQuery() {
+        // PG13: leader_pid eklendi; query_id yok (PG14+)
+        return """
+            select
+              pid, datname, usename, application_name,
+              client_addr::text, backend_start, xact_start,
+              query_start, state_change, state,
+              wait_event_type, wait_event,
+              left(query, 1000) as query,
+              backend_type,
+              usesysid::bigint as usesysid,
+              client_hostname,
+              client_port,
+              backend_xid::text as backend_xid,
+              backend_xmin::text as backend_xmin,
+              leader_pid,
+              null::bigint as query_id
+            from pg_stat_activity
+            where pid <> pg_backend_pid()
+            """;
+    }
+
+    // =========================================================================
+    // Table stats — n_ins_since_vacuum eklendi (PG13+)
+    // =========================================================================
+
+    @Override
+    public String tableStatsQuery() {
+        return """
+            select
+              s.relid, s.schemaname, s.relname,
+              s.seq_scan, s.seq_tup_read,
+              coalesce(s.idx_scan, 0) as idx_scan,
+              coalesce(s.idx_tup_fetch, 0) as idx_tup_fetch,
+              s.n_tup_ins, s.n_tup_upd, s.n_tup_del, s.n_tup_hot_upd,
+              s.vacuum_count, s.autovacuum_count,
+              s.analyze_count, s.autoanalyze_count,
+              coalesce(io.heap_blks_read, 0) as heap_blks_read,
+              coalesce(io.heap_blks_hit, 0) as heap_blks_hit,
+              coalesce(io.idx_blks_read, 0) as idx_blks_read,
+              coalesce(io.idx_blks_hit, 0) as idx_blks_hit,
+              coalesce(io.toast_blks_read, 0) as toast_blks_read,
+              coalesce(io.toast_blks_hit, 0) as toast_blks_hit,
+              coalesce(io.tidx_blks_read, 0) as tidx_blks_read,
+              coalesce(io.tidx_blks_hit, 0) as tidx_blks_hit,
+              s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze,
+              s.last_vacuum, s.last_autovacuum,
+              s.last_analyze, s.last_autoanalyze,
+              s.n_ins_since_vacuum,
+              null::timestamptz as last_seq_scan,
+              null::timestamptz as last_idx_scan,
+              0::bigint as n_tup_newpage_upd
+            from pg_stat_user_tables s
+            left join pg_statio_user_tables io on io.relid = s.relid
+            """;
+    }
 
     @Override
     public String progressAnalyzeQuery() {
@@ -77,7 +135,7 @@ public class Pg13Queries extends Pg11_12Queries {
 
     @Override
     public String pgssStatsQuery(String pgssFunction) {
-        // PG13: plans, wal, min/max/stddev exec+plan var; jit detay+temp_blk yok
+        // PG13: plans, wal, min/max/stddev exec+plan, mean_exec/plan var; jit detay+temp_blk yok
         return """
             select
               userid, dbid, queryid,
@@ -88,6 +146,8 @@ public class Pg13Queries extends Pg11_12Queries {
               total_exec_time,
               min_exec_time, max_exec_time, stddev_exec_time,
               min_plan_time, max_plan_time, stddev_plan_time,
+              mean_exec_time,
+              mean_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -106,10 +166,17 @@ public class Pg13Queries extends Pg11_12Queries {
               0::double precision as jit_emission_time,
               0::bigint as jit_deform_count,
               0::double precision as jit_deform_time,
+              0::bigint as jit_inlining_count,
+              0::bigint as jit_optimization_count,
+              0::bigint as jit_emission_count,
               null::timestamptz as stats_since,
               null::timestamptz as minmax_stats_since,
               0::bigint as parallel_workers_to_launch,
-              0::bigint as parallel_workers_launched
+              0::bigint as parallel_workers_launched,
+              0::double precision as shared_blk_read_time,
+              0::double precision as shared_blk_write_time,
+              0::double precision as local_blk_read_time,
+              0::double precision as local_blk_write_time
             from %s(false)
             """.formatted(pgssFunction);
     }

@@ -410,6 +410,15 @@ public class ClusterCollector {
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.activityQuery())) {
             while (rs.next()) {
+                // V066: yeni kolonlar — query_id, leader_pid, usesysid, client_hostname, client_port, backend_xid, backend_xmin
+                Long queryId = rs.getObject("query_id") != null ? rs.getLong("query_id") : null;
+                Integer leaderPid = rs.getObject("leader_pid") != null ? rs.getInt("leader_pid") : null;
+                Long usesysid = rs.getObject("usesysid") != null ? rs.getLong("usesysid") : null;
+                String clientHostname = rs.getString("client_hostname");
+                Integer clientPort = rs.getObject("client_port") != null ? rs.getInt("client_port") : null;
+                String backendXid = rs.getString("backend_xid");
+                String backendXmin = rs.getString("backend_xmin");
+
                 factRepo.insertActivitySnapshot(now, instancePk,
                     rs.getInt("pid"),
                     rs.getString("datname"),
@@ -424,7 +433,9 @@ public class ClusterCollector {
                     rs.getString("wait_event_type"),
                     rs.getString("wait_event"),
                     rs.getString("query"),
-                    rs.getString("backend_type")
+                    rs.getString("backend_type"),
+                    queryId, leaderPid, usesysid, clientHostname, clientPort,
+                    backendXid, backendXmin
                 );
                 rows++;
             }
@@ -445,6 +456,15 @@ public class ClusterCollector {
                 long replayLagBytes = rs.getLong("replay_lag_bytes");
                 String replayLagStr = rs.getString("replay_lag");
 
+                // V066: yeni kolonlar
+                Long usesysid = rs.getObject("usesysid") != null ? rs.getLong("usesysid") : null;
+                String clientHostname = rs.getString("client_hostname");
+                Integer clientPort = rs.getObject("client_port") != null ? rs.getInt("client_port") : null;
+                OffsetDateTime backendStart = rs.getObject("backend_start", OffsetDateTime.class);
+                String backendXmin = rs.getString("backend_xmin");
+                Integer syncPriority = rs.getObject("sync_priority") != null ? rs.getInt("sync_priority") : null;
+                OffsetDateTime replyTime = rs.getObject("reply_time", OffsetDateTime.class);
+
                 factRepo.insertReplicationSnapshot(now, instancePk,
                     rs.getInt("pid"),
                     rs.getString("usename"),
@@ -459,7 +479,9 @@ public class ClusterCollector {
                     rs.getString("flush_lag"),
                     replayLagStr,
                     rs.getString("sync_state"),
-                    replayLagBytes
+                    replayLagBytes,
+                    usesysid, clientHostname, clientPort, backendStart,
+                    backendXmin, syncPriority, replyTime
                 );
                 rows++;
 
@@ -721,7 +743,8 @@ public class ClusterCollector {
                     (Long) rs.getObject("stream_count"),
                     (Long) rs.getObject("stream_bytes"),
                     (Long) rs.getObject("total_txns"),
-                    (Long) rs.getObject("total_bytes")
+                    (Long) rs.getObject("total_bytes"),
+                    rs.getObject("stats_reset", OffsetDateTime.class)
                 );
                 rows++;
             }
@@ -748,7 +771,9 @@ public class ClusterCollector {
                     (Long) rs.getObject("confl_lock"),
                     (Long) rs.getObject("confl_snapshot"),
                     (Long) rs.getObject("confl_bufferpin"),
-                    (Long) rs.getObject("confl_deadlock")
+                    (Long) rs.getObject("confl_deadlock"),
+                    (Long) rs.getObject("datid"),
+                    (Long) rs.getObject("confl_active_logicalslot")
                 );
                 rows++;
             }

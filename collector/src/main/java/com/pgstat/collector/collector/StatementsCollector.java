@@ -396,6 +396,8 @@ public class StatementsCollector {
             rs.getDouble("min_plan_time"),
             rs.getDouble("max_plan_time"),
             rs.getDouble("stddev_plan_time"),
+            rs.getDouble("mean_exec_time"),
+            rs.getDouble("mean_plan_time"),
             rs.getLong("rows"),
             rs.getLong("shared_blks_hit"),
             rs.getLong("shared_blks_read"),
@@ -422,10 +424,17 @@ public class StatementsCollector {
             rs.getDouble("jit_emission_time"),
             rs.getLong("jit_deform_count"),
             rs.getDouble("jit_deform_time"),
+            rs.getLong("jit_inlining_count"),
+            rs.getLong("jit_optimization_count"),
+            rs.getLong("jit_emission_count"),
             rs.getObject("stats_since", java.time.OffsetDateTime.class),
             rs.getObject("minmax_stats_since", java.time.OffsetDateTime.class),
             rs.getLong("parallel_workers_to_launch"),
-            rs.getLong("parallel_workers_launched")
+            rs.getLong("parallel_workers_launched"),
+            rs.getDouble("shared_blk_read_time"),
+            rs.getDouble("shared_blk_write_time"),
+            rs.getDouble("local_blk_read_time"),
+            rs.getDouble("local_blk_write_time")
         );
     }
 

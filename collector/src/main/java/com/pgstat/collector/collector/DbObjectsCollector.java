@@ -147,6 +147,26 @@ public class DbObjectsCollector {
                 current.put("session_time", rs.getDouble("session_time"));
                 current.put("active_time", rs.getDouble("active_time"));
                 current.put("idle_in_transaction_time", rs.getDouble("idle_in_transaction_time"));
+                // V066: yeni kumulatif kolonlar
+                current.put("sessions", rs.getDouble("sessions"));
+                current.put("sessions_abandoned", rs.getDouble("sessions_abandoned"));
+                current.put("sessions_fatal", rs.getDouble("sessions_fatal"));
+                current.put("sessions_killed", rs.getDouble("sessions_killed"));
+                current.put("parallel_workers_to_launch", rs.getDouble("parallel_workers_to_launch"));
+                current.put("parallel_workers_launched", rs.getDouble("parallel_workers_launched"));
+                break;
+            }
+        }
+
+        // V066: snapshot kolonlari (delta degil) — her seferinde yeniden oku
+        OffsetDateTime statsReset = null;
+        OffsetDateTime checksumLastFailure = null;
+        try (Statement stmt2 = conn.createStatement();
+             ResultSet rs2 = stmt2.executeQuery(queries.databaseStatsQuery())) {
+            while (rs2.next()) {
+                if (rs2.getLong("dbid") != dbid) continue;
+                statsReset = rs2.getObject("stats_reset", OffsetDateTime.class);
+                checksumLastFailure = rs2.getObject("checksum_last_failure", OffsetDateTime.class);
                 break;
             }
         }
@@ -175,7 +195,14 @@ public class DbObjectsCollector {
             orZeroD(deltaCalc.deltaDouble(current.get("blk_write_time"), prev.get("blk_write_time"))),
             orZeroD(deltaCalc.deltaDouble(current.get("session_time"), prev.get("session_time"))),
             orZeroD(deltaCalc.deltaDouble(current.get("active_time"), prev.get("active_time"))),
-            orZeroD(deltaCalc.deltaDouble(current.get("idle_in_transaction_time"), prev.get("idle_in_transaction_time")))
+            orZeroD(deltaCalc.deltaDouble(current.get("idle_in_transaction_time"), prev.get("idle_in_transaction_time"))),
+            d2lNullable(deltaCalc.deltaDouble(current.get("sessions"), prev.get("sessions"))),
+            d2lNullable(deltaCalc.deltaDouble(current.get("sessions_abandoned"), prev.get("sessions_abandoned"))),
+            d2lNullable(deltaCalc.deltaDouble(current.get("sessions_fatal"), prev.get("sessions_fatal"))),
+            d2lNullable(deltaCalc.deltaDouble(current.get("sessions_killed"), prev.get("sessions_killed"))),
+            statsReset, checksumLastFailure,
+            d2lNullable(deltaCalc.deltaDouble(current.get("parallel_workers_to_launch"), prev.get("parallel_workers_to_launch"))),
+            d2lNullable(deltaCalc.deltaDouble(current.get("parallel_workers_launched"), prev.get("parallel_workers_launched")))
         );
         return 1;
     }
@@ -229,6 +256,16 @@ public class DbObjectsCollector {
                 long nDeadTup = rs.getLong("n_dead_tup");
                 long nModSinceAnalyze = rs.getLong("n_mod_since_analyze");
 
+                // Yeni gauge/timestamp kolonlari (V066)
+                java.time.OffsetDateTime lastVacuum = rs.getObject("last_vacuum", java.time.OffsetDateTime.class);
+                java.time.OffsetDateTime lastAutovacuum = rs.getObject("last_autovacuum", java.time.OffsetDateTime.class);
+                java.time.OffsetDateTime lastAnalyze = rs.getObject("last_analyze", java.time.OffsetDateTime.class);
+                java.time.OffsetDateTime lastAutoanalyze = rs.getObject("last_autoanalyze", java.time.OffsetDateTime.class);
+                long nInsSinceVacuum = rs.getLong("n_ins_since_vacuum");
+                java.time.OffsetDateTime lastSeqScan = rs.getObject("last_seq_scan", java.time.OffsetDateTime.class);
+                java.time.OffsetDateTime lastIdxScan = rs.getObject("last_idx_scan", java.time.OffsetDateTime.class);
+                long nTupNewpageUpd = rs.getLong("n_tup_newpage_upd");
+
                 Map<String, Long> prev = previousTableStats.put(cacheKey, current);
                 if (prev == null) continue; // Baseline
 
@@ -243,7 +280,9 @@ public class DbObjectsCollector {
                     d(prev, current, "idx_blks_read"), d(prev, current, "idx_blks_hit"),
                     d(prev, current, "toast_blks_read"), d(prev, current, "toast_blks_hit"),
                     d(prev, current, "tidx_blks_read"), d(prev, current, "tidx_blks_hit"),
-                    nLiveTup, nDeadTup, nModSinceAnalyze
+                    nLiveTup, nDeadTup, nModSinceAnalyze,
+                    lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
+                    nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd
                 );
                 rows++;
             }
@@ -284,13 +323,17 @@ public class DbObjectsCollector {
                 Map<String, Long> prev = previousIndexStats.put(cacheKey, current);
                 if (prev == null) continue;
 
+                // PG16+ last_idx_scan (nullable)
+                java.time.OffsetDateTime lastIdxScan = rs.getObject("last_idx_scan", java.time.OffsetDateTime.class);
+
                 factRepo.insertIndexStatDelta(now, instancePk, dbid, tableRelid, indexRelid,
                     schemaname, tableRelname, indexRelname,
                     d(prev, current, "idx_scan"), d(prev, current, "idx_tup_read"),
                     d(prev, current, "idx_tup_fetch"),
                     d(prev, current, "idx_blks_read"), d(prev, current, "idx_blks_hit"),
                     (Boolean) rs.getObject("is_valid"), (Boolean) rs.getObject("is_ready"),
-                    (Boolean) rs.getObject("is_primary"), (Boolean) rs.getObject("is_unique")
+                    (Boolean) rs.getObject("is_primary"), (Boolean) rs.getObject("is_unique"),
+                    lastIdxScan
                 );
                 rows++;
             }
@@ -310,5 +353,6 @@ public class DbObjectsCollector {
     }
 
     private long d2l(Double val) { return val != null ? val.longValue() : 0L; }
+    private Long d2lNullable(Double val) { return val != null ? val.longValue() : null; }
     private double orZeroD(Double val) { return val != null ? val : 0.0; }
 }

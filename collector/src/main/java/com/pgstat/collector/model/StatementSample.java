@@ -35,6 +35,8 @@ public record StatementSample(
     double minPlanTime,
     double maxPlanTime,
     double stddevPlanTime,
+    double meanExecTime,
+    double meanPlanTime,
     long rows,
     long sharedBlksHit,
     long sharedBlksRead,
@@ -61,8 +63,15 @@ public record StatementSample(
     double jitEmissionTime,
     long jitDeformCount,
     double jitDeformTime,
+    long jitInliningCount,
+    long jitOptimizationCount,
+    long jitEmissionCount,
     OffsetDateTime statsSince,
     OffsetDateTime minmaxStatsSince,
     long parallelWorkersToLaunch,
-    long parallelWorkersLaunched
+    long parallelWorkersLaunched,
+    double sharedBlkReadTime,
+    double sharedBlkWriteTime,
+    double localBlkReadTime,
+    double localBlkWriteTime
 ) {}

@@ -118,7 +118,8 @@ public interface SourceQueries {
               (pg_current_wal_lsn() - s.restart_lsn)::bigint as slot_lag_bytes,
               sr.spill_txns, sr.spill_count, sr.spill_bytes,
               sr.stream_txns, sr.stream_count, sr.stream_bytes,
-              sr.total_txns, sr.total_bytes
+              sr.total_txns, sr.total_bytes,
+              sr.stats_reset
             from pg_replication_slots s
             left join pg_stat_replication_slots sr on sr.slot_name = s.slot_name
             """;
@@ -126,16 +127,22 @@ public interface SourceQueries {
 
     /** pg_stat_database_conflicts (PG9.1+). */
     default String databaseConflictsQuery() {
+        // PG16+: confl_active_logicalslot eklendi — to_jsonb safe-lookup
         return """
+            with src as (
+              select to_jsonb(c.*) as j, c.* from pg_stat_database_conflicts c
+              where c.datname is not null
+            )
             select
+              datid::bigint as datid,
               datname,
               confl_tablespace,
               confl_lock,
               confl_snapshot,
               confl_bufferpin,
-              confl_deadlock
-            from pg_stat_database_conflicts
-            where datname is not null
+              confl_deadlock,
+              coalesce((j->>'confl_active_logicalslot')::bigint, 0) as confl_active_logicalslot
+            from src
             """;
     }
 

@@ -81,7 +81,8 @@ public class Pg11_12Queries implements SourceQueries {
               maxwritten_clean,
               buffers_backend,
               buffers_backend_fsync,
-              buffers_alloc
+              buffers_alloc,
+              stats_reset
             from pg_stat_bgwriter
             """;
     }
@@ -96,6 +97,7 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String activityQuery() {
+        // PG11-12: leader_pid yok (PG13+), query_id yok (PG14+)
         return """
             select
               pid, datname, usename, application_name,
@@ -103,7 +105,14 @@ public class Pg11_12Queries implements SourceQueries {
               query_start, state_change, state,
               wait_event_type, wait_event,
               left(query, 1000) as query,
-              backend_type
+              backend_type,
+              usesysid::bigint as usesysid,
+              client_hostname,
+              client_port,
+              backend_xid::text as backend_xid,
+              backend_xmin::text as backend_xmin,
+              null::integer as leader_pid,
+              null::bigint as query_id
             from pg_stat_activity
             where pid <> pg_backend_pid()
             """;
@@ -111,15 +120,26 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String replicationQuery() {
+        // PG11-12: reply_time PG12'de eklendi — to_jsonb safe-lookup
         return """
+            with src as (
+              select to_jsonb(r.*) as j, r.* from pg_stat_replication r
+            )
             select
               pid, usename, application_name,
               client_addr::text, state,
               sent_lsn::text, write_lsn::text, flush_lsn::text, replay_lsn::text,
               write_lag::text, flush_lag::text, replay_lag::text,
               sync_state,
-              (sent_lsn - replay_lsn) as replay_lag_bytes
-            from pg_stat_replication
+              (sent_lsn - replay_lsn) as replay_lag_bytes,
+              usesysid::bigint as usesysid,
+              client_hostname,
+              client_port,
+              backend_start,
+              backend_xmin::text as backend_xmin,
+              sync_priority,
+              (j->>'reply_time')::timestamptz as reply_time
+            from src
             """;
     }
 
@@ -199,7 +219,6 @@ public class Pg11_12Queries implements SourceQueries {
     @Override
     public String pgssStatsQuery(String pgssFunction) {
         // PG11-12: toplevel, plans, wal, jit yok; min/max/stddev sadece exec icin var
-        // (plan ayrimi PG13'te eklendi). Yeni alanlar 0 ya da null doner.
         return """
             select
               userid, dbid, queryid,
@@ -214,6 +233,8 @@ public class Pg11_12Queries implements SourceQueries {
               0::double precision as min_plan_time,
               0::double precision as max_plan_time,
               0::double precision as stddev_plan_time,
+              mean_time as mean_exec_time,
+              0::double precision as mean_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -234,10 +255,17 @@ public class Pg11_12Queries implements SourceQueries {
               0::double precision as jit_emission_time,
               0::bigint as jit_deform_count,
               0::double precision as jit_deform_time,
+              0::bigint as jit_inlining_count,
+              0::bigint as jit_optimization_count,
+              0::bigint as jit_emission_count,
               null::timestamptz as stats_since,
               null::timestamptz as minmax_stats_since,
               0::bigint as parallel_workers_to_launch,
-              0::bigint as parallel_workers_launched
+              0::bigint as parallel_workers_launched,
+              0::double precision as shared_blk_read_time,
+              0::double precision as shared_blk_write_time,
+              0::double precision as local_blk_read_time,
+              0::double precision as local_blk_write_time
             from %s(false)
             """.formatted(pgssFunction);
     }
@@ -257,7 +285,11 @@ public class Pg11_12Queries implements SourceQueries {
     @Override
     public String databaseStatsQuery() {
         // PG11-12: session_time, active_time, idle_in_transaction_time yok
+        // sessions/sessions_* yok (PG14+), checksum_last_failure PG12'de eklendi (to_jsonb)
         return """
+            with src as (
+              select to_jsonb(d.*) as j, d.* from pg_stat_database d where datid != 0
+            )
             select
               datid as dbid, datname, numbackends,
               xact_commit, xact_rollback,
@@ -271,14 +303,23 @@ public class Pg11_12Queries implements SourceQueries {
               blk_read_time, blk_write_time,
               0::double precision as session_time,
               0::double precision as active_time,
-              0::double precision as idle_in_transaction_time
-            from pg_stat_database
-            where datid != 0
+              0::double precision as idle_in_transaction_time,
+              0::bigint as sessions,
+              0::bigint as sessions_abandoned,
+              0::bigint as sessions_fatal,
+              0::bigint as sessions_killed,
+              stats_reset,
+              (j->>'checksum_last_failure')::timestamptz as checksum_last_failure,
+              0::bigint as parallel_workers_to_launch,
+              0::bigint as parallel_workers_launched
+            from src
             """;
     }
 
     @Override
     public String tableStatsQuery() {
+        // PG11-12: n_ins_since_vacuum yok (PG13+), last_seq_scan/last_idx_scan yok (PG16+),
+        // n_tup_newpage_upd yok (PG16+)
         return """
             select
               s.relid, s.schemaname, s.relname,
@@ -296,7 +337,13 @@ public class Pg11_12Queries implements SourceQueries {
               coalesce(io.toast_blks_hit, 0) as toast_blks_hit,
               coalesce(io.tidx_blks_read, 0) as tidx_blks_read,
               coalesce(io.tidx_blks_hit, 0) as tidx_blks_hit,
-              s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze
+              s.n_live_tup, s.n_dead_tup, s.n_mod_since_analyze,
+              s.last_vacuum, s.last_autovacuum,
+              s.last_analyze, s.last_autoanalyze,
+              0::bigint as n_ins_since_vacuum,
+              null::timestamptz as last_seq_scan,
+              null::timestamptz as last_idx_scan,
+              0::bigint as n_tup_newpage_upd
             from pg_stat_user_tables s
             left join pg_statio_user_tables io on io.relid = s.relid
             """;
@@ -304,6 +351,7 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String indexStatsQuery() {
+        // PG11-12: last_idx_scan yok (PG16+)
         return """
             select
               s.relid as table_relid,
@@ -317,7 +365,8 @@ public class Pg11_12Queries implements SourceQueries {
               ix.indisvalid as is_valid,
               ix.indisready as is_ready,
               ix.indisprimary as is_primary,
-              ix.indisunique as is_unique
+              ix.indisunique as is_unique,
+              null::timestamptz as last_idx_scan
             from pg_stat_user_indexes s
             left join pg_statio_user_indexes io on io.indexrelid = s.indexrelid
             left join pg_index ix on ix.indexrelid = s.indexrelid

@@ -115,20 +115,27 @@ public class FactRepository {
                                        OffsetDateTime backendStart, OffsetDateTime xactStart,
                                        OffsetDateTime queryStart, OffsetDateTime stateChange,
                                        String state, String waitEventType, String waitEvent,
-                                       String query, String backendType) {
+                                       String query, String backendType,
+                                       Long queryId, Integer leaderPid, Long usesysid,
+                                       String clientHostname, Integer clientPort,
+                                       String backendXid, String backendXmin) {
         jdbc.update("""
             insert into fact.pg_activity_snapshot (
               snapshot_ts, instance_pk, pid, datname, usename,
               application_name, client_addr, backend_start, xact_start,
               query_start, state_change, state, wait_event_type, wait_event,
-              query, backend_type
+              query, backend_type,
+              query_id, leader_pid, usesysid, client_hostname, client_port,
+              backend_xid, backend_xmin
             )
-            values (?, ?, ?, ?, ?, ?, ?::inet, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?::inet, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             snapshotTs, instancePk, pid, datname, usename,
             applicationName, clientAddr, backendStart, xactStart,
             queryStart, stateChange, state, waitEventType, waitEvent,
-            query, backendType
+            query, backendType,
+            queryId, leaderPid, usesysid, clientHostname, clientPort,
+            backendXid, backendXmin
         );
     }
 
@@ -143,19 +150,28 @@ public class FactRepository {
                                           String flushLsn, String replayLsn,
                                           String writeLag, String flushLag,
                                           String replayLag, String syncState,
-                                          Long replayLagBytes) {
+                                          Long replayLagBytes,
+                                          Long usesysid, String clientHostname,
+                                          Integer clientPort, OffsetDateTime backendStart,
+                                          String backendXmin, Integer syncPriority,
+                                          OffsetDateTime replyTime) {
         jdbc.update("""
             insert into fact.pg_replication_snapshot (
               snapshot_ts, instance_pk, pid, usename, application_name,
               client_addr, state, sent_lsn, write_lsn, flush_lsn, replay_lsn,
-              write_lag, flush_lag, replay_lag, sync_state, replay_lag_bytes
+              write_lag, flush_lag, replay_lag, sync_state, replay_lag_bytes,
+              usesysid, client_hostname, client_port, backend_start,
+              backend_xmin, sync_priority, reply_time
             )
             values (?, ?, ?, ?, ?, ?::inet, ?, ?::pg_lsn, ?::pg_lsn, ?::pg_lsn, ?::pg_lsn,
-                    ?::interval, ?::interval, ?::interval, ?, ?)
+                    ?::interval, ?::interval, ?::interval, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?)
             """,
             snapshotTs, instancePk, pid, usename, applicationName,
             clientAddr, state, sentLsn, writeLsn, flushLsn, replayLsn,
-            writeLag, flushLag, replayLag, syncState, replayLagBytes
+            writeLag, flushLag, replayLag, syncState, replayLagBytes,
+            usesysid, clientHostname, clientPort, backendStart,
+            backendXmin, syncPriority, replyTime
         );
     }
 
@@ -295,7 +311,11 @@ public class FactRepository {
                                     long deadlocksDelta, long checksumFailuresDelta,
                                     double blkReadTimeMsDelta, double blkWriteTimeMsDelta,
                                     double sessionTimeMsDelta, double activeTimeMsDelta,
-                                    double idleInTxTimeMsDelta) {
+                                    double idleInTxTimeMsDelta,
+                                    Long sessionsDelta, Long sessionsAbandonedDelta,
+                                    Long sessionsFatalDelta, Long sessionsKilledDelta,
+                                    OffsetDateTime statsReset, OffsetDateTime checksumLastFailure,
+                                    Long parallelWorkersToLaunchDelta, Long parallelWorkersLaunchedDelta) {
         jdbc.update("""
             insert into fact.pg_database_delta (
               sample_ts, instance_pk, dbid, datname, numbackends,
@@ -307,9 +327,14 @@ public class FactRepository {
               deadlocks_delta, checksum_failures_delta,
               blk_read_time_ms_delta, blk_write_time_ms_delta,
               session_time_ms_delta, active_time_ms_delta,
-              idle_in_transaction_time_ms_delta
+              idle_in_transaction_time_ms_delta,
+              sessions_delta, sessions_abandoned_delta,
+              sessions_fatal_delta, sessions_killed_delta,
+              stats_reset, checksum_last_failure,
+              parallel_workers_to_launch_delta, parallel_workers_launched_delta
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, datname, numbackends,
@@ -321,7 +346,11 @@ public class FactRepository {
             deadlocksDelta, checksumFailuresDelta,
             blkReadTimeMsDelta, blkWriteTimeMsDelta,
             sessionTimeMsDelta, activeTimeMsDelta,
-            idleInTxTimeMsDelta
+            idleInTxTimeMsDelta,
+            sessionsDelta, sessionsAbandonedDelta,
+            sessionsFatalDelta, sessionsKilledDelta,
+            statsReset, checksumLastFailure,
+            parallelWorkersToLaunchDelta, parallelWorkersLaunchedDelta
         );
     }
 
@@ -342,7 +371,11 @@ public class FactRepository {
                                      long toastBlksReadDelta, long toastBlksHitDelta,
                                      long tidxBlksReadDelta, long tidxBlksHitDelta,
                                      long nLiveTupEstimate, long nDeadTupEstimate,
-                                     long nModSinceAnalyze) {
+                                     long nModSinceAnalyze,
+                                     OffsetDateTime lastVacuum, OffsetDateTime lastAutovacuum,
+                                     OffsetDateTime lastAnalyze, OffsetDateTime lastAutoanalyze,
+                                     long nInsSinceVacuum, OffsetDateTime lastSeqScan,
+                                     OffsetDateTime lastIdxScan, long nTupNewpageUpd) {
         jdbc.update("""
             insert into fact.pg_table_stat_delta (
               sample_ts, instance_pk, dbid, relid, schemaname, relname,
@@ -354,9 +387,12 @@ public class FactRepository {
               idx_blks_read_delta, idx_blks_hit_delta,
               toast_blks_read_delta, toast_blks_hit_delta,
               tidx_blks_read_delta, tidx_blks_hit_delta,
-              n_live_tup_estimate, n_dead_tup_estimate, n_mod_since_analyze
+              n_live_tup_estimate, n_dead_tup_estimate, n_mod_since_analyze,
+              last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
+              n_ins_since_vacuum, last_seq_scan, last_idx_scan, n_tup_newpage_upd
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, relid, schemaname, relname,
@@ -368,7 +404,9 @@ public class FactRepository {
             idxBlksReadDelta, idxBlksHitDelta,
             toastBlksReadDelta, toastBlksHitDelta,
             tidxBlksReadDelta, tidxBlksHitDelta,
-            nLiveTupEstimate, nDeadTupEstimate, nModSinceAnalyze
+            nLiveTupEstimate, nDeadTupEstimate, nModSinceAnalyze,
+            lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
+            nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd
         );
     }
 
@@ -384,23 +422,26 @@ public class FactRepository {
                                      long idxTupFetchDelta,
                                      long idxBlksReadDelta, long idxBlksHitDelta,
                                      Boolean isValid, Boolean isReady,
-                                     Boolean isPrimary, Boolean isUnique) {
+                                     Boolean isPrimary, Boolean isUnique,
+                                     OffsetDateTime lastIdxScan) {
         jdbc.update("""
             insert into fact.pg_index_stat_delta (
               sample_ts, instance_pk, dbid, table_relid, index_relid,
               schemaname, table_relname, index_relname,
               idx_scan_delta, idx_tup_read_delta, idx_tup_fetch_delta,
               idx_blks_read_delta, idx_blks_hit_delta,
-              is_valid, is_ready, is_primary, is_unique
+              is_valid, is_ready, is_primary, is_unique,
+              last_idx_scan
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, tableRelid, indexRelid,
             schemaname, tableRelname, indexRelname,
             idxScanDelta, idxTupReadDelta, idxTupFetchDelta,
             idxBlksReadDelta, idxBlksHitDelta,
-            isValid, isReady, isPrimary, isUnique
+            isValid, isReady, isPrimary, isUnique,
+            lastIdxScan
         );
     }
 
@@ -460,7 +501,8 @@ public class FactRepository {
                                    Long safeWalSize, Long slotLagBytes,
                                    Long spillTxns, Long spillCount, Long spillBytes,
                                    Long streamTxns, Long streamCount, Long streamBytes,
-                                   Long totalTxns, Long totalBytes) {
+                                   Long totalTxns, Long totalBytes,
+                                   OffsetDateTime statsReset) {
         jdbc.update("""
             insert into fact.pg_replication_slot_snapshot (
               sample_ts, instance_pk, slot_name, plugin, slot_type, database,
@@ -468,9 +510,9 @@ public class FactRepository {
               confirmed_flush_lsn, wal_status, safe_wal_size, slot_lag_bytes,
               spill_txns, spill_count, spill_bytes,
               stream_txns, stream_count, stream_bytes,
-              total_txns, total_bytes
+              total_txns, total_bytes, stats_reset
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, slotName, plugin, slotType, database,
@@ -478,7 +520,7 @@ public class FactRepository {
             confirmedFlushLsn, walStatus, safeWalSize, slotLagBytes,
             spillTxns, spillCount, spillBytes,
             streamTxns, streamCount, streamBytes,
-            totalTxns, totalBytes
+            totalTxns, totalBytes, statsReset
         );
     }
 
@@ -489,17 +531,20 @@ public class FactRepository {
     public void insertConflictSnapshot(OffsetDateTime sampleTs, long instancePk,
                                        String datname, Long conflTablespace,
                                        Long conflLock, Long conflSnapshot,
-                                       Long conflBufferpin, Long conflDeadlock) {
+                                       Long conflBufferpin, Long conflDeadlock,
+                                       Long datid, Long conflActiveLogicalslot) {
         jdbc.update("""
             insert into fact.pg_database_conflict_snapshot (
               sample_ts, instance_pk, datname,
-              confl_tablespace, confl_lock, confl_snapshot, confl_bufferpin, confl_deadlock
+              confl_tablespace, confl_lock, confl_snapshot, confl_bufferpin, confl_deadlock,
+              datid, confl_active_logicalslot
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, datname, conflTablespace,
-            conflLock, conflSnapshot, conflBufferpin, conflDeadlock
+            conflLock, conflSnapshot, conflBufferpin, conflDeadlock,
+            datid, conflActiveLogicalslot
         );
     }
 

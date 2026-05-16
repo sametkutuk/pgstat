@@ -25,7 +25,8 @@ public class Pg17_18Queries extends Pg14_16Queries {
             select
               buffers_clean,
               maxwritten_clean,
-              buffers_alloc
+              buffers_alloc,
+              stats_reset
             from pg_stat_bgwriter
             """;
     }
@@ -33,23 +34,84 @@ public class Pg17_18Queries extends Pg14_16Queries {
     @Override
     public String checkpointerQuery() {
         // PG17+: pg_stat_checkpointer ayri view
+        // PG18+: num_done, slru_written eklendi — to_jsonb safe-lookup
         return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_checkpointer s
+            )
             select
               num_timed as checkpoints_timed,
               num_requested as checkpoints_req,
               write_time as checkpoint_write_time,
               sync_time as checkpoint_sync_time,
-              buffers_written as buffers_checkpoint
-            from pg_stat_checkpointer
+              buffers_written as buffers_checkpoint,
+              restartpoints_timed,
+              restartpoints_req,
+              restartpoints_done,
+              coalesce((j->>'num_done')::bigint, 0) as num_done,
+              coalesce((j->>'slru_written')::bigint, 0) as slru_written,
+              stats_reset
+            from src
+            """;
+    }
+
+    // PG18: pg_stat_wal'dan wal_write/sync/write_time/sync_time kaldirildi
+    @Override
+    public String walQuery() {
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_wal s
+            )
+            select
+              wal_records,
+              wal_fpi,
+              wal_bytes,
+              coalesce((j->>'wal_buffers_full')::bigint, 0) as wal_buffers_full,
+              coalesce((j->>'wal_write')::bigint, 0)        as wal_write,
+              coalesce((j->>'wal_sync')::bigint, 0)         as wal_sync,
+              coalesce((j->>'wal_write_time')::double precision, 0) as wal_write_time,
+              coalesce((j->>'wal_sync_time')::double precision, 0)  as wal_sync_time,
+              (j->>'stats_reset')::timestamptz as stats_reset
+            from src
+            """;
+    }
+
+    // PG17+ subscription: leader_pid eklendi
+    @Override
+    public String subscriptionQuery() {
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.*
+              from pg_stat_subscription s
+            )
+            select
+              s.subid::bigint                    as subid,
+              s.subname,
+              s.pid,
+              s.relid::bigint                    as relid,
+              s.received_lsn::text               as received_lsn,
+              s.last_msg_send_time,
+              s.last_msg_receipt_time,
+              s.latest_end_lsn::text             as latest_end_lsn,
+              s.latest_end_time,
+              case when s.received_lsn is null or s.latest_end_lsn is null
+                then null
+                else (s.received_lsn - s.latest_end_lsn)::bigint
+              end as lag_bytes,
+              ss.apply_error_count,
+              ss.sync_error_count,
+              ss.stats_reset,
+              coalesce((src.j->>'leader_pid')::integer, null) as leader_pid
+            from pg_stat_subscription s
+            left join pg_stat_subscription_stats ss on ss.subid = s.subid
+            left join src on src.subid = s.subid
             """;
     }
 
     @Override
     public String pgssStatsQuery(String pgssFunction) {
-        // PG17+: blk_*_time shared/local/temp split, wal_buffers_full eklendi.
-        // Merkezi tabloda temp_blk_read/write_time ayri kolonlardir ve PG17+'da
-        // dogrudan dolar. Eski toplam blk_read_time/blk_write_time = shared+local+temp.
-        // PG18+ icin parallel_workers_to_launch/launched to_jsonb ile guvenli okuma.
+        // PG17+: blk_*_time shared/local/temp split, wal_buffers_full PG18'de eklendi.
+        // PG18+: parallel_workers_to_launch/launched, jit_*_count to_jsonb ile guvenli okuma.
         return """
             with src as (
               select to_jsonb(s.*) as j, s.* from %s(false) s
@@ -63,6 +125,8 @@ public class Pg17_18Queries extends Pg14_16Queries {
               total_exec_time,
               min_exec_time, max_exec_time, stddev_exec_time,
               min_plan_time, max_plan_time, stddev_plan_time,
+              coalesce((j->>'mean_exec_time')::double precision, 0) as mean_exec_time,
+              coalesce((j->>'mean_plan_time')::double precision, 0) as mean_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -78,22 +142,25 @@ public class Pg17_18Queries extends Pg14_16Queries {
               coalesce(temp_blk_read_time, 0)  as temp_blk_read_time,
               coalesce(temp_blk_write_time, 0) as temp_blk_write_time,
               wal_records, wal_fpi, wal_bytes,
-              -- wal_buffers_full pg_stat_statements'e PG18'de eklendi; PG17'de yok.
-              -- to_jsonb safe-lookup ile kolon yoksa 0.
               coalesce((j->>'wal_buffers_full')::bigint, 0) as wal_buffers_full,
               jit_functions,
               jit_generation_time,
               jit_inlining_time,
               jit_optimization_time,
               jit_emission_time,
-              -- jit_deform_count/time PG16'da view kolonu olarak var ama PG17'de
-              -- bazi dagitimlarda eksik olabilir — safe-lookup.
               coalesce((j->>'jit_deform_count')::bigint, 0)         as jit_deform_count,
               coalesce((j->>'jit_deform_time')::double precision, 0) as jit_deform_time,
+              coalesce((j->>'jit_inlining_count')::bigint, 0)       as jit_inlining_count,
+              coalesce((j->>'jit_optimization_count')::bigint, 0)   as jit_optimization_count,
+              coalesce((j->>'jit_emission_count')::bigint, 0)       as jit_emission_count,
               stats_since,
               minmax_stats_since,
               coalesce((j->>'parallel_workers_to_launch')::bigint, 0) as parallel_workers_to_launch,
-              coalesce((j->>'parallel_workers_launched')::bigint, 0)  as parallel_workers_launched
+              coalesce((j->>'parallel_workers_launched')::bigint, 0)  as parallel_workers_launched,
+              coalesce(shared_blk_read_time, 0) as shared_blk_read_time,
+              coalesce(shared_blk_write_time, 0) as shared_blk_write_time,
+              coalesce(local_blk_read_time, 0) as local_blk_read_time,
+              coalesce(local_blk_write_time, 0) as local_blk_write_time
             from src
             """.formatted(pgssFunction);
     }

@@ -49,22 +49,123 @@ public class Pg14_16Queries extends Pg13Queries {
 
     @Override
     public String ioStatQuery() {
-        // PG16+ — pg_stat_io mevcut
+        // PG16+: writebacks, writeback_time, op_bytes, stats_reset eklendi
+        // PG18'de read_bytes/write_bytes/extend_bytes eklendi, op_bytes kaldirildi — to_jsonb
         return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_io s
+            )
             select
               backend_type, object, context,
               reads, read_time,
               writes, write_time,
               extends, extend_time,
               hits, evictions, reuses,
-              fsyncs, fsync_time
-            from pg_stat_io
+              fsyncs, fsync_time,
+              coalesce((j->>'writebacks')::bigint, 0) as writebacks,
+              coalesce((j->>'writeback_time')::double precision, 0) as writeback_time,
+              (j->>'op_bytes')::bigint as op_bytes,
+              (j->>'read_bytes')::numeric as read_bytes,
+              (j->>'write_bytes')::numeric as write_bytes,
+              (j->>'extend_bytes')::numeric as extend_bytes,
+              (j->>'stats_reset')::timestamptz as stats_reset
+            from src
             """;
     }
 
     // =========================================================================
     // Lock — waitstart eklendi (PG14+)
     // =========================================================================
+
+    // Activity — query_id eklendi (PG14+)
+    @Override
+    public String activityQuery() {
+        return """
+            select
+              pid, datname, usename, application_name,
+              client_addr::text, backend_start, xact_start,
+              query_start, state_change, state,
+              wait_event_type, wait_event,
+              left(query, 1000) as query,
+              backend_type,
+              usesysid::bigint as usesysid,
+              client_hostname,
+              client_port,
+              backend_xid::text as backend_xid,
+              backend_xmin::text as backend_xmin,
+              leader_pid,
+              query_id
+            from pg_stat_activity
+            where pid <> pg_backend_pid()
+            """;
+    }
+
+    // Table stats — PG16+ last_seq_scan, last_idx_scan, n_tup_newpage_upd (to_jsonb safe-lookup)
+    @Override
+    public String tableStatsQuery() {
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.*, io.*
+              from pg_stat_user_tables s
+              left join pg_statio_user_tables io on io.relid = s.relid
+            )
+            select
+              relid, schemaname, relname,
+              seq_scan, seq_tup_read,
+              coalesce(idx_scan, 0) as idx_scan,
+              coalesce(idx_tup_fetch, 0) as idx_tup_fetch,
+              n_tup_ins, n_tup_upd, n_tup_del, n_tup_hot_upd,
+              vacuum_count, autovacuum_count,
+              analyze_count, autoanalyze_count,
+              coalesce(heap_blks_read, 0) as heap_blks_read,
+              coalesce(heap_blks_hit, 0) as heap_blks_hit,
+              coalesce(idx_blks_read, 0) as idx_blks_read,
+              coalesce(idx_blks_hit, 0) as idx_blks_hit,
+              coalesce(toast_blks_read, 0) as toast_blks_read,
+              coalesce(toast_blks_hit, 0) as toast_blks_hit,
+              coalesce(tidx_blks_read, 0) as tidx_blks_read,
+              coalesce(tidx_blks_hit, 0) as tidx_blks_hit,
+              n_live_tup, n_dead_tup, n_mod_since_analyze,
+              last_vacuum, last_autovacuum,
+              last_analyze, last_autoanalyze,
+              n_ins_since_vacuum,
+              (j->>'last_seq_scan')::timestamptz as last_seq_scan,
+              (j->>'last_idx_scan')::timestamptz as last_idx_scan,
+              coalesce((j->>'n_tup_newpage_upd')::bigint, 0) as n_tup_newpage_upd
+            from src
+            """;
+    }
+
+    // Index stats — PG16+ last_idx_scan (to_jsonb safe-lookup)
+    @Override
+    public String indexStatsQuery() {
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.*,
+                coalesce(io.idx_blks_read, 0) as io_idx_blks_read,
+                coalesce(io.idx_blks_hit, 0) as io_idx_blks_hit,
+                ix.indisvalid, ix.indisready, ix.indisprimary, ix.indisunique
+              from pg_stat_user_indexes s
+              left join pg_statio_user_indexes io on io.indexrelid = s.indexrelid
+              left join pg_index ix on ix.indexrelid = s.indexrelid
+            )
+            select
+              relid as table_relid,
+              indexrelid as index_relid,
+              schemaname,
+              relname as table_relname,
+              indexrelname as index_relname,
+              idx_scan, idx_tup_read, idx_tup_fetch,
+              io_idx_blks_read as idx_blks_read,
+              io_idx_blks_hit as idx_blks_hit,
+              indisvalid as is_valid,
+              indisready as is_ready,
+              indisprimary as is_primary,
+              indisunique as is_unique,
+              (j->>'last_idx_scan')::timestamptz as last_idx_scan
+            from src
+            """;
+    }
 
     @Override
     public String lockQuery() {
@@ -100,17 +201,9 @@ public class Pg14_16Queries extends Pg13Queries {
     @Override
     public String pgssStatsQuery(String pgssFunction) {
         // PG14-16: toplevel, plans, jit detay var.
-        // PG15+ temp_blk_read/write_time, stats_since, minmax_stats_since
+        // PG15+ temp_blk_read/write_time, stats_since, minmax_stats_since, jit_*_count
         // PG16+ jit_deform_count/time
-        // Pragmatik: PG14'te temp_blk_*_time yok → coalesce ile 0
-        // PG15-16'da doğrudan kolon var; SQL versiyona gore branch yapmak yerine
-        // run-time'da try/catch yapamayız (single SQL). Bu yuzden:
-        //   - PG14-15-16 hepsi icin pg_extension version'a bakmak yerine
-        //   - to_jsonb ile kolon yoksa null donuyor mantigi kullanamıyoruz (subquery zorlasiyor)
-        // Cozum: Bu sinif PG14-16 ortak. PG14 icin temp_blk_*_time yoktur → bu durumda
-        // ext yuklu olsa bile pg_stat_statements 1.10 kolonu olmamasi durumunda
-        // SQL hata verir. Ama yine de cogu PG14 1.10'a guncellenebiliyor.
-        // En guvenli yol: to_jsonb -> obj #>> '{key}' okuma (column existence safe)
+        // to_jsonb safe-lookup ile kolon yoksa null/0 doner.
         return """
             with src as (
               select to_jsonb(s.*) as j, s.* from %s(false) s
@@ -124,6 +217,8 @@ public class Pg14_16Queries extends Pg13Queries {
               total_exec_time,
               min_exec_time, max_exec_time, stddev_exec_time,
               min_plan_time, max_plan_time, stddev_plan_time,
+              coalesce((j->>'mean_exec_time')::double precision, 0) as mean_exec_time,
+              coalesce((j->>'mean_plan_time')::double precision, 0) as mean_plan_time,
               rows,
               shared_blks_hit, shared_blks_read,
               shared_blks_dirtied, shared_blks_written,
@@ -142,10 +237,17 @@ public class Pg14_16Queries extends Pg13Queries {
               jit_emission_time,
               coalesce((j->>'jit_deform_count')::bigint, 0)         as jit_deform_count,
               coalesce((j->>'jit_deform_time')::double precision, 0) as jit_deform_time,
+              coalesce((j->>'jit_inlining_count')::bigint, 0)       as jit_inlining_count,
+              coalesce((j->>'jit_optimization_count')::bigint, 0)   as jit_optimization_count,
+              coalesce((j->>'jit_emission_count')::bigint, 0)       as jit_emission_count,
               (j->>'stats_since')::timestamptz          as stats_since,
               (j->>'minmax_stats_since')::timestamptz   as minmax_stats_since,
               0::bigint as parallel_workers_to_launch,
-              0::bigint as parallel_workers_launched
+              0::bigint as parallel_workers_launched,
+              0::double precision as shared_blk_read_time,
+              0::double precision as shared_blk_write_time,
+              0::double precision as local_blk_read_time,
+              0::double precision as local_blk_write_time
             from src
             """.formatted(pgssFunction);
     }
@@ -156,7 +258,12 @@ public class Pg14_16Queries extends Pg13Queries {
 
     @Override
     public String databaseStatsQuery() {
+        // PG14+: session_time, sessions, sessions_* eklendi
+        // PG16+: parallel_workers yok (PG18+) — to_jsonb safe-lookup
         return """
+            with src as (
+              select to_jsonb(d.*) as j, d.* from pg_stat_database d where datid != 0
+            )
             select
               datid as dbid, datname, numbackends,
               xact_commit, xact_rollback,
@@ -170,9 +277,16 @@ public class Pg14_16Queries extends Pg13Queries {
               blk_read_time, blk_write_time,
               session_time,
               active_time,
-              idle_in_transaction_time
-            from pg_stat_database
-            where datid != 0
+              idle_in_transaction_time,
+              sessions,
+              sessions_abandoned,
+              sessions_fatal,
+              sessions_killed,
+              stats_reset,
+              (j->>'checksum_last_failure')::timestamptz as checksum_last_failure,
+              coalesce((j->>'parallel_workers_to_launch')::bigint, 0) as parallel_workers_to_launch,
+              coalesce((j->>'parallel_workers_launched')::bigint, 0) as parallel_workers_launched
+            from src
             """;
     }
 
