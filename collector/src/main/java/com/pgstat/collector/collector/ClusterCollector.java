@@ -309,7 +309,12 @@ public class ClusterCollector {
         return deltas.size();
     }
 
-    /** Bir sorgudan tum sayisal kolonlari family.name formatinda okur. */
+    /**
+     * Bir sorgudan tum sayisal kolonlari family.name formatinda okur.
+     * Timestamp/text gibi sayisal olmayan kolonlar atlanir (Kiro V066'da
+     * stats_reset gibi timestamptz kolonlar ekledi — rs.getDouble onlar
+     * icin "Bad value for type double" hatasi veriyordu).
+     */
     private void readMetrics(Connection conn, String sql, String family,
                              Map<String, Double> target) throws Exception {
         try (Statement stmt = conn.createStatement();
@@ -318,6 +323,18 @@ public class ClusterCollector {
                 ResultSetMetaData meta = rs.getMetaData();
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
                     String colName = meta.getColumnName(i);
+                    int sqlType = meta.getColumnType(i);
+                    // Sadece sayisal tipleri oku — timestamp/text kolonlari atla.
+                    if (sqlType != java.sql.Types.BIGINT
+                            && sqlType != java.sql.Types.INTEGER
+                            && sqlType != java.sql.Types.SMALLINT
+                            && sqlType != java.sql.Types.NUMERIC
+                            && sqlType != java.sql.Types.DECIMAL
+                            && sqlType != java.sql.Types.DOUBLE
+                            && sqlType != java.sql.Types.FLOAT
+                            && sqlType != java.sql.Types.REAL) {
+                        continue;
+                    }
                     double val = rs.getDouble(i);
                     if (!rs.wasNull()) {
                         target.put(family + "." + colName, val);
