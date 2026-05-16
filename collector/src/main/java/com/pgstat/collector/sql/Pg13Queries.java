@@ -87,7 +87,11 @@ public class Pg13Queries extends Pg11_12Queries {
               s.n_ins_since_vacuum,
               null::timestamptz as last_seq_scan,
               null::timestamptz as last_idx_scan,
-              0::bigint as n_tup_newpage_upd
+              0::bigint as n_tup_newpage_upd,
+              0::double precision as total_vacuum_time,
+              0::double precision as total_autovacuum_time,
+              0::double precision as total_analyze_time,
+              0::double precision as total_autoanalyze_time
             from pg_stat_user_tables s
             left join pg_statio_user_tables io on io.relid = s.relid
             """;
@@ -97,19 +101,26 @@ public class Pg13Queries extends Pg11_12Queries {
     public String progressAnalyzeQuery() {
         return """
             select
-              p.pid, 'ANALYZE' as command,
-              d.datname, c.relname,
+              p.pid, p.datid::bigint, d.datname, p.relid::bigint,
               p.phase,
-              p.sample_blks_total as blocks_total,
-              p.sample_blks_scanned as blocks_done,
-              p.ext_stats_total as tuples_total,
-              p.ext_stats_computed as tuples_done,
-              case when p.sample_blks_total > 0
-                then round(100.0 * p.sample_blks_scanned / p.sample_blks_total, 2)
-                else null end as progress_pct
+              p.sample_blks_total, p.sample_blks_scanned,
+              p.ext_stats_total, p.ext_stats_computed,
+              p.child_tables_total, p.child_tables_done,
+              p.current_child_table_relid::bigint
             from pg_stat_progress_analyze p
             left join pg_database d on d.oid = p.datid
-            left join pg_class c on c.oid = p.relid
+            """;
+    }
+
+    /** PG13+: pg_stat_progress_basebackup. */
+    @Override
+    public String progressBasebackupQuery() {
+        return """
+            select
+              pid, phase,
+              backup_total, backup_streamed,
+              tablespaces_total, tablespaces_streamed
+            from pg_stat_progress_basebackup
             """;
     }
 
@@ -202,7 +213,16 @@ public class Pg13Queries extends Pg11_12Queries {
               end as lag_bytes,
               null::bigint      as apply_error_count,
               null::bigint      as sync_error_count,
-              null::timestamptz as stats_reset
+              null::timestamptz as stats_reset,
+              null::integer     as leader_pid,
+              'apply'::text     as worker_type,
+              0::bigint as confl_insert_exists,
+              0::bigint as confl_update_origin_differs,
+              0::bigint as confl_update_exists,
+              0::bigint as confl_update_missing,
+              0::bigint as confl_delete_origin_differs,
+              0::bigint as confl_delete_missing,
+              0::bigint as confl_multiple_unique_conflicts
             from pg_stat_subscription s
             """;
     }

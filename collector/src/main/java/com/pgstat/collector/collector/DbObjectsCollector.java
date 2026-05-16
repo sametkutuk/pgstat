@@ -266,6 +266,16 @@ public class DbObjectsCollector {
                 java.time.OffsetDateTime lastIdxScan = rs.getObject("last_idx_scan", java.time.OffsetDateTime.class);
                 long nTupNewpageUpd = rs.getLong("n_tup_newpage_upd");
 
+                // V067 Madde 4: PG18 vacuum/analyze time (monotonik counter → delta)
+                double totalVacuumTime = rs.getDouble("total_vacuum_time");
+                double totalAutovacuumTime = rs.getDouble("total_autovacuum_time");
+                double totalAnalyzeTime = rs.getDouble("total_analyze_time");
+                double totalAutoanalyzeTime = rs.getDouble("total_autoanalyze_time");
+                current.put("total_vacuum_time", (long) totalVacuumTime);
+                current.put("total_autovacuum_time", (long) totalAutovacuumTime);
+                current.put("total_analyze_time", (long) totalAnalyzeTime);
+                current.put("total_autoanalyze_time", (long) totalAutoanalyzeTime);
+
                 Map<String, Long> prev = previousTableStats.put(cacheKey, current);
                 if (prev == null) continue; // Baseline
 
@@ -282,7 +292,11 @@ public class DbObjectsCollector {
                     d(prev, current, "tidx_blks_read"), d(prev, current, "tidx_blks_hit"),
                     nLiveTup, nDeadTup, nModSinceAnalyze,
                     lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
-                    nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd
+                    nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd,
+                    orZeroD(deltaCalc.deltaDouble(totalVacuumTime, prev.get("total_vacuum_time") != null ? prev.get("total_vacuum_time").doubleValue() : null)),
+                    orZeroD(deltaCalc.deltaDouble(totalAutovacuumTime, prev.get("total_autovacuum_time") != null ? prev.get("total_autovacuum_time").doubleValue() : null)),
+                    orZeroD(deltaCalc.deltaDouble(totalAnalyzeTime, prev.get("total_analyze_time") != null ? prev.get("total_analyze_time").doubleValue() : null)),
+                    orZeroD(deltaCalc.deltaDouble(totalAutoanalyzeTime, prev.get("total_autoanalyze_time") != null ? prev.get("total_autoanalyze_time").doubleValue() : null))
                 );
                 rows++;
             }

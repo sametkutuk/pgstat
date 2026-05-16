@@ -397,7 +397,9 @@ public class FactRepository {
                                      OffsetDateTime lastVacuum, OffsetDateTime lastAutovacuum,
                                      OffsetDateTime lastAnalyze, OffsetDateTime lastAutoanalyze,
                                      long nInsSinceVacuum, OffsetDateTime lastSeqScan,
-                                     OffsetDateTime lastIdxScan, long nTupNewpageUpd) {
+                                     OffsetDateTime lastIdxScan, long nTupNewpageUpd,
+                                     double totalVacuumTimeMsDelta, double totalAutovacuumTimeMsDelta,
+                                     double totalAnalyzeTimeMsDelta, double totalAutoanalyzeTimeMsDelta) {
         jdbc.update("""
             insert into fact.pg_table_stat_delta (
               sample_ts, instance_pk, dbid, relid, schemaname, relname,
@@ -411,10 +413,12 @@ public class FactRepository {
               tidx_blks_read_delta, tidx_blks_hit_delta,
               n_live_tup_estimate, n_dead_tup_estimate, n_mod_since_analyze,
               last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
-              n_ins_since_vacuum, last_seq_scan, last_idx_scan, n_tup_newpage_upd
+              n_ins_since_vacuum, last_seq_scan, last_idx_scan, n_tup_newpage_upd,
+              total_vacuum_time_ms_delta, total_autovacuum_time_ms_delta,
+              total_analyze_time_ms_delta, total_autoanalyze_time_ms_delta
             )
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, relid, schemaname, relname,
@@ -428,7 +432,9 @@ public class FactRepository {
             tidxBlksReadDelta, tidxBlksHitDelta,
             nLiveTupEstimate, nDeadTupEstimate, nModSinceAnalyze,
             lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
-            nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd
+            nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd,
+            totalVacuumTimeMsDelta, totalAutovacuumTimeMsDelta,
+            totalAnalyzeTimeMsDelta, totalAutoanalyzeTimeMsDelta
         );
     }
 
@@ -644,21 +650,36 @@ public class FactRepository {
                                            OffsetDateTime lastMsgReceiptTime,
                                            String latestEndLsn, OffsetDateTime latestEndTime,
                                            Long lagBytes, Long applyErrorCount,
-                                           Long syncErrorCount, OffsetDateTime statsReset) {
+                                           Long syncErrorCount, OffsetDateTime statsReset,
+                                           Integer leaderPid, String workerType,
+                                           long conflInsertExists, long conflUpdateOriginDiffers,
+                                           long conflUpdateExists, long conflUpdateMissing,
+                                           long conflDeleteOriginDiffers, long conflDeleteMissing,
+                                           long conflMultipleUniqueConflicts) {
         jdbc.update("""
             insert into fact.pg_subscription_snapshot (
               sample_ts, instance_pk, subid, subname, pid, relid,
               received_lsn, last_msg_send_time, last_msg_receipt_time,
               latest_end_lsn, latest_end_time, lag_bytes,
-              apply_error_count, sync_error_count, stats_reset
+              apply_error_count, sync_error_count, stats_reset,
+              leader_pid, worker_type,
+              confl_insert_exists_delta, confl_update_origin_differs_delta,
+              confl_update_exists_delta, confl_update_missing_delta,
+              confl_delete_origin_differs_delta, confl_delete_missing_delta,
+              confl_multiple_unique_conflicts_delta
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, subid, subname, pid, relid,
             receivedLsn, lastMsgSendTime, lastMsgReceiptTime,
             latestEndLsn, latestEndTime, lagBytes,
-            applyErrorCount, syncErrorCount, statsReset
+            applyErrorCount, syncErrorCount, statsReset,
+            leaderPid, workerType,
+            conflInsertExists, conflUpdateOriginDiffers,
+            conflUpdateExists, conflUpdateMissing,
+            conflDeleteOriginDiffers, conflDeleteMissing,
+            conflMultipleUniqueConflicts
         );
     }
 
@@ -725,6 +746,160 @@ public class FactRepository {
             """,
             sampleTs, instancePk, dbid, relid,
             schemaname, relname, blksRead, blksHit
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_vacuum_snapshot (Madde 8)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressVacuumSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                             int pid, Long datid, String datname, Long relid,
+                                             String phase, Long heapBlksTotal, Long heapBlksScanned,
+                                             Long heapBlksVacuumed, Long indexVacuumCount,
+                                             Long maxDeadItemIds, Long maxDeadTupleBytes,
+                                             Long numDeadItemIds, Long deadTupleBytes,
+                                             Long indexesTotal, Long indexesProcessed) {
+        jdbc.update("""
+            insert into fact.pg_progress_vacuum_snapshot (
+              sample_ts, instance_pk, pid, datid, datname, relid, phase,
+              heap_blks_total, heap_blks_scanned, heap_blks_vacuumed,
+              index_vacuum_count, max_dead_item_ids, max_dead_tuple_bytes,
+              num_dead_item_ids, dead_tuple_bytes, indexes_total, indexes_processed
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, datid, datname, relid, phase,
+            heapBlksTotal, heapBlksScanned, heapBlksVacuumed,
+            indexVacuumCount, maxDeadItemIds, maxDeadTupleBytes,
+            numDeadItemIds, deadTupleBytes, indexesTotal, indexesProcessed
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_analyze_snapshot (Madde 9)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressAnalyzeSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                              int pid, Long datid, String datname, Long relid,
+                                              String phase, Long sampleBlksTotal, Long sampleBlksScanned,
+                                              Long extStatsTotal, Long extStatsComputed,
+                                              Long childTablesTotal, Long childTablesDone,
+                                              Long currentChildTableRelid) {
+        jdbc.update("""
+            insert into fact.pg_progress_analyze_snapshot (
+              sample_ts, instance_pk, pid, datid, datname, relid, phase,
+              sample_blks_total, sample_blks_scanned, ext_stats_total, ext_stats_computed,
+              child_tables_total, child_tables_done, current_child_table_relid
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, datid, datname, relid, phase,
+            sampleBlksTotal, sampleBlksScanned, extStatsTotal, extStatsComputed,
+            childTablesTotal, childTablesDone, currentChildTableRelid
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_create_index_snapshot (Madde 10)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressCreateIndexSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                                   int pid, Long datid, String datname, Long relid,
+                                                   Long indexRelid, String command, String phase,
+                                                   Long lockersTotal, Long lockersDone, Long currentLockerPid,
+                                                   Long blocksTotal, Long blocksDone,
+                                                   Long tuplesTotal, Long tuplesDone,
+                                                   Long partitionsTotal, Long partitionsDone) {
+        jdbc.update("""
+            insert into fact.pg_progress_create_index_snapshot (
+              sample_ts, instance_pk, pid, datid, datname, relid, index_relid,
+              command, phase, lockers_total, lockers_done, current_locker_pid,
+              blocks_total, blocks_done, tuples_total, tuples_done,
+              partitions_total, partitions_done
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, datid, datname, relid, indexRelid,
+            command, phase, lockersTotal, lockersDone, currentLockerPid,
+            blocksTotal, blocksDone, tuplesTotal, tuplesDone,
+            partitionsTotal, partitionsDone
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_basebackup_snapshot (Madde 11)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressBasebackupSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                                  int pid, String phase,
+                                                  Long backupTotal, Long backupStreamed,
+                                                  Long tablespacesTotal, Long tablespacesStreamed) {
+        jdbc.update("""
+            insert into fact.pg_progress_basebackup_snapshot (
+              sample_ts, instance_pk, pid, phase,
+              backup_total, backup_streamed, tablespaces_total, tablespaces_streamed
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, phase,
+            backupTotal, backupStreamed, tablespacesTotal, tablespacesStreamed
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_copy_snapshot (Madde 12)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressCopySnapshot(OffsetDateTime sampleTs, long instancePk,
+                                           int pid, Long datid, String datname, Long relid,
+                                           String command, String copyType,
+                                           Long bytesProcessed, Long bytesTotal,
+                                           Long tuplesProcessed, Long tuplesExcluded,
+                                           Long tuplesSkipped) {
+        jdbc.update("""
+            insert into fact.pg_progress_copy_snapshot (
+              sample_ts, instance_pk, pid, datid, datname, relid,
+              command, copy_type, bytes_processed, bytes_total,
+              tuples_processed, tuples_excluded, tuples_skipped
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, datid, datname, relid,
+            command, copyType, bytesProcessed, bytesTotal,
+            tuplesProcessed, tuplesExcluded, tuplesSkipped
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // fact.pg_progress_cluster_snapshot (Madde 13)
+    // -------------------------------------------------------------------------
+
+    public void insertProgressClusterSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                              int pid, Long datid, String datname, Long relid,
+                                              String command, String phase, Long clusterIndexRelid,
+                                              Long heapTuplesScanned, Long heapTuplesWritten,
+                                              Long heapBlksTotal, Long heapBlksScanned,
+                                              Long indexRebuildCount) {
+        jdbc.update("""
+            insert into fact.pg_progress_cluster_snapshot (
+              sample_ts, instance_pk, pid, datid, datname, relid,
+              command, phase, cluster_index_relid,
+              heap_tuples_scanned, heap_tuples_written,
+              heap_blks_total, heap_blks_scanned, index_rebuild_count
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, datid, datname, relid,
+            command, phase, clusterIndexRelid,
+            heapTuplesScanned, heapTuplesWritten,
+            heapBlksTotal, heapBlksScanned, indexRebuildCount
         );
     }
 }

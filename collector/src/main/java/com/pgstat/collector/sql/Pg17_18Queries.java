@@ -76,13 +76,15 @@ public class Pg17_18Queries extends Pg14_16Queries {
             """;
     }
 
-    // PG17+ subscription: leader_pid eklendi
+    // PG17+ subscription: leader_pid + worker_type + conflict kolonlari
     @Override
     public String subscriptionQuery() {
         return """
-            with src as (
-              select to_jsonb(s.*) as j, s.*
-              from pg_stat_subscription s
+            with sub_src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_subscription s
+            ),
+            stats_src as (
+              select to_jsonb(ss.*) as j, ss.* from pg_stat_subscription_stats ss
             )
             select
               s.subid::bigint                    as subid,
@@ -101,10 +103,19 @@ public class Pg17_18Queries extends Pg14_16Queries {
               ss.apply_error_count,
               ss.sync_error_count,
               ss.stats_reset,
-              coalesce((src.j->>'leader_pid')::integer, null) as leader_pid
+              s.leader_pid,
+              coalesce(sub_src.j->>'worker_type', 'apply') as worker_type,
+              coalesce((stats_src.j->>'confl_insert_exists')::bigint, 0) as confl_insert_exists,
+              coalesce((stats_src.j->>'confl_update_origin_differs')::bigint, 0) as confl_update_origin_differs,
+              coalesce((stats_src.j->>'confl_update_exists')::bigint, 0) as confl_update_exists,
+              coalesce((stats_src.j->>'confl_update_missing')::bigint, 0) as confl_update_missing,
+              coalesce((stats_src.j->>'confl_delete_origin_differs')::bigint, 0) as confl_delete_origin_differs,
+              coalesce((stats_src.j->>'confl_delete_missing')::bigint, 0) as confl_delete_missing,
+              coalesce((stats_src.j->>'confl_multiple_unique_conflicts')::bigint, 0) as confl_multiple_unique_conflicts
             from pg_stat_subscription s
+            join sub_src on sub_src.subid = s.subid
             left join pg_stat_subscription_stats ss on ss.subid = s.subid
-            left join src on src.subid = s.subid
+            left join stats_src on stats_src.subid = s.subid
             """;
     }
 

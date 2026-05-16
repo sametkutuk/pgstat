@@ -126,11 +126,9 @@ public class Pg14_16Queries extends Pg13Queries {
     }
 
     // Table stats — PG16+ last_seq_scan, last_idx_scan, n_tup_newpage_upd (to_jsonb safe-lookup)
+    // PG18+ total_vacuum_time, total_autovacuum_time, total_analyze_time, total_autoanalyze_time
     @Override
     public String tableStatsQuery() {
-        // pg_stat_user_tables ve pg_statio_user_tables her ikisi de "relid" kolonuna
-        // sahip; "select ..., s.*, io.*" yapinca "relid" ambiguous oluyor. Kolonlari
-        // alias'lariyla qualify edip cakismayi onleriz.
         return """
             with src as (
               select to_jsonb(s.*) as j, s.*
@@ -158,7 +156,11 @@ public class Pg14_16Queries extends Pg13Queries {
               s.n_ins_since_vacuum,
               (src.j->>'last_seq_scan')::timestamptz as last_seq_scan,
               (src.j->>'last_idx_scan')::timestamptz as last_idx_scan,
-              coalesce((src.j->>'n_tup_newpage_upd')::bigint, 0) as n_tup_newpage_upd
+              coalesce((src.j->>'n_tup_newpage_upd')::bigint, 0) as n_tup_newpage_upd,
+              coalesce((src.j->>'total_vacuum_time')::double precision, 0) as total_vacuum_time,
+              coalesce((src.j->>'total_autovacuum_time')::double precision, 0) as total_autovacuum_time,
+              coalesce((src.j->>'total_analyze_time')::double precision, 0) as total_analyze_time,
+              coalesce((src.j->>'total_autoanalyze_time')::double precision, 0) as total_autoanalyze_time
             from pg_stat_user_tables s
             join src on src.relid = s.relid
             left join pg_statio_user_tables io on io.relid = s.relid
@@ -325,7 +327,15 @@ public class Pg14_16Queries extends Pg13Queries {
      */
     @Override
     public String subscriptionQuery() {
+        // PG14: subscription_stats yok (PG15+ var). PG15-16: stats var ama conflict yok.
+        // to_jsonb safe-lookup ile PG18 conflict + worker_type
         return """
+            with sub_src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_subscription s
+            ),
+            stats_src as (
+              select to_jsonb(ss.*) as j, ss.* from pg_stat_subscription_stats ss
+            )
             select
               s.subid::bigint                    as subid,
               s.subname,
@@ -342,9 +352,20 @@ public class Pg14_16Queries extends Pg13Queries {
               end as lag_bytes,
               ss.apply_error_count,
               ss.sync_error_count,
-              ss.stats_reset
+              ss.stats_reset,
+              (sub_src.j->>'leader_pid')::integer as leader_pid,
+              coalesce(sub_src.j->>'worker_type', 'apply') as worker_type,
+              coalesce((stats_src.j->>'confl_insert_exists')::bigint, 0) as confl_insert_exists,
+              coalesce((stats_src.j->>'confl_update_origin_differs')::bigint, 0) as confl_update_origin_differs,
+              coalesce((stats_src.j->>'confl_update_exists')::bigint, 0) as confl_update_exists,
+              coalesce((stats_src.j->>'confl_update_missing')::bigint, 0) as confl_update_missing,
+              coalesce((stats_src.j->>'confl_delete_origin_differs')::bigint, 0) as confl_delete_origin_differs,
+              coalesce((stats_src.j->>'confl_delete_missing')::bigint, 0) as confl_delete_missing,
+              coalesce((stats_src.j->>'confl_multiple_unique_conflicts')::bigint, 0) as confl_multiple_unique_conflicts
             from pg_stat_subscription s
+            join sub_src on sub_src.subid = s.subid
             left join pg_stat_subscription_stats ss on ss.subid = s.subid
+            left join stats_src on stats_src.subid = s.subid
             """;
     }
 
@@ -356,6 +377,20 @@ public class Pg14_16Queries extends Pg13Queries {
               prefetch, hit, skip_init, skip_new, skip_fpw, skip_rep,
               stats_reset, wal_distance, block_distance, io_depth
             from pg_stat_recovery_prefetch
+            """;
+    }
+
+    /** PG14+: pg_stat_progress_copy. */
+    @Override
+    public String progressCopyQuery() {
+        return """
+            select
+              p.pid, p.datid::bigint, d.datname, p.relid::bigint,
+              p.command::text, p.type as copy_type,
+              p.bytes_processed, p.bytes_total,
+              p.tuples_processed, p.tuples_excluded, p.tuples_skipped
+            from pg_stat_progress_copy p
+            left join pg_database d on d.oid = p.datid
             """;
     }
 }

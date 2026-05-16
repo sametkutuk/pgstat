@@ -175,7 +175,15 @@ public interface SourceQueries {
      * Alt versiyonlarda override — stats_* kolonlari null.
      */
     default String subscriptionQuery() {
+        // PG15+ default: pg_stat_subscription + pg_stat_subscription_stats join
+        // PG18+: worker_type, 7 conflict kolonlari to_jsonb safe-lookup
         return """
+            with sub_src as (
+              select to_jsonb(s.*) as j, s.* from pg_stat_subscription s
+            ),
+            stats_src as (
+              select to_jsonb(ss.*) as j, ss.* from pg_stat_subscription_stats ss
+            )
             select
               s.subid::bigint                    as subid,
               s.subname,
@@ -192,9 +200,20 @@ public interface SourceQueries {
               end as lag_bytes,
               ss.apply_error_count,
               ss.sync_error_count,
-              ss.stats_reset
+              ss.stats_reset,
+              coalesce(sub_src.j->>'leader_pid', null)::integer as leader_pid,
+              coalesce(sub_src.j->>'worker_type', 'apply') as worker_type,
+              coalesce((stats_src.j->>'confl_insert_exists')::bigint, 0) as confl_insert_exists,
+              coalesce((stats_src.j->>'confl_update_origin_differs')::bigint, 0) as confl_update_origin_differs,
+              coalesce((stats_src.j->>'confl_update_exists')::bigint, 0) as confl_update_exists,
+              coalesce((stats_src.j->>'confl_update_missing')::bigint, 0) as confl_update_missing,
+              coalesce((stats_src.j->>'confl_delete_origin_differs')::bigint, 0) as confl_delete_origin_differs,
+              coalesce((stats_src.j->>'confl_delete_missing')::bigint, 0) as confl_delete_missing,
+              coalesce((stats_src.j->>'confl_multiple_unique_conflicts')::bigint, 0) as confl_multiple_unique_conflicts
             from pg_stat_subscription s
+            join sub_src on sub_src.subid = s.subid
             left join pg_stat_subscription_stats ss on ss.subid = s.subid
+            left join stats_src on stats_src.subid = s.subid
             """;
     }
 
@@ -261,11 +280,45 @@ public interface SourceQueries {
     /** pg_stat_progress_vacuum — PG9.6+. */
     String progressVacuumQuery();
 
+    /** pg_stat_progress_vacuum — full kolonlar (Madde 8). PG version-safe. */
+    default String progressVacuumFullQuery() {
+        // to_jsonb safe-lookup ile PG14+ ve PG17+ kolonlari
+        return """
+            with src as (
+              select to_jsonb(p.*) as j, p.*, d.datname
+              from pg_stat_progress_vacuum p
+              left join pg_database d on d.oid = p.datid
+            )
+            select
+              pid, datid::bigint, datname, relid::bigint, phase,
+              heap_blks_total, heap_blks_scanned, heap_blks_vacuumed,
+              coalesce((j->>'index_vacuum_count')::bigint, 0) as index_vacuum_count,
+              coalesce((j->>'max_dead_item_ids')::bigint,
+                       (j->>'max_dead_tuples')::bigint, 0) as max_dead_item_ids,
+              coalesce((j->>'max_dead_tuple_bytes')::bigint, 0) as max_dead_tuple_bytes,
+              coalesce((j->>'num_dead_item_ids')::bigint,
+                       (j->>'num_dead_tuples')::bigint, 0) as num_dead_item_ids,
+              coalesce((j->>'dead_tuple_bytes')::bigint, 0) as dead_tuple_bytes,
+              coalesce((j->>'indexes_total')::bigint, 0) as indexes_total,
+              coalesce((j->>'indexes_processed')::bigint, 0) as indexes_processed
+            from src
+            """;
+    }
+
     /** pg_stat_progress_analyze — PG13+. */
     default String progressAnalyzeQuery() { return null; }
 
     /** pg_stat_progress_create_index — PG12+. */
     default String progressCreateIndexQuery() { return null; }
+
+    /** pg_stat_progress_basebackup — PG13+ (primary only). */
+    default String progressBasebackupQuery() { return null; }
+
+    /** pg_stat_progress_copy — PG14+. */
+    default String progressCopyQuery() { return null; }
+
+    /** pg_stat_progress_cluster — PG12+ (CLUSTER/VACUUM FULL). */
+    default String progressClusterQuery() { return null; }
 
     /** pg_stat_wal_receiver — PG9.6+ (standby only). Null doner primary'de. */
     default String walReceiverQuery() {
@@ -287,7 +340,10 @@ public interface SourceQueries {
               latest_end_time,
               slot_name,
               coalesce(j->>'sender_host', '') as sender_host,
-              coalesce((j->>'sender_port')::integer, 0) as sender_port
+              coalesce((j->>'sender_port')::integer, 0) as sender_port,
+              case when flushed_lsn is not null
+                then pg_wal_lsn_diff(pg_last_wal_receive_lsn(), flushed_lsn)::bigint
+                else null end as lag_bytes
             from src
             """;
     }

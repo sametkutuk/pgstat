@@ -195,20 +195,32 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String progressCreateIndexQuery() {
-        // PG12'de mevcut
+        // PG12'de mevcut (PG11'de yok — bu class PG11+12 icin, PG12'de var)
         return """
             select
-              p.pid, 'CREATE INDEX' as command,
-              d.datname, c.relname,
-              p.phase,
-              p.blocks_total, p.blocks_done,
-              p.tuples_total, p.tuples_done,
-              case when p.blocks_total > 0
-                then round(100.0 * p.blocks_done / p.blocks_total, 2)
-                else null end as progress_pct
+              p.pid, p.datid::bigint, d.datname, p.relid::bigint,
+              p.index_relid::bigint, p.command::text, p.phase,
+              p.lockers_total, p.lockers_done, p.current_locker_pid,
+              p.blocks_total, p.blocks_done, p.tuples_total, p.tuples_done,
+              p.partitions_total, p.partitions_done
             from pg_stat_progress_create_index p
             left join pg_database d on d.oid = p.datid
-            left join pg_class c on c.oid = p.relid
+            """;
+    }
+
+    /** PG12+: pg_stat_progress_cluster (CLUSTER/VACUUM FULL). */
+    @Override
+    public String progressClusterQuery() {
+        return """
+            select
+              p.pid, p.datid::bigint, d.datname, p.relid::bigint,
+              p.command::text, p.phase,
+              p.cluster_index_relid::bigint,
+              p.heap_tuples_scanned, p.heap_tuples_written,
+              p.heap_blks_total, p.heap_blks_scanned,
+              p.index_rebuild_count
+            from pg_stat_progress_cluster p
+            left join pg_database d on d.oid = p.datid
             """;
     }
 
@@ -343,7 +355,11 @@ public class Pg11_12Queries implements SourceQueries {
               0::bigint as n_ins_since_vacuum,
               null::timestamptz as last_seq_scan,
               null::timestamptz as last_idx_scan,
-              0::bigint as n_tup_newpage_upd
+              0::bigint as n_tup_newpage_upd,
+              0::double precision as total_vacuum_time,
+              0::double precision as total_autovacuum_time,
+              0::double precision as total_analyze_time,
+              0::double precision as total_autoanalyze_time
             from pg_stat_user_tables s
             left join pg_statio_user_tables io on io.relid = s.relid
             """;
@@ -399,7 +415,16 @@ public class Pg11_12Queries implements SourceQueries {
               end as lag_bytes,
               null::bigint      as apply_error_count,
               null::bigint      as sync_error_count,
-              null::timestamptz as stats_reset
+              null::timestamptz as stats_reset,
+              null::integer     as leader_pid,
+              'apply'::text     as worker_type,
+              0::bigint as confl_insert_exists,
+              0::bigint as confl_update_origin_differs,
+              0::bigint as confl_update_exists,
+              0::bigint as confl_update_missing,
+              0::bigint as confl_delete_origin_differs,
+              0::bigint as confl_delete_missing,
+              0::bigint as confl_multiple_unique_conflicts
             from pg_stat_subscription s
             """;
     }

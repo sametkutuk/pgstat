@@ -261,6 +261,58 @@ public class ClusterCollector {
             } catch (Exception e) {
                 log.warn("Sequence I/O snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
+
+            // Adim 18: Progress vacuum full snapshot (Madde 8)
+            try {
+                rowsWritten += collectProgressVacuumFull(conn, queries, instancePk, now);
+            } catch (Exception e) {
+                log.warn("Progress vacuum full hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+
+            // Adim 19: Progress analyze full snapshot (Madde 9, PG13+)
+            if (queries.progressAnalyzeQuery() != null) {
+                try {
+                    rowsWritten += collectProgressAnalyzeFull(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("Progress analyze full hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
+
+            // Adim 20: Progress create index full snapshot (Madde 10, PG12+)
+            if (queries.progressCreateIndexQuery() != null) {
+                try {
+                    rowsWritten += collectProgressCreateIndexFull(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("Progress create index full hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
+
+            // Adim 21: Progress basebackup (Madde 11, PG13+, primary only)
+            if (isPrimary && queries.progressBasebackupQuery() != null) {
+                try {
+                    rowsWritten += collectProgressBasebackup(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("Progress basebackup hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
+
+            // Adim 22: Progress copy (Madde 12, PG14+)
+            if (queries.progressCopyQuery() != null) {
+                try {
+                    rowsWritten += collectProgressCopy(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("Progress copy hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
+
+            // Adim 23: Progress cluster (Madde 13, PG12+)
+            if (queries.progressClusterQuery() != null) {
+                try {
+                    rowsWritten += collectProgressCluster(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("Progress cluster hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
         }
 
         log.debug("Cluster toplama tamamlandi: {} — {} satir", instance.instanceId(), rowsWritten);
@@ -785,7 +837,7 @@ public class ClusterCollector {
                 rs.getString("slot_name"),
                 rs.getString("sender_host"),
                 (Integer) rs.getObject("sender_port"),
-                null // lag_bytes — computed at query time if needed
+                rs.getObject("lag_bytes") != null ? rs.getLong("lag_bytes") : null
             );
             return 1;
         }
@@ -922,7 +974,17 @@ public class ClusterCollector {
                     toLongSafe(rs.getObject("lag_bytes")),
                     toLongSafe(rs.getObject("apply_error_count")),
                     toLongSafe(rs.getObject("sync_error_count")),
-                    rs.getObject("stats_reset", OffsetDateTime.class)
+                    rs.getObject("stats_reset", OffsetDateTime.class),
+                    // V067: leader_pid, worker_type, 7 conflict kolonlari
+                    (Integer) rs.getObject("leader_pid"),
+                    rs.getString("worker_type"),
+                    rs.getLong("confl_insert_exists"),
+                    rs.getLong("confl_update_origin_differs"),
+                    rs.getLong("confl_update_exists"),
+                    rs.getLong("confl_update_missing"),
+                    rs.getLong("confl_delete_origin_differs"),
+                    rs.getLong("confl_delete_missing"),
+                    rs.getLong("confl_multiple_unique_conflicts")
                 );
                 rows++;
             }
@@ -1013,6 +1075,198 @@ public class ClusterCollector {
                     rs.getString("relname"),
                     toLongSafe(rs.getObject("blks_read")),
                     toLongSafe(rs.getObject("blks_hit"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 18: Progress vacuum full (Madde 8)
+    // =========================================================================
+
+    private long collectProgressVacuumFull(Connection conn, SourceQueries queries,
+                                           long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressVacuumFullQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressVacuumSnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    toLongSafe(rs.getObject("datid")),
+                    rs.getString("datname"),
+                    toLongSafe(rs.getObject("relid")),
+                    rs.getString("phase"),
+                    toLongSafe(rs.getObject("heap_blks_total")),
+                    toLongSafe(rs.getObject("heap_blks_scanned")),
+                    toLongSafe(rs.getObject("heap_blks_vacuumed")),
+                    toLongSafe(rs.getObject("index_vacuum_count")),
+                    toLongSafe(rs.getObject("max_dead_item_ids")),
+                    toLongSafe(rs.getObject("max_dead_tuple_bytes")),
+                    toLongSafe(rs.getObject("num_dead_item_ids")),
+                    toLongSafe(rs.getObject("dead_tuple_bytes")),
+                    toLongSafe(rs.getObject("indexes_total")),
+                    toLongSafe(rs.getObject("indexes_processed"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 19: Progress analyze full (Madde 9)
+    // =========================================================================
+
+    private long collectProgressAnalyzeFull(Connection conn, SourceQueries queries,
+                                            long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressAnalyzeQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressAnalyzeSnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    toLongSafe(rs.getObject("datid")),
+                    rs.getString("datname"),
+                    toLongSafe(rs.getObject("relid")),
+                    rs.getString("phase"),
+                    toLongSafe(rs.getObject("sample_blks_total")),
+                    toLongSafe(rs.getObject("sample_blks_scanned")),
+                    toLongSafe(rs.getObject("ext_stats_total")),
+                    toLongSafe(rs.getObject("ext_stats_computed")),
+                    toLongSafe(rs.getObject("child_tables_total")),
+                    toLongSafe(rs.getObject("child_tables_done")),
+                    toLongSafe(rs.getObject("current_child_table_relid"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 20: Progress create index full (Madde 10)
+    // =========================================================================
+
+    private long collectProgressCreateIndexFull(Connection conn, SourceQueries queries,
+                                                long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressCreateIndexQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressCreateIndexSnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    toLongSafe(rs.getObject("datid")),
+                    rs.getString("datname"),
+                    toLongSafe(rs.getObject("relid")),
+                    toLongSafe(rs.getObject("index_relid")),
+                    rs.getString("command"),
+                    rs.getString("phase"),
+                    toLongSafe(rs.getObject("lockers_total")),
+                    toLongSafe(rs.getObject("lockers_done")),
+                    toLongSafe(rs.getObject("current_locker_pid")),
+                    toLongSafe(rs.getObject("blocks_total")),
+                    toLongSafe(rs.getObject("blocks_done")),
+                    toLongSafe(rs.getObject("tuples_total")),
+                    toLongSafe(rs.getObject("tuples_done")),
+                    toLongSafe(rs.getObject("partitions_total")),
+                    toLongSafe(rs.getObject("partitions_done"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 21: Progress basebackup (Madde 11)
+    // =========================================================================
+
+    private long collectProgressBasebackup(Connection conn, SourceQueries queries,
+                                           long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressBasebackupQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressBasebackupSnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    rs.getString("phase"),
+                    toLongSafe(rs.getObject("backup_total")),
+                    toLongSafe(rs.getObject("backup_streamed")),
+                    toLongSafe(rs.getObject("tablespaces_total")),
+                    toLongSafe(rs.getObject("tablespaces_streamed"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 22: Progress copy (Madde 12)
+    // =========================================================================
+
+    private long collectProgressCopy(Connection conn, SourceQueries queries,
+                                     long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressCopyQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressCopySnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    toLongSafe(rs.getObject("datid")),
+                    rs.getString("datname"),
+                    toLongSafe(rs.getObject("relid")),
+                    rs.getString("command"),
+                    rs.getString("copy_type"),
+                    toLongSafe(rs.getObject("bytes_processed")),
+                    toLongSafe(rs.getObject("bytes_total")),
+                    toLongSafe(rs.getObject("tuples_processed")),
+                    toLongSafe(rs.getObject("tuples_excluded")),
+                    toLongSafe(rs.getObject("tuples_skipped"))
+                );
+                rows++;
+            }
+        }
+        return rows;
+    }
+
+    // =========================================================================
+    // Adim 23: Progress cluster (Madde 13)
+    // =========================================================================
+
+    private long collectProgressCluster(Connection conn, SourceQueries queries,
+                                        long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.progressClusterQuery();
+        if (sql == null) return 0;
+        long rows = 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                factRepo.insertProgressClusterSnapshot(now, instancePk,
+                    rs.getInt("pid"),
+                    toLongSafe(rs.getObject("datid")),
+                    rs.getString("datname"),
+                    toLongSafe(rs.getObject("relid")),
+                    rs.getString("command"),
+                    rs.getString("phase"),
+                    toLongSafe(rs.getObject("cluster_index_relid")),
+                    toLongSafe(rs.getObject("heap_tuples_scanned")),
+                    toLongSafe(rs.getObject("heap_tuples_written")),
+                    toLongSafe(rs.getObject("heap_blks_total")),
+                    toLongSafe(rs.getObject("heap_blks_scanned")),
+                    toLongSafe(rs.getObject("index_rebuild_count"))
                 );
                 rows++;
             }
