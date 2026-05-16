@@ -319,7 +319,17 @@ public class StatementsCollector {
                             orZeroD(deltaCalc.deltaDouble(sample.jitDeformTime(), prev.jitDeformTime())),
                             sample.statsSince(), sample.minmaxStatsSince(),
                             orZeroL(deltaCalc.deltaLong(sample.parallelWorkersToLaunch(), prev.parallelWorkersToLaunch())),
-                            orZeroL(deltaCalc.deltaLong(sample.parallelWorkersLaunched(), prev.parallelWorkersLaunched()))
+                            orZeroL(deltaCalc.deltaLong(sample.parallelWorkersLaunched(), prev.parallelWorkersLaunched())),
+                            // V066 yeni alanlar — mean SNAPSHOT (current pgss snapshot degeri),
+                            // jit_*_count delta, shared/local_blk_*_time delta
+                            sample.meanExecTime(), sample.meanPlanTime(),
+                            orZeroL(deltaCalc.deltaLong(sample.jitInliningCount(), prev.jitInliningCount())),
+                            orZeroL(deltaCalc.deltaLong(sample.jitOptimizationCount(), prev.jitOptimizationCount())),
+                            orZeroL(deltaCalc.deltaLong(sample.jitEmissionCount(), prev.jitEmissionCount())),
+                            orZeroD(deltaCalc.deltaDouble(sample.sharedBlkReadTime(), prev.sharedBlkReadTime())),
+                            orZeroD(deltaCalc.deltaDouble(sample.sharedBlkWriteTime(), prev.sharedBlkWriteTime())),
+                            orZeroD(deltaCalc.deltaDouble(sample.localBlkReadTime(), prev.localBlkReadTime())),
+                            orZeroD(deltaCalc.deltaDouble(sample.localBlkWriteTime(), prev.localBlkWriteTime()))
                         );
                         rowsWritten++;
                     }
@@ -358,7 +368,12 @@ public class StatementsCollector {
                         sample.walBuffersFull(),
                         sample.jitFunctions(), sample.jitDeformCount(), sample.jitDeformTime(),
                         sample.statsSince(), sample.minmaxStatsSince(),
-                        sample.parallelWorkersToLaunch(), sample.parallelWorkersLaunched()
+                        sample.parallelWorkersToLaunch(), sample.parallelWorkersLaunched(),
+                        // V066 yeni alanlar — epoch reset sonrasi degerler oldugu gibi delta'dir
+                        sample.meanExecTime(), sample.meanPlanTime(),
+                        sample.jitInliningCount(), sample.jitOptimizationCount(), sample.jitEmissionCount(),
+                        sample.sharedBlkReadTime(), sample.sharedBlkWriteTime(),
+                        sample.localBlkReadTime(), sample.localBlkWriteTime()
                     );
                     rowsWritten++;
                 } else {
