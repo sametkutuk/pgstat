@@ -261,7 +261,7 @@ export default function Statements() {
               : 'Bu aralıkta pg_stat_statements verisi toplanmamış. Zaman aralığını genişletmeyi deneyin.'} />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+            <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
               <thead>
                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                   <ResizableTh colKey="instance" width={widths['instance'] ?? 140} onResize={setWidth}

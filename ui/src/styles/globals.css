@@ -110,3 +110,15 @@ body {
     margin-top: 1rem !important;
   }
 }
+/* Resizable statements table — fixed layout ile hucreler kolon genisligine sigsin,
+   tasanlar ... ile kesilsin. ResizableTh kullanan tablolara stmt-resizable-table sinifi verilir. */
+.stmt-resizable-table th,
+.stmt-resizable-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.stmt-resizable-table td > * {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

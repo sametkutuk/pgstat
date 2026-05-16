@@ -497,7 +497,7 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
                     <EmptyState icon="📝" title="Sorgu kaydı yok" description={data?.length === 0 ? "Bu aralıkta statement verisi yok." : "Filtreyle eşleşen sorgu bulunamadı."} />
                 ) : (
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
                             <thead>
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                                     <ResizableTh colKey="db_rol" width={widths['db_rol'] ?? 140} onResize={setWidth}
