@@ -13,6 +13,7 @@ import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
+import ResizableTh, { useColumnWidths } from '../components/statements/ResizableTh';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings';
 
@@ -369,6 +370,7 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
 
     const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.statements.widths');
 
     const qp = new URLSearchParams({
         from: range.fromIso,
@@ -484,6 +486,11 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
                             title="Görmek istediğiniz kolonları seçin">
                             ⚙️ Sütun ({selectedCols.length})
                         </button>
+                        <button onClick={resetWidths}
+                            className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]"
+                            title="Kolon genişliklerini varsayılana döndür">
+                            ↔ Genişlik
+                        </button>
                         <button onClick={() => refetch()}
                             className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                             {isFetching ? 'Yenileniyor...' : 'Yenile'}
@@ -502,20 +509,23 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
                     <EmptyState icon="📝" title="Sorgu kaydı yok" description={data?.length === 0 ? "Bu aralıkta statement verisi yok." : "Filtreyle eşleşen sorgu bulunamadı."} />
                 ) : (
                     <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
+                        <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
                             <thead>
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
-                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                                    <ResizableTh colKey="db_rol" width={widths['db_rol'] ?? 140} onResize={setWidth}
+                                        className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</ResizableTh>
+                                    <ResizableTh colKey="sql" width={widths['sql'] ?? 360} onResize={setWidth}
+                                        className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</ResizableTh>
                                     {selectedCols.map(col => {
                                         const meta = colsMeta?.available.find(c => c.key === col);
                                         return (
-                                            <th key={col} className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide whitespace-nowrap">
+                                            <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align="right"
+                                                className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                                 {meta?.label ?? col}
                                                 {meta && meta.since > 11 && (
                                                     <span className="ml-1 text-[9px] font-normal text-[#94A3B8]">PG{meta.since}+</span>
                                                 )}
-                                            </th>
+                                            </ResizableTh>
                                         );
                                     })}
                                 </tr>

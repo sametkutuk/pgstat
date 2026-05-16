@@ -7,6 +7,7 @@ import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
+import ResizableTh, { useColumnWidths } from '../components/statements/ResizableTh';
 
 // Dinamik kolon destegi — Statement satiri Record<string, any> olarak gelir.
 // Sabit alanlar (instance_name, datname, queryid, query_text_short, query_text_id)
@@ -55,6 +56,7 @@ export default function Statements() {
 
   // Kullanici secimi kolonlar (LocalStorage) + meta (API'den)
   const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
+  const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.statements.widths');
   const [datname, setDatname] = useState('');
   const [rolname, setRolname] = useState('');
   const [sqlSearch, setSqlSearch] = useState('');
@@ -171,6 +173,11 @@ export default function Statements() {
             title="Görmek istediğiniz kolonları seçin">
             ⚙️ Sütun Yönet ({selectedCols.length})
           </button>
+          <button onClick={resetWidths}
+            className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors print:hidden"
+            title="Kolon genişliklerini varsayılana döndür">
+            ↔ Genişlik sıfırla
+          </button>
           <PrintButton title="Top Statements" />
           <button
             onClick={() => refetch()}
@@ -270,22 +277,27 @@ export default function Statements() {
               : 'Bu aralıkta pg_stat_statements verisi toplanmamış. Zaman aralığını genişletmeyi deneyin.'} />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
               <thead>
                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                  <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Instance</th>
-                  <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</th>
-                  <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
-                  <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                  <ResizableTh colKey="instance" width={widths['instance'] ?? 140} onResize={setWidth}
+                    className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Instance</ResizableTh>
+                  <ResizableTh colKey="db_rol" width={widths['db_rol'] ?? 140} onResize={setWidth}
+                    className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB / Rol</ResizableTh>
+                  <ResizableTh colKey="queryid" width={widths['queryid'] ?? 130} onResize={setWidth}
+                    className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</ResizableTh>
+                  <ResizableTh colKey="sql" width={widths['sql'] ?? 360} onResize={setWidth}
+                    className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</ResizableTh>
                   {selectedCols.map(col => {
                     const meta = colsMeta?.available.find(c => c.key === col);
                     return (
-                      <th key={col} className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide whitespace-nowrap">
+                      <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align="right"
+                        className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                         {meta?.label ?? col}
                         {meta && meta.since > 11 && (
                           <span className="ml-1 text-[9px] font-normal text-[#94A3B8]">PG{meta.since}+</span>
                         )}
-                      </th>
+                      </ResizableTh>
                     );
                   })}
                 </tr>
