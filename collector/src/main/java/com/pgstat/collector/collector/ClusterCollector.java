@@ -204,6 +204,15 @@ public class ClusterCollector {
                 log.warn("Archiver snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
             }
 
+            // Adim 10b: WAL receiver snapshot (standby only)
+            if (!isPrimary) {
+                try {
+                    rowsWritten += collectWalReceiverSnapshot(conn, queries, instancePk, now);
+                } catch (Exception e) {
+                    log.warn("WAL receiver snapshot hatasi: {} — {}", instance.instanceId(), e.getMessage());
+                }
+            }
+
             // Adim 11: Replication slot snapshot
             try {
                 rowsWritten += collectSlotSnapshot(conn, queries, instancePk, now);
@@ -352,6 +361,9 @@ public class ClusterCollector {
                                 long instancePk, OffsetDateTime now) throws Exception {
         // Key: "backendType|object|context" → metrikName → kumulatif deger
         Map<String, Map<String, Double>> currentSamples = new LinkedHashMap<>();
+        // Snapshot kolonlari (delta hesaplanmaz): op_bytes, stats_reset
+        Map<String, Long> opBytesMap = new LinkedHashMap<>();
+        Map<String, OffsetDateTime> statsResetMap = new LinkedHashMap<>();
 
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.ioStatQuery())) {
@@ -371,7 +383,18 @@ public class ClusterCollector {
                 metrics.put("reuses", getDoubleOrZero(rs, "reuses"));
                 metrics.put("fsyncs", getDoubleOrZero(rs, "fsyncs"));
                 metrics.put("fsync_time", getDoubleOrZero(rs, "fsync_time"));
+                // V067: writebacks, writeback_time monotonik counter → delta
+                metrics.put("writebacks", getDoubleOrZero(rs, "writebacks"));
+                metrics.put("writeback_time", getDoubleOrZero(rs, "writeback_time"));
+                // V067: PG18 byte kolonlari monotonik counter → delta
+                metrics.put("read_bytes", getDoubleOrZero(rs, "read_bytes"));
+                metrics.put("write_bytes", getDoubleOrZero(rs, "write_bytes"));
+                metrics.put("extend_bytes", getDoubleOrZero(rs, "extend_bytes"));
                 currentSamples.put(key, metrics);
+                // Snapshot kolonlari
+                Long opBytes = rs.getObject("op_bytes") != null ? rs.getLong("op_bytes") : null;
+                opBytesMap.put(key, opBytes);
+                statsResetMap.put(key, rs.getObject("stats_reset", OffsetDateTime.class));
             }
         }
 
@@ -392,7 +415,6 @@ public class ClusterCollector {
 
             Long readsDelta = deltaCalc.deltaLong(curr.get("reads").longValue(),
                     prev.get("reads") != null ? prev.get("reads").longValue() : null);
-            // Herhangi bir delta varsa yaz
             factRepo.insertIoStatDelta(now, instancePk,
                 parts[0], parts[1], parts[2],
                 readsDelta,
@@ -405,7 +427,15 @@ public class ClusterCollector {
                 deltaCalc.deltaLong(curr.get("evictions").longValue(), prev.get("evictions").longValue()),
                 deltaCalc.deltaLong(curr.get("reuses").longValue(), prev.get("reuses").longValue()),
                 deltaCalc.deltaLong(curr.get("fsyncs").longValue(), prev.get("fsyncs").longValue()),
-                deltaCalc.deltaDouble(curr.get("fsync_time"), prev.get("fsync_time"))
+                deltaCalc.deltaDouble(curr.get("fsync_time"), prev.get("fsync_time")),
+                // V067: yeni kolonlar
+                deltaCalc.deltaLong(curr.get("writebacks").longValue(), prev.get("writebacks").longValue()),
+                deltaCalc.deltaDouble(curr.get("writeback_time"), prev.get("writeback_time")),
+                opBytesMap.get(entry.getKey()),
+                deltaCalc.deltaLong(curr.get("read_bytes").longValue(), prev.get("read_bytes").longValue()),
+                deltaCalc.deltaLong(curr.get("write_bytes").longValue(), prev.get("write_bytes").longValue()),
+                deltaCalc.deltaLong(curr.get("extend_bytes").longValue(), prev.get("extend_bytes").longValue()),
+                statsResetMap.get(entry.getKey())
             );
             rowsWritten++;
         }
@@ -730,6 +760,37 @@ public class ClusterCollector {
     // Adim 11: Replication slot snapshot
     // =========================================================================
 
+    // Adim 10b: WAL receiver snapshot (standby only)
+    private long collectWalReceiverSnapshot(Connection conn, SourceQueries queries,
+                                             long instancePk, OffsetDateTime now) throws Exception {
+        String sql = queries.walReceiverQuery();
+        if (sql == null) return 0;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            if (!rs.next()) return 0;
+
+            factRepo.insertWalReceiverSnapshot(
+                now, instancePk,
+                (Integer) rs.getObject("pid"),
+                rs.getString("status"),
+                rs.getString("receive_start_lsn"),
+                (Integer) rs.getObject("receive_start_tli"),
+                rs.getString("written_lsn"),
+                rs.getString("flushed_lsn"),
+                (Integer) rs.getObject("received_tli"),
+                rs.getObject("last_msg_send_time", OffsetDateTime.class),
+                rs.getObject("last_msg_receipt_time", OffsetDateTime.class),
+                rs.getString("latest_end_lsn"),
+                rs.getObject("latest_end_time", OffsetDateTime.class),
+                rs.getString("slot_name"),
+                rs.getString("sender_host"),
+                (Integer) rs.getObject("sender_port"),
+                null // lag_bytes — computed at query time if needed
+            );
+            return 1;
+        }
+    }
+
     private long collectSlotSnapshot(Connection conn, SourceQueries queries,
                                       long instancePk, OffsetDateTime now) throws Exception {
         String sql = queries.replicationSlotsQuery();
@@ -761,7 +822,14 @@ public class ClusterCollector {
                     (Long) rs.getObject("stream_bytes"),
                     (Long) rs.getObject("total_txns"),
                     (Long) rs.getObject("total_bytes"),
-                    rs.getObject("stats_reset", OffsetDateTime.class)
+                    rs.getObject("stats_reset", OffsetDateTime.class),
+                    // V067: PG17+ slot health kolonlari
+                    (Boolean) rs.getObject("temporary"),
+                    (Boolean) rs.getObject("two_phase"),
+                    (Boolean) rs.getObject("conflicting"),
+                    rs.getString("invalidation_reason"),
+                    (Boolean) rs.getObject("failover"),
+                    (Boolean) rs.getObject("synced")
                 );
                 rows++;
             }

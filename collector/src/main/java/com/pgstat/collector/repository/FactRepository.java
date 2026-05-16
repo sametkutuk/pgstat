@@ -87,21 +87,29 @@ public class FactRepository {
                                   Long extendsDelta, Double extendTimeMsDelta,
                                   Long hitsDelta, Long evictionsDelta,
                                   Long reusesDelta, Long fsyncsDelta,
-                                  Double fsyncTimeMsDelta) {
+                                  Double fsyncTimeMsDelta,
+                                  Long writebacksDelta, Double writebackTimeMsDelta,
+                                  Long opBytes, Long readBytesDelta,
+                                  Long writeBytesDelta, Long extendBytesDelta,
+                                  OffsetDateTime statsReset) {
         jdbc.update("""
             insert into fact.pg_io_stat_delta (
               sample_ts, instance_pk, backend_type, object, context,
               reads_delta, read_time_ms_delta, writes_delta, write_time_ms_delta,
               extends_delta, extend_time_ms_delta, hits_delta, evictions_delta,
-              reuses_delta, fsyncs_delta, fsync_time_ms_delta
+              reuses_delta, fsyncs_delta, fsync_time_ms_delta,
+              writebacks_delta, writeback_time_ms_delta, op_bytes,
+              read_bytes_delta, write_bytes_delta, extend_bytes_delta, stats_reset
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, backendType, object, context,
             readsDelta, readTimeMsDelta, writesDelta, writeTimeMsDelta,
             extendsDelta, extendTimeMsDelta, hitsDelta, evictionsDelta,
-            reusesDelta, fsyncsDelta, fsyncTimeMsDelta
+            reusesDelta, fsyncsDelta, fsyncTimeMsDelta,
+            writebacksDelta, writebackTimeMsDelta, opBytes,
+            readBytesDelta, writeBytesDelta, extendBytesDelta, statsReset
         );
     }
 
@@ -504,6 +512,39 @@ public class FactRepository {
     }
 
     // -------------------------------------------------------------------------
+    // fact.pg_wal_receiver_snapshot — pg_stat_wal_receiver (standby only)
+    // -------------------------------------------------------------------------
+
+    public void insertWalReceiverSnapshot(OffsetDateTime sampleTs, long instancePk,
+                                          Integer pid, String status,
+                                          String receiveStartLsn, Integer receiveStartTli,
+                                          String writtenLsn, String flushedLsn,
+                                          Integer receivedTli,
+                                          OffsetDateTime lastMsgSendTime,
+                                          OffsetDateTime lastMsgReceiptTime,
+                                          String latestEndLsn, OffsetDateTime latestEndTime,
+                                          String slotName, String senderHost,
+                                          Integer senderPort, Long lagBytes) {
+        jdbc.update("""
+            insert into fact.pg_wal_receiver_snapshot (
+              sample_ts, instance_pk, pid, status,
+              receive_start_lsn, receive_start_tli, written_lsn, flushed_lsn,
+              received_tli, last_msg_send_time, last_msg_receipt_time,
+              latest_end_lsn, latest_end_time, slot_name,
+              sender_host, sender_port, lag_bytes
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            sampleTs, instancePk, pid, status,
+            receiveStartLsn, receiveStartTli, writtenLsn, flushedLsn,
+            receivedTli, lastMsgSendTime, lastMsgReceiptTime,
+            latestEndLsn, latestEndTime, slotName,
+            senderHost, senderPort, lagBytes
+        );
+    }
+
+    // -------------------------------------------------------------------------
     // fact.pg_replication_slot_snapshot
     // -------------------------------------------------------------------------
 
@@ -516,7 +557,10 @@ public class FactRepository {
                                    Long spillTxns, Long spillCount, Long spillBytes,
                                    Long streamTxns, Long streamCount, Long streamBytes,
                                    Long totalTxns, Long totalBytes,
-                                   OffsetDateTime statsReset) {
+                                   OffsetDateTime statsReset,
+                                   Boolean temporary, Boolean twoPhase,
+                                   Boolean conflicting, String invalidationReason,
+                                   Boolean failover, Boolean synced) {
         jdbc.update("""
             insert into fact.pg_replication_slot_snapshot (
               sample_ts, instance_pk, slot_name, plugin, slot_type, database,
@@ -524,9 +568,11 @@ public class FactRepository {
               confirmed_flush_lsn, wal_status, safe_wal_size, slot_lag_bytes,
               spill_txns, spill_count, spill_bytes,
               stream_txns, stream_count, stream_bytes,
-              total_txns, total_bytes, stats_reset
+              total_txns, total_bytes, stats_reset,
+              temporary, two_phase, conflicting, invalidation_reason, failover, synced
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, slotName, plugin, slotType, database,
@@ -534,7 +580,8 @@ public class FactRepository {
             confirmedFlushLsn, walStatus, safeWalSize, slotLagBytes,
             spillTxns, spillCount, spillBytes,
             streamTxns, streamCount, streamBytes,
-            totalTxns, totalBytes, statsReset
+            totalTxns, totalBytes, statsReset,
+            temporary, twoPhase, conflicting, invalidationReason, failover, synced
         );
     }
 

@@ -101,7 +101,12 @@ public interface SourceQueries {
      * Burada PG14+ versiyonu — override edenler farkli yazabilir.
      */
     default String replicationSlotsQuery() {
+        // PG14+ default: pg_replication_slots + pg_stat_replication_slots join
+        // PG17+ slot health kolonlari to_jsonb safe-lookup ile
         return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_replication_slots s
+            )
             select
               s.slot_name,
               s.plugin,
@@ -119,8 +124,15 @@ public interface SourceQueries {
               sr.spill_txns, sr.spill_count, sr.spill_bytes,
               sr.stream_txns, sr.stream_count, sr.stream_bytes,
               sr.total_txns, sr.total_bytes,
-              sr.stats_reset
+              sr.stats_reset,
+              coalesce((src.j->>'temporary')::boolean, false) as temporary,
+              coalesce((src.j->>'two_phase')::boolean, false) as two_phase,
+              (src.j->>'conflicting')::boolean as conflicting,
+              src.j->>'invalidation_reason' as invalidation_reason,
+              coalesce((src.j->>'failover')::boolean, false) as failover,
+              coalesce((src.j->>'synced')::boolean, false) as synced
             from pg_replication_slots s
+            join src on src.slot_name = s.slot_name
             left join pg_stat_replication_slots sr on sr.slot_name = s.slot_name
             """;
     }
@@ -254,6 +266,31 @@ public interface SourceQueries {
 
     /** pg_stat_progress_create_index — PG12+. */
     default String progressCreateIndexQuery() { return null; }
+
+    /** pg_stat_wal_receiver — PG9.6+ (standby only). Null doner primary'de. */
+    default String walReceiverQuery() {
+        // PG13+ full set: written_lsn var, sender_host/port var
+        return """
+            with src as (
+              select to_jsonb(r.*) as j, r.* from pg_stat_wal_receiver r
+            )
+            select
+              pid, status,
+              receive_start_lsn::text as receive_start_lsn,
+              receive_start_tli,
+              coalesce((j->>'written_lsn'), flushed_lsn::text) as written_lsn,
+              flushed_lsn::text as flushed_lsn,
+              received_tli,
+              last_msg_send_time,
+              last_msg_receipt_time,
+              latest_end_lsn::text as latest_end_lsn,
+              latest_end_time,
+              slot_name,
+              coalesce(j->>'sender_host', '') as sender_host,
+              coalesce((j->>'sender_port')::integer, 0) as sender_port
+            from src
+            """;
+    }
 
     // =========================================================================
     // Statements (pg_stat_statements)
