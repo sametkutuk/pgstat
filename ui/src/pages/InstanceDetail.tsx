@@ -16,7 +16,7 @@ import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '..
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'settings';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -95,11 +95,17 @@ export default function InstanceDetail() {
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
         { key: 'replication_slots', label: 'Slots', tip: 'pg_replication_slots — slot durumu, lag, WAL status, PG17+ conflict/failover bilgileri.' },
+        { key: 'subscriptions', label: 'Subscriptions', tip: 'pg_stat_subscription — logical replication worker durumu, PG18+ conflict detayları.' },
+        { key: 'wal_receiver', label: 'WAL Receiver', tip: 'pg_stat_wal_receiver — standby WAL receiver durumu, lag, sender bilgisi.' },
+        { key: 'conflicts', label: 'Conflicts', tip: 'pg_stat_database_conflicts — standby recovery conflict istatistikleri.' },
         { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
         { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
         { key: 'io_stats', label: 'I/O Stats', tip: 'pg_stat_io (PG16+) — backend tipi, object ve context bazında detaylı I/O istatistikleri.' },
+        { key: 'bgwriter', label: 'BgWriter', tip: 'pg_stat_bgwriter — background writer ve (PG16 öncesi) checkpoint istatistikleri.' },
+        { key: 'checkpointer', label: 'Checkpointer', tip: 'pg_stat_checkpointer (PG17+) — checkpoint ve restartpoint istatistikleri.' },
+        { key: 'archiver', label: 'Archiver', tip: 'pg_stat_archiver — WAL arşivleme başarı/hata sayıları ve son arşivlenen dosya.' },
         { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir. Parametre değiştiğinde otomatik PARAMETER_CHANGED INFO alert tetiklenir (bildirim kanallarına da gönderilir).' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
@@ -172,11 +178,17 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'replication_slots' && <ReplicationSlotsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
+            {tab === 'subscriptions' && <SubscriptionsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
+            {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'conflicts' && <ConflictsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
@@ -1873,6 +1885,265 @@ function ReplicationSlotsTab({ instancePk, pgMajor }: { instancePk: number; pgMa
                 )}
             </div>
             <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Replication Slots Sütunları" />
+        </div>
+    );
+}
+
+// =========================================================================
+// Checkpointer Tab (PG17+) — cluster_delta key-value pivot
+// =========================================================================
+function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-checkpointer', instancePk, range.fromIso, range.toIso],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/cluster-metrics?family=pg_stat_checkpointer&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (pgMajor != null && pgMajor < 17) {
+        return <EmptyState icon="🔄" title="PG17+ gerekli" description={`pg_stat_checkpointer PG17'de eklendi. Bu instance PG${pgMajor}. Checkpoint metrikleri BgWriter tab'ında.`} />;
+    }
+    if (isLoading) return <SkeletonTable rows={5} cols={4} />;
+
+    // Pivot: metric_name → son değer
+    const latest = new Map<string, number>();
+    (data || []).forEach((r: any) => { latest.set(r.metric_name, Number(r.metric_value_num)); });
+
+    const metrics = [
+        { key: 'checkpoints_timed', label: 'Timed Checkpoints' },
+        { key: 'checkpoints_req', label: 'Requested Checkpoints' },
+        { key: 'checkpoint_write_time', label: 'Write Time (ms)' },
+        { key: 'checkpoint_sync_time', label: 'Sync Time (ms)' },
+        { key: 'buffers_checkpoint', label: 'Buffers Written' },
+        { key: 'restartpoints_timed', label: 'Restartpoints Timed' },
+        { key: 'restartpoints_req', label: 'Restartpoints Req' },
+        { key: 'restartpoints_done', label: 'Restartpoints Done' },
+        { key: 'num_done', label: 'Num Done (PG18+)' },
+        { key: 'slru_written', label: 'SLRU Written (PG18+)' },
+    ];
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8]">Seçili aralıktaki delta toplamları</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <table className="w-full text-sm">
+                    <thead><tr className="border-b border-[#E2E8F0]"><th className="text-left py-2 px-3 text-xs font-semibold text-[#64748B]">Metrik</th><th className="text-right py-2 px-3 text-xs font-semibold text-[#64748B]">Delta Toplam</th></tr></thead>
+                    <tbody>{metrics.map(m => (
+                        <tr key={m.key} className="border-b border-[#F1F5F9]">
+                            <td className="py-2 px-3 text-xs">{m.label}</td>
+                            <td className="py-2 px-3 text-xs text-right font-mono">{latest.has(m.key) ? fmtValue(m.key, latest.get(m.key)) : '—'}</td>
+                        </tr>
+                    ))}</tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// BgWriter Tab — cluster_delta key-value pivot
+// =========================================================================
+function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-bgwriter', instancePk, range.fromIso, range.toIso],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/cluster-metrics?family=pg_stat_bgwriter&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={5} cols={4} />;
+
+    const latest = new Map<string, number>();
+    (data || []).forEach((r: any) => { latest.set(r.metric_name, Number(r.metric_value_num)); });
+
+    // PG17 öncesi full set, PG17+ slim set
+    const fullMetrics = [
+        { key: 'checkpoints_timed', label: 'Timed Checkpoints', since: 11 },
+        { key: 'checkpoints_req', label: 'Requested Checkpoints', since: 11 },
+        { key: 'checkpoint_write_time', label: 'Checkpoint Write Time (ms)', since: 11 },
+        { key: 'checkpoint_sync_time', label: 'Checkpoint Sync Time (ms)', since: 11 },
+        { key: 'buffers_checkpoint', label: 'Buffers Checkpoint', since: 11 },
+        { key: 'buffers_clean', label: 'Buffers Clean', since: 11 },
+        { key: 'maxwritten_clean', label: 'Max Written Clean', since: 11 },
+        { key: 'buffers_backend', label: 'Buffers Backend', since: 11 },
+        { key: 'buffers_backend_fsync', label: 'Buffers Backend Fsync', since: 11 },
+        { key: 'buffers_alloc', label: 'Buffers Alloc', since: 11 },
+    ];
+    const slimMetrics = [
+        { key: 'buffers_clean', label: 'Buffers Clean', since: 11 },
+        { key: 'maxwritten_clean', label: 'Max Written Clean', since: 11 },
+        { key: 'buffers_alloc', label: 'Buffers Alloc', since: 11 },
+    ];
+    const metrics = (pgMajor != null && pgMajor >= 17) ? slimMetrics : fullMetrics;
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8]">{pgMajor != null && pgMajor >= 17 ? 'PG17+ slim set (checkpoint → Checkpointer tab)' : 'Full set (checkpoint dahil)'}</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <table className="w-full text-sm">
+                    <thead><tr className="border-b border-[#E2E8F0]"><th className="text-left py-2 px-3 text-xs font-semibold text-[#64748B]">Metrik</th><th className="text-right py-2 px-3 text-xs font-semibold text-[#64748B]">Delta Toplam</th></tr></thead>
+                    <tbody>{metrics.map(m => (
+                        <tr key={m.key} className="border-b border-[#F1F5F9]">
+                            <td className="py-2 px-3 text-xs">{m.label}</td>
+                            <td className="py-2 px-3 text-xs text-right font-mono">{latest.has(m.key) ? fmtValue(m.key, latest.get(m.key)) : '—'}</td>
+                        </tr>
+                    ))}</tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// Archiver Tab — fact.pg_archiver_snapshot
+// =========================================================================
+function ArchiverTab({ instancePk }: { instancePk: number }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-archiver', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/archiver`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={3} cols={5} />;
+
+    const columns = [
+        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
+        { key: 'archived_count', header: 'Arşivlenen', render: (r: any) => Number(r.archived_count || 0).toLocaleString(), className: 'text-right' },
+        { key: 'last_archived_wal', header: 'Son Arşiv WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_archived_wal || '—'}</span> },
+        { key: 'failed_count', header: 'Başarısız', render: (r: any) => { const n = Number(r.failed_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : <span className="text-green-600">0</span>; }, className: 'text-right' },
+        { key: 'last_failed_wal', header: 'Son Hata WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_failed_wal || '—'}</span> },
+        { key: 'stats_reset', header: 'Stats Reset', render: (r: any) => r.stats_reset ? <TimeAgo date={r.stats_reset} /> : '—' },
+    ];
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <DataTable columns={columns} data={data || []} emptyText="Archiver verisi yok (archive_mode kapalı olabilir)" />
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// Subscriptions Tab — fact.pg_subscription_snapshot
+// =========================================================================
+function SubscriptionsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-subscriptions', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/subscriptions`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={3} cols={6} />;
+
+    const columns: any[] = [
+        { key: 'subname', header: 'Subscription' },
+        { key: 'pid', header: 'PID' },
+        { key: 'worker_type', header: 'Worker Type', render: (r: any) => r.worker_type || '—' },
+        { key: 'received_lsn', header: 'Received LSN', render: (r: any) => <span className="font-mono text-xs">{r.received_lsn || '—'}</span> },
+        { key: 'lag_bytes', header: 'Lag', render: (r: any) => r.lag_bytes != null ? fmtValue('lag_bytes', r.lag_bytes) : '—', className: 'text-right' },
+        { key: 'apply_error_count', header: 'Apply Errors', render: (r: any) => { const n = Number(r.apply_error_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : '0'; }, className: 'text-right' },
+        { key: 'sync_error_count', header: 'Sync Errors', render: (r: any) => { const n = Number(r.sync_error_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : '0'; }, className: 'text-right' },
+    ];
+    // PG17+ leader_pid
+    if (pgMajor == null || pgMajor >= 17) columns.push({ key: 'leader_pid', header: 'Leader PID', render: (r: any) => r.leader_pid ?? '—' });
+    // PG18+ conflict kolonları
+    if (pgMajor == null || pgMajor >= 18) {
+        columns.push({ key: 'confl_insert_exists_delta', header: 'Confl Insert', className: 'text-right', render: (r: any) => Number(r.confl_insert_exists_delta || 0).toLocaleString() });
+        columns.push({ key: 'confl_update_missing_delta', header: 'Confl Upd Missing', className: 'text-right', render: (r: any) => Number(r.confl_update_missing_delta || 0).toLocaleString() });
+        columns.push({ key: 'confl_delete_missing_delta', header: 'Confl Del Missing', className: 'text-right', render: (r: any) => Number(r.confl_delete_missing_delta || 0).toLocaleString() });
+    }
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8]">{data?.length ?? 0} subscription worker</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <DataTable columns={columns} data={data || []} emptyText="Logical subscription yok" />
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// WAL Receiver Tab — fact.pg_wal_receiver_snapshot (standby only)
+// =========================================================================
+function WalReceiverTab({ instancePk, isPrimary }: { instancePk: number; isPrimary: boolean | null | undefined }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-wal-receiver', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-receiver`),
+        enabled: Number.isFinite(instancePk) && isPrimary !== true,
+    });
+
+    if (isPrimary === true) {
+        return <EmptyState icon="📡" title="Primary instance" description="WAL Receiver sadece standby instance'larda çalışır. Bu instance primary." />;
+    }
+    if (isLoading) return <SkeletonTable rows={2} cols={5} />;
+
+    const columns = [
+        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
+        { key: 'status', header: 'Status', render: (r: any) => <Badge value={r.status || 'unknown'} /> },
+        { key: 'sender_host', header: 'Sender', render: (r: any) => `${r.sender_host || '?'}:${r.sender_port || '?'}` },
+        { key: 'flushed_lsn', header: 'Flushed LSN', render: (r: any) => <span className="font-mono text-xs">{r.flushed_lsn || '—'}</span> },
+        { key: 'lag_bytes', header: 'Lag', render: (r: any) => r.lag_bytes != null ? fmtValue('lag_bytes', r.lag_bytes) : '—', className: 'text-right' },
+        { key: 'slot_name', header: 'Slot', render: (r: any) => r.slot_name || '—' },
+        { key: 'last_msg_receipt_time', header: 'Son Mesaj', render: (r: any) => r.last_msg_receipt_time ? <TimeAgo date={r.last_msg_receipt_time} /> : '—' },
+    ];
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <DataTable columns={columns} data={data || []} emptyText="WAL Receiver verisi yok (standby aktif değil veya veri toplanmamış)" />
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// Conflicts Tab — fact.pg_database_conflict_snapshot
+// =========================================================================
+function ConflictsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-conflicts', instancePk],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/conflicts`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={3} cols={6} />;
+
+    const columns: any[] = [
+        { key: 'datname', header: 'Database' },
+        { key: 'confl_tablespace', header: 'Tablespace', className: 'text-right', render: (r: any) => Number(r.confl_tablespace || 0).toLocaleString() },
+        { key: 'confl_lock', header: 'Lock', className: 'text-right', render: (r: any) => Number(r.confl_lock || 0).toLocaleString() },
+        { key: 'confl_snapshot', header: 'Snapshot', className: 'text-right', render: (r: any) => Number(r.confl_snapshot || 0).toLocaleString() },
+        { key: 'confl_bufferpin', header: 'Bufferpin', className: 'text-right', render: (r: any) => Number(r.confl_bufferpin || 0).toLocaleString() },
+        { key: 'confl_deadlock', header: 'Deadlock', className: 'text-right', render: (r: any) => Number(r.confl_deadlock || 0).toLocaleString() },
+    ];
+    if (pgMajor == null || pgMajor >= 16) {
+        columns.push({ key: 'confl_active_logicalslot', header: 'Logical Slot', className: 'text-right', render: (r: any) => Number(r.confl_active_logicalslot || 0).toLocaleString() });
+    }
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8]">Standby conflict istatistikleri (primary'de genelde 0)</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <DataTable columns={columns} data={data || []} emptyText="Conflict verisi yok" />
+            </div>
         </div>
     );
 }

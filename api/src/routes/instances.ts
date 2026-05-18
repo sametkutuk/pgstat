@@ -1648,6 +1648,66 @@ router.get('/:id/replication-slots', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ============================================================================
+// Archiver — fact.pg_archiver_snapshot (son 10 snapshot)
+// ============================================================================
+router.get('/:id/archiver', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_archiver_snapshot
+      where instance_pk = $1
+      order by sample_ts desc limit 10
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Subscriptions — fact.pg_subscription_snapshot (son snapshot)
+// ============================================================================
+router.get('/:id/subscriptions', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_subscription_snapshot
+      where instance_pk = $1
+        and sample_ts = (select max(sample_ts) from fact.pg_subscription_snapshot where instance_pk = $1)
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// WAL Receiver — fact.pg_wal_receiver_snapshot (son 10 snapshot)
+// ============================================================================
+router.get('/:id/wal-receiver', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_wal_receiver_snapshot
+      where instance_pk = $1
+      order by sample_ts desc limit 10
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Conflicts — fact.pg_database_conflict_snapshot (son snapshot)
+// ============================================================================
+router.get('/:id/conflicts', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_database_conflict_snapshot
+      where instance_pk = $1
+        and sample_ts = (select max(sample_ts) from fact.pg_database_conflict_snapshot where instance_pk = $1)
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
 export default router;
 
 /** secret_ref'i UI'da göstermek için maskeler */
