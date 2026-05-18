@@ -1374,7 +1374,7 @@ router.get('/:id/wal', async (req, res, next) => {
 router.get('/:id/slru', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1388,7 +1388,7 @@ router.get('/:id/slru', async (req, res, next) => {
           greatest(truncates - lag(truncates) over w, 0) as truncates_d
         from fact.pg_slru_snapshot
         where instance_pk = $1
-          and sample_ts >= now() - make_interval(hours => $2)
+          and sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by name order by sample_ts)
       )
       select
@@ -1406,7 +1406,7 @@ router.get('/:id/slru', async (req, res, next) => {
       from deltas
       group by name
       order by total_blks_read desc nulls last
-    `, [id, hours]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
