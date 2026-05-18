@@ -2387,54 +2387,82 @@ function TpsTab({ data, loading, custom }: { data: any | undefined; loading: boo
     const daily = data?.daily || [];
     const hourly = data?.hourly || [];
 
+    // Custom modda: tek satır toplam (seçili pencerenin tamamı). "Gün" yerine "Periyot" kolonu.
+    const dailyColumns: any[] = custom
+        ? [
+            {
+                key: 'period', header: 'Periyot', render: (r: any) => {
+                    const f = new Date(r.period_start).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                    const t = new Date(r.period_end).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                    return `${f} → ${t}`;
+                }
+            },
+        ]
+        : [
+            { key: 'day', header: 'Gün', render: (r: any) => new Date(r.day).toLocaleDateString('tr-TR') },
+        ];
+    dailyColumns.push(
+        { key: 'datname', header: 'Database' },
+        { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
+        {
+            key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
+                const n = Number(r.rollbacks);
+                return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
+            }, className: 'text-right'
+        },
+        { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
+        {
+            key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
+                <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
+            ), className: 'text-right'
+        },
+    );
+
     return (
         <div className="space-y-5">
             <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük TPS {custom ? '(seçili aralık)' : '(son 7 gün)'}</h3>
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük TPS {custom ? '(seçili aralık toplamı)' : '(son 7 gün)'}</h3>
                 {daily.length === 0 ? (
                     <div className="text-sm text-[#94A3B8] py-4 text-center">Günlük TPS verisi yok</div>
                 ) : (
-                    <DataTable columns={[
-                        { key: 'day', header: 'Gün', render: (r: any) => new Date(r.day).toLocaleDateString('tr-TR') },
-                        { key: 'datname', header: 'Database' },
-                        { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
-                        {
-                            key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
-                                const n = Number(r.rollbacks);
-                                return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
-                            }, className: 'text-right'
-                        },
-                        { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
-                        {
-                            key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
-                                <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
-                            ), className: 'text-right'
-                        },
-                    ]} data={daily} />
+                    <DataTable columns={dailyColumns} data={daily} />
                 )}
             </div>
             <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Saatlik TPS {custom ? '(seçili aralık)' : '(son 25 saat)'}</h3>
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">
+                    Saatlik TPS {custom ? (hourly[0]?.hour ? '(seçili aralık)' : '(seçili aralık toplamı)') : '(son 25 saat)'}
+                </h3>
                 {hourly.length === 0 ? (
                     <div className="text-sm text-[#94A3B8] py-4 text-center">Saatlik TPS verisi yok</div>
                 ) : (
-                    <DataTable columns={[
-                        { key: 'hour', header: 'Saat', render: (r: any) => new Date(r.hour).toLocaleString('tr-TR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) },
-                        { key: 'datname', header: 'Database' },
-                        { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
-                        {
-                            key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
-                                const n = Number(r.rollbacks);
-                                return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
-                            }, className: 'text-right'
-                        },
-                        { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
-                        {
-                            key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
-                                <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
-                            ), className: 'text-right'
-                        },
-                    ]} data={hourly} />
+                    <DataTable columns={(() => {
+                        const cols: any[] = hourly[0]?.hour
+                            ? [{ key: 'hour', header: 'Saat', render: (r: any) => new Date(r.hour).toLocaleString('tr-TR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }]
+                            : [{
+                                key: 'period', header: 'Periyot', render: (r: any) => {
+                                    const f = new Date(r.period_start).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                                    const t = new Date(r.period_end).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                                    return `${f} → ${t}`;
+                                }
+                            }];
+                        cols.push(
+                            { key: 'datname', header: 'Database' },
+                            { key: 'commits', header: 'Commits', render: (r: any) => Number(r.commits).toLocaleString('tr-TR'), className: 'text-right' },
+                            {
+                                key: 'rollbacks', header: 'Rollbacks', render: (r: any) => {
+                                    const n = Number(r.rollbacks);
+                                    return n > 0 ? <span className="text-red-600">{n.toLocaleString('tr-TR')}</span> : <span className="text-[#94A3B8]">0</span>;
+                                }, className: 'text-right'
+                            },
+                            { key: 'total_xact', header: 'Toplam Xact', render: (r: any) => Number(r.total_xact).toLocaleString('tr-TR'), className: 'text-right' },
+                            {
+                                key: 'avg_tps', header: 'Ort. TPS', render: (r: any) => (
+                                    <span className="font-semibold text-[#2563EB]">{Number(r.avg_tps).toLocaleString('tr-TR')}</span>
+                                ), className: 'text-right'
+                            },
+                        );
+                        return cols;
+                    })()} data={hourly} />
                 )}
             </div>
         </div>

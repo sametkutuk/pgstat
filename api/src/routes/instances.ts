@@ -1174,31 +1174,72 @@ router.get('/:id/settings/diff', async (req, res, next) => {
   }
 });
 
-// GET /api/instances/:id/tps — Günlük ve saatlik TPS tablosu
-// custom=1 (UI kullanıcının tarih aralığını uyguladı): her iki tablo da from/to kullanır
-// custom=0 (default): günlük=son 7 gün, saatlik=son 25 saat (klasik davranış)
+// GET /api/instances/:id/tps — Günlük (toplam) ve saatlik TPS tablosu
+// custom=1: kullanıcı tarih aralığı (tek satır toplam, saatlik aralık küçükse saat granülerliği)
+// custom=0 (default): günlük=son 7 gün (gün bazında), saatlik=son 25 saat (saat bazında)
 router.get('/:id/tps', async (req, res, next) => {
   try {
     const { id } = req.params;
     const custom = req.query.custom === '1';
     const { fromIso, toIso } = parseTimeRange(req.query, 24);
 
-    const dailyParams: any[] = [id];
-    const hourlyParams: any[] = [id];
-    let dailyWhere = '';
-    let hourlyWhere = '';
-
     if (custom) {
-      dailyParams.push(fromIso, toIso);
-      hourlyParams.push(fromIso, toIso);
-      dailyWhere = `and d.sample_ts between $2::timestamptz and $3::timestamptz`;
-      hourlyWhere = `and d.sample_ts between $2::timestamptz and $3::timestamptz`;
-    } else {
-      // Default sabit pencereler
-      dailyWhere = `and d.sample_ts >= now() - interval '7 days'`;
-      hourlyWhere = `and d.sample_ts >= now() - interval '25 hours'`;
+      // Aralığın saat farkı (saatlik mi yoksa tek satır mı karar için)
+      const rangeMs = new Date(toIso).getTime() - new Date(fromIso).getTime();
+      const rangeHours = rangeMs / 3600_000;
+      const rangeSeconds = rangeMs / 1000;
+
+      // Günlük tablo: TEK SATIR/DB — seçili pencerenin toplamı
+      // avg_tps = toplam_xact / pencerenin gerçek saniyesi
+      const dailyResult = await pool.query(`
+        select
+          $2::timestamptz as period_start,
+          $3::timestamptz as period_end,
+          dbr.datname,
+          sum(d.xact_commit_delta) as commits,
+          sum(d.xact_rollback_delta) as rollbacks,
+          sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+          case when $4::numeric > 0
+            then round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / $4::numeric)
+            else 0 end as avg_tps
+        from fact.pg_database_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+        group by dbr.datname
+        order by total_xact desc nulls last
+      `, [id, fromIso, toIso, rangeSeconds]);
+
+      // Saatlik tablo:
+      // - Aralık ≤ 24 saat ise saat granülerliği (eskisi gibi)
+      // - Aralık > 24 saat ise TEK SATIR/DB toplam (gün/saat granülerliği yerine)
+      let hourlyResult;
+      if (rangeHours <= 24) {
+        hourlyResult = await pool.query(`
+          select
+            date_trunc('hour', d.sample_ts) as hour,
+            dbr.datname,
+            sum(d.xact_commit_delta) as commits,
+            sum(d.xact_rollback_delta) as rollbacks,
+            sum(d.xact_commit_delta + d.xact_rollback_delta) as total_xact,
+            round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 3600) as avg_tps
+          from fact.pg_database_delta d
+          left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+          group by 1, dbr.datname
+          order by 1 desc, dbr.datname
+        `, [id, fromIso, toIso]);
+      } else {
+        // Tek satır toplam (Günlük ile aynı içerik, UI farklı başlık ile gösterir)
+        hourlyResult = { rows: dailyResult.rows };
+      }
+
+      res.json({ daily: dailyResult.rows, hourly: hourlyResult.rows });
+      return;
     }
 
+    // Default mod (kullanıcı tarih aralığını değiştirmemiş): klasik davranış
     const [daily, hourly] = await Promise.all([
       pool.query(`
         select
@@ -1210,10 +1251,11 @@ router.get('/:id/tps', async (req, res, next) => {
           round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps
         from fact.pg_database_delta d
         left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
-        where d.instance_pk = $1 ${dailyWhere}
+        where d.instance_pk = $1
+          and d.sample_ts >= now() - interval '7 days'
         group by 1, dbr.datname
         order by 1 desc, dbr.datname
-      `, dailyParams),
+      `, [id]),
       pool.query(`
         select
           date_trunc('hour', d.sample_ts) as hour,
@@ -1224,10 +1266,11 @@ router.get('/:id/tps', async (req, res, next) => {
           round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 3600) as avg_tps
         from fact.pg_database_delta d
         left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
-        where d.instance_pk = $1 ${hourlyWhere}
+        where d.instance_pk = $1
+          and d.sample_ts >= now() - interval '25 hours'
         group by 1, dbr.datname
         order by 1 desc, dbr.datname
-      `, hourlyParams),
+      `, [id]),
     ]);
 
     res.json({ daily: daily.rows, hourly: hourly.rows });
