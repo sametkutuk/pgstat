@@ -28,6 +28,23 @@ export function useDataColumns(storageKey: string, defaults: string[], meta?: Co
         return defaults;
     });
 
+    // meta geldiğinde LocalStorage'taki kolonları whitelist'e göre filtrele
+    // (önceki turda kaydedilmiş yabancı kolonlar veya endpoint'te kaldırılmış kolonlar otomatik temizlenir)
+    useEffect(() => {
+        if (!meta) return;
+        const allowed = new Set(meta.available.map(c => c.key));
+        const cleaned = selected.filter(c => allowed.has(c));
+        if (cleaned.length === 0) {
+            // Hiç eşleşme yoksa default'a dön
+            setSelectedState(meta.defaults);
+            try { localStorage.setItem(storageKey, JSON.stringify(meta.defaults)); } catch { /* ignore */ }
+        } else if (cleaned.length !== selected.length) {
+            setSelectedState(cleaned);
+            try { localStorage.setItem(storageKey, JSON.stringify(cleaned)); } catch { /* ignore */ }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [meta]);
+
     function setSelected(cols: string[]) {
         setSelectedState(cols);
         try { localStorage.setItem(storageKey, JSON.stringify(cols)); } catch { /* ignore */ }
