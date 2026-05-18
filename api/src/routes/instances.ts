@@ -430,6 +430,97 @@ router.get('/:id/databases', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/:id/databases/stats — pg_database_delta istatistikleri
+const DATABASE_STAT_COLUMNS: ColumnRegistry = {
+  datname: { sql: 'coalesce(dbr.datname, d.datname)', since: 11, label: 'Database' },
+  dbid: { sql: 'd.dbid', since: 11, label: 'DB OID' },
+  numbackends: { sql: 'max(d.numbackends)', since: 11, label: 'Backends' },
+  xact_commit_delta: { sql: 'sum(d.xact_commit_delta)', since: 11, label: 'Commits' },
+  xact_rollback_delta: { sql: 'sum(d.xact_rollback_delta)', since: 11, label: 'Rollbacks' },
+  blks_read_delta: { sql: 'sum(d.blks_read_delta)', since: 11, label: 'Blks Read' },
+  blks_hit_delta: { sql: 'sum(d.blks_hit_delta)', since: 11, label: 'Blks Hit' },
+  tup_returned_delta: { sql: 'sum(d.tup_returned_delta)', since: 11, label: 'Tup Returned' },
+  tup_fetched_delta: { sql: 'sum(d.tup_fetched_delta)', since: 11, label: 'Tup Fetched' },
+  tup_inserted_delta: { sql: 'sum(d.tup_inserted_delta)', since: 11, label: 'Tup Inserted' },
+  tup_updated_delta: { sql: 'sum(d.tup_updated_delta)', since: 11, label: 'Tup Updated' },
+  tup_deleted_delta: { sql: 'sum(d.tup_deleted_delta)', since: 11, label: 'Tup Deleted' },
+  conflicts_delta: { sql: 'sum(d.conflicts_delta)', since: 11, label: 'Conflicts' },
+  temp_files_delta: { sql: 'sum(d.temp_files_delta)', since: 11, label: 'Temp Files' },
+  temp_bytes_delta: { sql: 'sum(d.temp_bytes_delta)', since: 11, label: 'Temp Bytes' },
+  deadlocks_delta: { sql: 'sum(d.deadlocks_delta)', since: 11, label: 'Deadlocks' },
+  blk_read_time_ms_delta: { sql: 'sum(d.blk_read_time_ms_delta)', since: 11, label: 'Read Time (ms)' },
+  blk_write_time_ms_delta: { sql: 'sum(d.blk_write_time_ms_delta)', since: 11, label: 'Write Time (ms)' },
+  checksum_failures_delta: { sql: 'sum(d.checksum_failures_delta)', since: 12, label: 'Checksum Failures' },
+  checksum_last_failure: { sql: 'max(d.checksum_last_failure)', since: 12, label: 'Last Checksum Failure' },
+  session_time_ms_delta: { sql: 'sum(d.session_time_ms_delta)', since: 14, label: 'Session Time (ms)' },
+  active_time_ms_delta: { sql: 'sum(d.active_time_ms_delta)', since: 14, label: 'Active Time (ms)' },
+  idle_in_transaction_time_ms_delta: { sql: 'sum(d.idle_in_transaction_time_ms_delta)', since: 14, label: 'Idle In Xact Time (ms)' },
+  sessions_delta: { sql: 'sum(d.sessions_delta)', since: 14, label: 'Sessions' },
+  sessions_abandoned_delta: { sql: 'sum(d.sessions_abandoned_delta)', since: 14, label: 'Sessions Abandoned' },
+  sessions_fatal_delta: { sql: 'sum(d.sessions_fatal_delta)', since: 14, label: 'Sessions Fatal' },
+  sessions_killed_delta: { sql: 'sum(d.sessions_killed_delta)', since: 14, label: 'Sessions Killed' },
+  parallel_workers_to_launch_delta: { sql: 'sum(d.parallel_workers_to_launch_delta)', since: 18, label: 'Parallel To Launch' },
+  parallel_workers_launched_delta: { sql: 'sum(d.parallel_workers_launched_delta)', since: 18, label: 'Parallel Launched' },
+};
+const DATABASE_STAT_DEFAULTS = ['datname', 'xact_commit_delta', 'xact_rollback_delta', 'blks_read_delta', 'blks_hit_delta', 'deadlocks_delta', 'temp_bytes_delta'];
+const DATABASE_STAT_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'd.sample_ts', since: 11, label: 'Zaman' },
+  ...DATABASE_STAT_COLUMNS,
+};
+const DATABASE_STAT_RAW_DEFAULTS = ['sample_ts', ...DATABASE_STAT_DEFAULTS];
+
+router.get('/:id/databases/stats/columns', (_req, res) => {
+  res.json(columnsMetaResponse(DATABASE_STAT_COLUMNS, DATABASE_STAT_DEFAULTS));
+});
+
+router.get('/:id/databases/stats', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, DATABASE_STAT_RAW_COLUMNS, DATABASE_STAT_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'd.sample_ts');
+      params.push(limit);
+      const selectCols = rawCols.map(c => rawSelectExpr(DATABASE_STAT_RAW_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_database_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${cursorWhere}
+        order by d.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+
+    const requestedCols = parseColumns(req.query.columns as string | undefined, DATABASE_STAT_COLUMNS, DATABASE_STAT_DEFAULTS);
+    const orderClause = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, 'xact_commit_delta');
+    const selectCols = requestedCols.map(c => `${DATABASE_STAT_COLUMNS[c].sql} as ${c}`).join(',\n        ');
+
+    const result = await pool.query(`
+      select ${selectCols}
+      from fact.pg_database_delta d
+      left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+      group by d.dbid, coalesce(dbr.datname, d.datname)
+      order by ${orderClause}
+      limit 500
+    `, [id, fromIso, toIso]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/capability — Instance capability detayı
 router.get('/:id/capability', async (req, res, next) => {
   try {

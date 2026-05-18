@@ -58,7 +58,6 @@ export default function InstanceDetail() {
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
     const cluster = useQuery({ queryKey: ['inst-cluster', id], queryFn: () => apiGet<any>(`/instances/${id}/cluster`), enabled: !!id });
     // Snapshot-bazlı (range'den etkilenmez) — DB listesi, storage en son snapshot
-    const databases = useQuery({ queryKey: ['databases', id], queryFn: () => apiGet<any[]>(`/instances/${id}/databases`), enabled: tab === 'databases' });
     const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
     // Range'e bağlı (zaman-serisi)
     const alerts = useQuery({ queryKey: ['inst-alerts', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}&${rangeQp}`), enabled: tab === 'alerts' });
@@ -178,7 +177,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
             {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
             {tab === 'statements' && <StatementsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
-            {tab === 'databases' && <DatabasesTab data={databases.data} loading={databases.isLoading} instanceId={id!} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
+            {tab === 'databases' && <DatabasesTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
             {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
@@ -246,6 +245,8 @@ function RawDeltaTable({
     pgMajor,
     storageKey,
     emptyTitle,
+    requiredQueryCols = [],
+    onRowClick,
 }: {
     basePath: string;
     baseParams: Record<string, string>;
@@ -256,17 +257,20 @@ function RawDeltaTable({
     pgMajor?: number;
     storageKey: string;
     emptyTitle: string;
+    requiredQueryCols?: string[];
+    onRowClick?: (row: any) => void;
 }) {
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sentinelRef = useRef<HTMLDivElement>(null);
     const visibleCols = selectedCols.includes('sample_ts') ? selectedCols : ['sample_ts', ...selectedCols];
+    const queryCols = Array.from(new Set([...requiredQueryCols, ...visibleCols]));
     const { widths, setWidth, reset: resetWidths } = useColumnWidths(`${storageKey}.widths`);
 
     const rawQuery = useInfiniteQuery<RawDeltaResponse>({
-        queryKey: [...queryKey, visibleCols.join(',')],
+        queryKey: [...queryKey, queryCols.join(',')],
         initialPageParam: undefined as string | undefined,
         queryFn: ({ pageParam }) => {
-            const qp = new URLSearchParams({ ...baseParams, mode: 'raw', limit: '200', columns: visibleCols.join(',') });
+            const qp = new URLSearchParams({ ...baseParams, mode: 'raw', limit: '200', columns: queryCols.join(',') });
             if (pageParam) qp.set('cursor', String(pageParam));
             return apiGet<RawDeltaResponse>(`${basePath}?${qp}`);
         },
@@ -314,7 +318,8 @@ function RawDeltaTable({
                                 })}
                             </tr></thead>
                             <tbody>{rows.map((r: any, i: number) => (
-                                <tr key={`${r.sample_ts ?? 'row'}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                <tr key={`${r.sample_ts ?? 'row'}-${i}`} onClick={() => onRowClick?.(r)}
+                                    className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] ${onRowClick ? 'cursor-pointer' : ''}`}>
                                     {visibleCols.map(col => (
                                         <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${col === 'sample_ts' ? '' : 'text-right font-mono'}`}>
                                             {formatRawCell(col, r[col])}
@@ -788,17 +793,108 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
     );
 }
 
-function DatabasesTab({ data, loading, onSelectDb }: { data: any[] | undefined; loading: boolean; instanceId?: string; onSelectDb?: (dbid: number) => void }) {
-    if (loading) return <SkeletonTable rows={5} cols={4} />;
+function DatabasesTab({ instancePk, range, pgMajor, onSelectDb }: { instancePk: number; range: TimeRange; pgMajor?: number; onSelectDb?: (dbid: number) => void }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'xact_commit_delta', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const defaults = ['datname', 'xact_commit_delta', 'xact_rollback_delta', 'blks_read_delta', 'blks_hit_delta', 'deadlocks_delta', 'temp_bytes_delta'];
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['database-stats-cols-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/databases/stats/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.databases.cols', defaults, colsMeta);
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', ...defaults]), [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns('pgstat.instance.databases.raw.cols', ['sample_ts', ...defaults], rawMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.databases.widths');
+    const queryCols = Array.from(new Set(['dbid', 'datname', ...selectedCols]));
+    const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, columns: queryCols.join(','), order_by: orderParam });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-database-stats', instancePk, range.fromIso, range.toIso, orderParam, queryCols.join(',')],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/databases/stats?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    useEffect(() => {
+        setSortKeys(prev => {
+            const filtered = prev.filter(s => selectedCols.includes(s.col));
+            if (filtered.length > 0) return filtered;
+            const fallback = selectedCols.includes('xact_commit_delta') ? 'xact_commit_delta' : selectedCols[0];
+            return [{ col: fallback, dir: 'desc' }];
+        });
+    }, [selectedCols]);
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        if (!q) return data ?? [];
+        return (data ?? []).filter((r: any) => String(r.datname ?? '').toLowerCase().includes(q));
+    }, [data, search]);
+
+    if (mode === 'raw') {
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/databases/stats`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['instance-database-stats-raw', instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    pgMajor={pgMajor}
+                    storageKey="pgstat.instance.databases.raw"
+                    emptyTitle="Ham database delta satırı yok"
+                    requiredQueryCols={['dbid']}
+                    onRowClick={onSelectDb ? (row) => onSelectDb(Number(row.dbid)) : undefined}
+                />
+            </div>
+        );
+    }
+
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || 7} />;
+
     return (
-        <div className="bg-white rounded-lg shadow-sm p-4">
-            <DataTable columns={[
-                { key: 'datname', header: 'Database' },
-                { key: 'dbid', header: 'OID' },
-                { key: 'last_db_objects_collect_at', header: 'Son Toplama', render: (r: any) => <TimeAgo date={r.last_db_objects_collect_at} /> },
-                { key: 'next_db_objects_collect_at', header: 'Sonraki', render: (r: any) => <TimeAgo date={r.next_db_objects_collect_at} /> },
-                { key: 'consecutive_failures', header: 'Hatalar', render: (r: any) => (r.consecutive_failures || 0) > 0 ? <span className="text-red-600">{r.consecutive_failures}</span> : <span className="text-green-600">0</span> },
-            ]} data={data || []} onRowClick={onSelectDb ? (r: any) => onSelectDb(r.dbid) : undefined} />
+        <div>
+            <DataKindBanner kind="delta" description="DELTA (periyot toplamı): seçili tarih aralığındaki pg_database_delta kayıtları database bazında toplanır. Satıra tıklayınca ilgili database için Tables tab'ına geçilir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Database ara"
+                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{filtered.length} database</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {filtered.length === 0 ? <EmptyState icon="🗄️" title="Database istatistiği yok" description="Bu aralıkta pg_database_delta verisi yok." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const m = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? (col === 'datname' ? 190 : 140)} onResize={setWidth} align={col === 'datname' ? 'left' : 'right'} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}{m && m.since > 11 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{m.since}+</span>}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{filtered.map((r: any, i: number) => (
+                                <tr key={`${r.dbid ?? 'db'}-${i}`} onClick={() => onSelectDb?.(Number(r.dbid))}
+                                    className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${onSelectDb ? 'cursor-pointer' : ''}`}>
+                                    {selectedCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${col === 'datname' ? '' : 'text-right font-mono'}`}>
+                                            {col === 'datname' ? (r[col] ?? '—') : fmtValue(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Database Sütunları" />
         </div>
     );
 }
