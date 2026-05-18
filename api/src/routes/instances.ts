@@ -642,6 +642,7 @@ router.get('/:id/indexes', async (req, res, next) => {
         coalesce(lf.is_ready, true) as is_ready,
         coalesce(lf.is_primary, false) as is_primary,
         coalesce(lf.is_unique, false) as is_unique,
+        max(ix.last_idx_scan) as last_idx_scan,
         min(ix.sample_ts) as observed_since,
         max(ix.sample_ts) as observed_until,
         round(extract(epoch from (max(ix.sample_ts) - min(ix.sample_ts))) / 3600.0, 1) as observed_hours,
@@ -1703,6 +1704,117 @@ router.get('/:id/conflicts', async (req, res, next) => {
       select * from fact.pg_database_conflict_snapshot
       where instance_pk = $1
         and sample_ts = (select max(sample_ts) from fact.pg_database_conflict_snapshot where instance_pk = $1)
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Recovery Prefetch (PG15+, standby) — TAM PAKET
+// ============================================================================
+const RECOVERY_PREFETCH_COLUMNS: ColumnRegistry = {
+  prefetch: { sql: 'prefetch', since: 15, label: 'Prefetch' },
+  hit: { sql: 'hit', since: 15, label: 'Hit' },
+  skip_init: { sql: 'skip_init', since: 15, label: 'Skip Init' },
+  skip_new: { sql: 'skip_new', since: 15, label: 'Skip New' },
+  skip_fpw: { sql: 'skip_fpw', since: 15, label: 'Skip FPW' },
+  skip_rep: { sql: 'skip_rep', since: 15, label: 'Skip Rep' },
+  wal_distance: { sql: 'wal_distance', since: 15, label: 'WAL Distance' },
+  block_distance: { sql: 'block_distance', since: 15, label: 'Block Distance' },
+  io_depth: { sql: 'io_depth', since: 15, label: 'I/O Depth' },
+  stats_reset: { sql: 'stats_reset', since: 15, label: 'Stats Reset' },
+};
+const RECOVERY_PREFETCH_DEFAULTS = ['prefetch', 'hit', 'skip_fpw', 'wal_distance', 'io_depth'];
+
+router.get('/:id/recovery-prefetch/columns', (_req, res) => {
+  res.json(columnsMetaResponse(RECOVERY_PREFETCH_COLUMNS, RECOVERY_PREFETCH_DEFAULTS));
+});
+
+router.get('/:id/recovery-prefetch', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, RECOVERY_PREFETCH_COLUMNS, RECOVERY_PREFETCH_DEFAULTS);
+    const selectParts = requestedCols.map(c => RECOVERY_PREFETCH_COLUMNS[c].sql);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_recovery_prefetch_snapshot
+      where instance_pk = $1
+      order by sample_ts desc limit 20
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Progress endpoints (6 view — son 1 saat)
+// ============================================================================
+router.get('/:id/progress-vacuum', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_vacuum_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/progress-analyze', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_analyze_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/progress-create-index', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_create_index_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/progress-basebackup', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_basebackup_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/progress-copy', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_copy_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/progress-cluster', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      select * from fact.pg_progress_cluster_snapshot
+      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
+      order by sample_ts desc limit 100
     `, [id]);
     res.json(result.rows);
   } catch (err) { next(err); }

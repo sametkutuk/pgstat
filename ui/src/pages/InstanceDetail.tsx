@@ -16,7 +16,7 @@ import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '..
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -98,6 +98,7 @@ export default function InstanceDetail() {
         { key: 'subscriptions', label: 'Subscriptions', tip: 'pg_stat_subscription — logical replication worker durumu, PG18+ conflict detayları.' },
         { key: 'wal_receiver', label: 'WAL Receiver', tip: 'pg_stat_wal_receiver — standby WAL receiver durumu, lag, sender bilgisi.' },
         { key: 'conflicts', label: 'Conflicts', tip: 'pg_stat_database_conflicts — standby recovery conflict istatistikleri.' },
+        { key: 'recovery_prefetch', label: 'Recovery Prefetch', tip: 'pg_stat_recovery_prefetch (PG15+) — standby prefetch istatistikleri.' },
         { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
@@ -106,6 +107,7 @@ export default function InstanceDetail() {
         { key: 'bgwriter', label: 'BgWriter', tip: 'pg_stat_bgwriter — background writer ve (PG16 öncesi) checkpoint istatistikleri.' },
         { key: 'checkpointer', label: 'Checkpointer', tip: 'pg_stat_checkpointer (PG17+) — checkpoint ve restartpoint istatistikleri.' },
         { key: 'archiver', label: 'Archiver', tip: 'pg_stat_archiver — WAL arşivleme başarı/hata sayıları ve son arşivlenen dosya.' },
+        { key: 'progress', label: 'Progress', tip: 'pg_stat_progress_* — aktif vacuum/analyze/create_index/basebackup/copy/cluster operasyonları.' },
         { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir. Parametre değiştiğinde otomatik PARAMETER_CHANGED INFO alert tetiklenir (bildirim kanallarına da gönderilir).' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
@@ -181,6 +183,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'subscriptions' && <SubscriptionsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
             {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'conflicts' && <ConflictsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
+            {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
@@ -189,6 +192,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} />}
+            {tab === 'progress' && <ProgressTab instancePk={Number(id)} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
@@ -1581,6 +1585,9 @@ function ActivityTab({ instancePk }: { instancePk: number }) {
         { key: 'wait_event_type', header: 'Wait', render: (r: any) => r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '-' },
         { key: 'query', header: 'Sorgu', render: (r: any) => <div className="max-w-xs truncate text-xs font-mono" title={r.query}>{r.query ? r.query.substring(0, 120) : '-'}</div> },
         { key: 'backend_type', header: 'Backend' },
+        { key: 'query_id', header: 'Query ID', render: (r: any) => r.query_id ? <span className="font-mono text-xs">{r.query_id}</span> : '—' },
+        { key: 'leader_pid', header: 'Leader', render: (r: any) => r.leader_pid ?? '—' },
+        { key: 'client_hostname', header: 'Hostname', render: (r: any) => r.client_hostname || '—' },
     ];
 
     if (isLoading) return <SkeletonTable rows={5} cols={5} />;
@@ -1700,6 +1707,9 @@ function ReplicationTab({ instancePk, isPrimary }: { instancePk: number; isPrima
             }
         },
         { key: 'flush_lag', header: 'Flush Lag' },
+        { key: 'sync_priority', header: 'Priority', render: (r: any) => r.sync_priority ?? '—' },
+        { key: 'reply_time', header: 'Reply Time', render: (r: any) => r.reply_time ? <TimeAgo date={r.reply_time} /> : '—' },
+        { key: 'backend_xmin', header: 'Xmin', render: (r: any) => r.backend_xmin || '—' },
     ];
 
     return (
@@ -2143,6 +2153,147 @@ function ConflictsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: n
             </div>
             <div className="bg-white rounded-lg shadow-sm p-4">
                 <DataTable columns={columns} data={data || []} emptyText="Conflict verisi yok" />
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// Recovery Prefetch Tab (PG15+, standby only) — TAM PAKET
+// =========================================================================
+function RecoveryPrefetchTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'prefetch', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['recovery-prefetch-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/recovery-prefetch/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.instance.recovery-prefetch.cols',
+        ['prefetch', 'hit', 'skip_fpw', 'wal_distance', 'io_depth'],
+        colsMeta
+    );
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.recovery-prefetch.widths');
+
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-recovery-prefetch', instancePk, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/recovery-prefetch?${qp}`),
+        enabled: Number.isFinite(instancePk) && isPrimary !== true,
+    });
+
+    if (pgMajor != null && pgMajor < 15) return <EmptyState icon="⚡" title="PG15+ gerekli" description={`pg_stat_recovery_prefetch PG15'te eklendi. Bu instance PG${pgMajor}.`} />;
+    if (isPrimary === true) return <EmptyState icon="⚡" title="Standby gerekli" description="Recovery prefetch sadece standby instance'larda çalışır." />;
+    if (isLoading) return <SkeletonTable rows={3} cols={5} />;
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} satır</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="⚡" title="Recovery prefetch verisi yok" description="Standby aktif değil veya veri toplanmamış." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const meta = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? 110} onResize={setWidth} align="right" sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{meta?.label ?? col}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{data.map((r: any, i: number) => (
+                                <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                    {selectedCols.map(col => (
+                                        <td key={col} className="py-2 px-3 text-xs text-right font-mono whitespace-nowrap">{fmtValue(col, r[col])}</td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Recovery Prefetch Sütunları" />
+        </div>
+    );
+}
+
+// =========================================================================
+// Progress Tab — 6 alt sekme
+// =========================================================================
+type ProgressSub = 'vacuum' | 'analyze' | 'create_index' | 'basebackup' | 'copy' | 'cluster';
+
+function ProgressTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+    const [sub, setSub] = useState<ProgressSub>('vacuum');
+
+    const subs: { key: ProgressSub; label: string; since: number }[] = [
+        { key: 'vacuum', label: 'Vacuum', since: 11 },
+        { key: 'analyze', label: 'Analyze', since: 13 },
+        { key: 'create_index', label: 'Create Index', since: 12 },
+        { key: 'basebackup', label: 'Basebackup', since: 13 },
+        { key: 'copy', label: 'Copy', since: 14 },
+        { key: 'cluster', label: 'Cluster', since: 12 },
+    ];
+
+    return (
+        <div>
+            <div className="flex gap-1 mb-3 flex-wrap">
+                {subs.filter(s => pgMajor == null || s.since <= pgMajor).map(s => (
+                    <button key={s.key} onClick={() => setSub(s.key)}
+                        className={`px-3 py-1 text-xs rounded ${sub === s.key ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
+                        {s.label}
+                    </button>
+                ))}
+            </div>
+            <ProgressSubTab instancePk={instancePk} subType={sub} />
+        </div>
+    );
+}
+
+function ProgressSubTab({ instancePk, subType }: { instancePk: number; subType: ProgressSub }) {
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-progress', instancePk, subType],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/progress-${subType.replace('_', '-')}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={3} cols={5} />;
+
+    if (!data || data.length === 0) {
+        return (
+            <div className="bg-white rounded-lg shadow-sm p-4">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC] mb-3">{isFetching ? '...' : 'Yenile'}</button>
+                <EmptyState icon="⏳" title={`Çalışan ${subType} operasyonu yok`} description="Son 1 saatte bu tipte progress kaydı bulunamadı." />
+            </div>
+        );
+    }
+
+    // Dinamik kolonlar — veri satırlarından key'leri çıkar
+    const allKeys = Object.keys(data[0]).filter(k => k !== 'sample_ts' && k !== 'instance_pk');
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8]">{data.length} kayıt (son 1 saat)</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden overflow-x-auto">
+                <table className="w-full text-sm" style={{ tableLayout: 'auto' }}>
+                    <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {allKeys.map(k => <th key={k} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase whitespace-nowrap text-left">{k.replace(/_/g, ' ')}</th>)}
+                    </tr></thead>
+                    <tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                            {allKeys.map(k => <td key={k} className="py-2 px-3 text-xs whitespace-nowrap">{r[k] != null ? String(r[k]) : '—'}</td>)}
+                        </tr>
+                    ))}</tbody>
+                </table>
             </div>
         </div>
     );
