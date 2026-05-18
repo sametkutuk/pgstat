@@ -11,6 +11,11 @@ export interface ColDef {
 
 export type ColumnRegistry = Record<string, ColDef>;
 
+export function rawSelectExpr(colDef: ColDef, key: string): string {
+    const m = /^(?:sum|max|min|avg|count)\s*\(\s*([a-z_0-9\.]+)\s*\)$/i.exec(colDef.sql);
+    return m ? `${m[1]} as ${key}` : `${colDef.sql} as ${key}`;
+}
+
 /**
  * İstenen kolonları whitelist'e göre filtreler.
  * Bilinmeyen kolon adları sessizce atılır (SQL injection koruması).

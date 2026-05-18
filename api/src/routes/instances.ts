@@ -3,9 +3,47 @@ import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
 import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
 import { PGSS_COLUMNS, parseRequestedColumns, parseStatementsOrderBy } from './statements';
-import { parseColumns, parseOrderBy as parseGenericOrderBy, columnsMetaResponse, type ColumnRegistry } from './_columnsHelper';
+import { parseColumns, parseOrderBy as parseGenericOrderBy, columnsMetaResponse, rawSelectExpr, type ColumnRegistry } from './_columnsHelper';
 
 const router = Router();
+
+const RAW_PAGE_SIZE = 200;
+
+function isRawMode(mode: unknown): boolean {
+  return mode === 'raw';
+}
+
+function parseRawLimit(val: unknown): number {
+  return Math.min(parseLimit(val, RAW_PAGE_SIZE), RAW_PAGE_SIZE);
+}
+
+function addRawCursorWhere(params: any[], cursor: unknown, columnRef: string): string {
+  if (typeof cursor !== 'string' || cursor.trim() === '') return '';
+  const d = new Date(cursor);
+  if (Number.isNaN(d.getTime())) return '';
+  params.push(d.toISOString());
+  return ` and ${columnRef} < $${params.length}::timestamptz`;
+}
+
+function rawPage(rows: any[], limit: number) {
+  return {
+    rows,
+    next_cursor: rows.length === limit ? rows[rows.length - 1]?.sample_ts ?? null : null,
+  };
+}
+
+function clusterMetricRawExpr(registry: ColumnRegistry, key: string, metricFamily: string): string {
+  const m = /metric_name='([a-z_0-9]+)'/i.exec(registry[key].sql);
+  if (!m) return `${registry[key].sql} as ${key}`;
+  const metricName = m[1].replace(/'/g, "''");
+  const family = metricFamily.replace(/'/g, "''");
+  return `(select x.metric_value_num
+            from fact.pg_cluster_delta x
+            where x.instance_pk = s.instance_pk
+              and x.sample_ts = s.sample_ts
+              and x.metric_family = '${family}'
+              and x.metric_name = '${metricName}') as ${key}`;
+}
 
 // GET /api/instances — Instance listesi
 router.get('/', async (req, res, next) => {
@@ -540,10 +578,96 @@ router.get('/:id/replication', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/tables — Instance genelinde tablo istatistikleri
+const TABLE_STAT_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 't.sample_ts', since: 11, label: 'Zaman' },
+  dbid: { sql: 't.dbid', since: 11, label: 'DB OID' },
+  datname: { sql: 'dbr.datname', since: 11, label: 'Database' },
+  relid: { sql: 't.relid', since: 11, label: 'Rel OID' },
+  schemaname: { sql: 't.schemaname', since: 11, label: 'Schema' },
+  relname: { sql: 't.relname', since: 11, label: 'Table' },
+  total_seq_scan: { sql: 'sum(t.seq_scan_delta)', since: 11, label: 'Seq Scan' },
+  total_idx_scan: { sql: 'sum(t.idx_scan_delta)', since: 11, label: 'Idx Scan' },
+  total_inserts: { sql: 'sum(t.n_tup_ins_delta)', since: 11, label: 'Inserts' },
+  total_updates: { sql: 'sum(t.n_tup_upd_delta)', since: 11, label: 'Updates' },
+  total_deletes: { sql: 'sum(t.n_tup_del_delta)', since: 11, label: 'Deletes' },
+  total_heap_blks_read: { sql: 'sum(t.heap_blks_read_delta)', since: 11, label: 'Heap Read' },
+  total_heap_blks_hit: { sql: 'sum(t.heap_blks_hit_delta)', since: 11, label: 'Heap Hit' },
+  n_live_tup: { sql: 'max(t.n_live_tup_estimate)', since: 11, label: 'Live Tuples' },
+  n_dead_tup: { sql: 'max(t.n_dead_tup_estimate)', since: 11, label: 'Dead Tuples' },
+  last_vacuum: { sql: 'max(t.last_vacuum)', since: 11, label: 'Last Vacuum' },
+  last_autovacuum: { sql: 'max(t.last_autovacuum)', since: 11, label: 'Last Autovacuum' },
+  last_analyze: { sql: 'max(t.last_analyze)', since: 11, label: 'Last Analyze' },
+  last_autoanalyze: { sql: 'max(t.last_autoanalyze)', since: 11, label: 'Last Autoanalyze' },
+  n_ins_since_vacuum: { sql: 'max(t.n_ins_since_vacuum)', since: 13, label: 'Ins Since Vacuum' },
+  last_seq_scan: { sql: 'max(t.last_seq_scan)', since: 16, label: 'Last Seq Scan' },
+  last_idx_scan: { sql: 'max(t.last_idx_scan)', since: 16, label: 'Last Idx Scan' },
+  total_n_tup_newpage_upd: { sql: 'sum(t.n_tup_newpage_upd)', since: 16, label: 'Newpage Updates' },
+  total_vacuum_time_ms: { sql: 'sum(t.total_vacuum_time_ms_delta)', since: 18, label: 'Vacuum Time (ms)' },
+  total_autovacuum_time_ms: { sql: 'sum(t.total_autovacuum_time_ms_delta)', since: 18, label: 'Autovacuum Time (ms)' },
+  total_analyze_time_ms: { sql: 'sum(t.total_analyze_time_ms_delta)', since: 18, label: 'Analyze Time (ms)' },
+  total_autoanalyze_time_ms: { sql: 'sum(t.total_autoanalyze_time_ms_delta)', since: 18, label: 'Autoanalyze Time (ms)' },
+};
+const TABLE_STAT_DEFAULTS = ['dbid', 'datname', 'schemaname', 'relname', 'total_seq_scan', 'total_idx_scan', 'total_inserts', 'total_updates', 'total_deletes', 'total_heap_blks_read', 'total_heap_blks_hit', 'n_live_tup', 'n_dead_tup'];
+const TABLE_STAT_RAW_DEFAULTS = ['sample_ts', ...TABLE_STAT_DEFAULTS];
+
+router.get('/:id/tables/columns', (_req, res) => {
+  res.json(columnsMetaResponse(TABLE_STAT_COLUMNS, TABLE_STAT_DEFAULTS));
+});
+
+const INDEX_STAT_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'ix.sample_ts', since: 11, label: 'Zaman' },
+  dbid: { sql: 'ix.dbid', since: 11, label: 'DB OID' },
+  datname: { sql: 'dbr.datname', since: 11, label: 'Database' },
+  index_relid: { sql: 'ix.index_relid', since: 11, label: 'Index OID' },
+  table_relid: { sql: 'ix.table_relid', since: 11, label: 'Table OID' },
+  schemaname: { sql: 'ix.schemaname', since: 11, label: 'Schema' },
+  table_relname: { sql: 'ix.table_relname', since: 11, label: 'Table' },
+  index_relname: { sql: 'ix.index_relname', since: 11, label: 'Index' },
+  total_idx_scan: { sql: 'sum(ix.idx_scan_delta)', since: 11, label: 'Idx Scan' },
+  total_idx_tup_read: { sql: 'sum(ix.idx_tup_read_delta)', since: 11, label: 'Idx Tup Read' },
+  total_idx_tup_fetch: { sql: 'sum(ix.idx_tup_fetch_delta)', since: 11, label: 'Idx Tup Fetch' },
+  total_idx_blks_read: { sql: 'sum(ix.idx_blks_read_delta)', since: 11, label: 'Idx Blks Read' },
+  total_idx_blks_hit: { sql: 'sum(ix.idx_blks_hit_delta)', since: 11, label: 'Idx Blks Hit' },
+  is_valid: { sql: 'ix.is_valid', since: 11, label: 'Valid' },
+  is_ready: { sql: 'ix.is_ready', since: 11, label: 'Ready' },
+  is_primary: { sql: 'ix.is_primary', since: 11, label: 'Primary' },
+  is_unique: { sql: 'ix.is_unique', since: 11, label: 'Unique' },
+  last_idx_scan: { sql: 'max(ix.last_idx_scan)', since: 16, label: 'Last Idx Scan' },
+};
+const INDEX_STAT_DEFAULTS = ['dbid', 'datname', 'schemaname', 'table_relname', 'index_relname', 'total_idx_scan', 'total_idx_tup_read', 'total_idx_tup_fetch', 'total_idx_blks_read', 'total_idx_blks_hit', 'is_valid', 'is_ready', 'is_primary', 'is_unique'];
+const INDEX_STAT_RAW_DEFAULTS = ['sample_ts', ...INDEX_STAT_DEFAULTS];
+
+router.get('/:id/indexes/columns', (_req, res) => {
+  res.json(columnsMetaResponse(INDEX_STAT_COLUMNS, INDEX_STAT_DEFAULTS));
+});
+
 router.get('/:id/tables', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, TABLE_STAT_COLUMNS, TABLE_STAT_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 't.sample_ts');
+      params.push(limit);
+      const selectCols = rawCols.map(c => rawSelectExpr(TABLE_STAT_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_table_stat_delta t
+        left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
+        where t.instance_pk = $1
+          and t.sample_ts between $2::timestamptz and $3::timestamptz
+          ${cursorWhere}
+        order by t.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
 
     const result = await pool.query(`
       select
@@ -593,6 +717,42 @@ router.get('/:id/indexes', async (req, res, next) => {
     const dbid = req.query.dbid ? Number(req.query.dbid) : null;
     const unusedOnly = req.query.unused === 'true';
     const invalidOnly = req.query.invalid === 'true';
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, INDEX_STAT_COLUMNS, INDEX_STAT_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const where = [
+        'ix.instance_pk = $1',
+        'ix.sample_ts between $2::timestamptz and $3::timestamptz'
+      ];
+      if (Number.isFinite(dbid) && dbid && dbid > 0) {
+        params.push(dbid);
+        where.push(`ix.dbid = $${params.length}`);
+      }
+      if (invalidOnly) {
+        where.push('(coalesce(ix.is_valid, true) = false or coalesce(ix.is_ready, true) = false)');
+      }
+      if (unusedOnly) {
+        where.push('coalesce(ix.idx_scan_delta, 0) = 0');
+      }
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'ix.sample_ts');
+      if (cursorWhere) where.push(cursorWhere.replace(/^\s*and\s+/, ''));
+      params.push(limit);
+      const selectCols = rawCols.map(c => rawSelectExpr(INDEX_STAT_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_index_stat_delta ix
+        left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
+        where ${where.join('\n          and ')}
+        order by ix.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
 
     const params: Array<string | number> = [id, fromIso, toIso];
     const where = [
@@ -671,6 +831,30 @@ router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
     const { id, dbid } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
 
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, TABLE_STAT_COLUMNS, TABLE_STAT_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, dbid, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 't.sample_ts');
+      params.push(limit);
+      const selectCols = rawCols.map(c => rawSelectExpr(TABLE_STAT_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_table_stat_delta t
+        left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
+        where t.instance_pk = $1
+          and t.dbid = $2
+          and t.sample_ts between $3::timestamptz and $4::timestamptz
+          ${cursorWhere}
+        order by t.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+
     const result = await pool.query(`
       select
         t.relid, t.schemaname, t.relname,
@@ -703,6 +887,36 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
     const { id, dbid } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const invalidOnly = req.query.invalid === 'true';
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, INDEX_STAT_COLUMNS, INDEX_STAT_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, dbid, fromIso, toIso];
+      const where = [
+        'ix.instance_pk = $1',
+        'ix.dbid = $2',
+        'ix.sample_ts between $3::timestamptz and $4::timestamptz'
+      ];
+      if (invalidOnly) {
+        where.push('(coalesce(ix.is_valid, true) = false or coalesce(ix.is_ready, true) = false)');
+      }
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'ix.sample_ts');
+      if (cursorWhere) where.push(cursorWhere.replace(/^\s*and\s+/, ''));
+      params.push(limit);
+      const selectCols = rawCols.map(c => rawSelectExpr(INDEX_STAT_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_index_stat_delta ix
+        left join dim.database_ref dbr on dbr.instance_pk = ix.instance_pk and dbr.dbid = ix.dbid
+        where ${where.join('\n          and ')}
+        order by ix.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
 
     const result = await pool.query(`
       with latest_flags as (
@@ -1368,6 +1582,56 @@ router.get('/:id/wal', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const [walResult, statWalResult, archiverResult] = await Promise.all([
+        pool.query(`
+          select sample_ts,
+                 current_wal_lsn,
+                 current_wal_file,
+                 wal_directory_size_byte,
+                 wal_file_count,
+                 period_wal_size_byte
+          from fact.pg_wal_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+            ${cursorWhere}
+          order by sample_ts desc
+          limit $${params.length}
+        `, params),
+        pool.query(`
+          select sample_ts,
+                 max(case when metric_name = 'wal_records' then metric_value_num end) as wal_records,
+                 max(case when metric_name = 'wal_fpi'     then metric_value_num end) as wal_fpi,
+                 max(case when metric_name = 'wal_bytes'   then metric_value_num end) as wal_bytes
+          from fact.pg_cluster_delta
+          where instance_pk = $1
+            and metric_family = 'pg_stat_wal'
+            and sample_ts between $2::timestamptz and $3::timestamptz
+          group by sample_ts
+          order by sample_ts
+        `, [id, fromIso, toIso]),
+        pool.query(`
+          select sample_ts, archived_count, last_archived_wal, last_archived_time,
+                 failed_count, last_failed_wal, last_failed_time
+          from fact.pg_archiver_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+          order by sample_ts
+        `, [id, fromIso, toIso]),
+      ]);
+      res.json({
+        ...rawPage(walResult.rows, limit),
+        stat_wal: statWalResult.rows,
+        archiver: archiverResult.rows,
+      });
+      return;
+    }
+
     const [walResult, statWalResult, archiverResult] = await Promise.all([
       pool.query(`
         select sample_ts,
@@ -1618,6 +1882,11 @@ const IO_STAT_COLUMNS: ColumnRegistry = {
   extend_bytes_delta: { sql: 'sum(extend_bytes_delta)', since: 18, label: 'Extend Bytes' },
 };
 const IO_STAT_DEFAULTS = ['backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta'];
+const IO_STAT_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'd.sample_ts', since: 16, label: 'Zaman' },
+  ...IO_STAT_COLUMNS,
+};
+const IO_STAT_RAW_DEFAULTS = ['sample_ts', ...IO_STAT_DEFAULTS];
 
 router.get('/:id/io-stats/columns', (_req, res) => {
   res.json(columnsMetaResponse(IO_STAT_COLUMNS, IO_STAT_DEFAULTS));
@@ -1629,6 +1898,29 @@ router.get('/:id/io-stats', async (req, res, next) => {
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const limit = parseLimit(req.query.limit, 200);
     const requestedCols = parseColumns(req.query.columns as string | undefined, IO_STAT_COLUMNS, IO_STAT_DEFAULTS);
+
+    if (isRawMode(req.query.mode)) {
+      const rawLimit = parseRawLimit(req.query.limit);
+      const rawRequestedCols = parseColumns(req.query.columns as string | undefined, IO_STAT_RAW_COLUMNS, IO_STAT_RAW_DEFAULTS);
+      const rawCols = rawRequestedCols.includes('sample_ts') ? rawRequestedCols : ['sample_ts', ...rawRequestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'd.sample_ts');
+      params.push(rawLimit);
+      const selectCols = rawCols.map(c => rawSelectExpr(IO_STAT_RAW_COLUMNS[c], c)).join(',\n        ');
+
+      const result = await pool.query(`
+        select ${selectCols}
+        from fact.pg_io_stat_delta d
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${cursorWhere}
+        order by d.sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, rawLimit));
+      return;
+    }
+
     const orderClause = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, 'reads_delta');
 
     const dims = ['backend_type', 'object', 'context'].filter(d => requestedCols.includes(d));
@@ -1728,6 +2020,11 @@ const CHECKPOINTER_COLUMNS: ColumnRegistry = {
   slru_written: { sql: "sum(case when metric_name='slru_written' then metric_value_num end)", since: 18, label: 'SLRU Written' },
 };
 const CHECKPOINTER_DEFAULTS = ['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written'];
+const CHECKPOINTER_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 's.sample_ts', since: 17, label: 'Zaman' },
+  ...CHECKPOINTER_COLUMNS,
+};
+const CHECKPOINTER_RAW_DEFAULTS = ['sample_ts', ...CHECKPOINTER_DEFAULTS];
 
 router.get('/:id/checkpointer/columns', (_req, res) => { res.json(columnsMetaResponse(CHECKPOINTER_COLUMNS, CHECKPOINTER_DEFAULTS)); });
 
@@ -1735,6 +2032,37 @@ router.get('/:id/checkpointer', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, CHECKPOINTER_RAW_COLUMNS, CHECKPOINTER_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const selectCols = rawCols
+        .map(c => c === 'sample_ts' ? 's.sample_ts' : clusterMetricRawExpr(CHECKPOINTER_RAW_COLUMNS, c, 'pg_stat_checkpointer'))
+        .join(',\n        ');
+
+      const result = await pool.query(`
+        with samples as (
+          select distinct instance_pk, sample_ts
+          from fact.pg_cluster_delta
+          where instance_pk = $1
+            and metric_family = 'pg_stat_checkpointer'
+            and sample_ts between $2::timestamptz and $3::timestamptz
+            ${cursorWhere}
+          order by sample_ts desc
+          limit $${params.length}
+        )
+        select ${selectCols}
+        from samples s
+        order by s.sample_ts desc
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+
     const requestedCols = parseColumns(req.query.columns as string | undefined, CHECKPOINTER_COLUMNS, CHECKPOINTER_DEFAULTS);
     const selectParts = requestedCols.map(c => `${CHECKPOINTER_COLUMNS[c].sql} as ${c}`);
     const result = await pool.query(`
@@ -1763,6 +2091,11 @@ const BGWRITER_COLUMNS: ColumnRegistry = {
   buffers_backend_fsync: { sql: "sum(case when metric_name='buffers_backend_fsync' then metric_value_num end)", since: 11, label: 'Backend Fsync' },
 };
 const BGWRITER_DEFAULTS = ['buffers_clean', 'maxwritten_clean', 'buffers_alloc'];
+const BGWRITER_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 's.sample_ts', since: 11, label: 'Zaman' },
+  ...BGWRITER_COLUMNS,
+};
+const BGWRITER_RAW_DEFAULTS = ['sample_ts', ...BGWRITER_DEFAULTS];
 
 router.get('/:id/bgwriter/columns', (_req, res) => { res.json(columnsMetaResponse(BGWRITER_COLUMNS, BGWRITER_DEFAULTS)); });
 
@@ -1770,6 +2103,37 @@ router.get('/:id/bgwriter', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, BGWRITER_RAW_COLUMNS, BGWRITER_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const selectCols = rawCols
+        .map(c => c === 'sample_ts' ? 's.sample_ts' : clusterMetricRawExpr(BGWRITER_RAW_COLUMNS, c, 'pg_stat_bgwriter'))
+        .join(',\n        ');
+
+      const result = await pool.query(`
+        with samples as (
+          select distinct instance_pk, sample_ts
+          from fact.pg_cluster_delta
+          where instance_pk = $1
+            and metric_family = 'pg_stat_bgwriter'
+            and sample_ts between $2::timestamptz and $3::timestamptz
+            ${cursorWhere}
+          order by sample_ts desc
+          limit $${params.length}
+        )
+        select ${selectCols}
+        from samples s
+        order by s.sample_ts desc
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+
     const requestedCols = parseColumns(req.query.columns as string | undefined, BGWRITER_COLUMNS, BGWRITER_DEFAULTS);
     const selectParts = requestedCols.map(c => `${BGWRITER_COLUMNS[c].sql} as ${c}`);
     const result = await pool.query(`
