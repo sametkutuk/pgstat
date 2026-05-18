@@ -2243,7 +2243,7 @@ function ProgressSubTab({ instancePk, range, subType }: { instancePk: number; ra
         return (
             <div className="bg-white rounded-lg shadow-sm p-4">
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC] mb-3">{isFetching ? '...' : 'Yenile'}</button>
-                <EmptyState icon="⏳" title={`Çalışan ${subType} operasyonu yok`} description="Son 1 saatte bu tipte progress kaydı bulunamadı." />
+                <EmptyState icon="⏳" title={`Çalışan ${subType} operasyonu yok`} description="Seçilen tarih aralığında bu tipte progress kaydı bulunamadı." />
             </div>
         );
     }
