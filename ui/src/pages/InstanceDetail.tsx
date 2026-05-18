@@ -625,21 +625,18 @@ function hitRatio(read: any, hit: any): number {
 }
 
 function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
-    // hours global range'ten türetilir (saat farkı) — local state kaldırıldı
-    const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
     const [orderBy, setOrderBy] = useState('seq_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
-    const setHours = (_: number) => { /* artık global picker'dan geliyor — bu setter no-op */ };
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
     }, [initialDbid]);
 
     const tables = useQuery({
-        queryKey: ['instance-tables', instancePk, hours],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/tables?hours=${hours}`),
+        queryKey: ['instance-tables', instancePk, range.fromIso, range.toIso],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/tables?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
         enabled: Number.isFinite(instancePk),
     });
 
@@ -676,15 +673,8 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
-                    <div>
-                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
-                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
-                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                            <option value={1}>Son 1 saat</option>
-                            <option value={6}>Son 6 saat</option>
-                            <option value={24}>Son 24 saat</option>
-                            <option value={72}>Son 3 gün</option>
-                        </select>
+                    <div className="text-[10px] text-[#94A3B8]">
+                        Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
                     <div>
                         <label className="block text-xs text-[#64748B] mb-1">Database</label>
@@ -789,9 +779,6 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 }
 
 function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
-    // hours global range'ten türetilir
-    const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
-    const setHours = (_: number) => { /* no-op, global picker */ };
     const [orderBy, setOrderBy] = useState('idx_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
@@ -803,14 +790,14 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
     }, [initialDbid]);
 
     const indexes = useQuery({
-        queryKey: ['instance-indexes', instancePk, hours, indexState],
+        queryKey: ['instance-indexes', instancePk, range.fromIso, range.toIso, indexState],
         queryFn: () => {
             const stateParam = indexState === 'unused'
                 ? '&unused=true&limit=10000'
                 : indexState === 'invalid'
                     ? '&invalid=true&limit=10000'
                     : '';
-            return apiGet<any[]>(`/instances/${instancePk}/indexes?hours=${hours}${stateParam}`);
+            return apiGet<any[]>(`/instances/${instancePk}/indexes?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${stateParam}`);
         },
         enabled: Number.isFinite(instancePk),
     });
@@ -851,7 +838,13 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
     const unusedCount = useMemo(() => (indexes.data || []).filter(isUnusedIndex).length, [indexes.data]);
     const invalidCount = useMemo(() => (indexes.data || []).filter(isInvalidIndex).length, [indexes.data]);
     const selectedDatabase = databases.find(d => d.dbid === dbFilter)?.datname;
-    const selectedRange = INDEX_TIME_RANGES.find(r => r.hours === hours) || { hours, label: `${hours} saat`, slug: `${hours}h` };
+    // Range'den okunabilir label ve dosya adı slug'ı türet
+    const _rangeHours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
+    const selectedRange = INDEX_TIME_RANGES.find(r => r.hours === _rangeHours) || {
+        hours: _rangeHours,
+        label: _rangeHours >= 24 ? `Son ${Math.round(_rangeHours / 24)} gün` : `Son ${_rangeHours} saat`,
+        slug: `${_rangeHours}h`,
+    };
 
     const exportExcel = () => {
         const headers = ['database', 'schema', 'table', 'index', 'status', 'is_valid', 'is_ready', 'is_primary', 'is_unique', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct', 'observed_since', 'observed_until', 'observed_hours', 'unused_window_covered'];
@@ -889,14 +882,8 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
-                    <div>
-                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
-                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
-                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                            {INDEX_TIME_RANGES.map(range => (
-                                <option key={range.hours} value={range.hours}>{range.label}</option>
-                            ))}
-                        </select>
+                    <div className="text-[10px] text-[#94A3B8]">
+                        Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
                     <div>
                         <label className="block text-xs text-[#64748B] mb-1">Database</label>
