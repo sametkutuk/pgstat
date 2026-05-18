@@ -2220,7 +2220,7 @@ function ProgressTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: nu
                     </button>
                 ))}
             </div>
-            <ProgressSubTab instancePk={instancePk} range={range} subType={sub} />
+            <ProgressSubTab key={sub} instancePk={instancePk} range={range} subType={sub} />
         </div>
     );
 }
