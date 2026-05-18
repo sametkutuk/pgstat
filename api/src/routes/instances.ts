@@ -1175,10 +1175,29 @@ router.get('/:id/settings/diff', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/tps — Günlük ve saatlik TPS tablosu
+// custom=1 (UI kullanıcının tarih aralığını uyguladı): her iki tablo da from/to kullanır
+// custom=0 (default): günlük=son 7 gün, saatlik=son 25 saat (klasik davranış)
 router.get('/:id/tps', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const days = parseInt(req.query.days as string) || 7;
+    const custom = req.query.custom === '1';
+    const { fromIso, toIso } = parseTimeRange(req.query, 24);
+
+    const dailyParams: any[] = [id];
+    const hourlyParams: any[] = [id];
+    let dailyWhere = '';
+    let hourlyWhere = '';
+
+    if (custom) {
+      dailyParams.push(fromIso, toIso);
+      hourlyParams.push(fromIso, toIso);
+      dailyWhere = `and d.sample_ts between $2::timestamptz and $3::timestamptz`;
+      hourlyWhere = `and d.sample_ts between $2::timestamptz and $3::timestamptz`;
+    } else {
+      // Default sabit pencereler
+      dailyWhere = `and d.sample_ts >= now() - interval '7 days'`;
+      hourlyWhere = `and d.sample_ts >= now() - interval '25 hours'`;
+    }
 
     const [daily, hourly] = await Promise.all([
       pool.query(`
@@ -1191,11 +1210,10 @@ router.get('/:id/tps', async (req, res, next) => {
           round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 86400) as avg_tps
         from fact.pg_database_delta d
         left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
-        where d.instance_pk = $1
-          and d.sample_ts >= now() - make_interval(days => $2)
+        where d.instance_pk = $1 ${dailyWhere}
         group by 1, dbr.datname
         order by 1 desc, dbr.datname
-      `, [id, days]),
+      `, dailyParams),
       pool.query(`
         select
           date_trunc('hour', d.sample_ts) as hour,
@@ -1206,11 +1224,10 @@ router.get('/:id/tps', async (req, res, next) => {
           round(sum(d.xact_commit_delta + d.xact_rollback_delta)::numeric / 3600) as avg_tps
         from fact.pg_database_delta d
         left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
-        where d.instance_pk = $1
-          and d.sample_ts >= now() - interval '25 hours'
+        where d.instance_pk = $1 ${hourlyWhere}
         group by 1, dbr.datname
         order by 1 desc, dbr.datname
-      `, [id]),
+      `, hourlyParams),
     ]);
 
     res.json({ daily: daily.rows, hourly: hourly.rows });

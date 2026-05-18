@@ -44,6 +44,9 @@ export default function InstanceDetail() {
     // Snapshot bazlı veriler (bloat oranı, son satır sayısı, son DB listesi) bu aralıktan
     // etkilenmez — onlar her zaman en son snapshot'ı kullanır.
     const [range, setRange] = useState<TimeRange>(() => loadPersistedRange(`inst-range-${id}`));
+    // Kullanıcı tarih aralığı değiştirdi mi? — TPS gibi tab'lar default davranıştan ayrılmak için
+    const [rangeIsCustom, setRangeIsCustom] = useState(false);
+    const setRangeCustom = (r: TimeRange) => { setRangeIsCustom(true); setRange(r); };
     // Mevcut endpoint'lerin geri uyumluluğu için range'ten hours hesabı (preset bazlı kullanım)
     const rangeQp = `from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`;
     const rangeHours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
@@ -62,9 +65,8 @@ export default function InstanceDetail() {
     const sequences = useQuery({ queryKey: ['inst-sequences', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?${hoursQp}&${rangeQp}`), enabled: tab === 'sequences' });
     const walData = useQuery({ queryKey: ['inst-wal', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/wal?${hoursQp}&${rangeQp}`), enabled: tab === 'wal' });
     const slruData = useQuery({ queryKey: ['inst-slru', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?${hoursQp}&${rangeQp}`), enabled: tab === 'slru' });
-    // TPS gün bazlı endpoint — range'den gün sayısı hesapla
-    const rangeDays = Math.max(1, Math.round(rangeHours / 24));
-    const tpsData = useQuery({ queryKey: ['inst-tps', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/tps?days=${rangeDays}`), enabled: tab === 'tps' });
+    // TPS — default'ta günlük 7 gün + saatlik 25 saat; kullanıcı aralık değiştirirse o aralığa
+    const tpsData = useQuery({ queryKey: ['inst-tps', id, range.fromIso, range.toIso, rangeIsCustom], queryFn: () => apiGet<any>(`/instances/${id}/tps?${rangeQp}&custom=${rangeIsCustom ? 1 : 0}`), enabled: tab === 'tps' });
     const [settingsDiffDays, setSettingsDiffDays] = useState(30);
     const settingsDiff = useQuery({
         queryKey: ['settings-diff', id, settingsDiffDays],
@@ -138,7 +140,7 @@ export default function InstanceDetail() {
             {/* Global tarih aralığı seçici — tüm tab'lardaki zaman serileri bu aralığa göre */}
             <div className="mb-4 bg-white border border-[#E2E8F0] rounded-lg p-3 flex items-center gap-3 flex-wrap">
                 <span className="text-xs text-[#64748B] font-medium">⏱ Tarih Aralığı:</span>
-                <TimeRangePicker value={range} onChange={setRange} persistKey={`inst-range-${id}`} />
+                <TimeRangePicker value={range} onChange={setRangeCustom} persistKey={`inst-range-${id}`} />
                 <InfoTip text={`Tüm zaman-serisi grafikleri ve sorgular bu aralığa göre çekilir
 (Statements, TPS, WAL, SLRU, Functions, Sequences, Activity, Alerts).
 
@@ -193,7 +195,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} range={range} />}
             {tab === 'progress' && <ProgressTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
-            {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
+            {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} custom={rangeIsCustom} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
@@ -2382,7 +2384,7 @@ function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean 
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="SLRU verisi yok (PG13+)" /></div>;
 }
 
-function TpsTab({ data, loading }: { data: any | undefined; loading: boolean }) {
+function TpsTab({ data, loading, custom }: { data: any | undefined; loading: boolean; custom: boolean }) {
     if (loading) return <SkeletonTable rows={5} cols={5} />;
     const daily = data?.daily || [];
     const hourly = data?.hourly || [];
@@ -2390,7 +2392,7 @@ function TpsTab({ data, loading }: { data: any | undefined; loading: boolean }) 
     return (
         <div className="space-y-5">
             <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük TPS (son 7 gün)</h3>
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Günlük TPS {custom ? '(seçili aralık)' : '(son 7 gün)'}</h3>
                 {daily.length === 0 ? (
                     <div className="text-sm text-[#94A3B8] py-4 text-center">Günlük TPS verisi yok</div>
                 ) : (
@@ -2414,7 +2416,7 @@ function TpsTab({ data, loading }: { data: any | undefined; loading: boolean }) 
                 )}
             </div>
             <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Saatlik TPS (son 25 saat)</h3>
+                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Saatlik TPS {custom ? '(seçili aralık)' : '(son 25 saat)'}</h3>
                 {hourly.length === 0 ? (
                     <div className="text-sm text-[#94A3B8] py-4 text-center">Saatlik TPS verisi yok</div>
                 ) : (
