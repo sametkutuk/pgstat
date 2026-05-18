@@ -2014,81 +2014,76 @@ function ArchiverTab({ instancePk }: { instancePk: number }) {
 }
 
 // =========================================================================
-// Subscriptions Tab — fact.pg_subscription_snapshot
+// Subscriptions Tab — TAM PAKET
 // =========================================================================
 function SubscriptionsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-subscriptions', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/subscriptions`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['subscriptions-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/subscriptions/columns`), staleTime: 3600_000 });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.subscriptions.cols', ['subname', 'pid', 'worker_type', 'lag_bytes', 'apply_error_count', 'sync_error_count'], colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.subscriptions.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-subscriptions', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/subscriptions?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={6} />;
 
-    const columns: any[] = [
-        { key: 'subname', header: 'Subscription' },
-        { key: 'pid', header: 'PID' },
-        { key: 'worker_type', header: 'Worker Type', render: (r: any) => r.worker_type || '—' },
-        { key: 'received_lsn', header: 'Received LSN', render: (r: any) => <span className="font-mono text-xs">{r.received_lsn || '—'}</span> },
-        { key: 'lag_bytes', header: 'Lag', render: (r: any) => r.lag_bytes != null ? fmtValue('lag_bytes', r.lag_bytes) : '—', className: 'text-right' },
-        { key: 'apply_error_count', header: 'Apply Errors', render: (r: any) => { const n = Number(r.apply_error_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : '0'; }, className: 'text-right' },
-        { key: 'sync_error_count', header: 'Sync Errors', render: (r: any) => { const n = Number(r.sync_error_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : '0'; }, className: 'text-right' },
-    ];
-    // PG17+ leader_pid
-    if (pgMajor == null || pgMajor >= 17) columns.push({ key: 'leader_pid', header: 'Leader PID', render: (r: any) => r.leader_pid ?? '—' });
-    // PG18+ conflict kolonları
-    if (pgMajor == null || pgMajor >= 18) {
-        columns.push({ key: 'confl_insert_exists_delta', header: 'Confl Insert', className: 'text-right', render: (r: any) => Number(r.confl_insert_exists_delta || 0).toLocaleString() });
-        columns.push({ key: 'confl_update_missing_delta', header: 'Confl Upd Missing', className: 'text-right', render: (r: any) => Number(r.confl_update_missing_delta || 0).toLocaleString() });
-        columns.push({ key: 'confl_delete_missing_delta', header: 'Confl Del Missing', className: 'text-right', render: (r: any) => Number(r.confl_delete_missing_delta || 0).toLocaleString() });
-    }
-
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
-                <span className="text-xs text-[#94A3B8]">{data?.length ?? 0} subscription worker</span>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} worker</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <DataTable columns={columns} data={data || []} emptyText="Logical subscription yok" />
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📨" title="Subscription yok" description="Logical subscription bulunamadı." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}{m && m.since > 11 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{m.since}+</span>}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">{selectedCols.map(col => <td key={col} className="py-2 px-3 text-xs whitespace-nowrap truncate">{r[col] != null ? (typeof r[col] === 'number' ? fmtValue(col, r[col]) : String(r[col])) : '—'}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Subscriptions Sütunları" />
         </div>
     );
 }
 
 // =========================================================================
-// WAL Receiver Tab — fact.pg_wal_receiver_snapshot (standby only)
+// WAL Receiver Tab — TAM PAKET (standby only)
 // =========================================================================
 function WalReceiverTab({ instancePk, isPrimary }: { instancePk: number; isPrimary: boolean | null | undefined }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-wal-receiver', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-receiver`),
-        enabled: Number.isFinite(instancePk) && isPrimary !== true,
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['wal-receiver-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/wal-receiver/columns`), staleTime: 3600_000 });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.wal-receiver.cols', ['status', 'sender_host', 'flushed_lsn', 'lag_bytes', 'last_msg_receipt_time'], colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.wal-receiver.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-wal-receiver', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-receiver?${qp}`), enabled: Number.isFinite(instancePk) && isPrimary !== true });
 
-    if (isPrimary === true) {
-        return <EmptyState icon="📡" title="Primary instance" description="WAL Receiver sadece standby instance'larda çalışır. Bu instance primary." />;
-    }
+    if (isPrimary === true) return <EmptyState icon="📡" title="Primary instance" description="WAL Receiver sadece standby instance'larda çalışır." />;
     if (isLoading) return <SkeletonTable rows={2} cols={5} />;
-
-    const columns = [
-        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
-        { key: 'status', header: 'Status', render: (r: any) => <Badge value={r.status || 'unknown'} /> },
-        { key: 'sender_host', header: 'Sender', render: (r: any) => `${r.sender_host || '?'}:${r.sender_port || '?'}` },
-        { key: 'flushed_lsn', header: 'Flushed LSN', render: (r: any) => <span className="font-mono text-xs">{r.flushed_lsn || '—'}</span> },
-        { key: 'lag_bytes', header: 'Lag', render: (r: any) => r.lag_bytes != null ? fmtValue('lag_bytes', r.lag_bytes) : '—', className: 'text-right' },
-        { key: 'slot_name', header: 'Slot', render: (r: any) => r.slot_name || '—' },
-        { key: 'last_msg_receipt_time', header: 'Son Mesaj', render: (r: any) => r.last_msg_receipt_time ? <TimeAgo date={r.last_msg_receipt_time} /> : '—' },
-    ];
 
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} snapshot</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <DataTable columns={columns} data={data || []} emptyText="WAL Receiver verisi yok (standby aktif değil veya veri toplanmamış)" />
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📡" title="WAL Receiver verisi yok" description="Standby aktif değil veya veri toplanmamış." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 130} onResize={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">{selectedCols.map(col => <td key={col} className="py-2 px-3 text-xs whitespace-nowrap truncate">{r[col] != null ? (typeof r[col] === 'number' ? fmtValue(col, r[col]) : String(r[col])) : '—'}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} title="⚙️ WAL Receiver Sütunları" />
         </div>
     );
 }
@@ -2229,11 +2224,16 @@ function ProgressTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; p
 }
 
 function ProgressSubTab({ instancePk, subType }: { instancePk: number; subType: ProgressSub }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-progress', instancePk, subType],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/progress-${subType.replace('_', '-')}`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const resource = `progress-${subType.replace('_', '-')}`;
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: [`${resource}-cols-meta`, instancePk], queryFn: () => apiGet(`/instances/${instancePk}/${resource}/columns`), staleTime: 3600_000 });
+    const defaults = colsMeta?.defaults ?? ['pid', 'phase'];
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(`pgstat.instance.${resource}.cols`, defaults, colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths(`pgstat.instance.${resource}.widths`);
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: [`inst-${resource}`, instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/${resource}?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 
@@ -2246,27 +2246,25 @@ function ProgressSubTab({ instancePk, subType }: { instancePk: number; subType: 
         );
     }
 
-    // Dinamik kolonlar — veri satırlarından key'leri çıkar
-    const allKeys = Object.keys(data[0]).filter(k => k !== 'sample_ts' && k !== 'instance_pk');
-
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
-                <span className="text-xs text-[#94A3B8]">{data.length} kayıt (son 1 saat)</span>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data.length} kayıt</span>
             </div>
             <div className="bg-white rounded-lg shadow-sm overflow-hidden overflow-x-auto">
-                <table className="w-full text-sm" style={{ tableLayout: 'auto' }}>
+                <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
                     <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                        {allKeys.map(k => <th key={k} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase whitespace-nowrap text-left">{k.replace(/_/g, ' ')}</th>)}
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>; })}
                     </tr></thead>
                     <tbody>{data.map((r: any, i: number) => (
-                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                            {allKeys.map(k => <td key={k} className="py-2 px-3 text-xs whitespace-nowrap">{r[k] != null ? String(r[k]) : '—'}</td>)}
-                        </tr>
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">{selectedCols.map(col => <td key={col} className="py-2 px-3 text-xs whitespace-nowrap truncate">{r[col] != null ? String(r[col]) : '—'}</td>)}</tr>
                     ))}</tbody>
                 </table>
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} title={`⚙️ Progress ${subType} Sütunları`} />
         </div>
     );
 }

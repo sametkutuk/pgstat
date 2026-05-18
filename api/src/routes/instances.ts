@@ -1749,13 +1749,38 @@ router.get('/:id/archiver', async (req, res, next) => {
 });
 
 // ============================================================================
-// Subscriptions — (basit, sonraki turda TAM PAKET)
+// Subscriptions — TAM PAKET
 // ============================================================================
+const SUBSCRIPTION_COLUMNS: ColumnRegistry = {
+  subname: { sql: 'subname', since: 11, label: 'Subscription' },
+  pid: { sql: 'pid', since: 11, label: 'PID' },
+  leader_pid: { sql: 'leader_pid', since: 17, label: 'Leader PID' },
+  worker_type: { sql: 'worker_type', since: 18, label: 'Worker Type' },
+  relid: { sql: 'relid', since: 11, label: 'Relid' },
+  received_lsn: { sql: 'received_lsn', since: 11, label: 'Received LSN' },
+  lag_bytes: { sql: 'lag_bytes', since: 11, label: 'Lag (bytes)' },
+  apply_error_count: { sql: 'apply_error_count', since: 15, label: 'Apply Errors' },
+  sync_error_count: { sql: 'sync_error_count', since: 15, label: 'Sync Errors' },
+  stats_reset: { sql: 'stats_reset', since: 15, label: 'Stats Reset' },
+  confl_insert_exists_delta: { sql: 'confl_insert_exists_delta', since: 18, label: 'Confl Insert' },
+  confl_update_origin_differs_delta: { sql: 'confl_update_origin_differs_delta', since: 18, label: 'Confl Upd Origin' },
+  confl_update_exists_delta: { sql: 'confl_update_exists_delta', since: 18, label: 'Confl Upd Exists' },
+  confl_update_missing_delta: { sql: 'confl_update_missing_delta', since: 18, label: 'Confl Upd Missing' },
+  confl_delete_origin_differs_delta: { sql: 'confl_delete_origin_differs_delta', since: 18, label: 'Confl Del Origin' },
+  confl_delete_missing_delta: { sql: 'confl_delete_missing_delta', since: 18, label: 'Confl Del Missing' },
+  confl_multiple_unique_conflicts_delta: { sql: 'confl_multiple_unique_conflicts_delta', since: 18, label: 'Confl Multi Unique' },
+};
+const SUBSCRIPTION_DEFAULTS = ['subname', 'pid', 'worker_type', 'lag_bytes', 'apply_error_count', 'sync_error_count'];
+
+router.get('/:id/subscriptions/columns', (_req, res) => { res.json(columnsMetaResponse(SUBSCRIPTION_COLUMNS, SUBSCRIPTION_DEFAULTS)); });
+
 router.get('/:id/subscriptions', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, SUBSCRIPTION_COLUMNS, SUBSCRIPTION_DEFAULTS);
+    const selectParts = requestedCols.map(c => SUBSCRIPTION_COLUMNS[c].sql);
     const result = await pool.query(`
-      select * from fact.pg_subscription_snapshot
+      select ${selectParts.join(', ')} from fact.pg_subscription_snapshot
       where instance_pk = $1
         and sample_ts = (select max(sample_ts) from fact.pg_subscription_snapshot where instance_pk = $1)
     `, [id]);
@@ -1764,18 +1789,73 @@ router.get('/:id/subscriptions', async (req, res, next) => {
 });
 
 // ============================================================================
-// WAL Receiver — (basit, sonraki turda TAM PAKET)
+// WAL Receiver — TAM PAKET
 // ============================================================================
+const WAL_RECEIVER_COLUMNS: ColumnRegistry = {
+  pid: { sql: 'pid', since: 11, label: 'PID' },
+  status: { sql: 'status', since: 11, label: 'Status' },
+  receive_start_lsn: { sql: 'receive_start_lsn', since: 11, label: 'Start LSN' },
+  receive_start_tli: { sql: 'receive_start_tli', since: 11, label: 'Start TLI' },
+  written_lsn: { sql: 'written_lsn', since: 13, label: 'Written LSN' },
+  flushed_lsn: { sql: 'flushed_lsn', since: 11, label: 'Flushed LSN' },
+  received_tli: { sql: 'received_tli', since: 11, label: 'Received TLI' },
+  last_msg_send_time: { sql: 'last_msg_send_time', since: 11, label: 'Last Msg Send' },
+  last_msg_receipt_time: { sql: 'last_msg_receipt_time', since: 11, label: 'Last Msg Receipt' },
+  latest_end_lsn: { sql: 'latest_end_lsn', since: 11, label: 'Latest End LSN' },
+  latest_end_time: { sql: 'latest_end_time', since: 11, label: 'Latest End Time' },
+  slot_name: { sql: 'slot_name', since: 11, label: 'Slot' },
+  sender_host: { sql: 'sender_host', since: 12, label: 'Sender Host' },
+  sender_port: { sql: 'sender_port', since: 12, label: 'Sender Port' },
+  lag_bytes: { sql: 'lag_bytes', since: 11, label: 'Lag (bytes)' },
+};
+const WAL_RECEIVER_DEFAULTS = ['status', 'sender_host', 'flushed_lsn', 'lag_bytes', 'last_msg_receipt_time'];
+
+router.get('/:id/wal-receiver/columns', (_req, res) => { res.json(columnsMetaResponse(WAL_RECEIVER_COLUMNS, WAL_RECEIVER_DEFAULTS)); });
+
 router.get('/:id/wal-receiver', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, WAL_RECEIVER_COLUMNS, WAL_RECEIVER_DEFAULTS);
+    const selectParts = requestedCols.map(c => WAL_RECEIVER_COLUMNS[c].sql);
     const result = await pool.query(`
-      select * from fact.pg_wal_receiver_snapshot
+      select ${selectParts.join(', ')} from fact.pg_wal_receiver_snapshot
       where instance_pk = $1 order by sample_ts desc limit 10
     `, [id]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
+
+// ============================================================================
+// Progress — /columns endpoints (6 sub-types)
+// ============================================================================
+const PROGRESS_VACUUM_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 11, label: 'PID' }, datname: { sql: 'datname', since: 11, label: 'Database' }, relid: { sql: 'relid', since: 11, label: 'Relid' }, phase: { sql: 'phase', since: 11, label: 'Phase' }, heap_blks_total: { sql: 'heap_blks_total', since: 11, label: 'Heap Total' }, heap_blks_scanned: { sql: 'heap_blks_scanned', since: 11, label: 'Heap Scanned' }, heap_blks_vacuumed: { sql: 'heap_blks_vacuumed', since: 11, label: 'Heap Vacuumed' }, index_vacuum_count: { sql: 'index_vacuum_count', since: 11, label: 'Idx Vac Count' }, max_dead_item_ids: { sql: 'max_dead_item_ids', since: 14, label: 'Max Dead IDs' }, max_dead_tuple_bytes: { sql: 'max_dead_tuple_bytes', since: 17, label: 'Max Dead Bytes' }, num_dead_item_ids: { sql: 'num_dead_item_ids', since: 14, label: 'Dead IDs' }, dead_tuple_bytes: { sql: 'dead_tuple_bytes', since: 17, label: 'Dead Bytes' }, indexes_total: { sql: 'indexes_total', since: 17, label: 'Indexes Total' }, indexes_processed: { sql: 'indexes_processed', since: 17, label: 'Indexes Done' } };
+const PROGRESS_ANALYZE_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 13, label: 'PID' }, datname: { sql: 'datname', since: 13, label: 'Database' }, relid: { sql: 'relid', since: 13, label: 'Relid' }, phase: { sql: 'phase', since: 13, label: 'Phase' }, sample_blks_total: { sql: 'sample_blks_total', since: 13, label: 'Sample Total' }, sample_blks_scanned: { sql: 'sample_blks_scanned', since: 13, label: 'Sample Scanned' }, ext_stats_total: { sql: 'ext_stats_total', since: 13, label: 'Ext Stats Total' }, ext_stats_computed: { sql: 'ext_stats_computed', since: 13, label: 'Ext Stats Done' }, child_tables_total: { sql: 'child_tables_total', since: 13, label: 'Child Total' }, child_tables_done: { sql: 'child_tables_done', since: 13, label: 'Child Done' } };
+const PROGRESS_CREATE_INDEX_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 12, label: 'PID' }, datname: { sql: 'datname', since: 12, label: 'Database' }, relid: { sql: 'relid', since: 12, label: 'Relid' }, command: { sql: 'command', since: 12, label: 'Command' }, phase: { sql: 'phase', since: 12, label: 'Phase' }, blocks_total: { sql: 'blocks_total', since: 12, label: 'Blocks Total' }, blocks_done: { sql: 'blocks_done', since: 12, label: 'Blocks Done' }, tuples_total: { sql: 'tuples_total', since: 12, label: 'Tuples Total' }, tuples_done: { sql: 'tuples_done', since: 12, label: 'Tuples Done' }, partitions_total: { sql: 'partitions_total', since: 12, label: 'Parts Total' }, partitions_done: { sql: 'partitions_done', since: 12, label: 'Parts Done' } };
+const PROGRESS_BASEBACKUP_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 13, label: 'PID' }, phase: { sql: 'phase', since: 13, label: 'Phase' }, backup_total: { sql: 'backup_total', since: 13, label: 'Backup Total' }, backup_streamed: { sql: 'backup_streamed', since: 13, label: 'Streamed' }, tablespaces_total: { sql: 'tablespaces_total', since: 13, label: 'TBS Total' }, tablespaces_streamed: { sql: 'tablespaces_streamed', since: 13, label: 'TBS Streamed' } };
+const PROGRESS_COPY_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 14, label: 'PID' }, datname: { sql: 'datname', since: 14, label: 'Database' }, relid: { sql: 'relid', since: 14, label: 'Relid' }, command: { sql: 'command', since: 14, label: 'Command' }, copy_type: { sql: 'copy_type', since: 14, label: 'Type' }, bytes_processed: { sql: 'bytes_processed', since: 14, label: 'Bytes Done' }, bytes_total: { sql: 'bytes_total', since: 14, label: 'Bytes Total' }, tuples_processed: { sql: 'tuples_processed', since: 14, label: 'Tuples Done' }, tuples_excluded: { sql: 'tuples_excluded', since: 14, label: 'Excluded' } };
+const PROGRESS_CLUSTER_COLS: ColumnRegistry = { pid: { sql: 'pid', since: 12, label: 'PID' }, datname: { sql: 'datname', since: 12, label: 'Database' }, relid: { sql: 'relid', since: 12, label: 'Relid' }, command: { sql: 'command', since: 12, label: 'Command' }, phase: { sql: 'phase', since: 12, label: 'Phase' }, heap_tuples_scanned: { sql: 'heap_tuples_scanned', since: 12, label: 'Tuples Scanned' }, heap_tuples_written: { sql: 'heap_tuples_written', since: 12, label: 'Tuples Written' }, heap_blks_total: { sql: 'heap_blks_total', since: 12, label: 'Blks Total' }, heap_blks_scanned: { sql: 'heap_blks_scanned', since: 12, label: 'Blks Scanned' }, index_rebuild_count: { sql: 'index_rebuild_count', since: 12, label: 'Idx Rebuild' } };
+
+const PROGRESS_MAP: Record<string, { cols: ColumnRegistry; defaults: string[]; table: string }> = {
+  vacuum: { cols: PROGRESS_VACUUM_COLS, defaults: ['pid', 'datname', 'phase', 'heap_blks_scanned', 'heap_blks_total'], table: 'fact.pg_progress_vacuum_snapshot' },
+  analyze: { cols: PROGRESS_ANALYZE_COLS, defaults: ['pid', 'datname', 'phase', 'sample_blks_scanned', 'sample_blks_total'], table: 'fact.pg_progress_analyze_snapshot' },
+  'create-index': { cols: PROGRESS_CREATE_INDEX_COLS, defaults: ['pid', 'datname', 'command', 'phase', 'blocks_done', 'blocks_total'], table: 'fact.pg_progress_create_index_snapshot' },
+  basebackup: { cols: PROGRESS_BASEBACKUP_COLS, defaults: ['pid', 'phase', 'backup_streamed', 'backup_total'], table: 'fact.pg_progress_basebackup_snapshot' },
+  copy: { cols: PROGRESS_COPY_COLS, defaults: ['pid', 'datname', 'command', 'copy_type', 'bytes_processed', 'tuples_processed'], table: 'fact.pg_progress_copy_snapshot' },
+  cluster: { cols: PROGRESS_CLUSTER_COLS, defaults: ['pid', 'datname', 'command', 'phase', 'heap_tuples_scanned', 'heap_tuples_written'], table: 'fact.pg_progress_cluster_snapshot' },
+};
+
+for (const [sub, cfg] of Object.entries(PROGRESS_MAP)) {
+  router.get(`/:id/progress-${sub}/columns`, (_req, res) => { res.json(columnsMetaResponse(cfg.cols, cfg.defaults)); });
+  router.get(`/:id/progress-${sub}`, async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const requestedCols = parseColumns(req.query.columns as string | undefined, cfg.cols, cfg.defaults);
+      const selectParts = requestedCols.map(c => cfg.cols[c].sql);
+      const result = await pool.query(`select ${selectParts.join(', ')} from ${cfg.table} where instance_pk = $1 and sample_ts >= now() - interval '1 hour' order by sample_ts desc limit 100`, [id]);
+      res.json(result.rows);
+    } catch (err) { next(err); }
+  });
+}
 
 // ============================================================================
 // Conflicts — TAM PAKET
@@ -1845,80 +1925,6 @@ router.get('/:id/recovery-prefetch', async (req, res, next) => {
 });
 
 // ============================================================================
-// Progress endpoints (6 view — son 1 saat)
-// ============================================================================
-router.get('/:id/progress-vacuum', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_vacuum_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
-router.get('/:id/progress-analyze', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_analyze_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
-router.get('/:id/progress-create-index', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_create_index_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
-router.get('/:id/progress-basebackup', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_basebackup_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
-router.get('/:id/progress-copy', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_copy_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
-router.get('/:id/progress-cluster', async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query(`
-      select * from fact.pg_progress_cluster_snapshot
-      where instance_pk = $1 and sample_ts >= now() - interval '1 hour'
-      order by sample_ts desc limit 100
-    `, [id]);
-    res.json(result.rows);
-  } catch (err) { next(err); }
-});
-
 export default router;
 
 /** secret_ref'i UI'da göstermek için maskeler */
