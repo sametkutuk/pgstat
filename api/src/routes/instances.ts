@@ -1650,22 +1650,106 @@ router.get('/:id/replication-slots', async (req, res, next) => {
 });
 
 // ============================================================================
-// Archiver — fact.pg_archiver_snapshot (son 10 snapshot)
+// Checkpointer (PG17+) — TAM PAKET (pivot from cluster_delta)
 // ============================================================================
+const CHECKPOINTER_COLUMNS: ColumnRegistry = {
+  checkpoints_timed: { sql: "sum(case when metric_name='checkpoints_timed' then metric_value_num end)", since: 17, label: 'Timed' },
+  checkpoints_req: { sql: "sum(case when metric_name='checkpoints_req' then metric_value_num end)", since: 17, label: 'Requested' },
+  checkpoint_write_time: { sql: "sum(case when metric_name='checkpoint_write_time' then metric_value_num end)", since: 17, label: 'Write Time (ms)' },
+  checkpoint_sync_time: { sql: "sum(case when metric_name='checkpoint_sync_time' then metric_value_num end)", since: 17, label: 'Sync Time (ms)' },
+  buffers_written: { sql: "sum(case when metric_name='buffers_checkpoint' then metric_value_num end)", since: 17, label: 'Buffers Written' },
+  restartpoints_timed: { sql: "sum(case when metric_name='restartpoints_timed' then metric_value_num end)", since: 17, label: 'Restartpoints Timed' },
+  restartpoints_req: { sql: "sum(case when metric_name='restartpoints_req' then metric_value_num end)", since: 17, label: 'Restartpoints Req' },
+  restartpoints_done: { sql: "sum(case when metric_name='restartpoints_done' then metric_value_num end)", since: 17, label: 'Restartpoints Done' },
+  num_done: { sql: "sum(case when metric_name='num_done' then metric_value_num end)", since: 18, label: 'Num Done' },
+  slru_written: { sql: "sum(case when metric_name='slru_written' then metric_value_num end)", since: 18, label: 'SLRU Written' },
+};
+const CHECKPOINTER_DEFAULTS = ['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written'];
+
+router.get('/:id/checkpointer/columns', (_req, res) => { res.json(columnsMetaResponse(CHECKPOINTER_COLUMNS, CHECKPOINTER_DEFAULTS)); });
+
+router.get('/:id/checkpointer', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, CHECKPOINTER_COLUMNS, CHECKPOINTER_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${CHECKPOINTER_COLUMNS[c].sql} as ${c}`);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_cluster_delta
+      where instance_pk = $1 and metric_family = 'pg_stat_checkpointer'
+        and sample_ts between $2::timestamptz and $3::timestamptz
+    `, [id, fromIso, toIso]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// BgWriter — TAM PAKET (pivot from cluster_delta)
+// ============================================================================
+const BGWRITER_COLUMNS: ColumnRegistry = {
+  buffers_clean: { sql: "sum(case when metric_name='buffers_clean' then metric_value_num end)", since: 11, label: 'Buffers Clean' },
+  maxwritten_clean: { sql: "sum(case when metric_name='maxwritten_clean' then metric_value_num end)", since: 11, label: 'Max Written Clean' },
+  buffers_alloc: { sql: "sum(case when metric_name='buffers_alloc' then metric_value_num end)", since: 11, label: 'Buffers Alloc' },
+  checkpoints_timed: { sql: "sum(case when metric_name='checkpoints_timed' then metric_value_num end)", since: 11, label: 'Checkpoints Timed' },
+  checkpoints_req: { sql: "sum(case when metric_name='checkpoints_req' then metric_value_num end)", since: 11, label: 'Checkpoints Req' },
+  checkpoint_write_time: { sql: "sum(case when metric_name='checkpoint_write_time' then metric_value_num end)", since: 11, label: 'Checkpoint Write (ms)' },
+  checkpoint_sync_time: { sql: "sum(case when metric_name='checkpoint_sync_time' then metric_value_num end)", since: 11, label: 'Checkpoint Sync (ms)' },
+  buffers_checkpoint: { sql: "sum(case when metric_name='buffers_checkpoint' then metric_value_num end)", since: 11, label: 'Buffers Checkpoint' },
+  buffers_backend: { sql: "sum(case when metric_name='buffers_backend' then metric_value_num end)", since: 11, label: 'Buffers Backend' },
+  buffers_backend_fsync: { sql: "sum(case when metric_name='buffers_backend_fsync' then metric_value_num end)", since: 11, label: 'Backend Fsync' },
+};
+const BGWRITER_DEFAULTS = ['buffers_clean', 'maxwritten_clean', 'buffers_alloc'];
+
+router.get('/:id/bgwriter/columns', (_req, res) => { res.json(columnsMetaResponse(BGWRITER_COLUMNS, BGWRITER_DEFAULTS)); });
+
+router.get('/:id/bgwriter', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, BGWRITER_COLUMNS, BGWRITER_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${BGWRITER_COLUMNS[c].sql} as ${c}`);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_cluster_delta
+      where instance_pk = $1 and metric_family = 'pg_stat_bgwriter'
+        and sample_ts between $2::timestamptz and $3::timestamptz
+    `, [id, fromIso, toIso]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Archiver — TAM PAKET
+// ============================================================================
+const ARCHIVER_COLUMNS: ColumnRegistry = {
+  archived_count: { sql: 'archived_count', since: 11, label: 'Archived Count' },
+  last_archived_wal: { sql: 'last_archived_wal', since: 11, label: 'Last Archived WAL' },
+  last_archived_time: { sql: 'last_archived_time', since: 11, label: 'Last Archived Time' },
+  failed_count: { sql: 'failed_count', since: 11, label: 'Failed Count' },
+  last_failed_wal: { sql: 'last_failed_wal', since: 11, label: 'Last Failed WAL' },
+  last_failed_time: { sql: 'last_failed_time', since: 11, label: 'Last Failed Time' },
+  stats_reset: { sql: 'stats_reset', since: 11, label: 'Stats Reset' },
+};
+const ARCHIVER_DEFAULTS = ['archived_count', 'last_archived_wal', 'last_archived_time', 'failed_count'];
+
+router.get('/:id/archiver/columns', (_req, res) => { res.json(columnsMetaResponse(ARCHIVER_COLUMNS, ARCHIVER_DEFAULTS)); });
+
 router.get('/:id/archiver', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, ARCHIVER_COLUMNS, ARCHIVER_DEFAULTS);
+    const selectParts = requestedCols.map(c => ARCHIVER_COLUMNS[c].sql);
     const result = await pool.query(`
-      select * from fact.pg_archiver_snapshot
-      where instance_pk = $1
-      order by sample_ts desc limit 10
+      select ${selectParts.join(', ')} from fact.pg_archiver_snapshot
+      where instance_pk = $1 order by sample_ts desc limit 10
     `, [id]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
 
 // ============================================================================
-// Subscriptions — fact.pg_subscription_snapshot (son snapshot)
+// Subscriptions — (basit, sonraki turda TAM PAKET)
 // ============================================================================
 router.get('/:id/subscriptions', async (req, res, next) => {
   try {
@@ -1680,28 +1764,43 @@ router.get('/:id/subscriptions', async (req, res, next) => {
 });
 
 // ============================================================================
-// WAL Receiver — fact.pg_wal_receiver_snapshot (son 10 snapshot)
+// WAL Receiver — (basit, sonraki turda TAM PAKET)
 // ============================================================================
 router.get('/:id/wal-receiver', async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await pool.query(`
       select * from fact.pg_wal_receiver_snapshot
-      where instance_pk = $1
-      order by sample_ts desc limit 10
+      where instance_pk = $1 order by sample_ts desc limit 10
     `, [id]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
 
 // ============================================================================
-// Conflicts — fact.pg_database_conflict_snapshot (son snapshot)
+// Conflicts — TAM PAKET
 // ============================================================================
+const CONFLICTS_COLUMNS: ColumnRegistry = {
+  datid: { sql: 'datid', since: 11, label: 'DB OID' },
+  datname: { sql: 'datname', since: 11, label: 'Database' },
+  confl_tablespace: { sql: 'confl_tablespace', since: 11, label: 'Tablespace' },
+  confl_lock: { sql: 'confl_lock', since: 11, label: 'Lock' },
+  confl_snapshot: { sql: 'confl_snapshot', since: 11, label: 'Snapshot' },
+  confl_bufferpin: { sql: 'confl_bufferpin', since: 11, label: 'Bufferpin' },
+  confl_deadlock: { sql: 'confl_deadlock', since: 11, label: 'Deadlock' },
+  confl_active_logicalslot: { sql: 'confl_active_logicalslot', since: 16, label: 'Logical Slot' },
+};
+const CONFLICTS_DEFAULTS = ['datname', 'confl_lock', 'confl_snapshot', 'confl_bufferpin', 'confl_deadlock'];
+
+router.get('/:id/conflicts/columns', (_req, res) => { res.json(columnsMetaResponse(CONFLICTS_COLUMNS, CONFLICTS_DEFAULTS)); });
+
 router.get('/:id/conflicts', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, CONFLICTS_COLUMNS, CONFLICTS_DEFAULTS);
+    const selectParts = requestedCols.map(c => CONFLICTS_COLUMNS[c].sql);
     const result = await pool.query(`
-      select * from fact.pg_database_conflict_snapshot
+      select ${selectParts.join(', ')} from fact.pg_database_conflict_snapshot
       where instance_pk = $1
         and sample_ts = (select max(sample_ts) from fact.pg_database_conflict_snapshot where instance_pk = $1)
     `, [id]);

@@ -1900,54 +1900,39 @@ function ReplicationSlotsTab({ instancePk, pgMajor }: { instancePk: number; pgMa
 }
 
 // =========================================================================
-// Checkpointer Tab (PG17+) — cluster_delta key-value pivot
+// Checkpointer Tab (PG17+) — TAM PAKET
 // =========================================================================
 function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-checkpointer', instancePk, range.fromIso, range.toIso],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/cluster-metrics?family=pg_stat_checkpointer&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['checkpointer-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/checkpointer/columns`), staleTime: 3600_000 });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.checkpointer.cols', ['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written'], colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.checkpointer.widths');
+    const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-checkpointer', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/checkpointer?${qp}`), enabled: Number.isFinite(instancePk) });
 
-    if (pgMajor != null && pgMajor < 17) {
-        return <EmptyState icon="🔄" title="PG17+ gerekli" description={`pg_stat_checkpointer PG17'de eklendi. Bu instance PG${pgMajor}. Checkpoint metrikleri BgWriter tab'ında.`} />;
-    }
-    if (isLoading) return <SkeletonTable rows={5} cols={4} />;
-
-    // Pivot: metric_name → son değer
-    const latest = new Map<string, number>();
-    (data || []).forEach((r: any) => { latest.set(r.metric_name, Number(r.metric_value_num)); });
-
-    const metrics = [
-        { key: 'checkpoints_timed', label: 'Timed Checkpoints' },
-        { key: 'checkpoints_req', label: 'Requested Checkpoints' },
-        { key: 'checkpoint_write_time', label: 'Write Time (ms)' },
-        { key: 'checkpoint_sync_time', label: 'Sync Time (ms)' },
-        { key: 'buffers_checkpoint', label: 'Buffers Written' },
-        { key: 'restartpoints_timed', label: 'Restartpoints Timed' },
-        { key: 'restartpoints_req', label: 'Restartpoints Req' },
-        { key: 'restartpoints_done', label: 'Restartpoints Done' },
-        { key: 'num_done', label: 'Num Done (PG18+)' },
-        { key: 'slru_written', label: 'SLRU Written (PG18+)' },
-    ];
+    if (pgMajor != null && pgMajor < 17) return <EmptyState icon="🔄" title="PG17+ gerekli" description={`pg_stat_checkpointer PG17'de eklendi. Bu instance PG${pgMajor}. Checkpoint metrikleri BgWriter tab'ında.`} />;
+    if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
-                <span className="text-xs text-[#94A3B8]">Seçili aralıktaki delta toplamları</span>
+                <span className="text-xs text-[#94A3B8] ml-auto">Seçili aralık delta toplamı</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <table className="w-full text-sm">
-                    <thead><tr className="border-b border-[#E2E8F0]"><th className="text-left py-2 px-3 text-xs font-semibold text-[#64748B]">Metrik</th><th className="text-right py-2 px-3 text-xs font-semibold text-[#64748B]">Delta Toplam</th></tr></thead>
-                    <tbody>{metrics.map(m => (
-                        <tr key={m.key} className="border-b border-[#F1F5F9]">
-                            <td className="py-2 px-3 text-xs">{m.label}</td>
-                            <td className="py-2 px-3 text-xs text-right font-mono">{latest.has(m.key) ? fmtValue(m.key, latest.get(m.key)) : '—'}</td>
-                        </tr>
-                    ))}</tbody>
-                </table>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="🔄" title="Checkpointer verisi yok" description="Bu aralıkta veri toplanmamış." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 130} onResize={setWidth} align="right" sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9]">{selectedCols.map(col => <td key={col} className="py-2 px-3 text-xs text-right font-mono whitespace-nowrap">{fmtValue(col, r[col])}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Checkpointer Sütunları" />
         </div>
     );
 }
