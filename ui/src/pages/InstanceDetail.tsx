@@ -15,6 +15,7 @@ import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../com
 import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
+import DataKindBanner from '../components/common/DataKindBanner';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
 
@@ -1795,6 +1796,7 @@ function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range:
 
     return (
         <div>
+            <DataKindBanner kind="delta" description="Her satır, seçili tarih aralığındaki backend_type × object × context kombinasyonu için TOPLAM I/O sayılarını gösterir (delta toplaması). Sayılar olay sayısıdır — örn. 'reads = 5000' demek bu pencerede 5000 okuma operasyonu olmuş demek." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -1867,6 +1869,7 @@ function ReplicationSlotsTab({ instancePk, range, pgMajor }: { instancePk: numbe
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Slot listesi anlık durumdur — seçili tarih aralığındaki EN SON snapshot gösterilir. spill/stream counter'lar slot ömrü boyunca kümülatif değerdir (delta değil)." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -1919,6 +1922,7 @@ function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; r
 
     return (
         <div>
+            <DataKindBanner kind="delta" description="Tek satır gösterir — seçili tarih aralığındaki checkpoint metriklerinin TOPLAMI. Örn. 'num_timed = 12' demek aralıkta 12 zamanlı checkpoint olmuş; ortalama 'write_time = 1500ms' demek toplam yazma süresi 1.5 saniye." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -1958,6 +1962,7 @@ function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range
 
     return (
         <div>
+            <DataKindBanner kind="delta" description="Tek satır — seçili tarih aralığındaki bgwriter aktivitesi TOPLAMI. PG17+ slim sürümde sadece bgwriter kolonları görünür (checkpoint metrikleri Checkpointer tab'ına taşındı)." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -1995,6 +2000,7 @@ function ArchiverTab({ instancePk, range }: { instancePk: number; range: TimeRan
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Her satır toplama anındaki KÜMÜLATİF değerdir (stats_reset'ten bu yana). archived_count = TOPLAM arşivlenmiş WAL sayısı. İki ardışık satırın farkını bakarak periyot artışını ölçebilirsin." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -2032,6 +2038,7 @@ function SubscriptionsTab({ instancePk, range, pgMajor }: { instancePk: number; 
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Subscription listesi anlık snapshot — seçili aralıktaki EN SON durum. lag_bytes anlıktır. apply_error_count / sync_error_count KÜMÜLATİF (stats_reset'ten bu yana). PG18 confl_*_delta kolonları ise periyot DELTA'sıdır." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -2070,6 +2077,7 @@ function WalReceiverTab({ instancePk, range, isPrimary }: { instancePk: number; 
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Her satır toplama anındaki anlık WAL receiver durumu. flushed_lsn / lag_bytes anlık değerlerdir, delta değil. Birden çok satır = birden çok toplama cycle'ı (en yenisi üstte)." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -2107,6 +2115,7 @@ function ConflictsTab({ instancePk, range, pgMajor }: { instancePk: number; rang
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Database başına standby recovery conflict sayıları — seçili aralıktaki EN SON snapshot. Her confl_* kolonu KÜMÜLATİF (stats_reset'ten beri). Primary instance'larda 0 görünür (sadece standby'da anlamlı)." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -2161,6 +2170,7 @@ function RecoveryPrefetchTab({ instancePk, range, pgMajor, isPrimary }: { instan
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Her satır toplama anındaki KÜMÜLATİF prefetch counter'ları (stats_reset'ten beri). wal_distance / block_distance / io_depth anlık göstergedir. Periyot artışı için iki ardışık satırın farkına bak." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
@@ -2212,6 +2222,7 @@ function ProgressTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: nu
 
     return (
         <div>
+            <DataKindBanner kind="snapshot" description="Progress view'ları ÇOK KISA ÖMÜRLÜDÜR — operasyon (vacuum/analyze/cluster/...) bittiğinde PG'den o satır kaybolur. Collector poll cycle'ı bu kısa pencereye denk gelirse satır yazılır. Yani burada gördüğün her satır = collector toplama yaparken o anda çalışıyordu. heap_blks_scanned vb. değerler O ANKİ ilerlemedir, delta değil." />
             <div className="flex gap-1 mb-3 flex-wrap">
                 {subs.filter(s => pgMajor == null || s.since <= pgMajor).map(s => (
                     <button key={s.key} onClick={() => setSub(s.key)}
