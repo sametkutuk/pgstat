@@ -448,7 +448,7 @@ router.get('/:id/statements', async (req, res, next) => {
 router.get('/:id/statements/hourly', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 24);
+    const { fromIso, toIso } = parseTimeRange(req.query, 24);
 
     const result = await pool.query(`
       select
@@ -460,10 +460,10 @@ router.get('/:id/statements/hourly', async (req, res, next) => {
         sum(h.shared_blks_hit_sum) as total_shared_blks_hit
       from agg.pgss_hourly h
       where h.instance_pk = $1
-        and h.bucket_start >= now() - make_interval(hours => $2)
+        and h.bucket_start between $2::timestamptz and $3::timestamptz
       group by h.bucket_start
       order by h.bucket_start
-    `, [id, hours]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -474,19 +474,19 @@ router.get('/:id/statements/hourly', async (req, res, next) => {
 router.get('/:id/cluster-metrics', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const family = req.query.family as string; // pg_stat_bgwriter, pg_stat_wal, vb.
 
     let query = `
       select sample_ts, metric_family, metric_name, metric_value_num
       from fact.pg_cluster_delta
       where instance_pk = $1
-        and sample_ts >= now() - make_interval(hours => $2)
+        and sample_ts between $2::timestamptz and $3::timestamptz
     `;
-    const params: any[] = [id, hours];
+    const params: any[] = [id, fromIso, toIso];
 
     if (family) {
-      query += ` and metric_family = $3`;
+      query += ` and metric_family = $4`;
       params.push(family);
     }
 
@@ -543,7 +543,7 @@ router.get('/:id/replication', async (req, res, next) => {
 router.get('/:id/tables', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
 
     const result = await pool.query(`
       select
@@ -573,11 +573,11 @@ router.get('/:id/tables', async (req, res, next) => {
       from fact.pg_table_stat_delta t
       left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
       where t.instance_pk = $1
-        and t.sample_ts >= now() - make_interval(hours => $2)
+        and t.sample_ts between $2::timestamptz and $3::timestamptz
       group by t.dbid, dbr.datname, t.relid, t.schemaname, t.relname
       order by total_seq_scan desc nulls last
       limit 500
-    `, [id, hours]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -588,16 +588,16 @@ router.get('/:id/tables', async (req, res, next) => {
 router.get('/:id/indexes', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const limit = parseLimit(req.query.limit, 500);
     const dbid = req.query.dbid ? Number(req.query.dbid) : null;
     const unusedOnly = req.query.unused === 'true';
     const invalidOnly = req.query.invalid === 'true';
 
-    const params: Array<string | number> = [id, hours];
+    const params: Array<string | number> = [id, fromIso, toIso];
     const where = [
       'ix.instance_pk = $1',
-      'ix.sample_ts >= b.window_start'
+      'ix.sample_ts between b.window_start and b.window_end'
     ];
     if (Number.isFinite(dbid) && dbid && dbid > 0) {
       params.push(dbid);
@@ -617,9 +617,9 @@ router.get('/:id/indexes', async (req, res, next) => {
     const result = await pool.query(`
       with bounds as (
         select
-          now() - make_interval(hours => $2) as window_start,
-          now() as window_end,
-          least(greatest(make_interval(hours => $2) * 0.05, interval '10 minutes'), interval '6 hours') as tolerance
+          $2::timestamptz as window_start,
+          $3::timestamptz as window_end,
+          least(greatest(($3::timestamptz - $2::timestamptz) * 0.05, interval '10 minutes'), interval '6 hours') as tolerance
       ),
       latest_flags as (
         select distinct on (ix.instance_pk, ix.dbid, ix.index_relid)
@@ -669,7 +669,7 @@ router.get('/:id/indexes', async (req, res, next) => {
 router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
 
     const result = await pool.query(`
       select
@@ -686,11 +686,11 @@ router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
       from fact.pg_table_stat_delta t
       where t.instance_pk = $1
         and t.dbid = $2
-        and t.sample_ts >= now() - make_interval(hours => $3)
+        and t.sample_ts between $3::timestamptz and $4::timestamptz
       group by t.relid, t.schemaname, t.relname
       order by total_seq_scan desc nulls last
       limit 100
-    `, [id, dbid, hours]);
+    `, [id, dbid, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -701,7 +701,7 @@ router.get('/:id/databases/:dbid/tables', async (req, res, next) => {
 router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const invalidOnly = req.query.invalid === 'true';
 
     const result = await pool.query(`
@@ -730,13 +730,13 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
       left join latest_flags lf on lf.instance_pk = ix.instance_pk and lf.dbid = ix.dbid and lf.index_relid = ix.index_relid
       where ix.instance_pk = $1
         and ix.dbid = $2
-        and ix.sample_ts >= now() - make_interval(hours => $3)
+        and ix.sample_ts between $3::timestamptz and $4::timestamptz
       group by ix.index_relid, ix.table_relid, ix.schemaname,
                ix.table_relname, ix.index_relname, lf.is_valid, lf.is_ready, lf.is_primary, lf.is_unique
       ${invalidOnly ? "having coalesce(lf.is_valid, true) = false or coalesce(lf.is_ready, true) = false" : ''}
       order by total_idx_scan desc nulls last
       limit 100
-    `, [id, dbid, hours]);
+    `, [id, dbid, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -747,7 +747,7 @@ router.get('/:id/databases/:dbid/indexes', async (req, res, next) => {
 router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
   try {
     const { id, dbid } = req.params;
-    const hours = parseHours(req.query.hours, 24);
+    const { fromIso, toIso } = parseTimeRange(req.query, 24);
 
     const result = await pool.query(`
       select
@@ -760,9 +760,9 @@ router.get('/:id/databases/:dbid/stats', async (req, res, next) => {
       from fact.pg_database_delta
       where instance_pk = $1
         and dbid = $2
-        and sample_ts >= now() - make_interval(hours => $3)
+        and sample_ts between $3::timestamptz and $4::timestamptz
       order by sample_ts
-    `, [id, dbid, hours]);
+    `, [id, dbid, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -1240,7 +1240,7 @@ router.get('/:id/tps', async (req, res, next) => {
 router.get('/:id/functions', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1257,7 +1257,7 @@ router.get('/:id/functions', async (req, res, next) => {
           on dbr.instance_pk = f.instance_pk
          and dbr.dbid = f.dbid
         where f.instance_pk = $1
-          and f.sample_ts >= now() - make_interval(hours => $2)
+          and f.sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by f.dbid, f.funcid order by f.sample_ts)
       )
       select
@@ -1272,7 +1272,7 @@ router.get('/:id/functions', async (req, res, next) => {
       group by dbid, datname, funcid, schemaname, funcname
       order by total_time_ms desc nulls last
       limit 100
-    `, [id, hours]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -1284,7 +1284,7 @@ router.get('/:id/functions', async (req, res, next) => {
 router.get('/:id/sequences', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1293,7 +1293,7 @@ router.get('/:id/sequences', async (req, res, next) => {
           greatest(blks_hit - lag(blks_hit) over w, 0) as hit_d
         from fact.pg_sequence_io_snapshot
         where instance_pk = $1
-          and sample_ts >= now() - make_interval(hours => $2)
+          and sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by relid order by sample_ts)
       )
       select
@@ -1307,7 +1307,7 @@ router.get('/:id/sequences', async (req, res, next) => {
       group by relid, schemaname, relname
       order by total_blks_read desc nulls last
       limit 100
-    `, [id, hours]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -1324,7 +1324,7 @@ router.get('/:id/sequences', async (req, res, next) => {
 router.get('/:id/wal', async (req, res, next) => {
   try {
     const { id } = req.params;
-    const hours = parseHours(req.query.hours, 1);
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const [walResult, statWalResult, archiverResult] = await Promise.all([
       pool.query(`
         select sample_ts,
@@ -1335,9 +1335,9 @@ router.get('/:id/wal', async (req, res, next) => {
                period_wal_size_byte
         from fact.pg_wal_snapshot
         where instance_pk = $1
-          and sample_ts >= now() - make_interval(hours => $2)
+          and sample_ts between $2::timestamptz and $3::timestamptz
         order by sample_ts
-      `, [id, hours]),
+      `, [id, fromIso, toIso]),
       pool.query(`
         select sample_ts,
                max(case when metric_name = 'wal_records' then metric_value_num end) as wal_records,
@@ -1346,18 +1346,18 @@ router.get('/:id/wal', async (req, res, next) => {
         from fact.pg_cluster_delta
         where instance_pk = $1
           and metric_family = 'pg_stat_wal'
-          and sample_ts >= now() - make_interval(hours => $2)
+          and sample_ts between $2::timestamptz and $3::timestamptz
         group by sample_ts
         order by sample_ts
-      `, [id, hours]),
+      `, [id, fromIso, toIso]),
       pool.query(`
         select sample_ts, archived_count, last_archived_wal, last_archived_time,
                failed_count, last_failed_wal, last_failed_time
         from fact.pg_archiver_snapshot
         where instance_pk = $1
-          and sample_ts >= now() - make_interval(hours => $2)
+          and sample_ts between $2::timestamptz and $3::timestamptz
         order by sample_ts
-      `, [id, hours]),
+      `, [id, fromIso, toIso]),
     ]);
     res.json({
       wal: walResult.rows,
