@@ -3,6 +3,7 @@ import { pool } from '../config/database';
 import { saveSecret, hasSecret } from '../config/secrets';
 import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
 import { PGSS_COLUMNS, parseRequestedColumns, parseStatementsOrderBy } from './statements';
+import { parseColumns, parseOrderBy as parseGenericOrderBy, columnsMetaResponse, type ColumnRegistry } from './_columnsHelper';
 
 const router = Router();
 
@@ -316,15 +317,15 @@ router.patch('/:id/toggle', async (req, res, next) => {
 // (kullanıcı ALTER SYSTEM yaptığında alert'in eski değer görmemesi için)
 // Collector polling'de pending komutu görür ve hot settings çeker.
 router.post('/:id/refresh-settings', async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        if (Number.isNaN(id) || id <= 0) { res.status(400).json({ error: 'Geçersiz id' }); return; }
-        const r = await pool.query(
-            `insert into control.collector_command (command, instance_pk)
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id) || id <= 0) { res.status(400).json({ error: 'Geçersiz id' }); return; }
+    const r = await pool.query(
+      `insert into control.collector_command (command, instance_pk)
              values ('refresh_settings', $1) returning command_id, status, requested_at`,
-            [id]);
-        res.json(r.rows[0]);
-    } catch (err) { next(err); }
+      [id]);
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
 });
 
 // PATCH /api/instances/:id/retry — Bootstrap'ı pending'e döndür, yeniden dene
@@ -556,7 +557,19 @@ router.get('/:id/tables', async (req, res, next) => {
         sum(t.heap_blks_read_delta) as total_heap_blks_read,
         sum(t.heap_blks_hit_delta) as total_heap_blks_hit,
         max(t.n_live_tup_estimate) as n_live_tup,
-        max(t.n_dead_tup_estimate) as n_dead_tup
+        max(t.n_dead_tup_estimate) as n_dead_tup,
+        max(t.last_vacuum) as last_vacuum,
+        max(t.last_autovacuum) as last_autovacuum,
+        max(t.last_analyze) as last_analyze,
+        max(t.last_autoanalyze) as last_autoanalyze,
+        max(t.n_ins_since_vacuum) as n_ins_since_vacuum,
+        max(t.last_seq_scan) as last_seq_scan,
+        max(t.last_idx_scan) as last_idx_scan,
+        sum(t.n_tup_newpage_upd) as total_n_tup_newpage_upd,
+        sum(t.total_vacuum_time_ms_delta) as total_vacuum_time_ms,
+        sum(t.total_autovacuum_time_ms_delta) as total_autovacuum_time_ms,
+        sum(t.total_analyze_time_ms_delta) as total_analyze_time_ms,
+        sum(t.total_autoanalyze_time_ms_delta) as total_autoanalyze_time_ms
       from fact.pg_table_stat_delta t
       left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid
       where t.instance_pk = $1
@@ -1083,20 +1096,20 @@ router.get('/:id/health-report', async (req, res, next) => {
 // snapshot_ts'lerde olduğundan max(snapshot_ts) filtrelemek 16'yı kaybediyordu.
 // distinct on ile her parametrenin son değeri döner.
 router.get('/:id/settings', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const r = await pool.query(`
+  try {
+    const { id } = req.params;
+    const r = await pool.query(`
             select distinct on (setting_name)
                    setting_name, setting_value, unit, context, source, snapshot_ts
             from fact.pg_settings_snapshot
             where instance_pk = $1
             order by setting_name, snapshot_ts desc
         `, [id]);
-        // En son snapshot_ts (göstermek için)
-        const lastTs = r.rows.reduce((acc: string | null, row: any) =>
-            !acc || row.snapshot_ts > acc ? row.snapshot_ts : acc, null);
-        res.json({ settings: r.rows, last_snapshot_ts: lastTs });
-    } catch (err) { next(err); }
+    // En son snapshot_ts (göstermek için)
+    const lastTs = r.rows.reduce((acc: string | null, row: any) =>
+      !acc || row.snapshot_ts > acc ? row.snapshot_ts : acc, null);
+    res.json({ settings: r.rows, last_snapshot_ts: lastTs });
+  } catch (err) { next(err); }
 });
 
 router.get('/:id/settings/diff', async (req, res, next) => {
@@ -1517,6 +1530,123 @@ function collectorStorageUnionSql(): string {
      group by d.instance_pk, ss.dbid, dbr.datname
   `;
 }
+
+// ============================================================================
+// I/O Stats (pg_stat_io, PG16+) — Madde 1 Tab
+// ============================================================================
+const IO_STAT_COLUMNS: ColumnRegistry = {
+  backend_type: { sql: 'backend_type', since: 16, label: 'Backend Type' },
+  object: { sql: 'object', since: 16, label: 'Object' },
+  context: { sql: 'context', since: 16, label: 'Context' },
+  reads_delta: { sql: 'sum(reads_delta)', since: 16, label: 'Reads' },
+  read_time_ms_delta: { sql: 'sum(read_time_ms_delta)', since: 16, label: 'Read Time (ms)' },
+  writes_delta: { sql: 'sum(writes_delta)', since: 16, label: 'Writes' },
+  write_time_ms_delta: { sql: 'sum(write_time_ms_delta)', since: 16, label: 'Write Time (ms)' },
+  extends_delta: { sql: 'sum(extends_delta)', since: 16, label: 'Extends' },
+  extend_time_ms_delta: { sql: 'sum(extend_time_ms_delta)', since: 16, label: 'Extend Time (ms)' },
+  hits_delta: { sql: 'sum(hits_delta)', since: 16, label: 'Hits' },
+  evictions_delta: { sql: 'sum(evictions_delta)', since: 16, label: 'Evictions' },
+  reuses_delta: { sql: 'sum(reuses_delta)', since: 16, label: 'Reuses' },
+  fsyncs_delta: { sql: 'sum(fsyncs_delta)', since: 16, label: 'Fsyncs' },
+  fsync_time_ms_delta: { sql: 'sum(fsync_time_ms_delta)', since: 16, label: 'Fsync Time (ms)' },
+  writebacks_delta: { sql: 'sum(writebacks_delta)', since: 16, label: 'Writebacks' },
+  writeback_time_ms_delta: { sql: 'sum(writeback_time_ms_delta)', since: 16, label: 'Writeback Time (ms)' },
+  op_bytes: { sql: 'max(op_bytes)', since: 16, label: 'Op Bytes' },
+  read_bytes_delta: { sql: 'sum(read_bytes_delta)', since: 18, label: 'Read Bytes' },
+  write_bytes_delta: { sql: 'sum(write_bytes_delta)', since: 18, label: 'Write Bytes' },
+  extend_bytes_delta: { sql: 'sum(extend_bytes_delta)', since: 18, label: 'Extend Bytes' },
+};
+const IO_STAT_DEFAULTS = ['backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta'];
+
+router.get('/:id/io-stats/columns', (_req, res) => {
+  res.json(columnsMetaResponse(IO_STAT_COLUMNS, IO_STAT_DEFAULTS));
+});
+
+router.get('/:id/io-stats', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 200);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, IO_STAT_COLUMNS, IO_STAT_DEFAULTS);
+    const orderClause = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, 'reads_delta');
+
+    const dims = ['backend_type', 'object', 'context'].filter(d => requestedCols.includes(d));
+    const metrics = requestedCols.filter(c => !dims.includes(c));
+    const selectParts = [
+      ...dims.map(d => `d.${d}`),
+      ...metrics.map(c => `${IO_STAT_COLUMNS[c].sql} as ${c}`),
+    ];
+    const groupBy = dims.length > 0 ? `group by ${dims.map(d => `d.${d}`).join(', ')}` : '';
+
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_io_stat_delta d
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+      ${groupBy}
+      order by ${orderClause}
+      limit $4
+    `, [id, fromIso, toIso, limit]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+// ============================================================================
+// Replication Slots — Madde 3 Tab
+// ============================================================================
+const SLOT_COLUMNS: ColumnRegistry = {
+  slot_name: { sql: 'slot_name', since: 11, label: 'Slot Name' },
+  plugin: { sql: 'plugin', since: 11, label: 'Plugin' },
+  slot_type: { sql: 'slot_type', since: 11, label: 'Type' },
+  database: { sql: 'database', since: 11, label: 'Database' },
+  active: { sql: 'active', since: 11, label: 'Active' },
+  active_pid: { sql: 'active_pid', since: 11, label: 'Active PID' },
+  xmin_int: { sql: 'xmin_int', since: 11, label: 'Xmin' },
+  catalog_xmin_int: { sql: 'catalog_xmin_int', since: 11, label: 'Catalog Xmin' },
+  restart_lsn: { sql: 'restart_lsn', since: 11, label: 'Restart LSN' },
+  confirmed_flush_lsn: { sql: 'confirmed_flush_lsn', since: 11, label: 'Confirmed Flush LSN' },
+  wal_status: { sql: 'wal_status', since: 13, label: 'WAL Status' },
+  safe_wal_size: { sql: 'safe_wal_size', since: 13, label: 'Safe WAL Size' },
+  slot_lag_bytes: { sql: 'slot_lag_bytes', since: 11, label: 'Lag (bytes)' },
+  spill_txns: { sql: 'spill_txns', since: 14, label: 'Spill Txns' },
+  spill_count: { sql: 'spill_count', since: 14, label: 'Spill Count' },
+  spill_bytes: { sql: 'spill_bytes', since: 14, label: 'Spill Bytes' },
+  stream_txns: { sql: 'stream_txns', since: 14, label: 'Stream Txns' },
+  stream_count: { sql: 'stream_count', since: 14, label: 'Stream Count' },
+  stream_bytes: { sql: 'stream_bytes', since: 14, label: 'Stream Bytes' },
+  total_txns: { sql: 'total_txns', since: 14, label: 'Total Txns' },
+  total_bytes: { sql: 'total_bytes', since: 14, label: 'Total Bytes' },
+  stats_reset: { sql: 'stats_reset', since: 14, label: 'Stats Reset' },
+  temporary: { sql: 'temporary', since: 11, label: 'Temporary' },
+  two_phase: { sql: 'two_phase', since: 15, label: 'Two Phase' },
+  conflicting: { sql: 'conflicting', since: 17, label: 'Conflicting' },
+  invalidation_reason: { sql: 'invalidation_reason', since: 17, label: 'Invalidation Reason' },
+  failover: { sql: 'failover', since: 17, label: 'Failover' },
+  synced: { sql: 'synced', since: 17, label: 'Synced' },
+};
+const SLOT_DEFAULTS = ['slot_name', 'slot_type', 'database', 'active', 'wal_status', 'slot_lag_bytes', 'conflicting', 'failover'];
+
+router.get('/:id/replication-slots/columns', (_req, res) => {
+  res.json(columnsMetaResponse(SLOT_COLUMNS, SLOT_DEFAULTS));
+});
+
+router.get('/:id/replication-slots', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, SLOT_COLUMNS, SLOT_DEFAULTS);
+    // Snapshot — en son veriyi getir (aggregate yok, direkt kolon)
+    const selectParts = requestedCols.map(c => SLOT_COLUMNS[c].sql);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_replication_slot_snapshot
+      where instance_pk = $1
+        and sample_ts = (
+          select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $1
+        )
+    `, [id]);
+    res.json(result.rows);
+  } catch (err) { next(err); }
+});
 
 export default router;
 

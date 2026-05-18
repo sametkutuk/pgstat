@@ -12,10 +12,11 @@ import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRa
 import type { TimeRange } from '../components/common/TimeRangePicker';
 import { useEffect, useMemo, useState } from 'react';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
+import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'settings';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'settings';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -93,10 +94,12 @@ export default function InstanceDetail() {
         { key: 'tps', label: 'TPS', tip: 'Transactions Per Second — günlük ve saatlik commit/rollback dağılımı. Kapasite planlaması için kritik metrik.' },
         { key: 'activity', label: 'Activity', tip: 'pg_stat_activity — anlık aktif session\'lar. State, wait event ve çalışan sorguları gösterir.' },
         { key: 'replication', label: 'Replikasyon', tip: 'Primary node üzerinden streaming replica durumu, sync state ve replay lag bilgileri.' },
+        { key: 'replication_slots', label: 'Slots', tip: 'pg_replication_slots — slot durumu, lag, WAL status, PG17+ conflict/failover bilgileri.' },
         { key: 'functions', label: 'Functions', tip: 'pg_stat_user_functions — kullanıcı fonksiyonları. track_functions=all olmalı. Calls, total_time, self_time gösterir.' },
         { key: 'sequences', label: 'Sequences', tip: 'pg_statio_all_sequences — sequence I/O. Cache hit ratio düşükse shared_buffers yetersiz olabilir.' },
         { key: 'wal', label: 'WAL/Archive', tip: 'WAL üretimi ve archiver durumu. WAL bytes yüksekse checkpoint_completion_target ayarını kontrol edin. Failed archive varsa archive_command\'ı inceleyin.' },
         { key: 'slru', label: 'SLRU', tip: 'Simple LRU cache istatistikleri (PG13+). CommitTs, MultiXact, Notify, Serial, Subtrans, Xact cache\'leri. Hit ratio düşükse performans etkilenebilir.' },
+        { key: 'io_stats', label: 'I/O Stats', tip: 'pg_stat_io (PG16+) — backend tipi, object ve context bazında detaylı I/O istatistikleri.' },
         { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir. Parametre değiştiğinde otomatik PARAMETER_CHANGED INFO alert tetiklenir (bildirim kanallarına da gönderilir).' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
@@ -168,10 +171,12 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'replication_slots' && <ReplicationSlotsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
+            {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
@@ -650,116 +655,116 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 
     return (
         <div>
-                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
-                        <div className="flex flex-wrap gap-3 items-end">
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
-                                <select value={hours} onChange={e => setHours(Number(e.target.value))}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                                    <option value={1}>Son 1 saat</option>
-                                    <option value={6}>Son 6 saat</option>
-                                    <option value={24}>Son 24 saat</option>
-                                    <option value={72}>Son 3 gün</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Database</label>
-                                <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
-                                    <option value="">Tümü</option>
-                                    {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
-                                <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                                    <option value="seq_scan">Seq Scan</option>
-                                    <option value="idx_scan">Idx Scan</option>
-                                    <option value="writes">Write Toplamı</option>
-                                    <option value="dead_tup">Dead Tuple</option>
-                                    <option value="heap_read">Heap Read</option>
-                                </select>
-                            </div>
-                            <div className="flex-1 min-w-[180px]">
-                                <label className="block text-xs text-[#64748B] mb-1">Tablo Ara</label>
-                                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema veya tablo"
-                                    className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
-                                <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
-                                    className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
-                            </div>
-                            <div className="flex items-end gap-2 pb-0.5">
-                                {hasFilter && (
-                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); }}
-                                        className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                                        Temizle
-                                    </button>
-                                )}
-                                <button onClick={() => tables.refetch()}
-                                    className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                                    {tables.isFetching ? 'Yenileniyor...' : 'Yenile'}
-                                </button>
-                                <span className="text-xs text-[#94A3B8]">
-                                        {hasFilter && filtered.length !== (tables.data?.length ?? 0)
-                                            ? `${filtered.length} / ${tables.data?.length ?? 0}`
-                                            : `${filtered.length} tablo`}
-                                </span>
-                            </div>
-                        </div>
+            <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                <div className="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
+                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            <option value={1}>Son 1 saat</option>
+                            <option value={6}>Son 6 saat</option>
+                            <option value={24}>Son 24 saat</option>
+                            <option value={72}>Son 3 gün</option>
+                        </select>
                     </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                        <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                            <option value="">Tümü</option>
+                            {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
+                        <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            <option value="seq_scan">Seq Scan</option>
+                            <option value="idx_scan">Idx Scan</option>
+                            <option value="writes">Write Toplamı</option>
+                            <option value="dead_tup">Dead Tuple</option>
+                            <option value="heap_read">Heap Read</option>
+                        </select>
+                    </div>
+                    <div className="flex-1 min-w-[180px]">
+                        <label className="block text-xs text-[#64748B] mb-1">Tablo Ara</label>
+                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema veya tablo"
+                            className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
+                        <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
+                            className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div className="flex items-end gap-2 pb-0.5">
+                        {hasFilter && (
+                            <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); }}
+                                className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                Temizle
+                            </button>
+                        )}
+                        <button onClick={() => tables.refetch()}
+                            className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                            {tables.isFetching ? 'Yenileniyor...' : 'Yenile'}
+                        </button>
+                        <span className="text-xs text-[#94A3B8]">
+                            {hasFilter && filtered.length !== (tables.data?.length ?? 0)
+                                ? `${filtered.length} / ${tables.data?.length ?? 0}`
+                                : `${filtered.length} tablo`}
+                        </span>
+                    </div>
+                </div>
+            </div>
 
-                    <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-                        {tables.isLoading ? <SkeletonTable rows={5} cols={6} /> : filtered.length === 0 ? (
-                            <div className="text-[#94A3B8] py-8 text-center text-sm">Tablo istatistiği yok veya filtreyle eşleşen tablo bulunamadı.</div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Seq Scan</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Write</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Heap I/O</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuple</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filtered.map((r: any) => {
-                                            const writes = statNumber(r.total_inserts) + statNumber(r.total_updates) + statNumber(r.total_deletes);
-                                            const ratio = hitRatio(r.total_heap_blks_read, r.total_heap_blks_hit);
-                                            const dead = statNumber(r.n_dead_tup);
-                                            return (
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {tables.isLoading ? <SkeletonTable rows={5} cols={6} /> : filtered.length === 0 ? (
+                    <div className="text-[#94A3B8] py-8 text-center text-sm">Tablo istatistiği yok veya filtreyle eşleşen tablo bulunamadı.</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Seq Scan</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Write</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Heap I/O</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuple</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filtered.map((r: any) => {
+                                    const writes = statNumber(r.total_inserts) + statNumber(r.total_updates) + statNumber(r.total_deletes);
+                                    const ratio = hitRatio(r.total_heap_blks_read, r.total_heap_blks_hit);
+                                    const dead = statNumber(r.n_dead_tup);
+                                    return (
                                         <tr key={`${r.dbid}-${r.relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
                                             <td className="py-2.5 px-3 text-xs">
                                                 <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
                                                 <div className="font-medium text-[#1E293B]">{r.relname || '-'}</div>
                                             </td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_seq_scan))}</td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                        <div className={writes > 0 ? 'text-[#1E293B]' : 'text-[#94A3B8]'}>{fmtNum(writes)}</div>
-                                                        <div className="text-[10px] text-[#94A3B8]">I {fmtNum(statNumber(r.total_inserts))} / U {fmtNum(statNumber(r.total_updates))} / D {fmtNum(statNumber(r.total_deletes))}</div>
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                        <div>{fmtNum(statNumber(r.total_heap_blks_read))} R / {fmtNum(statNumber(r.total_heap_blks_hit))} H</div>
-                                                        <div className={ratio < 95 ? 'text-amber-600' : 'text-green-600'}>{ratio.toFixed(1)}%</div>
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                        <div>Live {fmtNum(statNumber(r.n_live_tup))}</div>
-                                                        <div className={dead > 0 ? 'text-red-600 font-semibold' : 'text-[#94A3B8]'}>Dead {fmtNum(dead)}</div>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_seq_scan))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                <div className={writes > 0 ? 'text-[#1E293B]' : 'text-[#94A3B8]'}>{fmtNum(writes)}</div>
+                                                <div className="text-[10px] text-[#94A3B8]">I {fmtNum(statNumber(r.total_inserts))} / U {fmtNum(statNumber(r.total_updates))} / D {fmtNum(statNumber(r.total_deletes))}</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                <div>{fmtNum(statNumber(r.total_heap_blks_read))} R / {fmtNum(statNumber(r.total_heap_blks_hit))} H</div>
+                                                <div className={ratio < 95 ? 'text-amber-600' : 'text-green-600'}>{ratio.toFixed(1)}%</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                <div>Live {fmtNum(statNumber(r.n_live_tup))}</div>
+                                                <div className={dead > 0 ? 'text-red-600 font-semibold' : 'text-[#94A3B8]'}>Dead {fmtNum(dead)}</div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
+                )}
+            </div>
         </div>
     );
 }
@@ -863,145 +868,145 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 
     return (
         <div>
-                    <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
-                        <div className="flex flex-wrap gap-3 items-end">
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
-                                <select value={hours} onChange={e => setHours(Number(e.target.value))}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                                    {INDEX_TIME_RANGES.map(range => (
-                                        <option key={range.hours} value={range.hours}>{range.label}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Database</label>
-                                <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
-                                    <option value="">Tümü</option>
-                                    {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
-                                <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
-                                    <option value="idx_scan">Idx Scan</option>
-                                    <option value="tup_read">Tuple Read</option>
-                                    <option value="tup_fetch">Tuple Fetch</option>
-                                    <option value="blks_read">Block Read</option>
-                                    <option value="hit_ratio_low">Düşük Hit Ratio</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Durum</label>
-                                <select value={indexState} onChange={e => setIndexState(e.target.value as 'all' | 'unused' | 'invalid')}
-                                    className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[145px]">
-                                    <option value="all">Tüm indexler</option>
-                                    <option value="unused">Unused only</option>
-                                    <option value="invalid">Invalid / not-ready</option>
-                                </select>
-                            </div>
-                            <div className="flex-1 min-w-[180px]">
-                                <label className="block text-xs text-[#64748B] mb-1">Index Ara</label>
-                                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema, tablo veya index"
-                                    className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
-                            </div>
-                            <div>
-                                <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
-                                <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
-                                    className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
-                            </div>
-                            <div className="flex items-end gap-2 pb-0.5">
-                                {hasFilter && (
-                                    <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); setIndexState('all'); }}
-                                        className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                                        Temizle
-                                    </button>
-                                )}
-                                <button onClick={exportExcel} disabled={filtered.length === 0}
-                                    className="px-3 py-1.5 text-sm text-[#2563EB] border border-[#BFDBFE] rounded hover:bg-[#EFF6FF] disabled:opacity-50 disabled:cursor-not-allowed">
-                                    Excel Export
-                                </button>
-                                <button onClick={() => indexes.refetch()}
-                                    className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                                    {indexes.isFetching ? 'Yenileniyor...' : 'Yenile'}
-                                </button>
-                                <span className="text-xs text-[#94A3B8]">
-                                    {hasFilter && filtered.length !== (indexes.data?.length ?? 0)
-                                        ? `${filtered.length} / ${indexes.data?.length ?? 0}`
-                                        : `${filtered.length} index`}
-                                </span>
-                            </div>
-                        </div>
-                        <div className="mt-3 text-xs text-[#64748B]">
-                            Unused kriteri: {selectedRange.label} içinde idx_scan = 0 ve pencereyi kapsayan yeterli gözlem datası var. Invalid kriteri son snapshot'ta indisvalid=false veya indisready=false olmasıdır. Kanıtlı unused: {unusedCount}, invalid/not-ready: {invalidCount}.
-                        </div>
+            <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                <div className="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Zaman</label>
+                        <select value={hours} onChange={e => setHours(Number(e.target.value))}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            {INDEX_TIME_RANGES.map(range => (
+                                <option key={range.hours} value={range.hours}>{range.label}</option>
+                            ))}
+                        </select>
                     </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                        <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                            <option value="">Tümü</option>
+                            {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Sıralama</label>
+                        <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white">
+                            <option value="idx_scan">Idx Scan</option>
+                            <option value="tup_read">Tuple Read</option>
+                            <option value="tup_fetch">Tuple Fetch</option>
+                            <option value="blks_read">Block Read</option>
+                            <option value="hit_ratio_low">Düşük Hit Ratio</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Durum</label>
+                        <select value={indexState} onChange={e => setIndexState(e.target.value as 'all' | 'unused' | 'invalid')}
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[145px]">
+                            <option value="all">Tüm indexler</option>
+                            <option value="unused">Unused only</option>
+                            <option value="invalid">Invalid / not-ready</option>
+                        </select>
+                    </div>
+                    <div className="flex-1 min-w-[180px]">
+                        <label className="block text-xs text-[#64748B] mb-1">Index Ara</label>
+                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="schema, tablo veya index"
+                            className="w-full border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-[#64748B] mb-1">Min Değer</label>
+                        <input type="number" min={0} value={minValue} onChange={e => setMinValue(e.target.value)}
+                            className="w-24 border border-[#E2E8F0] rounded px-3 py-1.5 text-sm focus:outline-none focus:border-[#3B82F6]" />
+                    </div>
+                    <div className="flex items-end gap-2 pb-0.5">
+                        {hasFilter && (
+                            <button onClick={() => { setDbFilter(''); setSearch(''); setMinValue(''); setIndexState('all'); }}
+                                className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                Temizle
+                            </button>
+                        )}
+                        <button onClick={exportExcel} disabled={filtered.length === 0}
+                            className="px-3 py-1.5 text-sm text-[#2563EB] border border-[#BFDBFE] rounded hover:bg-[#EFF6FF] disabled:opacity-50 disabled:cursor-not-allowed">
+                            Excel Export
+                        </button>
+                        <button onClick={() => indexes.refetch()}
+                            className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                            {indexes.isFetching ? 'Yenileniyor...' : 'Yenile'}
+                        </button>
+                        <span className="text-xs text-[#94A3B8]">
+                            {hasFilter && filtered.length !== (indexes.data?.length ?? 0)
+                                ? `${filtered.length} / ${indexes.data?.length ?? 0}`
+                                : `${filtered.length} index`}
+                        </span>
+                    </div>
+                </div>
+                <div className="mt-3 text-xs text-[#64748B]">
+                    Unused kriteri: {selectedRange.label} içinde idx_scan = 0 ve pencereyi kapsayan yeterli gözlem datası var. Invalid kriteri son snapshot'ta indisvalid=false veya indisready=false olmasıdır. Kanıtlı unused: {unusedCount}, invalid/not-ready: {invalidCount}.
+                </div>
+            </div>
 
-                    <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-                        {indexes.isLoading ? <SkeletonTable rows={5} cols={7} /> : filtered.length === 0 ? (
-                            <div className="text-[#94A3B8] py-8 text-center text-sm">Index istatistiği yok veya filtreyle eşleşen index bulunamadı.</div>
-                        ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
-                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Index</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuples</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blocks</th>
-                                            <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Status</th>
-                                            <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Hit Ratio</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filtered.map((r: any) => {
-                                            const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
-                                            const invalid = isInvalidIndex(r);
-                                            const unused = isUnusedIndex(r);
-                                            return (
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {indexes.isLoading ? <SkeletonTable rows={5} cols={7} /> : filtered.length === 0 ? (
+                    <div className="text-[#94A3B8] py-8 text-center text-sm">Index istatistiği yok veya filtreyle eşleşen index bulunamadı.</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Schema / Tablo</th>
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Index</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Idx Scan</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tuples</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Blocks</th>
+                                    <th className="text-left py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Status</th>
+                                    <th className="text-right py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">Hit Ratio</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filtered.map((r: any) => {
+                                    const ratio = hitRatio(r.total_idx_blks_read, r.total_idx_blks_hit);
+                                    const invalid = isInvalidIndex(r);
+                                    const unused = isUnusedIndex(r);
+                                    return (
                                         <tr key={`${r.dbid}-${r.index_relid}`} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors ${invalid ? 'bg-red-50/60' : unused ? 'bg-amber-50/40' : ''}`}>
                                             <td className="py-2.5 px-3 text-xs">
                                                 <div className="text-[#94A3B8]">{r.datname || '-'} / {r.schemaname || '-'}</div>
                                                 <div className="font-medium text-[#1E293B]">{r.table_relname || '-'}</div>
                                             </td>
-                                                    <td className="py-2.5 px-3 max-w-xs">
-                                                        <div className="truncate text-xs font-mono text-[#1E293B]" title={r.index_relname}>{r.index_relname || '-'}</div>
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                        <div>Read {fmtNum(statNumber(r.total_idx_tup_read))}</div>
-                                                        <div className="text-[#94A3B8]">Fetch {fmtNum(statNumber(r.total_idx_tup_fetch))}</div>
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                        <div>{fmtNum(statNumber(r.total_idx_blks_read))} R</div>
-                                                        <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} H</div>
-                                                    </td>
-                                                    <td className="py-2.5 px-3 text-xs">
-                                                        {invalid ? (
-                                                            <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">Invalid / not-ready</span>
-                                                        ) : unused ? (
-                                                            <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">Unused</span>
-                                                        ) : (
-                                                            <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700">OK</span>
-                                                        )}
-                                                        <div className="mt-1 text-[10px] text-[#94A3B8]">
-                                                            valid={r.is_valid === false ? 'no' : 'yes'} ready={r.is_ready === false ? 'no' : 'yes'}
-                                                        </div>
-                                                    </td>
-                                                    <td className={`py-2.5 px-3 text-right font-mono text-xs ${ratio < 95 ? 'text-amber-600 font-semibold' : 'text-green-600'}`}>
-                                                        {ratio.toFixed(1)}%
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
+                                            <td className="py-2.5 px-3 max-w-xs">
+                                                <div className="truncate text-xs font-mono text-[#1E293B]" title={r.index_relname}>{r.index_relname || '-'}</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs text-[#64748B]">{fmtNum(statNumber(r.total_idx_scan))}</td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                <div>Read {fmtNum(statNumber(r.total_idx_tup_read))}</div>
+                                                <div className="text-[#94A3B8]">Fetch {fmtNum(statNumber(r.total_idx_tup_fetch))}</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
+                                                <div>{fmtNum(statNumber(r.total_idx_blks_read))} R</div>
+                                                <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} H</div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-xs">
+                                                {invalid ? (
+                                                    <span className="inline-flex rounded-full bg-red-100 px-2 py-0.5 font-semibold text-red-700">Invalid / not-ready</span>
+                                                ) : unused ? (
+                                                    <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700">Unused</span>
+                                                ) : (
+                                                    <span className="inline-flex rounded-full bg-green-100 px-2 py-0.5 font-semibold text-green-700">OK</span>
+                                                )}
+                                                <div className="mt-1 text-[10px] text-[#94A3B8]">
+                                                    valid={r.is_valid === false ? 'no' : 'yes'} ready={r.is_ready === false ? 'no' : 'yes'}
+                                                </div>
+                                            </td>
+                                            <td className={`py-2.5 px-3 text-right font-mono text-xs ${ratio < 95 ? 'text-amber-600 font-semibold' : 'text-green-600'}`}>
+                                                {ratio.toFixed(1)}%
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
                     </div>
+                )}
+            </div>
         </div>
     );
 }
@@ -1731,6 +1736,147 @@ function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boole
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Job run kaydı yok" /></div>;
 }
 
+// =========================================================================
+// I/O Stats Tab (PG16+)
+// =========================================================================
+function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'reads_delta', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['io-stats-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/io-stats/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.instance.io-stats.cols',
+        ['backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta'],
+        colsMeta
+    );
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.io-stats.widths');
+
+    const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, limit: '200', order_by: orderParam, columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-io-stats', instancePk, range.fromIso, range.toIso, orderParam, selectedCols.join(',')],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/io-stats?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (pgMajor != null && pgMajor < 16) {
+        return <EmptyState icon="📊" title="PG16+ gerekli" description={`pg_stat_io PG16'da eklendi. Bu instance PG${pgMajor} çalıştırıyor.`} />;
+    }
+    if (isLoading) return <SkeletonTable rows={5} cols={6} />;
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} satır</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📊" title="I/O verisi yok" description="Bu aralıkta pg_stat_io verisi toplanmamış." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const meta = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align={['backend_type', 'object', 'context'].includes(col) ? 'left' : 'right'} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{meta?.label ?? col}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{data.map((r: any, i: number) => (
+                                <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                    {selectedCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${['backend_type', 'object', 'context'].includes(col) ? '' : 'text-right font-mono'}`}>
+                                            {['backend_type', 'object', 'context'].includes(col) ? (r[col] ?? '—') : fmtValue(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ I/O Stats Sütunları" />
+        </div>
+    );
+}
+
+// =========================================================================
+// Replication Slots Tab
+// =========================================================================
+function ReplicationSlotsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['slot-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/replication-slots/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.instance.replication-slots.cols',
+        ['slot_name', 'slot_type', 'database', 'active', 'wal_status', 'slot_lag_bytes', 'conflicting', 'failover'],
+        colsMeta
+    );
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.replication-slots.widths');
+
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-replication-slots', instancePk, selectedCols.join(',')],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/replication-slots?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+
+    if (isLoading) return <SkeletonTable rows={3} cols={6} />;
+
+    const formatCell = (col: string, val: any) => {
+        if (val == null) return '—';
+        if (col === 'active' || col === 'temporary' || col === 'two_phase' || col === 'conflicting' || col === 'failover' || col === 'synced') {
+            return val === true ? '✓' : val === false ? '✗' : '—';
+        }
+        if (col === 'slot_lag_bytes' || col === 'safe_wal_size' || col.endsWith('_bytes')) return fmtValue(col, val);
+        return String(val);
+    };
+
+    return (
+        <div>
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} slot</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="🔌" title="Replication slot yok" description="Bu instance'ta aktif replication slot bulunmuyor." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const meta = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? 130} onResize={setWidth} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{meta?.label ?? col}{meta && meta.since > 11 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{meta.since}+</span>}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{data.map((r: any, i: number) => (
+                                <tr key={i} className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] ${r.conflicting ? 'bg-red-50' : ''}`}>
+                                    {selectedCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${col === 'conflicting' && r.conflicting ? 'text-red-600 font-medium' : ''}`}>
+                                            {formatCell(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Replication Slots Sütunları" />
+        </div>
+    );
+}
+
 function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
     if (loading) return <SkeletonTable rows={5} cols={5} />;
     const columns = [
@@ -1979,7 +2125,7 @@ function SettingsTab({ instanceId, onRefresh, refreshing }: {
     const lastTs = data.last_snapshot_ts ? new Date(data.last_snapshot_ts) : null;
     const ageSec = lastTs ? Math.round((Date.now() - lastTs.getTime()) / 1000) : 0;
     const ageStr = ageSec < 60 ? `${ageSec}s` : ageSec < 3600 ? `${Math.round(ageSec / 60)} dk` :
-                   ageSec < 86400 ? `${Math.round(ageSec / 3600)} sa` : `${Math.round(ageSec / 86400)} g`;
+        ageSec < 86400 ? `${Math.round(ageSec / 3600)} sa` : `${Math.round(ageSec / 86400)} g`;
 
     return (
         <div className="space-y-3">
