@@ -1938,90 +1938,77 @@ function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; r
 }
 
 // =========================================================================
-// BgWriter Tab — cluster_delta key-value pivot
+// BgWriter Tab — TAM PAKET
 // =========================================================================
 function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-bgwriter', instancePk, range.fromIso, range.toIso],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/cluster-metrics?family=pg_stat_bgwriter&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['bgwriter-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/bgwriter/columns`), staleTime: 3600_000 });
+    const defaults = pgMajor != null && pgMajor >= 17 ? ['buffers_clean', 'maxwritten_clean', 'buffers_alloc'] : ['buffers_clean', 'maxwritten_clean', 'buffers_alloc', 'checkpoints_timed', 'checkpoints_req', 'buffers_checkpoint'];
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.bgwriter.cols', defaults, colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.bgwriter.widths');
+    const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-bgwriter', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/bgwriter?${qp}`), enabled: Number.isFinite(instancePk) });
 
-    if (isLoading) return <SkeletonTable rows={5} cols={4} />;
-
-    const latest = new Map<string, number>();
-    (data || []).forEach((r: any) => { latest.set(r.metric_name, Number(r.metric_value_num)); });
-
-    // PG17 öncesi full set, PG17+ slim set
-    const fullMetrics = [
-        { key: 'checkpoints_timed', label: 'Timed Checkpoints', since: 11 },
-        { key: 'checkpoints_req', label: 'Requested Checkpoints', since: 11 },
-        { key: 'checkpoint_write_time', label: 'Checkpoint Write Time (ms)', since: 11 },
-        { key: 'checkpoint_sync_time', label: 'Checkpoint Sync Time (ms)', since: 11 },
-        { key: 'buffers_checkpoint', label: 'Buffers Checkpoint', since: 11 },
-        { key: 'buffers_clean', label: 'Buffers Clean', since: 11 },
-        { key: 'maxwritten_clean', label: 'Max Written Clean', since: 11 },
-        { key: 'buffers_backend', label: 'Buffers Backend', since: 11 },
-        { key: 'buffers_backend_fsync', label: 'Buffers Backend Fsync', since: 11 },
-        { key: 'buffers_alloc', label: 'Buffers Alloc', since: 11 },
-    ];
-    const slimMetrics = [
-        { key: 'buffers_clean', label: 'Buffers Clean', since: 11 },
-        { key: 'maxwritten_clean', label: 'Max Written Clean', since: 11 },
-        { key: 'buffers_alloc', label: 'Buffers Alloc', since: 11 },
-    ];
-    const metrics = (pgMajor != null && pgMajor >= 17) ? slimMetrics : fullMetrics;
+    if (isLoading) return <SkeletonTable rows={3} cols={5} />;
+    const visibleCols = pgMajor != null && pgMajor >= 17 ? selectedCols.filter(c => !['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_checkpoint', 'buffers_backend', 'buffers_backend_fsync'].includes(c)) : selectedCols;
 
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
-                <span className="text-xs text-[#94A3B8]">{pgMajor != null && pgMajor >= 17 ? 'PG17+ slim set (checkpoint → Checkpointer tab)' : 'Full set (checkpoint dahil)'}</span>
+                <span className="text-xs text-[#94A3B8] ml-auto">{pgMajor != null && pgMajor >= 17 ? 'PG17+ slim (checkpoint → Checkpointer)' : 'Full set'}</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <table className="w-full text-sm">
-                    <thead><tr className="border-b border-[#E2E8F0]"><th className="text-left py-2 px-3 text-xs font-semibold text-[#64748B]">Metrik</th><th className="text-right py-2 px-3 text-xs font-semibold text-[#64748B]">Delta Toplam</th></tr></thead>
-                    <tbody>{metrics.map(m => (
-                        <tr key={m.key} className="border-b border-[#F1F5F9]">
-                            <td className="py-2 px-3 text-xs">{m.label}</td>
-                            <td className="py-2 px-3 text-xs text-right font-mono">{latest.has(m.key) ? fmtValue(m.key, latest.get(m.key)) : '—'}</td>
-                        </tr>
-                    ))}</tbody>
-                </table>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="✍️" title="BgWriter verisi yok" description="Bu aralıkta veri toplanmamış." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {visibleCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 130} onResize={setWidth} align="right" sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9]">{visibleCols.map(col => <td key={col} className="py-2 px-3 text-xs text-right font-mono whitespace-nowrap">{fmtValue(col, r[col])}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ BgWriter Sütunları" />
         </div>
     );
 }
 
 // =========================================================================
-// Archiver Tab — fact.pg_archiver_snapshot
+// Archiver Tab — TAM PAKET
 // =========================================================================
 function ArchiverTab({ instancePk }: { instancePk: number }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-archiver', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/archiver`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['archiver-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/archiver/columns`), staleTime: 3600_000 });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.archiver.cols', ['archived_count', 'last_archived_wal', 'last_archived_time', 'failed_count'], colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.archiver.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-archiver', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/archiver?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 
-    const columns = [
-        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
-        { key: 'archived_count', header: 'Arşivlenen', render: (r: any) => Number(r.archived_count || 0).toLocaleString(), className: 'text-right' },
-        { key: 'last_archived_wal', header: 'Son Arşiv WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_archived_wal || '—'}</span> },
-        { key: 'failed_count', header: 'Başarısız', render: (r: any) => { const n = Number(r.failed_count || 0); return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : <span className="text-green-600">0</span>; }, className: 'text-right' },
-        { key: 'last_failed_wal', header: 'Son Hata WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_failed_wal || '—'}</span> },
-        { key: 'stats_reset', header: 'Stats Reset', render: (r: any) => r.stats_reset ? <TimeAgo date={r.stats_reset} /> : '—' },
-    ];
-
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} snapshot</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <DataTable columns={columns} data={data || []} emptyText="Archiver verisi yok (archive_mode kapalı olabilir)" />
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📦" title="Archiver verisi yok" description="archive_mode kapalı olabilir." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 150} onResize={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">{selectedCols.map(col => <td key={col} className="py-2 px-3 text-xs whitespace-nowrap truncate">{r[col] != null ? String(r[col]) : '—'}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} title="⚙️ Archiver Sütunları" />
         </div>
     );
 }
@@ -2107,38 +2094,38 @@ function WalReceiverTab({ instancePk, isPrimary }: { instancePk: number; isPrima
 }
 
 // =========================================================================
-// Conflicts Tab — fact.pg_database_conflict_snapshot
+// Conflicts Tab — TAM PAKET
 // =========================================================================
 function ConflictsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
-    const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-conflicts', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/conflicts`),
-        enabled: Number.isFinite(instancePk),
-    });
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['conflicts-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/conflicts/columns`), staleTime: 3600_000 });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.conflicts.cols', ['datname', 'confl_lock', 'confl_snapshot', 'confl_bufferpin', 'confl_deadlock'], colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.conflicts.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-conflicts', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/conflicts?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={6} />;
 
-    const columns: any[] = [
-        { key: 'datname', header: 'Database' },
-        { key: 'confl_tablespace', header: 'Tablespace', className: 'text-right', render: (r: any) => Number(r.confl_tablespace || 0).toLocaleString() },
-        { key: 'confl_lock', header: 'Lock', className: 'text-right', render: (r: any) => Number(r.confl_lock || 0).toLocaleString() },
-        { key: 'confl_snapshot', header: 'Snapshot', className: 'text-right', render: (r: any) => Number(r.confl_snapshot || 0).toLocaleString() },
-        { key: 'confl_bufferpin', header: 'Bufferpin', className: 'text-right', render: (r: any) => Number(r.confl_bufferpin || 0).toLocaleString() },
-        { key: 'confl_deadlock', header: 'Deadlock', className: 'text-right', render: (r: any) => Number(r.confl_deadlock || 0).toLocaleString() },
-    ];
-    if (pgMajor == null || pgMajor >= 16) {
-        columns.push({ key: 'confl_active_logicalslot', header: 'Logical Slot', className: 'text-right', render: (r: any) => Number(r.confl_active_logicalslot || 0).toLocaleString() });
-    }
-
     return (
         <div>
-            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex gap-2 items-center">
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
-                <span className="text-xs text-[#94A3B8]">Standby conflict istatistikleri (primary'de genelde 0)</span>
+                <span className="text-xs text-[#94A3B8] ml-auto">Standby conflict istatistikleri</span>
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <DataTable columns={columns} data={data || []} emptyText="Conflict verisi yok" />
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="⚡" title="Conflict verisi yok" description="Standby'da conflict oluşmamış veya veri toplanmamış." /> : (
+                    <div className="overflow-x-auto"><table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}><thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        {selectedCols.map(col => { const m = colsMeta?.available.find(c => c.key === col); return <ResizableTh key={col} colKey={col} width={widths[col] ?? 120} onResize={setWidth} align={col === 'datname' ? 'left' : 'right'} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}{m && m.since > 11 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{m.since}+</span>}</ResizableTh>; })}
+                    </tr></thead><tbody>{data.map((r: any, i: number) => (
+                        <tr key={i} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">{selectedCols.map(col => <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap ${col === 'datname' ? '' : 'text-right font-mono'}`}>{col === 'datname' ? (r[col] || '—') : fmtValue(col, r[col])}</td>)}</tr>
+                    ))}</tbody></table></div>
+                )}
             </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Conflicts Sütunları" />
         </div>
     );
 }
