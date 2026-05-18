@@ -179,11 +179,11 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
             {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
-            {tab === 'replication_slots' && <ReplicationSlotsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
-            {tab === 'subscriptions' && <SubscriptionsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
-            {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
-            {tab === 'conflicts' && <ConflictsTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
-            {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'replication_slots' && <ReplicationSlotsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'subscriptions' && <SubscriptionsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} range={range} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'conflicts' && <ConflictsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
@@ -191,8 +191,8 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
-            {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} />}
-            {tab === 'progress' && <ProgressTab instancePk={Number(id)} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} range={range} />}
+            {tab === 'progress' && <ProgressTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
@@ -1830,7 +1830,7 @@ function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range:
 // =========================================================================
 // Replication Slots Tab
 // =========================================================================
-function ReplicationSlotsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+function ReplicationSlotsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
 
     const { data: colsMeta } = useQuery<ColumnsMeta>({
@@ -1845,9 +1845,9 @@ function ReplicationSlotsTab({ instancePk, pgMajor }: { instancePk: number; pgMa
     );
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.replication-slots.widths');
 
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-replication-slots', instancePk, selectedCols.join(',')],
+        queryKey: ['instance-replication-slots', instancePk, range.fromIso, range.toIso, selectedCols.join(',')],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/replication-slots?${qp}`),
         enabled: Number.isFinite(instancePk),
     });
@@ -1979,15 +1979,15 @@ function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range
 // =========================================================================
 // Archiver Tab — TAM PAKET
 // =========================================================================
-function ArchiverTab({ instancePk }: { instancePk: number }) {
+function ArchiverTab({ instancePk, range }: { instancePk: number; range: TimeRange }) {
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['archiver-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/archiver/columns`), staleTime: 3600_000 });
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.archiver.cols', ['archived_count', 'last_archived_wal', 'last_archived_time', 'failed_count'], colsMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.archiver.widths');
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
-    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-archiver', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/archiver?${qp}`), enabled: Number.isFinite(instancePk) });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-archiver', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/archiver?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 
@@ -2016,15 +2016,15 @@ function ArchiverTab({ instancePk }: { instancePk: number }) {
 // =========================================================================
 // Subscriptions Tab — TAM PAKET
 // =========================================================================
-function SubscriptionsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+function SubscriptionsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['subscriptions-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/subscriptions/columns`), staleTime: 3600_000 });
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.subscriptions.cols', ['subname', 'pid', 'worker_type', 'lag_bytes', 'apply_error_count', 'sync_error_count'], colsMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.subscriptions.widths');
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
-    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-subscriptions', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/subscriptions?${qp}`), enabled: Number.isFinite(instancePk) });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-subscriptions', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/subscriptions?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={6} />;
 
@@ -2053,15 +2053,15 @@ function SubscriptionsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor
 // =========================================================================
 // WAL Receiver Tab — TAM PAKET (standby only)
 // =========================================================================
-function WalReceiverTab({ instancePk, isPrimary }: { instancePk: number; isPrimary: boolean | null | undefined }) {
+function WalReceiverTab({ instancePk, range, isPrimary }: { instancePk: number; range: TimeRange; isPrimary: boolean | null | undefined }) {
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['wal-receiver-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/wal-receiver/columns`), staleTime: 3600_000 });
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.wal-receiver.cols', ['status', 'sender_host', 'flushed_lsn', 'lag_bytes', 'last_msg_receipt_time'], colsMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.wal-receiver.widths');
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
-    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-wal-receiver', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-receiver?${qp}`), enabled: Number.isFinite(instancePk) && isPrimary !== true });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-wal-receiver', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-receiver?${qp}`), enabled: Number.isFinite(instancePk) && isPrimary !== true });
 
     if (isPrimary === true) return <EmptyState icon="📡" title="Primary instance" description="WAL Receiver sadece standby instance'larda çalışır." />;
     if (isLoading) return <SkeletonTable rows={2} cols={5} />;
@@ -2091,15 +2091,15 @@ function WalReceiverTab({ instancePk, isPrimary }: { instancePk: number; isPrima
 // =========================================================================
 // Conflicts Tab — TAM PAKET
 // =========================================================================
-function ConflictsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+function ConflictsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['conflicts-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/conflicts/columns`), staleTime: 3600_000 });
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.conflicts.cols', ['datname', 'confl_lock', 'confl_snapshot', 'confl_bufferpin', 'confl_deadlock'], colsMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.conflicts.widths');
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
-    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-conflicts', instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/conflicts?${qp}`), enabled: Number.isFinite(instancePk) });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-conflicts', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/conflicts?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={6} />;
 
@@ -2128,7 +2128,7 @@ function ConflictsTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: n
 // =========================================================================
 // Recovery Prefetch Tab (PG15+, standby only) — TAM PAKET
 // =========================================================================
-function RecoveryPrefetchTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+function RecoveryPrefetchTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: number; range: TimeRange; pgMajor?: number; isPrimary: boolean | null | undefined }) {
     const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'prefetch', dir: 'desc' }]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const orderParam = sortKeysToParam(sortKeys);
@@ -2146,9 +2146,9 @@ function RecoveryPrefetchTab({ instancePk, pgMajor, isPrimary }: { instancePk: n
     );
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.recovery-prefetch.widths');
 
-    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam, from: range.fromIso, to: range.toIso });
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-recovery-prefetch', instancePk, selectedCols.join(','), orderParam],
+        queryKey: ['instance-recovery-prefetch', instancePk, range.fromIso, range.toIso, selectedCols.join(','), orderParam],
         queryFn: () => apiGet<any[]>(`/instances/${instancePk}/recovery-prefetch?${qp}`),
         enabled: Number.isFinite(instancePk) && isPrimary !== true,
     });
@@ -2196,7 +2196,7 @@ function RecoveryPrefetchTab({ instancePk, pgMajor, isPrimary }: { instancePk: n
 // =========================================================================
 type ProgressSub = 'vacuum' | 'analyze' | 'create_index' | 'basebackup' | 'copy' | 'cluster';
 
-function ProgressTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+function ProgressTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: number; range: TimeRange; pgMajor?: number; isPrimary: boolean | null | undefined }) {
     const [sub, setSub] = useState<ProgressSub>('vacuum');
 
     const subs: { key: ProgressSub; label: string; since: number }[] = [
@@ -2218,12 +2218,12 @@ function ProgressTab({ instancePk, pgMajor, isPrimary }: { instancePk: number; p
                     </button>
                 ))}
             </div>
-            <ProgressSubTab instancePk={instancePk} subType={sub} />
+            <ProgressSubTab instancePk={instancePk} range={range} subType={sub} />
         </div>
     );
 }
 
-function ProgressSubTab({ instancePk, subType }: { instancePk: number; subType: ProgressSub }) {
+function ProgressSubTab({ instancePk, range, subType }: { instancePk: number; range: TimeRange; subType: ProgressSub }) {
     const resource = `progress-${subType.replace('_', '-')}`;
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
@@ -2232,8 +2232,8 @@ function ProgressSubTab({ instancePk, subType }: { instancePk: number; subType: 
     const defaults = colsMeta?.defaults ?? ['pid', 'phase'];
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(`pgstat.instance.${resource}.cols`, defaults, colsMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths(`pgstat.instance.${resource}.widths`);
-    const qp = new URLSearchParams({ columns: selectedCols.join(',') });
-    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: [`inst-${resource}`, instancePk, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/${resource}?${qp}`), enabled: Number.isFinite(instancePk) });
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: [`inst-${resource}`, instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/${resource}?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 

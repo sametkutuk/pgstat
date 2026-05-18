@@ -1634,17 +1634,20 @@ router.get('/:id/replication-slots/columns', (_req, res) => {
 router.get('/:id/replication-slots', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const requestedCols = parseColumns(req.query.columns as string | undefined, SLOT_COLUMNS, SLOT_DEFAULTS);
-    // Snapshot — en son veriyi getir (aggregate yok, direkt kolon)
+    // Snapshot — verilen aralıktaki en son sample_ts'in durumunu getir
     const selectParts = requestedCols.map(c => SLOT_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')}
       from fact.pg_replication_slot_snapshot
       where instance_pk = $1
+        and sample_ts between $2::timestamptz and $3::timestamptz
         and sample_ts = (
-          select max(sample_ts) from fact.pg_replication_slot_snapshot where instance_pk = $1
+          select max(sample_ts) from fact.pg_replication_slot_snapshot
+          where instance_pk = $1 and sample_ts between $2::timestamptz and $3::timestamptz
         )
-    `, [id]);
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
@@ -1738,12 +1741,16 @@ router.get('/:id/archiver/columns', (_req, res) => { res.json(columnsMetaRespons
 router.get('/:id/archiver', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 100);
     const requestedCols = parseColumns(req.query.columns as string | undefined, ARCHIVER_COLUMNS, ARCHIVER_DEFAULTS);
     const selectParts = requestedCols.map(c => ARCHIVER_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')} from fact.pg_archiver_snapshot
-      where instance_pk = $1 order by sample_ts desc limit 10
-    `, [id]);
+      where instance_pk = $1
+        and sample_ts between $2::timestamptz and $3::timestamptz
+      order by sample_ts desc limit $4
+    `, [id, fromIso, toIso, limit]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
@@ -1777,13 +1784,18 @@ router.get('/:id/subscriptions/columns', (_req, res) => { res.json(columnsMetaRe
 router.get('/:id/subscriptions', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const requestedCols = parseColumns(req.query.columns as string | undefined, SUBSCRIPTION_COLUMNS, SUBSCRIPTION_DEFAULTS);
     const selectParts = requestedCols.map(c => SUBSCRIPTION_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')} from fact.pg_subscription_snapshot
       where instance_pk = $1
-        and sample_ts = (select max(sample_ts) from fact.pg_subscription_snapshot where instance_pk = $1)
-    `, [id]);
+        and sample_ts between $2::timestamptz and $3::timestamptz
+        and sample_ts = (
+          select max(sample_ts) from fact.pg_subscription_snapshot
+          where instance_pk = $1 and sample_ts between $2::timestamptz and $3::timestamptz
+        )
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
@@ -1815,12 +1827,16 @@ router.get('/:id/wal-receiver/columns', (_req, res) => { res.json(columnsMetaRes
 router.get('/:id/wal-receiver', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 100);
     const requestedCols = parseColumns(req.query.columns as string | undefined, WAL_RECEIVER_COLUMNS, WAL_RECEIVER_DEFAULTS);
     const selectParts = requestedCols.map(c => WAL_RECEIVER_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')} from fact.pg_wal_receiver_snapshot
-      where instance_pk = $1 order by sample_ts desc limit 10
-    `, [id]);
+      where instance_pk = $1
+        and sample_ts between $2::timestamptz and $3::timestamptz
+      order by sample_ts desc limit $4
+    `, [id, fromIso, toIso, limit]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
@@ -1849,9 +1865,11 @@ for (const [sub, cfg] of Object.entries(PROGRESS_MAP)) {
   router.get(`/:id/progress-${sub}`, async (req, res, next) => {
     try {
       const { id } = req.params;
+      const { fromIso, toIso } = parseTimeRange(req.query, 1);
+      const limit = parseLimit(req.query.limit, 100);
       const requestedCols = parseColumns(req.query.columns as string | undefined, cfg.cols, cfg.defaults);
       const selectParts = requestedCols.map(c => cfg.cols[c].sql);
-      const result = await pool.query(`select ${selectParts.join(', ')} from ${cfg.table} where instance_pk = $1 and sample_ts >= now() - interval '1 hour' order by sample_ts desc limit 100`, [id]);
+      const result = await pool.query(`select ${selectParts.join(', ')} from ${cfg.table} where instance_pk = $1 and sample_ts between $2::timestamptz and $3::timestamptz order by sample_ts desc limit $4`, [id, fromIso, toIso, limit]);
       res.json(result.rows);
     } catch (err) { next(err); }
   });
@@ -1877,13 +1895,18 @@ router.get('/:id/conflicts/columns', (_req, res) => { res.json(columnsMetaRespon
 router.get('/:id/conflicts', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
     const requestedCols = parseColumns(req.query.columns as string | undefined, CONFLICTS_COLUMNS, CONFLICTS_DEFAULTS);
     const selectParts = requestedCols.map(c => CONFLICTS_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')} from fact.pg_database_conflict_snapshot
       where instance_pk = $1
-        and sample_ts = (select max(sample_ts) from fact.pg_database_conflict_snapshot where instance_pk = $1)
-    `, [id]);
+        and sample_ts between $2::timestamptz and $3::timestamptz
+        and sample_ts = (
+          select max(sample_ts) from fact.pg_database_conflict_snapshot
+          where instance_pk = $1 and sample_ts between $2::timestamptz and $3::timestamptz
+        )
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
@@ -1912,14 +1935,17 @@ router.get('/:id/recovery-prefetch/columns', (_req, res) => {
 router.get('/:id/recovery-prefetch', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 100);
     const requestedCols = parseColumns(req.query.columns as string | undefined, RECOVERY_PREFETCH_COLUMNS, RECOVERY_PREFETCH_DEFAULTS);
     const selectParts = requestedCols.map(c => RECOVERY_PREFETCH_COLUMNS[c].sql);
     const result = await pool.query(`
       select ${selectParts.join(', ')}
       from fact.pg_recovery_prefetch_snapshot
       where instance_pk = $1
-      order by sample_ts desc limit 20
-    `, [id]);
+        and sample_ts between $2::timestamptz and $3::timestamptz
+      order by sample_ts desc limit $4
+    `, [id, fromIso, toIso, limit]);
     res.json(result.rows);
   } catch (err) { next(err); }
 });
