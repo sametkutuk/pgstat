@@ -1,13 +1,16 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { apiGet } from '../api/client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import PrintButton from '../components/common/PrintButton';
 import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
+import ViewModeToggle, { type ViewMode } from '../components/common/ViewModeToggle';
+import DataColumnsModal, { fmtValue, useDataColumns, type ColumnsMeta as DataColumnsMeta } from '../components/common/DataColumnsModal';
+import TimeAgo from '../components/common/TimeAgo';
 
 // Dinamik kolon destegi — Statement satiri Record<string, any> olarak gelir.
 // Sabit alanlar (instance_name, datname, queryid, query_text_short, query_text_id)
@@ -33,10 +36,112 @@ interface Instance {
   port: number;
 }
 
+interface RawDeltaResponse {
+  rows: Statement[];
+  next_cursor: string | null;
+}
+
+function formatRawStatementCell(col: string, val: any) {
+  if (col === 'sample_ts') return val ? <TimeAgo date={val} /> : '—';
+  if (col === 'query_text_short') return <span className="font-mono text-xs">{val || '—'}</span>;
+  if (col === 'datname' || col === 'rolname' || col === 'queryid' || col === 'instance_name') return val ?? '—';
+  return fmtValue(col, val);
+}
+
+function RawStatementsTable({
+  params,
+  queryKey,
+  selectedCols,
+  setSelectedCols,
+  meta,
+  navigate,
+}: {
+  params: Record<string, string>;
+  queryKey: unknown[];
+  selectedCols: string[];
+  setSelectedCols: (cols: string[]) => void;
+  meta: DataColumnsMeta | undefined;
+  navigate: (path: string) => void;
+}) {
+  const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const visibleCols = selectedCols.includes('sample_ts') ? selectedCols : ['sample_ts', ...selectedCols];
+  const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.statements.raw.widths');
+  const rawQuery = useInfiniteQuery<RawDeltaResponse>({
+    queryKey: [...queryKey, visibleCols.join(',')],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => {
+      const qp = new URLSearchParams({ ...params, limit: '200', columns: visibleCols.join(',') });
+      if (pageParam) qp.set('cursor', String(pageParam));
+      return apiGet<RawDeltaResponse>(`/statements/raw?${qp}`);
+    },
+    getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+  });
+
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && rawQuery.hasNextPage && !rawQuery.isFetchingNextPage && !rawQuery.isFetching) {
+        rawQuery.fetchNextPage();
+      }
+    }, { threshold: 0.1 });
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [rawQuery.hasNextPage, rawQuery.isFetchingNextPage, rawQuery.isFetching, rawQuery.fetchNextPage]);
+
+  const rows = rawQuery.data?.pages.flatMap(p => p.rows) ?? [];
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+      <div className="p-3 flex flex-wrap gap-2 items-center border-b border-[#E2E8F0]">
+        <button onClick={() => setColumnsModalOpen(true)} className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors">⚙️ Ham Sütun ({visibleCols.length})</button>
+        <button onClick={resetWidths} className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors">↔ Genişlik sıfırla</button>
+        <button onClick={() => rawQuery.refetch()} className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors">{rawQuery.isFetching && !rawQuery.isFetchingNextPage ? 'Yenileniyor...' : 'Yenile'}</button>
+        <span className="text-xs text-[#94A3B8] ml-auto">{rows.length} ham satır</span>
+      </div>
+      {rawQuery.isLoading ? <SkeletonTable rows={8} cols={visibleCols.length} /> : rows.length === 0 ? (
+        <EmptyState icon="📋" title="Ham statement delta satırı yok" description="Bu aralıkta ham delta satırı yok." />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+              {visibleCols.map(col => {
+                const m = meta?.available.find(c => c.key === col);
+                return <ResizableTh key={col} colKey={col} width={widths[col] ?? (col === 'query_text_short' ? 360 : 130)} onResize={setWidth} align={col === 'sample_ts' || col === 'query_text_short' ? 'left' : 'right'} className="py-3 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide">{m?.label ?? col}</ResizableTh>;
+              })}
+            </tr></thead>
+            <tbody>{rows.map((r, i) => (
+              <tr key={`${r.sample_ts ?? 'row'}-${r.statement_series_id ?? i}-${i}`} onClick={() => r.statement_series_id && navigate(`/statements/${r.statement_series_id}`)} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer transition-colors">
+                {visibleCols.map(col => (
+                  <td key={col} className={`py-2.5 px-3 text-xs whitespace-nowrap truncate ${col === 'sample_ts' || col === 'query_text_short' ? '' : 'text-right font-mono'}`}>
+                    {formatRawStatementCell(col, r[col])}
+                  </td>
+                ))}
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <div ref={sentinelRef} className="h-4" />
+      {rawQuery.hasNextPage && (
+        <div className="p-3 text-center">
+          <button onClick={() => rawQuery.fetchNextPage()} disabled={rawQuery.isFetchingNextPage}
+            className="px-3 py-1.5 text-sm text-[#2563EB] border border-[#BFDBFE] rounded hover:bg-[#EFF6FF] disabled:opacity-50">
+            {rawQuery.isFetchingNextPage ? 'Yükleniyor...' : 'Daha fazla yükle'}
+          </button>
+        </div>
+      )}
+      <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={visibleCols} onChange={setSelectedCols} meta={meta} title="⚙️ Ham Statement Sütunları" />
+    </div>
+  );
+}
+
 
 export default function Statements() {
   const navigate = useNavigate();
 
+  const [mode, setMode] = useState<ViewMode>('summary');
   const [hours, setHours] = useState(1);
   const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'total_exec_time_ms', dir: 'desc' }]);
   const orderParam = sortKeysToParam(sortKeys);
@@ -46,6 +151,26 @@ export default function Statements() {
 
   // Kullanici secimi kolonlar (LocalStorage) + meta (API'den)
   const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
+  const rawColsMeta = useMemo<DataColumnsMeta | undefined>(() => {
+    if (!colsMeta) return undefined;
+    return {
+      defaults: ['sample_ts', 'instance_name', 'datname', 'rolname', 'queryid', 'query_text_short', ...colsMeta.defaults],
+      available: [
+        { key: 'sample_ts', label: 'Zaman', since: 11 },
+        { key: 'instance_name', label: 'Instance', since: 11 },
+        { key: 'datname', label: 'Database', since: 11 },
+        { key: 'rolname', label: 'Rol', since: 11 },
+        { key: 'queryid', label: 'Query ID', since: 11 },
+        { key: 'query_text_short', label: 'SQL', since: 11 },
+        ...colsMeta.available,
+      ],
+    };
+  }, [colsMeta]);
+  const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(
+    'pgstat.statements.raw.cols',
+    ['sample_ts', 'instance_name', 'datname', 'rolname', 'queryid', 'query_text_short', ...((colsMeta?.defaults) ?? [])],
+    rawColsMeta
+  );
   const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.statements.widths');
   const [datname, setDatname] = useState('');
   const [rolname, setRolname] = useState('');
@@ -154,11 +279,20 @@ export default function Statements() {
     setSqlSearch(''); setMinAvgMs('');
   }
 
+  const rawParams = new URLSearchParams({
+    hours: String(hours),
+    ...(instancePk ? { instance_pk: instancePk } : {}),
+    ...(datname ? { datname } : {}),
+    ...(rolname ? { rolname } : {}),
+  });
+  const rawParamsRecord = Object.fromEntries(rawParams.entries());
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-xl font-bold">Top Statements</h1>
         <div className="flex items-center gap-2">
+          <ViewModeToggle mode={mode} onChange={setMode} />
           <button
             onClick={() => setColumnsModalOpen(true)}
             className="text-xs text-[#64748B] hover:text-[#1E293B] px-3 py-1.5 border border-[#E2E8F0] rounded-md hover:border-[#CBD5E1] transition-colors print:hidden"
@@ -251,6 +385,16 @@ export default function Statements() {
       </div>
 
       {/* Tablo */}
+      {mode === 'raw' ? (
+        <RawStatementsTable
+          params={rawParamsRecord}
+          queryKey={['statements-raw', hours, instancePk, datname, rolname, mode]}
+          selectedCols={rawSelectedCols}
+          setSelectedCols={setRawSelectedCols}
+          meta={rawColsMeta}
+          navigate={navigate}
+        />
+      ) : (
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
         {isLoading ? (
           <SkeletonTable rows={8} cols={6} />
@@ -334,6 +478,7 @@ export default function Statements() {
           </div>
         )}
       </div>
+      )}
 
       <StatementColumnsModal
         open={columnsModalOpen}

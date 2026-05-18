@@ -45,6 +45,19 @@ function clusterMetricRawExpr(registry: ColumnRegistry, key: string, metricFamil
               and x.metric_name = '${metricName}') as ${key}`;
 }
 
+const PGSS_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'd.sample_ts', since: 11, label: 'Zaman' },
+  ...PGSS_COLUMNS,
+};
+const PGSS_RAW_DEFAULTS = ['sample_ts', 'total_calls', 'total_exec_time_ms', 'mean_exec_time_ms', 'min_exec_time_ms', 'max_exec_time_ms', 'stddev_exec_time_ms', 'total_rows', 'total_shared_blks_hit', 'total_shared_blks_read', 'total_temp_blks_written', 'total_blk_read_time'];
+
+function parseRawStatementColumns(raw: string | undefined): string[] {
+  if (!raw) return PGSS_RAW_DEFAULTS;
+  const list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const safe = list.filter(c => Object.prototype.hasOwnProperty.call(PGSS_RAW_COLUMNS, c));
+  return safe.length > 0 ? safe : PGSS_RAW_DEFAULTS;
+}
+
 // GET /api/instances — Instance listesi
 router.get('/', async (req, res, next) => {
   try {
@@ -436,6 +449,55 @@ router.get('/:id/capability', async (req, res, next) => {
 
 // GET /api/instances/:id/statements — Instance'a ait top statement'lar
 // Filtreler: hours, limit, order_by, datname, rolname
+router.get('/:id/statements/raw', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseRawLimit(req.query.limit);
+    const datname = (req.query.datname as string) || null;
+    const rolname = (req.query.rolname as string) || null;
+    const requestedCols = parseRawStatementColumns(req.query.columns as string | undefined);
+    const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+    const selectCols = rawCols.map(c => rawSelectExpr(PGSS_RAW_COLUMNS[c], c)).join(',\n        ');
+
+    const params: any[] = [id, fromIso, toIso];
+    let whereExtra = '';
+    if (datname) {
+      params.push(datname);
+      whereExtra += ` and dbr.datname = $${params.length}`;
+    }
+    if (rolname) {
+      params.push(rolname);
+      whereExtra += ` and rr.rolname = $${params.length}`;
+    }
+    const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'd.sample_ts');
+    params.push(limit);
+
+    const result = await pool.query(`
+      select
+        ss.statement_series_id, ss.dbid, ss.userid, ss.queryid,
+        ss.query_text_id,
+        left(qt.query_text, 80) as query_text_short,
+        rr.rolname, dbr.datname,
+        ${selectCols}
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${whereExtra}
+        ${cursorWhere}
+      order by d.sample_ts desc
+      limit $${params.length}
+    `, params);
+    res.json(rawPage(result.rows, limit));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id/statements', async (req, res, next) => {
   try {
     const { id } = req.params;

@@ -190,7 +190,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
             {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
-            {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} />}
+            {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} instancePk={Number(id)} range={range} />}
             {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
             {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
@@ -513,6 +513,7 @@ function fmtNum(n: number): string {
 
 function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const navigate = useNavigate();
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'total_exec_time_ms', dir: 'desc' }]);
     const orderParam = sortKeysToParam(sortKeys);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
@@ -523,6 +524,25 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
 
     const { selected: selectedCols, setSelected: setSelectedCols, meta: colsMeta } = useStatementColumns();
+    const rawStmtMeta = useMemo<ColumnsMeta | undefined>(() => {
+        if (!colsMeta) return undefined;
+        return {
+            defaults: ['sample_ts', 'datname', 'rolname', 'queryid', 'query_text_short', ...colsMeta.defaults],
+            available: [
+                { key: 'sample_ts', label: 'Zaman', since: 11 },
+                { key: 'datname', label: 'Database', since: 11 },
+                { key: 'rolname', label: 'Rol', since: 11 },
+                { key: 'queryid', label: 'Query ID', since: 11 },
+                { key: 'query_text_short', label: 'SQL', since: 11 },
+                ...colsMeta.available,
+            ],
+        };
+    }, [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(
+        'pgstat.instance.statements.raw.cols',
+        ['sample_ts', 'datname', 'rolname', 'queryid', 'query_text_short', ...((colsMeta?.defaults) ?? [])],
+        rawStmtMeta
+    );
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.statements.widths');
 
     const qp = new URLSearchParams({
@@ -578,10 +598,53 @@ function StatementsTab({ instancePk, range, pgMajor }: { instancePk: number; ran
 
     if (isLoading) return <SkeletonTable rows={5} cols={6} />;
 
+    if (mode === 'raw') {
+        const rawParams: Record<string, string> = { from: range.fromIso, to: range.toIso };
+        if (datname) rawParams.datname = datname;
+        if (rolname) rawParams.rolname = rolname;
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    <div className="flex flex-wrap gap-3 items-end">
+                        <ViewModeToggle mode={mode} onChange={setMode} />
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                            <select value={datname} onChange={e => setDatname(e.target.value)}
+                                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[130px]">
+                                <option value="">Tümü</option>
+                                {datnames.map(d => <option key={d} value={d}>{d}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Rol</label>
+                            <select value={rolname} onChange={e => setRolname(e.target.value)}
+                                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[110px]">
+                                <option value="">Tümü</option>
+                                {rolnames.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/statements/raw`}
+                    baseParams={rawParams}
+                    queryKey={['instance-statements-raw', instancePk, range.fromIso, range.toIso, datname, rolname, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawStmtMeta}
+                    pgMajor={pgMajor}
+                    storageKey="pgstat.instance.statements.raw"
+                    emptyTitle="Ham statement delta satırı yok"
+                />
+            </div>
+        );
+    }
+
     return (
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
                     <div className="text-[10px] text-[#94A3B8]">
                         Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
@@ -2596,7 +2659,40 @@ function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boo
     return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Sequence I/O verisi yok" /></div>;
 }
 
-function WalArchiveTab({ data, loading }: { data: any | undefined; loading: boolean }) {
+function WalArchiveTab({ data, loading, instancePk, range }: { data: any | undefined; loading: boolean; instancePk: number; range: TimeRange }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
+    const walRawMeta = useMemo<ColumnsMeta>(() => ({
+        defaults: ['sample_ts', 'current_wal_lsn', 'current_wal_file', 'period_wal_size_byte', 'wal_directory_size_byte', 'wal_file_count'],
+        available: [
+            { key: 'sample_ts', label: 'Zaman', since: 11 },
+            { key: 'current_wal_lsn', label: 'LSN', since: 11 },
+            { key: 'current_wal_file', label: 'WAL Dosyası', since: 11 },
+            { key: 'period_wal_size_byte', label: 'Üretilen', since: 11 },
+            { key: 'wal_directory_size_byte', label: 'pg_wal Boyut', since: 11 },
+            { key: 'wal_file_count', label: 'Dosya', since: 11 },
+        ],
+    }), []);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns('pgstat.instance.wal.raw.cols', walRawMeta.defaults, walRawMeta);
+
+    if (mode === 'raw') {
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/wal`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['inst-wal-raw', instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={walRawMeta}
+                    storageKey="pgstat.instance.wal.raw"
+                    emptyTitle="Ham WAL snapshot satırı yok"
+                />
+            </div>
+        );
+    }
     if (loading) return <SkeletonTable rows={5} cols={5} />;
     const wal = data?.wal || [];
     const statWal = data?.stat_wal || [];
@@ -2604,6 +2700,9 @@ function WalArchiveTab({ data, loading }: { data: any | undefined; loading: bool
 
     return (
         <div className="space-y-5">
+            <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
+            </div>
             <div className="bg-white rounded-lg shadow-sm p-4">
                 <h3 className="text-sm font-semibold text-[#64748B] mb-3">WAL Pozisyonu ve Disk</h3>
                 {wal.length === 0 ? (

@@ -1,8 +1,30 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
-import { parseHours, parseDays, parseLimit, parseId, parseOrderBy } from '../middleware/validation';
+import { parseHours, parseDays, parseLimit, parseId, parseOrderBy, parseTimeRange } from '../middleware/validation';
+import { rawSelectExpr, type ColumnRegistry } from './_columnsHelper';
 
 const router = Router();
+
+const RAW_PAGE_SIZE = 200;
+
+function parseRawLimit(val: unknown): number {
+  return Math.min(parseLimit(val, RAW_PAGE_SIZE), RAW_PAGE_SIZE);
+}
+
+function addRawCursorWhere(params: any[], cursor: unknown, columnRef: string): string {
+  if (typeof cursor !== 'string' || cursor.trim() === '') return '';
+  const d = new Date(cursor);
+  if (Number.isNaN(d.getTime())) return '';
+  params.push(d.toISOString());
+  return ` and ${columnRef} < $${params.length}::timestamptz`;
+}
+
+function rawPage(rows: any[], limit: number) {
+  return {
+    rows,
+    next_cursor: rows.length === limit ? rows[rows.length - 1]?.sample_ts ?? null : null,
+  };
+}
 
 function emptyClusterQueryTotals() {
   return { calls: 0, exec_ms: 0, rows_delta: 0, blks_hit: 0, blks_read: 0, temp_blks_written: 0, wal_bytes: 0 };
@@ -88,6 +110,19 @@ export const DEFAULT_COLUMNS: string[] = [
   'total_temp_blks_written',
   'total_blk_read_time',
 ];
+
+const PGSS_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'd.sample_ts', since: 11, label: 'Zaman' },
+  ...PGSS_COLUMNS,
+};
+const RAW_DEFAULT_COLUMNS = ['sample_ts', ...DEFAULT_COLUMNS];
+
+function parseRawRequestedColumns(raw: string | undefined): string[] {
+  if (!raw) return RAW_DEFAULT_COLUMNS;
+  const list = raw.split(',').map(s => s.trim()).filter(Boolean);
+  const safe = list.filter(c => Object.prototype.hasOwnProperty.call(PGSS_RAW_COLUMNS, c));
+  return safe.length > 0 ? safe : RAW_DEFAULT_COLUMNS;
+}
 
 export function parseRequestedColumns(raw: string | undefined): string[] {
   if (!raw) return DEFAULT_COLUMNS;
@@ -222,6 +257,69 @@ router.get('/top', async (req, res, next) => {
 
 // GET /api/statements/search — dim.statement_series'ten SQL text araması
 // Delta verisi olmayan sorgular dahil tüm bilinen sorguları döner
+// GET /api/statements/raw — tum instance'lar icin ham pgss_delta satirlari
+router.get('/raw', async (req, res, next) => {
+  try {
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseRawLimit(req.query.limit);
+    const instancePk = parseId(req.query.instance_pk);
+    const datname = (req.query.datname as string) || null;
+    const rolname = (req.query.rolname as string) || null;
+    const queryid = (req.query.queryid as string) || null;
+    const requestedCols = parseRawRequestedColumns(req.query.columns as string | undefined);
+    const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+    const selectCols = rawCols.map(c => rawSelectExpr(PGSS_RAW_COLUMNS[c], c)).join(',\n        ');
+
+    const params: any[] = [fromIso, toIso];
+    let whereExtra = '';
+    if (instancePk) {
+      params.push(instancePk);
+      whereExtra += ` and d.instance_pk = $${params.length}`;
+    }
+    if (datname) {
+      params.push(datname);
+      whereExtra += ` and dbr.datname = $${params.length}`;
+    }
+    if (rolname) {
+      params.push(rolname);
+      whereExtra += ` and rr.rolname = $${params.length}`;
+    }
+    if (queryid) {
+      params.push(queryid);
+      whereExtra += ` and ss.queryid = $${params.length}`;
+    }
+    const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'd.sample_ts');
+    params.push(limit);
+
+    const result = await pool.query(`
+      select
+        d.instance_pk,
+        inv.display_name as instance_name,
+        ss.statement_series_id,
+        ss.queryid,
+        ss.query_text_id,
+        dbr.datname,
+        rr.rolname,
+        left(qt.query_text, 80) as query_text_short,
+        ${selectCols}
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      join control.instance_inventory inv on inv.instance_pk = d.instance_pk
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.sample_ts between $1::timestamptz and $2::timestamptz
+        ${whereExtra}
+        ${cursorWhere}
+      order by d.sample_ts desc
+      limit $${params.length}
+    `, params);
+    res.json(rawPage(result.rows, limit));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/search', async (req, res, next) => {
   try {
     const q = (req.query.q as string || '').trim();
