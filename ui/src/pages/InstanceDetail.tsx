@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { apiGet, apiPatch, apiPost } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import Badge from '../components/common/Badge';
@@ -10,12 +10,13 @@ import Skeleton, { SkeletonTable, SkeletonCard } from '../components/common/Skel
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange } from '../components/common/TimeRangePicker';
 import type { TimeRange } from '../components/common/TimeRangePicker';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 import DataKindBanner from '../components/common/DataKindBanner';
+import ViewModeToggle, { type ViewMode } from '../components/common/ViewModeToggle';
 
 type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
 
@@ -209,6 +210,132 @@ function InfoCard({ label, value }: { label: string; value: string }) {
         <div className="bg-white rounded-lg p-4 shadow-sm">
             <div className="text-xs text-[#64748B] mb-1">{label}</div>
             <div className="text-sm font-medium">{value}</div>
+        </div>
+    );
+}
+
+interface RawDeltaResponse {
+    rows: any[];
+    next_cursor: string | null;
+}
+
+function withSampleTsMeta(meta: ColumnsMeta | undefined, defaults: string[]): ColumnsMeta | undefined {
+    if (!meta) return undefined;
+    const hasSampleTs = meta.available.some(c => c.key === 'sample_ts');
+    return {
+        defaults,
+        available: hasSampleTs
+            ? meta.available
+            : [{ key: 'sample_ts', label: 'Zaman', since: 11 }, ...meta.available],
+    };
+}
+
+function formatRawCell(col: string, value: any) {
+    if (col === 'sample_ts') return value ? <TimeAgo date={value} /> : '—';
+    if (typeof value === 'boolean') return value ? '✓' : '✕';
+    return fmtValue(col, value);
+}
+
+function RawDeltaTable({
+    basePath,
+    baseParams,
+    queryKey,
+    selectedCols,
+    setSelectedCols,
+    meta,
+    pgMajor,
+    storageKey,
+    emptyTitle,
+}: {
+    basePath: string;
+    baseParams: Record<string, string>;
+    queryKey: unknown[];
+    selectedCols: string[];
+    setSelectedCols: (cols: string[]) => void;
+    meta: ColumnsMeta | undefined;
+    pgMajor?: number;
+    storageKey: string;
+    emptyTitle: string;
+}) {
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const sentinelRef = useRef<HTMLDivElement>(null);
+    const visibleCols = selectedCols.includes('sample_ts') ? selectedCols : ['sample_ts', ...selectedCols];
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths(`${storageKey}.widths`);
+
+    const rawQuery = useInfiniteQuery<RawDeltaResponse>({
+        queryKey: [...queryKey, visibleCols.join(',')],
+        initialPageParam: undefined as string | undefined,
+        queryFn: ({ pageParam }) => {
+            const qp = new URLSearchParams({ ...baseParams, mode: 'raw', limit: '200', columns: visibleCols.join(',') });
+            if (pageParam) qp.set('cursor', String(pageParam));
+            return apiGet<RawDeltaResponse>(`${basePath}?${qp}`);
+        },
+        getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+        enabled: Boolean(basePath),
+    });
+
+    useEffect(() => {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+    }, [basePath, baseParams.from, baseParams.to, visibleCols.join(',')]);
+
+    useEffect(() => {
+        const node = sentinelRef.current;
+        if (!node) return;
+        const obs = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && rawQuery.hasNextPage && !rawQuery.isFetchingNextPage && !rawQuery.isFetching) {
+                rawQuery.fetchNextPage();
+            }
+        }, { threshold: 0.1 });
+        obs.observe(node);
+        return () => obs.disconnect();
+    }, [rawQuery.hasNextPage, rawQuery.isFetchingNextPage, rawQuery.isFetching, rawQuery.fetchNextPage]);
+
+    const rows = rawQuery.data?.pages.flatMap(p => p.rows) ?? [];
+
+    return (
+        <div>
+            <DataKindBanner kind="delta" description="Ham Delta modunda satırlar toplanmadan, örnek zamanı ters sırada gösterilir. Aşağı indikçe 200'er satır yüklenir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({visibleCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => rawQuery.refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{rawQuery.isFetching && !rawQuery.isFetchingNextPage ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{rows.length} ham satır</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {rawQuery.isLoading ? <SkeletonTable rows={5} cols={visibleCols.length} /> : rows.length === 0 ? (
+                    <EmptyState icon="📋" title={emptyTitle} description="Bu aralıkta ham delta satırı yok." />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {visibleCols.map(col => {
+                                    const m = meta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? (col === 'sample_ts' ? 170 : 130)} onResize={setWidth} align={col === 'sample_ts' ? 'left' : 'right'} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{m?.label ?? col}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{rows.map((r: any, i: number) => (
+                                <tr key={`${r.sample_ts ?? 'row'}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                    {visibleCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${col === 'sample_ts' ? '' : 'text-right font-mono'}`}>
+                                            {formatRawCell(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+                <div ref={sentinelRef} className="h-4" />
+                {rawQuery.hasNextPage && (
+                    <div className="p-3 text-center">
+                        <button onClick={() => rawQuery.fetchNextPage()} disabled={rawQuery.isFetchingNextPage}
+                            className="px-3 py-1.5 text-sm text-[#2563EB] border border-[#BFDBFE] rounded hover:bg-[#EFF6FF] disabled:opacity-50">
+                            {rawQuery.isFetchingNextPage ? 'Yükleniyor...' : 'Daha fazla yükle'}
+                        </button>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={visibleCols} onChange={setSelectedCols} meta={meta} pgMajor={pgMajor} title="⚙️ Ham Delta Sütunları" />
         </div>
     );
 }
@@ -625,10 +752,18 @@ function hitRatio(read: any, hit: any): number {
 }
 
 function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [orderBy, setOrderBy] = useState('seq_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['table-stats-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/tables/columns`), staleTime: 3600_000 });
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', 'dbid', 'datname', 'schemaname', 'relname', 'total_seq_scan', 'total_idx_scan', 'total_inserts', 'total_updates', 'total_deletes', 'total_heap_blks_read', 'total_heap_blks_hit', 'n_live_tup', 'n_dead_tup']), [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(
+        'pgstat.instance.tables.raw.cols',
+        ['sample_ts', 'dbid', 'datname', 'schemaname', 'relname', 'total_seq_scan', 'total_idx_scan', 'total_inserts', 'total_updates', 'total_deletes', 'total_heap_blks_read', 'total_heap_blks_hit', 'n_live_tup', 'n_dead_tup'],
+        rawMeta
+    );
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
@@ -669,10 +804,42 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 
     const hasFilter = dbFilter || search || minValue;
 
+    if (mode === 'raw') {
+        const rawBasePath = dbFilter ? `/instances/${instancePk}/databases/${dbFilter}/tables` : `/instances/${instancePk}/tables`;
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    <div className="flex flex-wrap gap-3 items-end">
+                        <ViewModeToggle mode={mode} onChange={setMode} />
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                            <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                                <option value="">Tümü</option>
+                                {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <RawDeltaTable
+                    basePath={rawBasePath}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['instance-tables-raw', instancePk, dbFilter, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    storageKey="pgstat.instance.tables.raw"
+                    emptyTitle="Ham tablo delta satırı yok"
+                />
+            </div>
+        );
+    }
+
     return (
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
                     <div className="text-[10px] text-[#94A3B8]">
                         Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
@@ -779,11 +946,19 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 }
 
 function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number; initialDbid: number | null; range: TimeRange }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [orderBy, setOrderBy] = useState('idx_scan');
     const [dbFilter, setDbFilter] = useState('');
     const [search, setSearch] = useState('');
     const [minValue, setMinValue] = useState('');
     const [indexState, setIndexState] = useState<'all' | 'unused' | 'invalid'>('all');
+    const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['index-stats-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/indexes/columns`), staleTime: 3600_000 });
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', 'dbid', 'datname', 'schemaname', 'table_relname', 'index_relname', 'total_idx_scan', 'total_idx_tup_read', 'total_idx_tup_fetch', 'total_idx_blks_read', 'total_idx_blks_hit', 'is_valid', 'is_ready', 'is_primary', 'is_unique']), [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(
+        'pgstat.instance.indexes.raw.cols',
+        ['sample_ts', 'dbid', 'datname', 'schemaname', 'table_relname', 'index_relname', 'total_idx_scan', 'total_idx_tup_read', 'total_idx_tup_fetch', 'total_idx_blks_read', 'total_idx_blks_hit', 'is_valid', 'is_ready', 'is_primary', 'is_unique'],
+        rawMeta
+    );
 
     useEffect(() => {
         if (initialDbid) setDbFilter(String(initialDbid));
@@ -846,6 +1021,49 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         slug: `${_rangeHours}h`,
     };
 
+    if (mode === 'raw') {
+        const rawBasePath = dbFilter ? `/instances/${instancePk}/databases/${dbFilter}/indexes` : `/instances/${instancePk}/indexes`;
+        const rawParams: Record<string, string> = { from: range.fromIso, to: range.toIso };
+        if (!dbFilter && indexState === 'unused') rawParams.unused = 'true';
+        if (indexState === 'invalid') rawParams.invalid = 'true';
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
+                    <div className="flex flex-wrap gap-3 items-end">
+                        <ViewModeToggle mode={mode} onChange={setMode} />
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Database</label>
+                            <select value={dbFilter} onChange={e => setDbFilter(e.target.value)}
+                                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[140px]">
+                                <option value="">Tümü</option>
+                                {databases.map(d => <option key={d.dbid} value={d.dbid}>{d.datname}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Durum</label>
+                            <select value={indexState} onChange={e => setIndexState(e.target.value as 'all' | 'unused' | 'invalid')}
+                                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[145px]">
+                                <option value="all">Tüm indexler</option>
+                                <option value="unused">Unused only</option>
+                                <option value="invalid">Invalid / not-ready</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <RawDeltaTable
+                    basePath={rawBasePath}
+                    baseParams={rawParams}
+                    queryKey={['instance-indexes-raw', instancePk, dbFilter, indexState, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    storageKey="pgstat.instance.indexes.raw"
+                    emptyTitle="Ham index delta satırı yok"
+                />
+            </div>
+        );
+    }
+
     const exportExcel = () => {
         const headers = ['database', 'schema', 'table', 'index', 'status', 'is_valid', 'is_ready', 'is_primary', 'is_unique', 'idx_scan', 'idx_tup_read', 'idx_tup_fetch', 'idx_blks_read', 'idx_blks_hit', 'hit_ratio_pct', 'observed_since', 'observed_until', 'observed_hours', 'unused_window_covered'];
         const rows = filtered.map((r: any) => [
@@ -882,6 +1100,7 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
         <div>
             <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
                 <div className="flex flex-wrap gap-3 items-end">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
                     <div className="text-[10px] text-[#94A3B8]">
                         Zaman aralığı sayfanın üstündeki seçicidir.
                     </div>
@@ -1752,6 +1971,7 @@ function JobRunsTab({ data, loading }: { data: any[] | undefined; loading: boole
 // I/O Stats Tab (PG16+)
 // =========================================================================
 function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'reads_delta', dir: 'desc' }]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const orderParam = sortKeysToParam(sortKeys);
@@ -1767,6 +1987,12 @@ function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range:
         ['backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta'],
         colsMeta
     );
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', 'backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta']), [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(
+        'pgstat.instance.io-stats.raw.cols',
+        ['sample_ts', 'backend_type', 'object', 'context', 'reads_delta', 'read_time_ms_delta', 'writes_delta', 'write_time_ms_delta', 'hits_delta', 'evictions_delta'],
+        rawMeta
+    );
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.io-stats.widths');
 
     const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, limit: '200', order_by: orderParam, columns: selectedCols.join(',') });
@@ -1779,12 +2005,33 @@ function IoStatsTab({ instancePk, range, pgMajor }: { instancePk: number; range:
     if (pgMajor != null && pgMajor < 16) {
         return <EmptyState icon="📊" title="PG16+ gerekli" description={`pg_stat_io PG16'da eklendi. Bu instance PG${pgMajor} çalıştırıyor.`} />;
     }
+    if (mode === 'raw') {
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/io-stats`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['instance-io-stats-raw', instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    pgMajor={pgMajor}
+                    storageKey="pgstat.instance.io-stats.raw"
+                    emptyTitle="Ham I/O delta satırı yok"
+                />
+            </div>
+        );
+    }
     if (isLoading) return <SkeletonTable rows={5} cols={6} />;
 
     return (
         <div>
             <DataKindBanner kind="delta" description="Her satır, seçili tarih aralığındaki backend_type × object × context kombinasyonu için TOPLAM I/O sayılarını gösterir (delta toplaması). Sayılar olay sayısıdır — örn. 'reads = 5000' demek bu pencerede 5000 okuma operasyonu olmuş demek." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
@@ -1895,22 +2142,46 @@ function ReplicationSlotsTab({ instancePk, range, pgMajor }: { instancePk: numbe
 // Checkpointer Tab (PG17+) — TAM PAKET
 // =========================================================================
 function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['checkpointer-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/checkpointer/columns`), staleTime: 3600_000 });
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.checkpointer.cols', ['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written'], colsMeta);
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', 'checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written']), [colsMeta]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns('pgstat.instance.checkpointer.raw.cols', ['sample_ts', 'checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_written'], rawMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.checkpointer.widths');
     const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, columns: selectedCols.join(',') });
     const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-checkpointer', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/checkpointer?${qp}`), enabled: Number.isFinite(instancePk) });
 
     if (pgMajor != null && pgMajor < 17) return <EmptyState icon="🔄" title="PG17+ gerekli" description={`pg_stat_checkpointer PG17'de eklendi. Bu instance PG${pgMajor}. Checkpoint metrikleri BgWriter tab'ında.`} />;
+    if (mode === 'raw') {
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/checkpointer`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['inst-checkpointer-raw', instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    pgMajor={pgMajor}
+                    storageKey="pgstat.instance.checkpointer.raw"
+                    emptyTitle="Ham checkpointer delta satırı yok"
+                />
+            </div>
+        );
+    }
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
 
     return (
         <div>
             <DataKindBanner kind="delta" description="Tek satır gösterir — seçili tarih aralığındaki checkpoint metriklerinin TOPLAMI. Örn. 'num_timed = 12' demek aralıkta 12 zamanlı checkpoint olmuş; ortalama 'write_time = 1500ms' demek toplam yazma süresi 1.5 saniye." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
@@ -1934,16 +2205,39 @@ function CheckpointerTab({ instancePk, range, pgMajor }: { instancePk: number; r
 // BgWriter Tab — TAM PAKET
 // =========================================================================
 function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [mode, setMode] = useState<ViewMode>('summary');
     const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
     const { data: colsMeta } = useQuery<ColumnsMeta>({ queryKey: ['bgwriter-cols-meta', instancePk], queryFn: () => apiGet(`/instances/${instancePk}/bgwriter/columns`), staleTime: 3600_000 });
     const defaults = pgMajor != null && pgMajor >= 17 ? ['buffers_clean', 'maxwritten_clean', 'buffers_alloc'] : ['buffers_clean', 'maxwritten_clean', 'buffers_alloc', 'checkpoints_timed', 'checkpoints_req', 'buffers_checkpoint'];
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.bgwriter.cols', defaults, colsMeta);
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, ['sample_ts', ...defaults]), [colsMeta, defaults.join(',')]);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns('pgstat.instance.bgwriter.raw.cols', ['sample_ts', ...defaults], rawMeta);
     const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.bgwriter.widths');
     const qp = new URLSearchParams({ from: range.fromIso, to: range.toIso, columns: selectedCols.join(',') });
     const { data, isLoading, isFetching, refetch } = useQuery({ queryKey: ['inst-bgwriter', instancePk, range.fromIso, range.toIso, selectedCols.join(',')], queryFn: () => apiGet<any[]>(`/instances/${instancePk}/bgwriter?${qp}`), enabled: Number.isFinite(instancePk) });
 
+    if (mode === 'raw') {
+        return (
+            <div>
+                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/bgwriter`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={['inst-bgwriter-raw', instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    pgMajor={pgMajor}
+                    storageKey="pgstat.instance.bgwriter.raw"
+                    emptyTitle="Ham bgwriter delta satırı yok"
+                />
+            </div>
+        );
+    }
     if (isLoading) return <SkeletonTable rows={3} cols={5} />;
     const visibleCols = pgMajor != null && pgMajor >= 17 ? selectedCols.filter(c => !['checkpoints_timed', 'checkpoints_req', 'checkpoint_write_time', 'checkpoint_sync_time', 'buffers_checkpoint', 'buffers_backend', 'buffers_backend_fsync'].includes(c)) : selectedCols;
 
@@ -1951,6 +2245,7 @@ function BgWriterTab({ instancePk, range, pgMajor }: { instancePk: number; range
         <div>
             <DataKindBanner kind="delta" description="Tek satır — seçili tarih aralığındaki bgwriter aktivitesi TOPLAMI. PG17+ slim sürümde sadece bgwriter kolonları görünür (checkpoint metrikleri Checkpointer tab'ına taşındı)." />
             <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
                 <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
                 <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
                 <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
