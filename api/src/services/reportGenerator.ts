@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import type { Pool } from 'pg';
 import PDFDocument from 'pdfkit';
 import ExcelJS from 'exceljs';
@@ -22,18 +23,37 @@ interface SizeSource {
   sql: string;
 }
 
-const REPORT_HEADERS = [
-  'Instance Adı',
+const SUMMARY_HEADERS = [
+  'Instance Ad\u0131',
   'Host',
   'Port',
-  'PG Sürüm',
   'Rol',
   'Environment',
-  'Database Adı',
-  'Database Boyutu',
-  'Database Boyutu (bytes)',
+  'PG S\u00fcr\u00fcm',
+  'DB Say\u0131s\u0131',
   'Toplam Instance Boyutu',
+  'Toplam Instance Boyutu (bytes)',
 ];
+
+const DETAIL_HEADERS = [
+  'Instance Ad\u0131',
+  'Database Ad\u0131',
+  'Boyut',
+  'Boyut (bytes)',
+];
+
+interface InstanceInventoryGroup {
+  instance_id: string;
+  display_name: string;
+  host: string;
+  port: number;
+  pg_major: number | null;
+  is_primary: boolean | null;
+  environment: string | null;
+  instance_total_bytes: number;
+  instance_total_human: string;
+  databases: InstanceInventoryReportRow[];
+}
 
 function quoteIdent(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
@@ -232,147 +252,183 @@ export async function getInstanceInventoryReportRows(pool: Pool): Promise<Instan
 }
 
 function roleLabel(value: boolean | null): string {
-  if (value == null) return '—';
+  if (value == null) return '-';
   return value ? 'Primary' : 'Standby';
 }
 
 function pgVersionLabel(value: number | null): string {
-  return value ? `PG${value}` : '—';
+  return value ? `PG${value}` : '-';
 }
 
-function rowValues(row: InstanceInventoryReportRow): Array<string | number> {
-  return [
-    row.display_name,
-    row.host,
-    row.port,
-    pgVersionLabel(row.pg_major),
-    roleLabel(row.is_primary),
-    row.environment || '—',
-    row.datname || '—',
-    row.size_human || '—',
-    row.size_bytes ?? 0,
-    row.instance_total_human,
-  ];
+function groupRows(rows: InstanceInventoryReportRow[]): InstanceInventoryGroup[] {
+  const groups = new Map<string, InstanceInventoryGroup>();
+  for (const row of rows) {
+    const key = row.instance_id || row.display_name;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        instance_id: row.instance_id,
+        display_name: row.display_name,
+        host: row.host,
+        port: row.port,
+        pg_major: row.pg_major,
+        is_primary: row.is_primary,
+        environment: row.environment,
+        instance_total_bytes: row.instance_total_bytes,
+        instance_total_human: row.instance_total_human,
+        databases: [],
+      };
+      groups.set(key, group);
+    }
+    group.databases.push(row);
+  }
+  return Array.from(groups.values());
 }
 
-function resolvePdfFont(): string | null {
+function transliterateTurkish(value: string): string {
+  return value
+    .replace(/\u011f/g, 'g').replace(/\u011e/g, 'G')
+    .replace(/\u00fc/g, 'u').replace(/\u00dc/g, 'U')
+    .replace(/\u015f/g, 's').replace(/\u015e/g, 'S')
+    .replace(/\u0131/g, 'i').replace(/\u0130/g, 'I')
+    .replace(/\u00f6/g, 'o').replace(/\u00d6/g, 'O')
+    .replace(/\u00e7/g, 'c').replace(/\u00c7/g, 'C');
+}
+
+function resolveBundledFont(filename: string): string | null {
   const candidates = [
-    'C:\\Windows\\Fonts\\arial.ttf',
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    '/usr/share/fonts/dejavu/DejaVuSans.ttf',
-    '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+    path.join(__dirname, 'fonts', filename),
+    path.join(process.cwd(), 'src', 'services', 'fonts', filename),
+    path.join(process.cwd(), 'dist', 'services', 'fonts', filename),
   ];
   return candidates.find(p => fs.existsSync(p)) ?? null;
 }
 
+function resolvePdfFonts(): { regular: string | null; bold: string | null } {
+  const regular = resolveBundledFont('NotoSans-Regular.ttf');
+  const bold = resolveBundledFont('NotoSans-Bold.ttf');
+  if (regular && bold) return { regular, bold };
+  return { regular: null, bold: null };
+}
+
 export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[], date = new Date()): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 24, bufferPages: true });
+    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 28 });
     const chunks: Buffer[] = [];
-    const fontPath = resolvePdfFont();
-    if (fontPath) doc.registerFont('ReportFont', fontPath);
-    const font = fontPath ? 'ReportFont' : 'Helvetica';
-    const boldFont = fontPath ? 'ReportFont' : 'Helvetica-Bold';
+    const groups = groupRows(rows);
+    const fonts = resolvePdfFonts();
+    const hasTurkishFont = Boolean(fonts.regular && fonts.bold);
+    if (fonts.regular && fonts.bold) {
+      doc.registerFont('TR', fonts.regular);
+      doc.registerFont('TR-Bold', fonts.bold);
+    }
+    const font = hasTurkishFont ? 'TR' : 'Helvetica';
+    const boldFont = hasTurkishFont ? 'TR-Bold' : 'Helvetica-Bold';
+    const tr = (value: string) => hasTurkishFont ? value : transliterateTurkish(value);
 
     doc.on('data', chunk => chunks.push(Buffer.from(chunk)));
     doc.on('error', reject);
     doc.on('end', () => resolve(Buffer.concat(chunks)));
 
     const ts = timestampParts(date).display;
-    const pageWidth = doc.page.width;
-    const pageHeight = doc.page.height;
-    const margin = 24;
-    const widths = [112, 82, 34, 48, 55, 65, 104, 76, 82, 92];
-    const rowHeight = 19;
-    const tableLeft = margin;
+    const margin = 28;
+    const bottomMargin = 34;
+    const contentWidth = doc.page.width - margin * 2;
+    const tableWidth = Math.min(540, contentWidth);
+    const dbColWidth = tableWidth - 130;
+    const sizeColWidth = 130;
+    const rowHeight = 18;
     let y = margin;
 
-    const drawHeader = () => {
-      doc.font(boldFont).fontSize(15).fillColor('#111827').text('PostgreSQL Instance Envanteri', tableLeft, y);
-      doc.font(font).fontSize(8).fillColor('#475569').text(`Oluşturma zamanı: ${ts}`, tableLeft, y + 20);
-      y += 40;
-      let x = tableLeft;
-      doc.rect(tableLeft, y, pageWidth - margin * 2, rowHeight).fill('#E2E8F0');
-      doc.font(boldFont).fontSize(6.5).fillColor('#0F172A');
-      REPORT_HEADERS.forEach((h, i) => {
-        doc.text(h, x + 3, y + 5, { width: widths[i] - 6, height: rowHeight - 6, ellipsis: true });
-        x += widths[i];
-      });
-      y += rowHeight;
-    };
-
     const drawFooter = () => {
-      const footer = `pgstat tarafından oluşturuldu - ${ts}`;
-      doc.font(font).fontSize(7).fillColor('#64748B').text(footer, margin, pageHeight - 18, {
-        width: pageWidth - margin * 2,
-        align: 'center',
-      });
+      doc.font(font).fontSize(7).fillColor('#64748B').text(
+        tr('pgstat taraf\u0131ndan olu\u015fturuldu - ' + ts),
+        margin,
+        doc.page.height - bottomMargin - 8,
+        { width: contentWidth, align: 'center', lineBreak: false },
+      );
     };
 
-    drawHeader();
-    rows.forEach((row, index) => {
-      if (y + rowHeight > pageHeight - 32) {
-        drawFooter();
-        doc.addPage({ size: 'A4', layout: 'landscape', margin });
-        y = margin;
-        drawHeader();
-      }
-      let x = tableLeft;
-      if (index % 2 === 0) doc.rect(tableLeft, y, pageWidth - margin * 2, rowHeight).fill('#F8FAFC');
-      doc.font(font).fontSize(6.7).fillColor('#111827');
-      rowValues(row).forEach((value, i) => {
-        doc.text(String(value), x + 3, y + 5, { width: widths[i] - 6, height: rowHeight - 6, ellipsis: true });
-        x += widths[i];
-      });
-      doc.strokeColor('#E5E7EB').moveTo(tableLeft, y + rowHeight).lineTo(pageWidth - margin, y + rowHeight).stroke();
+    const drawReportHeader = () => {
+      doc.font(boldFont).fontSize(15).fillColor('#111827').text(tr('PostgreSQL Instance Envanteri'), margin, y);
+      doc.font(font).fontSize(8).fillColor('#475569').text(tr('Olu\u015fturulma zaman\u0131: ' + ts), margin, y + 22);
+      y += 44;
+    };
+
+    const ensureSpace = (neededHeight: number): boolean => {
+      if (y + neededHeight <= doc.page.height - bottomMargin) return false;
+      drawFooter();
+      doc.addPage({ size: 'A4', layout: 'landscape', margin });
+      y = margin;
+      drawReportHeader();
+      return true;
+    };
+
+    const drawDbHeader = () => {
+      ensureSpace(rowHeight);
+      doc.rect(margin, y, tableWidth, rowHeight).fill('#E2E8F0');
+      doc.font(boldFont).fontSize(8).fillColor('#0F172A');
+      doc.text(tr('Database Ad\u0131'), margin + 6, y + 5, { width: dbColWidth - 12, ellipsis: true });
+      doc.text(tr('Boyut'), margin + dbColWidth + 6, y + 5, { width: sizeColWidth - 12, align: 'right', ellipsis: true });
       y += rowHeight;
+    };
+
+    const drawInstanceHeader = (group: InstanceInventoryGroup) => {
+      ensureSpace(82);
+      doc.rect(margin, y, contentWidth, 54).fill('#F8FAFC').strokeColor('#CBD5E1').stroke();
+      doc.font(boldFont).fontSize(10).fillColor('#0F172A').text(tr('[INSTANCE: ' + group.display_name + ']'), margin + 8, y + 7, { width: contentWidth - 16, ellipsis: true });
+      doc.font(font).fontSize(8).fillColor('#334155');
+      doc.text(tr('Host: ' + group.host + ':' + group.port), margin + 8, y + 25, { width: 220, ellipsis: true });
+      doc.text(tr('Rol: ' + roleLabel(group.is_primary)), margin + 250, y + 25, { width: 110, ellipsis: true });
+      doc.text(tr('Env: ' + (group.environment || '-')), margin + 380, y + 25, { width: 120, ellipsis: true });
+      doc.text(tr('PG S\u00fcr\u00fcm\u00fc: ' + pgVersionLabel(group.pg_major)), margin + 8, y + 39, { width: 180, ellipsis: true });
+      doc.text(tr('Toplam: ' + group.instance_total_human), margin + 250, y + 39, { width: 130, ellipsis: true });
+      doc.text(tr('DB Say\u0131s\u0131: ' + group.databases.length), margin + 380, y + 39, { width: 120, ellipsis: true });
+      y += 62;
+      drawDbHeader();
+    };
+
+    drawReportHeader();
+    groups.forEach((group, groupIndex) => {
+      if (groupIndex > 0) {
+        ensureSpace(18);
+        doc.strokeColor('#E2E8F0').moveTo(margin, y).lineTo(margin + contentWidth, y).stroke();
+        y += 12;
+      }
+      drawInstanceHeader(group);
+      group.databases.forEach((row, rowIndex) => {
+        if (ensureSpace(rowHeight + rowHeight)) {
+          doc.font(boldFont).fontSize(8).fillColor('#0F172A').text(tr('[INSTANCE: ' + group.display_name + ' - devam]'), margin, y, { width: contentWidth, ellipsis: true });
+          y += 16;
+          drawDbHeader();
+        }
+        if (rowIndex % 2 === 0) doc.rect(margin, y, tableWidth, rowHeight).fill('#F8FAFC');
+        doc.font(font).fontSize(8).fillColor('#111827');
+        doc.text(tr(row.datname || '-'), margin + 6, y + 5, { width: dbColWidth - 12, ellipsis: true });
+        doc.text(tr(row.size_human || '-'), margin + dbColWidth + 6, y + 5, { width: sizeColWidth - 12, align: 'right', ellipsis: true });
+        doc.strokeColor('#E5E7EB').moveTo(margin, y + rowHeight).lineTo(margin + tableWidth, y + rowHeight).stroke();
+        y += rowHeight;
+      });
+      y += 8;
     });
     drawFooter();
     doc.end();
   });
 }
 
-export async function generateInstanceInventoryXlsx(rows: InstanceInventoryReportRow[]): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'pgstat';
-  workbook.created = new Date();
-  const sheet = workbook.addWorksheet('Instance Envanteri');
-  sheet.columns = [
-    { header: REPORT_HEADERS[0], key: 'display_name', width: 28 },
-    { header: REPORT_HEADERS[1], key: 'host', width: 18 },
-    { header: REPORT_HEADERS[2], key: 'port', width: 10 },
-    { header: REPORT_HEADERS[3], key: 'pg_major', width: 12 },
-    { header: REPORT_HEADERS[4], key: 'role', width: 12 },
-    { header: REPORT_HEADERS[5], key: 'environment', width: 16 },
-    { header: REPORT_HEADERS[6], key: 'datname', width: 28 },
-    { header: REPORT_HEADERS[7], key: 'size_human', width: 18 },
-    { header: REPORT_HEADERS[8], key: 'size_bytes', width: 20 },
-    { header: REPORT_HEADERS[9], key: 'instance_total_human', width: 22 },
-  ];
-
-  rows.forEach(row => {
-    sheet.addRow({
-      display_name: row.display_name,
-      host: row.host,
-      port: row.port,
-      pg_major: pgVersionLabel(row.pg_major),
-      role: roleLabel(row.is_primary),
-      environment: row.environment || '—',
-      datname: row.datname || '—',
-      size_human: row.size_human || '—',
-      size_bytes: row.size_bytes ?? 0,
-      instance_total_human: row.instance_total_human,
-    });
-  });
-
+function styleReportSheet(sheet: ExcelJS.Worksheet, headerToColumnCount: number, numericKeys: string[]) {
   const header = sheet.getRow(1);
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
   header.alignment = { vertical: 'middle' };
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
-  sheet.autoFilter = { from: 'A1', to: 'J1' };
-  sheet.getColumn('size_bytes').numFmt = '#,##0';
-
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: headerToColumnCount },
+  };
+  numericKeys.forEach(key => {
+    sheet.getColumn(key).numFmt = '#,##0';
+  });
   sheet.columns.forEach(column => {
     let max = String(column.header ?? '').length;
     column.eachCell?.({ includeEmpty: true }, cell => {
@@ -380,6 +436,57 @@ export async function generateInstanceInventoryXlsx(rows: InstanceInventoryRepor
     });
     column.width = Math.min(Math.max(max + 2, column.width ?? 10), 42);
   });
+}
+
+export async function generateInstanceInventoryXlsx(rows: InstanceInventoryReportRow[]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'pgstat';
+  workbook.created = new Date();
+  const groups = groupRows(rows);
+
+  const summary = workbook.addWorksheet('\u00d6zet');
+  summary.columns = [
+    { header: SUMMARY_HEADERS[0], key: 'display_name', width: 28 },
+    { header: SUMMARY_HEADERS[1], key: 'host', width: 18 },
+    { header: SUMMARY_HEADERS[2], key: 'port', width: 10 },
+    { header: SUMMARY_HEADERS[3], key: 'role', width: 12 },
+    { header: SUMMARY_HEADERS[4], key: 'environment', width: 16 },
+    { header: SUMMARY_HEADERS[5], key: 'pg_major', width: 12 },
+    { header: SUMMARY_HEADERS[6], key: 'db_count', width: 12 },
+    { header: SUMMARY_HEADERS[7], key: 'instance_total_human', width: 22 },
+    { header: SUMMARY_HEADERS[8], key: 'instance_total_bytes', width: 24 },
+  ];
+  groups.forEach(group => {
+    summary.addRow({
+      display_name: group.display_name,
+      host: group.host,
+      port: group.port,
+      role: roleLabel(group.is_primary),
+      environment: group.environment || '-',
+      pg_major: pgVersionLabel(group.pg_major),
+      db_count: group.databases.length,
+      instance_total_human: group.instance_total_human,
+      instance_total_bytes: group.instance_total_bytes,
+    });
+  });
+  styleReportSheet(summary, SUMMARY_HEADERS.length, ['instance_total_bytes']);
+
+  const detail = workbook.addWorksheet('Detay');
+  detail.columns = [
+    { header: DETAIL_HEADERS[0], key: 'display_name', width: 28 },
+    { header: DETAIL_HEADERS[1], key: 'datname', width: 28 },
+    { header: DETAIL_HEADERS[2], key: 'size_human', width: 16 },
+    { header: DETAIL_HEADERS[3], key: 'size_bytes', width: 18 },
+  ];
+  rows.forEach(row => {
+    detail.addRow({
+      display_name: row.display_name,
+      datname: row.datname || '-',
+      size_human: row.size_human || '-',
+      size_bytes: row.size_bytes ?? 0,
+    });
+  });
+  styleReportSheet(detail, DETAIL_HEADERS.length, ['size_bytes']);
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
