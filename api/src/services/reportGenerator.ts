@@ -331,9 +331,13 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
 
     const ts = timestampParts(date).display;
     const margin = 28;
-    // Footer'in tablodan ayri durmasi icin bottomMargin yeterli olsun.
     // Tablo bu degere kadar yazilir, altindan footer cizilir.
-    const bottomMargin = 28;
+    // bottomMargin = footer + alttan emniyet payi (~15pt)
+    const bottomMargin = 22;
+    // pdfkit'in otomatik sayfa kirilmasini engelle — sadece bizim
+    // ensureSpace fonksiyonumuz sayfa acar. Aksi halde text() cagrisi
+    // y koordinati sayfa altinda kalinca otomatik bos sayfa aciyor.
+    doc.on('pageAdded', () => { y = margin; });
     const contentWidth = doc.page.width - margin * 2;
     const rowHeight = 18;
 
@@ -393,7 +397,7 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
       if (y + neededHeight <= doc.page.height - bottomMargin) return false;
       drawFooter();
       doc.addPage({ size: 'A4', layout: 'landscape', margin });
-      y = margin;
+      // y sıfırlaması pageAdded event'inde yapılıyor
       drawReportHeader();
       drawTableHeader();
       return true;
@@ -404,8 +408,11 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
 
     let prevInstanceKey = '';
     let zebraIdx = 0;
-    rows.forEach(row => {
-      ensureSpace(rowHeight);
+    rows.forEach((row, idx) => {
+      // Son satır degilse sadece kendi yuksekligi; son satirsa footer da
+      // dusunulsun ki "neredeyse dolu sayfada son satir + footer sigsin"
+      const isLast = idx === rows.length - 1;
+      ensureSpace(isLast ? rowHeight + 15 : rowHeight);
       // Zebra sat\u0131r
       if (zebraIdx % 2 === 0) {
         doc.rect(margin, y, tableWidth, rowHeight).fill('#F8FAFC');
