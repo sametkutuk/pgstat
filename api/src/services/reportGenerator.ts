@@ -331,9 +331,9 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
 
     const ts = timestampParts(date).display;
     const margin = 28;
-    // Footer'in tablodan ayri durmasi icin bottomMargin'i bol tut.
-    // Tablo bu degere kadar yazilir, altindan ~12pt footer cizilir.
-    const bottomMargin = 48;
+    // Footer'in tablodan ayri durmasi icin bottomMargin yeterli olsun.
+    // Tablo bu degere kadar yazilir, altindan footer cizilir.
+    const bottomMargin = 28;
     const contentWidth = doc.page.width - margin * 2;
     const rowHeight = 18;
 
@@ -360,11 +360,11 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
     let y = margin;
 
     const drawFooter = () => {
-      // Footer sayfa altinda, tablodan emniyetli mesafede
+      // Footer sayfa altinda, tablodan ~15pt mesafede
       doc.font(font).fontSize(7).fillColor('#64748B').text(
         tr('pgstat taraf\u0131ndan olu\u015fturuldu - ' + ts),
         margin,
-        doc.page.height - 18,
+        doc.page.height - 15,
         { width: contentWidth, align: 'center', lineBreak: false },
       );
     };
