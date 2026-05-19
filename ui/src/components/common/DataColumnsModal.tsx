@@ -53,9 +53,23 @@ export function useDataColumns(storageKey: string, defaults: string[], meta?: Co
     return { selected, setSelected, meta };
 }
 
-/** Sayısal değeri kısa formatla (time/byte/count) */
+// ID/OID/PID gibi kimlik kolonları — sayısal formatlamaya tabi tutulmaz (ham gösterilir)
+const IDENTIFIER_KEYS = new Set([
+    'dbid', 'datid', 'relid', 'indexrelid', 'index_relid', 'table_relid',
+    'pid', 'leader_pid', 'active_pid', 'current_locker_pid',
+    'subid', 'usesysid', 'cluster_index_relid',
+    'queryid', 'query_id', 'query_text_id', 'statement_series_id',
+    'backend_xid', 'backend_xmin', 'xmin_int', 'catalog_xmin_int',
+    'instance_pk', 'sender_port', 'client_port',
+    'receive_start_tli', 'received_tli',
+]);
+
+/** Sayısal değeri kısa formatla (time/byte/count). ID kolonları ham döner. */
 export function fmtValue(key: string, val: any): string {
     if (val == null) return '—';
+    // ID/OID/PID gibi kimlikleri olduğu gibi göster — formatlama anlamsız
+    if (IDENTIFIER_KEYS.has(key)) return String(val);
+
     const n = Number(val);
     if (Number.isNaN(n)) return String(val);
 

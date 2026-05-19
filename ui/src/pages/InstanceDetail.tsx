@@ -1085,8 +1085,11 @@ function TableStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                                                 <div className="text-[10px] text-[#94A3B8]">I {fmtNum(statNumber(r.total_inserts))} / U {fmtNum(statNumber(r.total_updates))} / D {fmtNum(statNumber(r.total_deletes))}</div>
                                             </td>
                                             <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                <div>{fmtNum(statNumber(r.total_heap_blks_read))} R / {fmtNum(statNumber(r.total_heap_blks_hit))} H</div>
-                                                <div className={ratio < 95 ? 'text-amber-600' : 'text-green-600'}>{ratio.toFixed(1)}%</div>
+                                                <div title="R: diskten okunan blok / H: cache'te bulunan blok">
+                                                    {fmtNum(statNumber(r.total_heap_blks_read))} <span className="text-[#94A3B8]">disk</span> /
+                                                    {fmtNum(statNumber(r.total_heap_blks_hit))} <span className="text-[#94A3B8]">cache</span>
+                                                </div>
+                                                <div className={ratio < 95 ? 'text-amber-600' : 'text-green-600'} title="Cache hit ratio">{ratio.toFixed(1)}%</div>
                                             </td>
                                             <td className="py-2.5 px-3 text-right font-mono text-xs">
                                                 <div>Live {fmtNum(statNumber(r.n_live_tup))}</div>
@@ -1364,9 +1367,10 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
                                                 <div>Read {fmtNum(statNumber(r.total_idx_tup_read))}</div>
                                                 <div className="text-[#94A3B8]">Fetch {fmtNum(statNumber(r.total_idx_tup_fetch))}</div>
                                             </td>
-                                            <td className="py-2.5 px-3 text-right font-mono text-xs">
-                                                <div>{fmtNum(statNumber(r.total_idx_blks_read))} R</div>
-                                                <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} H</div>
+                                            <td className="py-2.5 px-3 text-right font-mono text-xs"
+                                                title="disk: diskten okunan blok / cache: cache'te bulunan blok">
+                                                <div>{fmtNum(statNumber(r.total_idx_blks_read))} <span className="text-[#94A3B8]">disk</span></div>
+                                                <div className="text-[#94A3B8]">{fmtNum(statNumber(r.total_idx_blks_hit))} cache</div>
                                             </td>
                                             <td className="py-2.5 px-3 text-xs">
                                                 {invalid ? (
