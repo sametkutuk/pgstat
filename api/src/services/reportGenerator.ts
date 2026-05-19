@@ -337,19 +337,21 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
 
     // Kolon tan\u0131mlar\u0131 \u2014 orijinal tablo format\u0131, t\u00fcm kolonlar tek sat\u0131rda
     // \u0130lk N "instance kolonu" tekrar etmez (ayn\u0131 instance'\u0131n 2-N sat\u0131r\u0131nda bo\u015f g\u00f6sterilir)
+    // Sayfa: A4 landscape = 842pt - 2*28 margin = 786pt kullan\u0131labilir
+    // Toplam kolon geni\u015fli\u011fi 780 civar\u0131nda tutulmal\u0131 (ta\u015fma olmas\u0131n)
     const columns: Array<{ header: string; key: string; width: number; align?: 'left' | 'right'; isInstance?: boolean; numeric?: boolean }> = [
-      { header: 'Instance Ad\u0131', key: 'display_name', width: 130, isInstance: true },
-      { header: 'Host', key: 'host', width: 90, isInstance: true },
-      { header: 'Port', key: 'port', width: 38, isInstance: true },
-      { header: 'PG S\u00fcr\u00fcm', key: 'pg_major', width: 50, isInstance: true },
-      { header: 'Rol', key: 'role', width: 50, isInstance: true },
-      { header: 'Environment', key: 'environment', width: 70, isInstance: true },
-      { header: 'Database Ad\u0131', key: 'datname', width: 130 },
-      { header: 'Database Boyutu', key: 'size_human', width: 80, align: 'right' },
-      { header: 'Database Boyutu (bytes)', key: 'size_bytes', width: 100, align: 'right', numeric: true },
-      { header: 'Toplam Instance Boyutu', key: 'instance_total_human', width: 90, align: 'right', isInstance: true },
+      { header: 'Instance Ad\u0131', key: 'display_name', width: 125, isInstance: true },
+      { header: 'Host', key: 'host', width: 80, isInstance: true },
+      { header: 'Port', key: 'port', width: 35, isInstance: true },
+      { header: 'PG S\u00fcr\u00fcm', key: 'pg_major', width: 48, isInstance: true },
+      { header: 'Rol', key: 'role', width: 48, isInstance: true },
+      { header: 'Env', key: 'environment', width: 50, isInstance: true },
+      { header: 'Database Ad\u0131', key: 'datname', width: 125 },
+      { header: 'Boyut', key: 'size_human', width: 65, align: 'right' },
+      { header: 'Boyut (bytes)', key: 'size_bytes', width: 95, align: 'right', numeric: true },
+      { header: 'Instance Toplam', key: 'instance_total_human', width: 80, align: 'right', isInstance: true },
     ];
-    // Toplam geni\u015flik tablonun s\u0131n\u0131r\u0131
+    // Toplam: 125+80+35+48+48+50+125+65+95+80 = 751pt (786pt s\u0131n\u0131r\u0131na emniyetle s\u0131\u011f\u0131yor)
     const tableWidth = columns.reduce((s, c) => s + c.width, 0);
     const colX = (idx: number) => margin + columns.slice(0, idx).reduce((s, c) => s + c.width, 0);
 
