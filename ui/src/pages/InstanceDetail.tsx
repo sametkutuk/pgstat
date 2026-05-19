@@ -180,8 +180,8 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'databases' && <DatabasesTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
             {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
             {tab === 'indexes' && <IndexStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
-            {tab === 'activity' && <ActivityTab instancePk={Number(id)} />}
-            {tab === 'replication' && <ReplicationTab instancePk={Number(id)} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'activity' && <ActivityTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'replication' && <ReplicationTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'replication_slots' && <ReplicationSlotsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'subscriptions' && <SubscriptionsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} range={range} isPrimary={cap?.is_primary ?? inst.is_primary} />}
@@ -1867,222 +1867,164 @@ function fmtBytes(value: any): string {
     return `${bytes.toLocaleString()} B`;
 }
 
-function ActivityTab({ instancePk }: { instancePk: number }) {
-    const [view, setView] = useState<'summary' | 'detail'>('summary');
-    const [filter, setFilter] = useState('all');
+function isSnapshotNumericCol(col: string): boolean {
+    return col === 'pid'
+        || col === 'datid'
+        || col === 'usesysid'
+        || col === 'leader_pid'
+        || col === 'client_port'
+        || col === 'query_id'
+        || col === 'sync_priority'
+        || col.endsWith('_bytes');
+}
+
+function isSnapshotTimeCol(col: string): boolean {
+    return col.endsWith('_time')
+        || col.endsWith('_start')
+        || col === 'query_start'
+        || col === 'xact_start'
+        || col === 'state_change'
+        || col === 'backend_start';
+}
+
+function formatSnapshotCell(col: string, val: any) {
+    if (val == null || val === '') return '—';
+    if (isSnapshotTimeCol(col)) return <TimeAgo date={val} />;
+    if (col === 'state' || col === 'sync_state') return <Badge value={String(val)} />;
+    if (col === 'query') {
+        return <div className="truncate font-mono text-[11px]" title={String(val)}>{String(val)}</div>;
+    }
+    if (typeof val === 'boolean') return val ? '✓' : '✕';
+    if (typeof val === 'number' || isSnapshotNumericCol(col)) return fmtValue(col, val);
+    return String(val);
+}
+
+function ActivityTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'query_start', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['activity-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/activity/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.instance.activity.cols',
+        ['pid', 'usename', 'datname', 'state', 'query_start', 'wait_event', 'query'],
+        colsMeta
+    );
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.activity.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso, order_by: orderParam });
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['instance-activity', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/activity`),
+        queryKey: ['instance-activity', instancePk, range.fromIso, range.toIso, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/activity?${qp}`),
         enabled: Number.isFinite(instancePk),
     });
 
-    const snapshotDate = data?.[0]?.snapshot_ts ? new Date(data[0].snapshot_ts) : null;
-    const snapshotAgo = snapshotDate
-        ? Math.round((Date.now() - snapshotDate.getTime()) / 1000)
-        : null;
-
-    const clientSessions = (data || []).filter((r: any) => r.backend_type === 'client backend');
-    const hotWindowMs = 1000;
-    const isJustBecameIdle = (r: any) => {
-        if (r.state !== 'idle' || !r.state_change || !snapshotDate) return false;
-        const stateChangeMs = new Date(r.state_change).getTime();
-        return (snapshotDate.getTime() - stateChangeMs) <= hotWindowMs;
-    };
-
-    const summaryMap = new Map<string, {
-        datname: string; client_addr: string; usename: string;
-        open: number; active_now: number; idle_in_trans_now: number;
-        idle_now: number; just_became_idle: number;
-    }>();
-    for (const r of clientSessions) {
-        const key = `${r.datname || ''}|${r.client_addr || ''}|${r.usename || ''}`;
-        let row = summaryMap.get(key);
-        if (!row) {
-            row = {
-                datname: r.datname || '-', client_addr: r.client_addr || '-', usename: r.usename || '-',
-                open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0
-            };
-            summaryMap.set(key, row);
-        }
-        row.open++;
-        if (r.state === 'active') row.active_now++;
-        else if (r.state === 'idle in transaction') row.idle_in_trans_now++;
-        else if (r.state === 'idle') {
-            if (isJustBecameIdle(r)) row.just_became_idle++;
-            else row.idle_now++;
-        }
-    }
-    const summaryRows = [...summaryMap.values()].sort((a, b) => b.active_now - a.active_now || b.open - a.open);
-    const totals = summaryRows.reduce((t, r) => ({
-        open: t.open + r.open, active_now: t.active_now + r.active_now,
-        idle_in_trans_now: t.idle_in_trans_now + r.idle_in_trans_now,
-        idle_now: t.idle_now + r.idle_now, just_became_idle: t.just_became_idle + r.just_became_idle,
-    }), { open: 0, active_now: 0, idle_in_trans_now: 0, idle_now: 0, just_became_idle: 0 });
-
-    const idleWaitTypes = new Set(['Activity', 'Client']);
-    const detailFiltered = (data || []).filter((r: any) => {
-        if (filter === 'client') return r.backend_type === 'client backend';
-        if (filter === 'active') return r.state === 'active' || isJustBecameIdle(r);
-        if (filter === 'idle') return r.state === 'idle' && !isJustBecameIdle(r);
-        if (filter === 'idle_tx') return r.state === 'idle in transaction';
-        if (filter === 'waiting') return r.wait_event_type && !idleWaitTypes.has(r.wait_event_type);
-        return true;
-    });
-    const detailCounts = {
-        all: (data || []).length,
-        client: clientSessions.length,
-        active: (data || []).filter((r: any) => r.state === 'active' || isJustBecameIdle(r)).length,
-        idle: clientSessions.filter((r: any) => r.state === 'idle' && !isJustBecameIdle(r)).length,
-        idle_tx: (data || []).filter((r: any) => r.state === 'idle in transaction').length,
-        waiting: (data || []).filter((r: any) => r.wait_event_type && !idleWaitTypes.has(r.wait_event_type)).length,
-    };
-
-    const detailColumns = [
-        { key: 'pid', header: 'PID' },
-        { key: 'datname', header: 'Database' },
-        { key: 'usename', header: 'User' },
-        { key: 'application_name', header: 'Uygulama' },
-        {
-            key: 'state', header: 'Durum', render: (r: any) => {
-                const jbi = isJustBecameIdle(r);
-                const color = r.state === 'active' ? 'text-green-600' : jbi ? 'text-green-500' : r.state === 'idle in transaction' ? 'text-yellow-600' : r.state === 'idle' ? 'text-[#94A3B8]' : 'text-[#CBD5E1]';
-                const label = jbi ? 'idle (aktifti)' : r.state || '-';
-                return <span className={`font-medium ${color}`}>{label}</span>;
-            }
-        },
-        { key: 'wait_event_type', header: 'Wait', render: (r: any) => r.wait_event_type ? `${r.wait_event_type}/${r.wait_event}` : '-' },
-        { key: 'query', header: 'Sorgu', render: (r: any) => <div className="max-w-xs truncate text-xs font-mono" title={r.query}>{r.query ? r.query.substring(0, 120) : '-'}</div> },
-        { key: 'backend_type', header: 'Backend' },
-        { key: 'query_id', header: 'Query ID', render: (r: any) => r.query_id ? <span className="font-mono text-xs">{r.query_id}</span> : '—' },
-        { key: 'leader_pid', header: 'Leader', render: (r: any) => r.leader_pid ?? '—' },
-        { key: 'client_hostname', header: 'Hostname', render: (r: any) => r.client_hostname || '—' },
-    ];
-
-    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
-
-    const summaryColumns = [
-        { key: 'datname', header: 'Database' },
-        { key: 'client_addr', header: 'Client' },
-        { key: 'usename', header: 'User' },
-        { key: 'open', header: 'Open', className: 'text-right' },
-        { key: 'active_now', header: 'Active', render: (r: any) => <span className={r.active_now > 0 ? 'text-green-600 font-medium' : ''}>{r.active_now}</span>, className: 'text-right' },
-        { key: 'idle_in_trans_now', header: 'Idle in TX', render: (r: any) => <span className={r.idle_in_trans_now > 0 ? 'text-yellow-600 font-medium' : ''}>{r.idle_in_trans_now}</span>, className: 'text-right' },
-        { key: 'idle_now', header: 'Idle', className: 'text-right' },
-        { key: 'just_became_idle', header: 'Just Idle', render: (r: any) => <span className={r.just_became_idle > 0 ? 'text-green-500' : ''} title="Snapshot anından <1s önce idle olmuş session">{r.just_became_idle}</span>, className: 'text-right' },
-    ];
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || 7} />;
 
     return (
         <div>
-            <div className="flex gap-1 mb-3 items-center">
-                <button onClick={() => setView('summary')}
-                    className={`px-3 py-1 text-xs rounded ${view === 'summary' ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
-                    Özet
-                </button>
-                <button onClick={() => setView('detail')}
-                    className={`px-3 py-1 text-xs rounded ${view === 'detail' ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
-                    Detay
-                </button>
-                {snapshotDate && (
-                    <span className="ml-auto text-xs text-[#64748B]">
-                        Snapshot: {snapshotDate.toLocaleTimeString()}
-                        <span className="text-[#94A3B8] ml-1">
-                            ({snapshotAgo! < 60 ? `${snapshotAgo}s` : `${Math.floor(snapshotAgo! / 60)}dk`} önce)
-                        </span>
-                    </span>
-                )}
-                <button onClick={() => refetch()} disabled={isFetching}
-                    className={`px-3 py-1 text-xs rounded border border-[#E2E8F0] hover:bg-[#F1F5F9] ${isFetching ? 'bg-[#F1F5F9] text-[#94A3B8]' : 'bg-white text-[#64748B]'}`}>
-                    {isFetching ? 'Yenileniyor...' : 'Yenile'}
-                </button>
+            <DataKindBanner kind="snapshot" description="Activity satirlari secili tarih araligindaki en son pg_stat_activity snapshot'idir. Degerler anliktir, delta degildir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} session</span>
             </div>
-
-            {view === 'summary' && (
-                <div className="bg-white rounded-lg shadow-sm p-4">
-                    <DataTable columns={summaryColumns} data={summaryRows} emptyText="Client session yok" />
-                    {summaryRows.length > 0 && (
-                        <div className="border-t border-[#E2E8F0] mt-1 pt-2 flex gap-6 text-xs flex-wrap">
-                            <span className="text-[#64748B] font-medium">TOPLAM</span>
-                            <span>Open: <strong>{totals.open}</strong></span>
-                            <span className={totals.active_now > 0 ? 'text-green-600' : ''}>Active: <strong>{totals.active_now}</strong></span>
-                            <span className={totals.idle_in_trans_now > 0 ? 'text-yellow-600' : ''}>Idle in TX: <strong>{totals.idle_in_trans_now}</strong></span>
-                            <span>Idle: <strong>{totals.idle_now}</strong></span>
-                            <span className={totals.just_became_idle > 0 ? 'text-green-500' : ''}>Just Idle: <strong>{totals.just_became_idle}</strong></span>
-                        </div>
-                    )}
-                    <p className="text-[10px] text-[#94A3B8] mt-2">
-                        Just Idle = snapshot anından &lt;1s önce idle olmuş session. Sadece client backend session'ları gösterilir.
-                    </p>
-                </div>
-            )}
-
-            {view === 'detail' && (
-                <div>
-                    <div className="flex gap-1 mb-3 flex-wrap">
-                        {([
-                            { k: 'all', l: 'Tümü' },
-                            { k: 'client', l: 'Client' },
-                            { k: 'active', l: 'Active + Just Idle' },
-                            { k: 'idle', l: 'Idle' },
-                            { k: 'idle_tx', l: 'Idle in TX' },
-                            { k: 'waiting', l: 'Bekleyen' },
-                        ] as { k: keyof typeof detailCounts; l: string }[]).map((f) => (
-                            <button key={f.k} onClick={() => setFilter(f.k)}
-                                className={`px-3 py-1 text-xs rounded ${filter === f.k ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'}`}>
-                                {f.l} ({detailCounts[f.k]})
-                            </button>
-                        ))}
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📋" title="Activity yok" description="Bu aralikta pg_stat_activity snapshot'i bulunmuyor." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const meta = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? (col === 'query' ? 320 : 130)} onResize={setWidth} align={isSnapshotNumericCol(col) ? 'right' : 'left'} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{meta?.label ?? col}{meta && meta.since > 10 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{meta.since}+</span>}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{data.map((r: any, i: number) => (
+                                <tr key={`${r.pid ?? 'session'}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                    {selectedCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${isSnapshotNumericCol(col) ? 'text-right font-mono' : ''}`}>
+                                            {formatSnapshotCell(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
                     </div>
-                    <div className="bg-white rounded-lg shadow-sm p-4">
-                        <DataTable columns={detailColumns} data={detailFiltered} emptyText="Bu filtrede session yok" />
-                    </div>
-                </div>
-            )}
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Activity Sütunları" />
         </div>
     );
 }
 
-function ReplicationTab({ instancePk, isPrimary }: { instancePk: number; isPrimary: boolean | null | undefined }) {
-    const { data, isLoading } = useQuery({
-        queryKey: ['instance-replication', instancePk],
-        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/replication`),
+function ReplicationTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: number; range: TimeRange; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'replay_lag_bytes', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['replication-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/replication/columns`),
+        staleTime: 3600_000,
+        enabled: Number.isFinite(instancePk) && isPrimary === true,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.instance.replication.cols',
+        ['usename', 'application_name', 'state', 'sync_state', 'write_lag', 'flush_lag', 'replay_lag', 'replay_lag_bytes'],
+        colsMeta
+    );
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.replication.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), from: range.fromIso, to: range.toIso, order_by: orderParam });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-replication', instancePk, range.fromIso, range.toIso, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/replication?${qp}`),
         enabled: Number.isFinite(instancePk) && isPrimary === true,
     });
 
     if (isPrimary !== true) {
-        return <div className="text-[#94A3B8] py-8 text-center">Bu node primary değil. Replikasyon bilgisi yalnızca primary node'larda gösterilir.</div>;
+        return <EmptyState icon="📡" title="Standby instance" description="Bu instance standby. pg_stat_replication yalnizca primary uzerinde dolar." />;
     }
-
-    if (isLoading) return <SkeletonTable rows={5} cols={5} />;
-
-    const formatBytes = (b: number) => {
-        if (b > 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
-        if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB';
-        if (b > 1024) return (b / 1024).toFixed(1) + ' KB';
-        return b + ' B';
-    };
-
-    const columns = [
-        { key: 'application_name', header: 'Replica' },
-        { key: 'client_addr', header: 'Adres' },
-        { key: 'state', header: 'Durum', render: (r: any) => <Badge value={r.state || 'unknown'} /> },
-        { key: 'sync_state', header: 'Sync' },
-        { key: 'replay_lag', header: 'Replay Lag' },
-        {
-            key: 'replay_lag_bytes', header: 'Lag (byte)', render: (r: any) => {
-                const bytes = Number(r.replay_lag_bytes);
-                const cls = bytes > 1073741824 ? 'text-red-600 font-medium' : bytes > 314572800 ? 'text-yellow-600' : '';
-                return <span className={cls}>{formatBytes(bytes)}</span>;
-            }
-        },
-        { key: 'flush_lag', header: 'Flush Lag' },
-        { key: 'sync_priority', header: 'Priority', render: (r: any) => r.sync_priority ?? '—' },
-        { key: 'reply_time', header: 'Reply Time', render: (r: any) => r.reply_time ? <TimeAgo date={r.reply_time} /> : '—' },
-        { key: 'backend_xmin', header: 'Xmin', render: (r: any) => r.backend_xmin || '—' },
-    ];
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || 8} />;
 
     return (
-        <div className="bg-white rounded-lg shadow-sm p-4">
-            <DataTable columns={columns} data={data || []} emptyText="Replica bağlantısı yok" />
+        <div>
+            <DataKindBanner kind="snapshot" description="Replication satirlari secili tarih araligindaki en son pg_stat_replication snapshot'idir. Lag ve LSN degerleri anliktir, delta degildir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">⚙️ Sütun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">↔ Genişlik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{data?.length ?? 0} replica</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                {(!data || data.length === 0) ? <EmptyState icon="📡" title="Replica baglantisi yok" description="Secili aralikta replication snapshot satiri bulunmuyor." /> : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                            <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                {selectedCols.map(col => {
+                                    const meta = colsMeta?.available.find(c => c.key === col);
+                                    return <ResizableTh key={col} colKey={col} width={widths[col] ?? 140} onResize={setWidth} align={isSnapshotNumericCol(col) ? 'right' : 'left'} sortKeys={sortKeys} onSortToggle={sortToggle} className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase">{meta?.label ?? col}{meta && meta.since > 10 && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{meta.since}+</span>}</ResizableTh>;
+                                })}
+                            </tr></thead>
+                            <tbody>{data.map((r: any, i: number) => (
+                                <tr key={`${r.pid ?? 'replica'}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                    {selectedCols.map(col => (
+                                        <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${isSnapshotNumericCol(col) ? 'text-right font-mono' : ''}`}>
+                                            {formatSnapshotCell(col, r[col])}
+                                        </td>
+                                    ))}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="⚙️ Replication Sütunları" />
         </div>
     );
 }
