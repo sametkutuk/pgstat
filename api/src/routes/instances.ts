@@ -691,20 +691,62 @@ router.get('/:id/cluster-metrics', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/activity — Aktif session snapshot
+const ACTIVITY_COLUMNS: ColumnRegistry = {
+  datid: { sql: 'dbr.dbid::bigint', since: 10, label: 'DB OID' },
+  datname: { sql: 'a.datname', since: 10, label: 'Database' },
+  pid: { sql: 'a.pid', since: 10, label: 'PID' },
+  leader_pid: { sql: 'a.leader_pid', since: 13, label: 'Leader PID' },
+  usesysid: { sql: 'a.usesysid', since: 10, label: 'User OID' },
+  usename: { sql: 'a.usename', since: 10, label: 'User' },
+  application_name: { sql: 'a.application_name', since: 10, label: 'Application' },
+  client_addr: { sql: 'a.client_addr', since: 10, label: 'Client Addr' },
+  client_hostname: { sql: 'a.client_hostname', since: 10, label: 'Client Hostname' },
+  client_port: { sql: 'a.client_port', since: 10, label: 'Client Port' },
+  backend_start: { sql: 'a.backend_start', since: 10, label: 'Backend Start' },
+  xact_start: { sql: 'a.xact_start', since: 10, label: 'Xact Start' },
+  query_start: { sql: 'a.query_start', since: 10, label: 'Query Start' },
+  state_change: { sql: 'a.state_change', since: 10, label: 'State Change' },
+  wait_event_type: { sql: 'a.wait_event_type', since: 10, label: 'Wait Type' },
+  wait_event: { sql: 'a.wait_event', since: 10, label: 'Wait Event' },
+  state: { sql: 'a.state', since: 10, label: 'State' },
+  backend_xid: { sql: 'a.backend_xid', since: 10, label: 'Backend XID' },
+  backend_xmin: { sql: 'a.backend_xmin', since: 10, label: 'Backend Xmin' },
+  query_id: { sql: 'a.query_id', since: 14, label: 'Query ID' },
+  query: { sql: 'a.query', since: 10, label: 'Query' },
+  backend_type: { sql: 'a.backend_type', since: 10, label: 'Backend Type' },
+};
+const ACTIVITY_DEFAULTS = ['pid', 'usename', 'datname', 'state', 'query_start', 'wait_event', 'query'];
+
+router.get('/:id/activity/columns', (_req, res) => {
+  res.json(columnsMetaResponse(ACTIVITY_COLUMNS, ACTIVITY_DEFAULTS));
+});
+
 router.get('/:id/activity', async (req, res, next) => {
   try {
     const { id } = req.params;
-    // En son snapshot'i getir
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, ACTIVITY_COLUMNS, ACTIVITY_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${ACTIVITY_COLUMNS[c].sql} as ${c}`);
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('state') ? 'state' : requestedCols[0]);
     const result = await pool.query(`
-      select *
-      from fact.pg_activity_snapshot
-      where instance_pk = $1
-        and snapshot_ts = (
+      select ${selectParts.join(', ')}
+      from fact.pg_activity_snapshot a
+      left join lateral (
+        select dbid
+        from dim.database_ref d
+        where d.instance_pk = a.instance_pk
+          and d.datname = a.datname
+        order by d.last_seen_at desc
+        limit 1
+      ) dbr on true
+      where a.instance_pk = $1
+        and a.snapshot_ts between $2::timestamptz and $3::timestamptz
+        and a.snapshot_ts = (
           select max(snapshot_ts) from fact.pg_activity_snapshot
-          where instance_pk = $1
+          where instance_pk = $1 and snapshot_ts between $2::timestamptz and $3::timestamptz
         )
-      order by state, query_start
-    `, [id]);
+      order by ${orderBy}
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -712,18 +754,53 @@ router.get('/:id/activity', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/replication — Replication durumu
+const REPLICATION_COLUMNS: ColumnRegistry = {
+  pid: { sql: 'r.pid', since: 10, label: 'PID' },
+  usesysid: { sql: 'r.usesysid', since: 10, label: 'User OID' },
+  usename: { sql: 'r.usename', since: 10, label: 'User' },
+  application_name: { sql: 'r.application_name', since: 10, label: 'Application' },
+  client_addr: { sql: 'r.client_addr', since: 10, label: 'Client Addr' },
+  client_hostname: { sql: 'r.client_hostname', since: 10, label: 'Client Hostname' },
+  client_port: { sql: 'r.client_port', since: 10, label: 'Client Port' },
+  backend_start: { sql: 'r.backend_start', since: 10, label: 'Backend Start' },
+  backend_xmin: { sql: 'r.backend_xmin', since: 10, label: 'Backend Xmin' },
+  state: { sql: 'r.state', since: 10, label: 'State' },
+  sent_lsn: { sql: 'r.sent_lsn', since: 10, label: 'Sent LSN' },
+  write_lsn: { sql: 'r.write_lsn', since: 10, label: 'Write LSN' },
+  flush_lsn: { sql: 'r.flush_lsn', since: 10, label: 'Flush LSN' },
+  replay_lsn: { sql: 'r.replay_lsn', since: 10, label: 'Replay LSN' },
+  write_lag: { sql: 'r.write_lag', since: 10, label: 'Write Lag' },
+  flush_lag: { sql: 'r.flush_lag', since: 10, label: 'Flush Lag' },
+  replay_lag: { sql: 'r.replay_lag', since: 10, label: 'Replay Lag' },
+  sync_priority: { sql: 'r.sync_priority', since: 10, label: 'Sync Priority' },
+  sync_state: { sql: 'r.sync_state', since: 10, label: 'Sync State' },
+  reply_time: { sql: 'r.reply_time', since: 12, label: 'Reply Time' },
+  replay_lag_bytes: { sql: 'r.replay_lag_bytes', since: 10, label: 'Replay Lag Bytes' },
+};
+const REPLICATION_DEFAULTS = ['usename', 'application_name', 'state', 'sync_state', 'write_lag', 'flush_lag', 'replay_lag', 'replay_lag_bytes'];
+
+router.get('/:id/replication/columns', (_req, res) => {
+  res.json(columnsMetaResponse(REPLICATION_COLUMNS, REPLICATION_DEFAULTS));
+});
+
 router.get('/:id/replication', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, REPLICATION_COLUMNS, REPLICATION_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${REPLICATION_COLUMNS[c].sql} as ${c}`);
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('application_name') ? 'application_name' : requestedCols[0]);
     const result = await pool.query(`
-      select *
-      from fact.pg_replication_snapshot
-      where instance_pk = $1
-        and snapshot_ts = (
+      select ${selectParts.join(', ')}
+      from fact.pg_replication_snapshot r
+      where r.instance_pk = $1
+        and r.snapshot_ts between $2::timestamptz and $3::timestamptz
+        and r.snapshot_ts = (
           select max(snapshot_ts) from fact.pg_replication_snapshot
-          where instance_pk = $1
+          where instance_pk = $1 and snapshot_ts between $2::timestamptz and $3::timestamptz
         )
-    `, [id]);
+      order by ${orderBy}
+    `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {
     next(err);
@@ -2350,12 +2427,17 @@ router.get('/:id/archiver', async (req, res, next) => {
 // Subscriptions — TAM PAKET
 // ============================================================================
 const SUBSCRIPTION_COLUMNS: ColumnRegistry = {
+  subid: { sql: 'subid', since: 10, label: 'Subscription ID' },
   subname: { sql: 'subname', since: 11, label: 'Subscription' },
   pid: { sql: 'pid', since: 11, label: 'PID' },
   leader_pid: { sql: 'leader_pid', since: 17, label: 'Leader PID' },
   worker_type: { sql: 'worker_type', since: 18, label: 'Worker Type' },
   relid: { sql: 'relid', since: 11, label: 'Relid' },
   received_lsn: { sql: 'received_lsn', since: 11, label: 'Received LSN' },
+  last_msg_send_time: { sql: 'last_msg_send_time', since: 10, label: 'Son Mesaj Gönderim' },
+  last_msg_receipt_time: { sql: 'last_msg_receipt_time', since: 10, label: 'Son Mesaj Alım' },
+  latest_end_lsn: { sql: 'latest_end_lsn', since: 10, label: 'Latest End LSN' },
+  latest_end_time: { sql: 'latest_end_time', since: 10, label: 'Latest End Time' },
   lag_bytes: { sql: 'lag_bytes', since: 11, label: 'Lag (bytes)' },
   apply_error_count: { sql: 'apply_error_count', since: 15, label: 'Apply Errors' },
   sync_error_count: { sql: 'sync_error_count', since: 15, label: 'Sync Errors' },
