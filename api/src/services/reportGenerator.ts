@@ -315,7 +315,6 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 28 });
     const chunks: Buffer[] = [];
-    const groups = groupRows(rows);
     const fonts = resolvePdfFonts();
     const hasTurkishFont = Boolean(fonts.regular && fonts.bold);
     if (fonts.regular && fonts.bold) {
@@ -334,10 +333,26 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
     const margin = 28;
     const bottomMargin = 34;
     const contentWidth = doc.page.width - margin * 2;
-    const tableWidth = Math.min(540, contentWidth);
-    const dbColWidth = tableWidth - 130;
-    const sizeColWidth = 130;
     const rowHeight = 18;
+
+    // Kolon tan\u0131mlar\u0131 \u2014 orijinal tablo format\u0131, t\u00fcm kolonlar tek sat\u0131rda
+    // \u0130lk N "instance kolonu" tekrar etmez (ayn\u0131 instance'\u0131n 2-N sat\u0131r\u0131nda bo\u015f g\u00f6sterilir)
+    const columns: Array<{ header: string; key: string; width: number; align?: 'left' | 'right'; isInstance?: boolean; numeric?: boolean }> = [
+      { header: 'Instance Ad\u0131', key: 'display_name', width: 130, isInstance: true },
+      { header: 'Host', key: 'host', width: 90, isInstance: true },
+      { header: 'Port', key: 'port', width: 38, isInstance: true },
+      { header: 'PG S\u00fcr\u00fcm', key: 'pg_major', width: 50, isInstance: true },
+      { header: 'Rol', key: 'role', width: 50, isInstance: true },
+      { header: 'Environment', key: 'environment', width: 70, isInstance: true },
+      { header: 'Database Ad\u0131', key: 'datname', width: 130 },
+      { header: 'Database Boyutu', key: 'size_human', width: 80, align: 'right' },
+      { header: 'Database Boyutu (bytes)', key: 'size_bytes', width: 100, align: 'right', numeric: true },
+      { header: 'Toplam Instance Boyutu', key: 'instance_total_human', width: 90, align: 'right', isInstance: true },
+    ];
+    // Toplam geni\u015flik tablonun s\u0131n\u0131r\u0131
+    const tableWidth = columns.reduce((s, c) => s + c.width, 0);
+    const colX = (idx: number) => margin + columns.slice(0, idx).reduce((s, c) => s + c.width, 0);
+
     let y = margin;
 
     const drawFooter = () => {
@@ -355,61 +370,82 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
       y += 44;
     };
 
+    const drawTableHeader = () => {
+      doc.rect(margin, y, tableWidth, rowHeight + 2).fill('#1E3A8A');
+      doc.font(boldFont).fontSize(7).fillColor('#FFFFFF');
+      columns.forEach((c, i) => {
+        doc.text(tr(c.header), colX(i) + 4, y + 6, {
+          width: c.width - 8,
+          align: c.align ?? 'left',
+          lineBreak: false,
+          ellipsis: true,
+        });
+      });
+      y += rowHeight + 2;
+    };
+
     const ensureSpace = (neededHeight: number): boolean => {
       if (y + neededHeight <= doc.page.height - bottomMargin) return false;
       drawFooter();
       doc.addPage({ size: 'A4', layout: 'landscape', margin });
       y = margin;
       drawReportHeader();
+      drawTableHeader();
       return true;
     };
 
-    const drawDbHeader = () => {
-      ensureSpace(rowHeight);
-      doc.rect(margin, y, tableWidth, rowHeight).fill('#E2E8F0');
-      doc.font(boldFont).fontSize(8).fillColor('#0F172A');
-      doc.text(tr('Database Ad\u0131'), margin + 6, y + 5, { width: dbColWidth - 12, ellipsis: true });
-      doc.text(tr('Boyut'), margin + dbColWidth + 6, y + 5, { width: sizeColWidth - 12, align: 'right', ellipsis: true });
-      y += rowHeight;
-    };
-
-    const drawInstanceHeader = (group: InstanceInventoryGroup) => {
-      ensureSpace(82);
-      doc.rect(margin, y, contentWidth, 54).fill('#F8FAFC').strokeColor('#CBD5E1').stroke();
-      doc.font(boldFont).fontSize(10).fillColor('#0F172A').text(tr('[INSTANCE: ' + group.display_name + ']'), margin + 8, y + 7, { width: contentWidth - 16, ellipsis: true });
-      doc.font(font).fontSize(8).fillColor('#334155');
-      doc.text(tr('Host: ' + group.host + ':' + group.port), margin + 8, y + 25, { width: 220, ellipsis: true });
-      doc.text(tr('Rol: ' + roleLabel(group.is_primary)), margin + 250, y + 25, { width: 110, ellipsis: true });
-      doc.text(tr('Env: ' + (group.environment || '-')), margin + 380, y + 25, { width: 120, ellipsis: true });
-      doc.text(tr('PG S\u00fcr\u00fcm\u00fc: ' + pgVersionLabel(group.pg_major)), margin + 8, y + 39, { width: 180, ellipsis: true });
-      doc.text(tr('Toplam: ' + group.instance_total_human), margin + 250, y + 39, { width: 130, ellipsis: true });
-      doc.text(tr('DB Say\u0131s\u0131: ' + group.databases.length), margin + 380, y + 39, { width: 120, ellipsis: true });
-      y += 62;
-      drawDbHeader();
-    };
-
     drawReportHeader();
-    groups.forEach((group, groupIndex) => {
-      if (groupIndex > 0) {
-        ensureSpace(18);
-        doc.strokeColor('#E2E8F0').moveTo(margin, y).lineTo(margin + contentWidth, y).stroke();
-        y += 12;
+    drawTableHeader();
+
+    let prevInstanceKey = '';
+    let zebraIdx = 0;
+    rows.forEach(row => {
+      ensureSpace(rowHeight);
+      // Zebra sat\u0131r
+      if (zebraIdx % 2 === 0) {
+        doc.rect(margin, y, tableWidth, rowHeight).fill('#F8FAFC');
       }
-      drawInstanceHeader(group);
-      group.databases.forEach((row, rowIndex) => {
-        if (ensureSpace(rowHeight + rowHeight)) {
-          doc.font(boldFont).fontSize(8).fillColor('#0F172A').text(tr('[INSTANCE: ' + group.display_name + ' - devam]'), margin, y, { width: contentWidth, ellipsis: true });
-          y += 16;
-          drawDbHeader();
+      zebraIdx++;
+
+      const instanceKey = row.instance_id;
+      const isFirstOfInstance = instanceKey !== prevInstanceKey;
+      // Yeni instance ba\u015fl\u0131yorsa \u00fcst ince \u00e7izgi
+      if (isFirstOfInstance && prevInstanceKey !== '') {
+        doc.strokeColor('#CBD5E1').lineWidth(0.5).moveTo(margin, y).lineTo(margin + tableWidth, y).stroke();
+      }
+
+      doc.font(font).fontSize(7).fillColor('#111827');
+      columns.forEach((c, i) => {
+        // Instance kolonlar\u0131 sadece grup ba\u015f\u0131nda yaz\u0131l\u0131r
+        const skipInstance = c.isInstance && !isFirstOfInstance;
+        let val: string;
+        if (skipInstance) {
+          val = '';
+        } else {
+          switch (c.key) {
+            case 'display_name': val = row.display_name; break;
+            case 'host': val = row.host; break;
+            case 'port': val = String(row.port); break;
+            case 'pg_major': val = pgVersionLabel(row.pg_major); break;
+            case 'role': val = roleLabel(row.is_primary); break;
+            case 'environment': val = row.environment || '-'; break;
+            case 'datname': val = row.datname || '-'; break;
+            case 'size_human': val = row.size_human || '\u2014'; break;
+            case 'size_bytes': val = c.numeric && row.size_bytes != null ? row.size_bytes.toLocaleString('tr-TR') : '0'; break;
+            case 'instance_total_human': val = row.instance_total_human; break;
+            default: val = '';
+          }
         }
-        if (rowIndex % 2 === 0) doc.rect(margin, y, tableWidth, rowHeight).fill('#F8FAFC');
-        doc.font(font).fontSize(8).fillColor('#111827');
-        doc.text(tr(row.datname || '-'), margin + 6, y + 5, { width: dbColWidth - 12, ellipsis: true });
-        doc.text(tr(row.size_human || '-'), margin + dbColWidth + 6, y + 5, { width: sizeColWidth - 12, align: 'right', ellipsis: true });
-        doc.strokeColor('#E5E7EB').moveTo(margin, y + rowHeight).lineTo(margin + tableWidth, y + rowHeight).stroke();
-        y += rowHeight;
+        doc.text(tr(val), colX(i) + 4, y + 5, {
+          width: c.width - 8,
+          align: c.align ?? 'left',
+          lineBreak: false,
+          ellipsis: true,
+        });
       });
-      y += 8;
+
+      y += rowHeight;
+      prevInstanceKey = instanceKey;
     });
     drawFooter();
     doc.end();
