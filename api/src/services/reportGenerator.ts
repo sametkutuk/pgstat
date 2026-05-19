@@ -362,21 +362,25 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
     const colX = (idx: number) => margin + columns.slice(0, idx).reduce((s, c) => s + c.width, 0);
 
     let y = margin;
+    // Footer kaldirildi \u2014 "pgstat tarafindan olusturuldu" zaten sayfa
+    // basligindaki "Olusturulma zamani" satirinda var, alt footer bos
+    // sayfa sorununa neden oluyordu.
 
-    const drawFooter = () => {
-      // Footer sayfa altinda, tablodan ~15pt mesafede
-      doc.font(font).fontSize(7).fillColor('#64748B').text(
-        tr('pgstat taraf\u0131ndan olu\u015fturuldu - ' + ts),
-        margin,
-        doc.page.height - 15,
-        { width: contentWidth, align: 'center', lineBreak: false },
-      );
-    };
-
-    const drawReportHeader = () => {
-      doc.font(boldFont).fontSize(15).fillColor('#111827').text(tr('PostgreSQL Instance Envanteri'), margin, y);
-      doc.font(font).fontSize(8).fillColor('#475569').text(tr('Olu\u015fturulma zaman\u0131: ' + ts), margin, y + 22);
-      y += 44;
+    const drawReportHeader = (isFirstPage: boolean) => {
+      if (isFirstPage) {
+        // Ilk sayfa: tam baslik + "pgstat tarafindan olusturuldu" metadata
+        doc.font(boldFont).fontSize(15).fillColor('#111827').text(tr('PostgreSQL Instance Envanteri'), margin, y);
+        doc.font(font).fontSize(8).fillColor('#475569').text(
+          tr('pgstat taraf\u0131ndan olu\u015fturuldu - ' + ts),
+          margin, y + 22,
+          { width: contentWidth, lineBreak: false },
+        );
+        y += 44;
+      } else {
+        // Diger sayfalar: sadece kompakt baslik (yer kazanmak icin)
+        doc.font(boldFont).fontSize(11).fillColor('#111827').text(tr('PostgreSQL Instance Envanteri'), margin, y);
+        y += 22;
+      }
     };
 
     const drawTableHeader = () => {
@@ -395,24 +399,19 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
 
     const ensureSpace = (neededHeight: number): boolean => {
       if (y + neededHeight <= doc.page.height - bottomMargin) return false;
-      drawFooter();
       doc.addPage({ size: 'A4', layout: 'landscape', margin });
-      // y sıfırlaması pageAdded event'inde yapılıyor
-      drawReportHeader();
+      drawReportHeader(false);
       drawTableHeader();
       return true;
     };
 
-    drawReportHeader();
+    drawReportHeader(true);
     drawTableHeader();
 
     let prevInstanceKey = '';
     let zebraIdx = 0;
-    rows.forEach((row, idx) => {
-      // Son satır degilse sadece kendi yuksekligi; son satirsa footer da
-      // dusunulsun ki "neredeyse dolu sayfada son satir + footer sigsin"
-      const isLast = idx === rows.length - 1;
-      ensureSpace(isLast ? rowHeight + 15 : rowHeight);
+    rows.forEach(row => {
+      ensureSpace(rowHeight);
       // Zebra sat\u0131r
       if (zebraIdx % 2 === 0) {
         doc.rect(margin, y, tableWidth, rowHeight).fill('#F8FAFC');
@@ -459,7 +458,6 @@ export function generateInstanceInventoryPdf(rows: InstanceInventoryReportRow[],
       y += rowHeight;
       prevInstanceKey = instanceKey;
     });
-    drawFooter();
     doc.end();
   });
 }
