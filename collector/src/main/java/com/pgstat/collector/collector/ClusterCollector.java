@@ -330,18 +330,32 @@ public class ClusterCollector {
                                        long instancePk, OffsetDateTime now) throws Exception {
         Map<String, Double> currentMetrics = new LinkedHashMap<>();
 
-        // bgwriter
-        readMetrics(conn, queries.bgwriterQuery(), "pg_stat_bgwriter", currentMetrics);
-
-        // wal (PG13+)
+        // Optimizasyon: bgwriter + wal + checkpointer 3 ayri round-trip yerine
+        // tek CTE+UNION sorgusu ile uzun-format (family, name, value) okunur.
+        // Eski readMetrics(...) cagrilari per-cycle 3 RTT idi; simdi 1 RTT.
+        // PG sürüm farkları için null guard: walQuery()/checkpointerQuery() null
+        // donerse o family atlanir.
+        // Sunucu tarafinda jsonb_each_text ile (key, value) pivotu yapilir;
+        // Java tarafi sadece (family, name, num_value) tuple okur.
+        StringBuilder unionSql = new StringBuilder();
+        unionSql.append("with bg as (").append(queries.bgwriterQuery()).append(")");
         if (queries.walQuery() != null) {
-            readMetrics(conn, queries.walQuery(), "pg_stat_wal", currentMetrics);
+            unionSql.append(", wal as (").append(queries.walQuery()).append(")");
         }
-
-        // checkpointer (PG17+)
         if (queries.checkpointerQuery() != null) {
-            readMetrics(conn, queries.checkpointerQuery(), "pg_stat_checkpointer", currentMetrics);
+            unionSql.append(", ckpt as (").append(queries.checkpointerQuery()).append(")");
         }
+        unionSql.append(" select 'pg_stat_bgwriter' as family, k as name, v as val")
+                .append(" from bg, lateral jsonb_each_text(to_jsonb(bg.*)) as kv(k, v)");
+        if (queries.walQuery() != null) {
+            unionSql.append(" union all select 'pg_stat_wal', k, v")
+                    .append(" from wal, lateral jsonb_each_text(to_jsonb(wal.*)) as kv(k, v)");
+        }
+        if (queries.checkpointerQuery() != null) {
+            unionSql.append(" union all select 'pg_stat_checkpointer', k, v")
+                    .append(" from ckpt, lateral jsonb_each_text(to_jsonb(ckpt.*)) as kv(k, v)");
+        }
+        readMetricsBatch(conn, unionSql.toString(), currentMetrics);
 
         ClusterMetricSample current = new ClusterMetricSample(instancePk, currentMetrics);
         ClusterMetricSample previous = previousSamples.put(instancePk, current);
@@ -403,6 +417,32 @@ public class ClusterCollector {
                     if (!rs.wasNull()) {
                         target.put(family + "." + colName, val);
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * Batch versiyon: CTE+UNION + jsonb_each_text ile birden cok view tek
+     * round-trip'te (family, name, val) tuple'lari olarak okunur.
+     * Sunucu tarafinda pivot yapildigi icin Java sadece string val'i Double'a
+     * cevirmeyi dener; cast hatasi (timestamp/text) ise atlanir.
+     */
+    private void readMetricsBatch(Connection conn, String sql,
+                                  Map<String, Double> target) throws Exception {
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                String family = rs.getString("family");
+                String name = rs.getString("name");
+                String val = rs.getString("val");
+                if (family == null || name == null || val == null) continue;
+                // Sayisal mi? Timestamp/text degerler parseDouble hata atar — atla.
+                try {
+                    double num = Double.parseDouble(val);
+                    target.put(family + "." + name, num);
+                } catch (NumberFormatException ignored) {
+                    // text/timestamp/bool — atla
                 }
             }
         }

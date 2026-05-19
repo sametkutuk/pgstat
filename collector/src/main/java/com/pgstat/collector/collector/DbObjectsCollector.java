@@ -124,6 +124,10 @@ public class DbObjectsCollector {
                                       OffsetDateTime now) throws Exception {
         String cacheKey = instancePk + ":" + dbid;
         Map<String, Double> current = new HashMap<>();
+        // Snapshot kolonlari (delta degil): tek geciste oku — onceden iki ayri
+        // executeQuery vardi, source PG'ye gereksiz extra round-trip getiriyordu.
+        OffsetDateTime statsReset = null;
+        OffsetDateTime checksumLastFailure = null;
 
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.databaseStatsQuery())) {
@@ -157,19 +161,9 @@ public class DbObjectsCollector {
                 current.put("sessions_killed", rs.getDouble("sessions_killed"));
                 current.put("parallel_workers_to_launch", rs.getDouble("parallel_workers_to_launch"));
                 current.put("parallel_workers_launched", rs.getDouble("parallel_workers_launched"));
-                break;
-            }
-        }
-
-        // V066: snapshot kolonlari (delta degil) — her seferinde yeniden oku
-        OffsetDateTime statsReset = null;
-        OffsetDateTime checksumLastFailure = null;
-        try (Statement stmt2 = conn.createStatement();
-             ResultSet rs2 = stmt2.executeQuery(queries.databaseStatsQuery())) {
-            while (rs2.next()) {
-                if (rs2.getLong("dbid") != dbid) continue;
-                statsReset = rs2.getObject("stats_reset", OffsetDateTime.class);
-                checksumLastFailure = rs2.getObject("checksum_last_failure", OffsetDateTime.class);
+                // V066 snapshot kolonlari ayni ResultSet'ten okunuyor
+                statsReset = rs.getObject("stats_reset", OffsetDateTime.class);
+                checksumLastFailure = rs.getObject("checksum_last_failure", OffsetDateTime.class);
                 break;
             }
         }
