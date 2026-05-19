@@ -4,6 +4,12 @@ import { saveSecret, hasSecret } from '../config/secrets';
 import { parseHours, parseLimit, parseOrderBy, parseTimeRange } from '../middleware/validation';
 import { PGSS_COLUMNS, parseRequestedColumns, parseStatementsOrderBy } from './statements';
 import { parseColumns, parseOrderBy as parseGenericOrderBy, columnsMetaResponse, rawSelectExpr, type ColumnRegistry } from './_columnsHelper';
+import {
+  generateInstanceInventoryPdf,
+  generateInstanceInventoryXlsx,
+  getInstanceInventoryReportRows,
+  inventoryReportFilename,
+} from '../services/reportGenerator';
 
 const router = Router();
 
@@ -112,6 +118,39 @@ router.get('/storage-summary', async (_req, res, next) => {
   } catch (err: any) {
     console.error('[storage-summary] error:', err.message);
     res.json([]);
+  }
+});
+
+// GET /api/instances/report — Aktif instance envanteri raporu
+router.get('/report', async (req, res) => {
+  try {
+    const format = String(req.query.format || 'json').toLowerCase();
+    if (!['json', 'pdf', 'xlsx'].includes(format)) {
+      res.status(400).json({ error: 'Unsupported report format. Use json, pdf, or xlsx.' });
+      return;
+    }
+
+    const rows = await getInstanceInventoryReportRows(pool);
+    if (format === 'json') {
+      res.json(rows);
+      return;
+    }
+
+    if (format === 'pdf') {
+      const buffer = await generateInstanceInventoryPdf(rows);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${inventoryReportFilename('pdf')}"`);
+      res.send(buffer);
+      return;
+    }
+
+    const buffer = await generateInstanceInventoryXlsx(rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${inventoryReportFilename('xlsx')}"`);
+    res.send(buffer);
+  } catch (err: any) {
+    console.error('[instances-report] error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Instance report could not be generated.' });
   }
 });
 

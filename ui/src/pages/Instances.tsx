@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { apiGet, apiPost, apiPut, apiPatch } from '../api/client';
+import { apiGet, apiPost, apiPut, apiPatch, getToken } from '../api/client';
 import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
@@ -65,6 +65,8 @@ export default function Instances() {
     const toast = useToast();
     const [formMode, setFormMode] = useState<'closed' | 'add' | 'edit'>('closed');
     const [editInstance, setEditInstance] = useState<Instance | null>(null);
+    const [reportMenuOpen, setReportMenuOpen] = useState(false);
+    const [reportDownloading, setReportDownloading] = useState<'pdf' | 'xlsx' | null>(null);
 
     // View toggle: list veya clusters
     const view = searchParams.get('view') === 'clusters' ? 'clusters' : 'list';
@@ -172,6 +174,38 @@ export default function Instances() {
     const openEdit = (inst: Instance) => {
         setEditInstance(inst);
         setFormMode('edit');
+    };
+
+    const downloadReport = async (format: 'pdf' | 'xlsx') => {
+        setReportMenuOpen(false);
+        setReportDownloading(format);
+        try {
+            const token = getToken();
+            const res = await fetch(`/api/instances/report?format=${format}`, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error((data as any).error || `Rapor indirilemedi: ${res.status}`);
+            }
+            const blob = await res.blob();
+            const disposition = res.headers.get('content-disposition') || '';
+            const match = /filename="?([^";]+)"?/i.exec(disposition);
+            const filename = match?.[1] || `pgstat-instance-envanteri.${format}`;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+            toast.success('Rapor indirildi.');
+        } catch (e: any) {
+            toast.error(e?.message || 'Rapor indirilemedi.');
+        } finally {
+            setReportDownloading(null);
+        }
     };
 
     // Pin tercihleri
@@ -310,6 +344,28 @@ export default function Instances() {
                 <div className="flex items-center gap-2">
                     {view === 'clusters' && <LastUpdated dataUpdatedAt={clusters.dataUpdatedAt} />}
                     <PrintButton title={view === 'clusters' ? 'Kümeler' : 'Instances'} />
+                    <div className="relative print:hidden">
+                        <button
+                            onClick={() => setReportMenuOpen(v => !v)}
+                            disabled={reportDownloading != null}
+                            className="px-4 py-2 text-sm bg-white text-[#334155] border border-[#CBD5E1] rounded hover:bg-[#F8FAFC] disabled:opacity-60">
+                            {reportDownloading ? 'Rapor hazırlanıyor...' : '📥 Rapor İndir'}
+                        </button>
+                        {reportMenuOpen && (
+                            <div className="absolute right-0 z-20 mt-2 w-52 bg-white border border-[#E2E8F0] rounded shadow-lg overflow-hidden">
+                                <button
+                                    onClick={() => downloadReport('pdf')}
+                                    className="w-full text-left px-4 py-2 text-sm text-[#334155] hover:bg-[#F8FAFC]">
+                                    📄 PDF olarak indir
+                                </button>
+                                <button
+                                    onClick={() => downloadReport('xlsx')}
+                                    className="w-full text-left px-4 py-2 text-sm text-[#334155] hover:bg-[#F8FAFC]">
+                                    📊 Excel (.xlsx)
+                                </button>
+                            </div>
+                        )}
+                    </div>
                     {view === 'list' && (
                         <button onClick={() => { setFormMode(formMode === 'closed' ? 'add' : 'closed'); setEditInstance(null); }}
                             className="px-4 py-2 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] print:hidden">
