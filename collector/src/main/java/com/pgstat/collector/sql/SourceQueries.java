@@ -64,7 +64,14 @@ public interface SourceQueries {
      * Primary'de pg_current_wal_lsn(), standby'da pg_last_wal_replay_lsn() kullanilir.
      */
     default String walLsnQuery() {
+        // pg_ls_waldir() bir cycle'da iki kez taranmasin diye tek CTE'de
+        // hem sum hem count alinir (disk listeleme PG tarafinda tekrarlanmaz).
         return """
+            with wd as (
+              select coalesce(sum(size), 0)::bigint as total_bytes,
+                     count(*)::int as file_count
+              from pg_ls_waldir()
+            )
             select
               case when pg_is_in_recovery()
                 then pg_last_wal_replay_lsn()::text
@@ -74,8 +81,8 @@ public interface SourceQueries {
                 then pg_walfile_name(pg_last_wal_replay_lsn())
                 else pg_walfile_name(pg_current_wal_lsn())
               end as current_wal_file,
-              (select coalesce(sum(size), 0)::bigint from pg_ls_waldir()) as wal_directory_size_byte,
-              (select count(*)::int from pg_ls_waldir()) as wal_file_count
+              (select total_bytes from wd) as wal_directory_size_byte,
+              (select file_count from wd) as wal_file_count
             """;
     }
 
