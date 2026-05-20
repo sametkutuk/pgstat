@@ -154,49 +154,42 @@ router.get('/report', async (req, res) => {
   }
 });
 
-// GET /api/instances/:id/storage — Collector DB'de instance + database kirilimi
+// GET /api/instances/:id/storage — latest pg_relation_size snapshot
+const STORAGE_COLUMNS: ColumnRegistry = {
+  dbid: { sql: 'rs.dbid', since: 10, label: 'DB OID' },
+  datname: { sql: 'dbr.datname', since: 10, label: 'Database' },
+  schemaname: { sql: 'rs.schemaname', since: 10, label: 'Schema' },
+  relname: { sql: 'rs.relname', since: 10, label: 'Relation' },
+  total_size_bytes: { sql: 'rs.total_size_bytes', since: 10, label: 'Total Size' },
+  table_size_bytes: { sql: 'rs.table_size_bytes', since: 10, label: 'Table Size' },
+  index_size_bytes: { sql: 'rs.index_size_bytes', since: 10, label: 'Index Size' },
+  toast_size_bytes: { sql: 'rs.toast_size_bytes', since: 10, label: 'TOAST Size' },
+};
+const STORAGE_DEFAULTS = ['datname', 'schemaname', 'relname', 'total_size_bytes', 'table_size_bytes', 'index_size_bytes'];
+
+router.get('/:id/storage/columns', (_req, res) => {
+  res.json(columnsMetaResponse(STORAGE_COLUMNS, STORAGE_DEFAULTS));
+});
+
 router.get('/:id/storage', async (req, res, next) => {
   try {
     const { id } = req.params;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, STORAGE_COLUMNS, STORAGE_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${STORAGE_COLUMNS[c].sql} as ${c}`);
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('total_size_bytes') ? 'total_size_bytes' : requestedCols[0]);
     const result = await pool.query(`
-      with storage_usage as (${collectorStorageUnionSql()}),
-      filtered as (
-        select * from storage_usage where instance_pk = $1
-      ),
-      total as (
-        select
-          coalesce(sum(row_count), 0)::bigint as total_rows,
-          coalesce(sum(data_bytes), 0)::bigint as total_bytes
-        from filtered
-      ),
-      dbs as (
-        select
-          dbid,
-          coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end) as datname,
-          sum(row_count)::bigint as row_count,
-          sum(data_bytes)::bigint as data_bytes
-        from filtered
-        group by dbid, coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end)
-      ),
-      tables as (
-        select
-          source_table,
-          coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end) as datname,
-          sum(row_count)::bigint as row_count,
-          sum(data_bytes)::bigint as data_bytes
-        from filtered
-        group by source_table, coalesce(datname, case when dbid is null then '(cluster)' else '(unknown)' end)
-      )
-      select json_build_object(
-        'instance_pk', $1::bigint,
-        'collector_db_bytes', pg_database_size(current_database())::bigint,
-        'total_rows', (select total_rows from total),
-        'total_bytes', (select total_bytes from total),
-        'databases', coalesce((select json_agg(dbs order by data_bytes desc) from dbs), '[]'::json),
-        'tables', coalesce((select json_agg(tables order by data_bytes desc) from tables), '[]'::json)
-      ) as storage
+      select ${selectParts.join(', ')}
+      from fact.pg_relation_size_snapshot rs
+      left join dim.database_ref dbr on dbr.instance_pk = rs.instance_pk and dbr.dbid = rs.dbid
+      where rs.instance_pk = $1
+        and rs.snapshot_ts = (
+          select max(snapshot_ts)
+          from fact.pg_relation_size_snapshot
+          where instance_pk = $1
+        )
+      order by ${orderBy}
     `, [id]);
-    res.json(result.rows[0]?.storage ?? {});
+    res.json(result.rows);
   } catch (err) {
     next(err);
   }
@@ -1777,10 +1770,78 @@ router.get('/:id/tps', async (req, res, next) => {
 });
 
 // GET /api/instances/:id/functions — User function istatistikleri
+const FUNCTION_COLUMNS: ColumnRegistry = {
+  dbid: { sql: 'dbid', since: 10, label: 'DB OID' },
+  datname: { sql: 'datname', since: 10, label: 'Database' },
+  funcid: { sql: 'funcid', since: 10, label: 'Func OID' },
+  schemaname: { sql: 'schemaname', since: 10, label: 'Schema' },
+  funcname: { sql: 'funcname', since: 10, label: 'Function' },
+  total_calls: { sql: 'total_calls', since: 10, label: 'Calls' },
+  total_time_ms: { sql: 'total_time_ms', since: 10, label: 'Total Time' },
+  self_time_ms: { sql: 'self_time_ms', since: 10, label: 'Self Time' },
+  avg_time_ms: { sql: 'avg_time_ms', since: 10, label: 'Avg Time' },
+};
+const FUNCTION_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'sample_ts', since: 10, label: 'Zaman' },
+  ...FUNCTION_COLUMNS,
+};
+const FUNCTION_DEFAULTS = ['datname', 'schemaname', 'funcname', 'total_calls', 'total_time_ms', 'avg_time_ms'];
+
+router.get('/:id/functions/columns', (_req, res) => {
+  res.json(columnsMetaResponse(FUNCTION_COLUMNS, FUNCTION_DEFAULTS));
+});
+
 router.get('/:id/functions', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const mode = String(req.query.mode || 'summary');
+    const registry = isRawMode(mode) ? FUNCTION_RAW_COLUMNS : FUNCTION_COLUMNS;
+    const defaults = isRawMode(mode) ? ['sample_ts', ...FUNCTION_DEFAULTS] : FUNCTION_DEFAULTS;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, registry, defaults);
+    const selectParts = requestedCols.map(c => `${registry[c].sql} as ${c}`);
+    const params: any[] = [id, fromIso, toIso];
+    if (isRawMode(mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const result = await pool.query(`
+        with deltas as (
+          select
+            f.sample_ts,
+            f.dbid,
+            dbr.datname,
+            f.funcid,
+            f.schemaname,
+            f.funcname,
+            greatest(f.calls - lag(f.calls) over w, 0) as total_calls,
+            greatest(f.total_time - lag(f.total_time) over w, 0) as total_time_ms,
+            greatest(f.self_time - lag(f.self_time) over w, 0) as self_time_ms
+          from fact.pg_user_function_snapshot f
+          left join dim.database_ref dbr on dbr.instance_pk = f.instance_pk and dbr.dbid = f.dbid
+          where f.instance_pk = $1
+            and f.sample_ts between $2::timestamptz and $3::timestamptz
+          window w as (partition by f.dbid, f.funcid order by f.sample_ts)
+        ),
+        shaped as (
+          select
+            sample_ts, dbid, datname, funcid, schemaname, funcname,
+            coalesce(total_calls, 0)::bigint as total_calls,
+            coalesce(total_time_ms, 0) as total_time_ms,
+            coalesce(self_time_ms, 0) as self_time_ms,
+            case when coalesce(total_calls, 0) > 0 then coalesce(total_time_ms, 0) / total_calls else 0 end as avg_time_ms
+          from deltas
+        )
+        select ${selectParts.join(', ')}
+        from shaped
+        where 1 = 1 ${cursorWhere}
+        order by sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('total_time_ms') ? 'total_time_ms' : requestedCols[0]);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1800,6 +1861,7 @@ router.get('/:id/functions', async (req, res, next) => {
           and f.sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by f.dbid, f.funcid order by f.sample_ts)
       )
+      , shaped as (
       select
         dbid, datname, funcid, schemaname, funcname,
         coalesce(sum(calls_d), 0)::bigint as total_calls,
@@ -1810,7 +1872,10 @@ router.get('/:id/functions', async (req, res, next) => {
           else 0 end as avg_time_ms
       from deltas
       group by dbid, datname, funcid, schemaname, funcname
-      order by total_time_ms desc nulls last
+      )
+      select ${selectParts.join(', ')}
+      from shaped
+      order by ${orderBy}
       limit 100
     `, [id, fromIso, toIso]);
     res.json(result.rows);
@@ -1821,10 +1886,69 @@ router.get('/:id/functions', async (req, res, next) => {
 
 // GET /api/instances/:id/sequences — Sequence I/O istatistikleri
 // Snapshot'lar arasındaki delta'yı window function ile hesaplar
+const SEQUENCE_COLUMNS: ColumnRegistry = {
+  relid: { sql: 'relid', since: 10, label: 'Rel OID' },
+  schemaname: { sql: 'schemaname', since: 10, label: 'Schema' },
+  relname: { sql: 'relname', since: 10, label: 'Sequence' },
+  total_blks_read: { sql: 'total_blks_read', since: 10, label: 'Blks Read' },
+  total_blks_hit: { sql: 'total_blks_hit', since: 10, label: 'Blks Hit' },
+  hit_ratio: { sql: 'hit_ratio', since: 10, label: 'Hit Ratio' },
+};
+const SEQUENCE_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'sample_ts', since: 10, label: 'Zaman' },
+  ...SEQUENCE_COLUMNS,
+};
+const SEQUENCE_DEFAULTS = ['schemaname', 'relname', 'total_blks_read', 'total_blks_hit', 'hit_ratio'];
+
+router.get('/:id/sequences/columns', (_req, res) => {
+  res.json(columnsMetaResponse(SEQUENCE_COLUMNS, SEQUENCE_DEFAULTS));
+});
+
 router.get('/:id/sequences', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const mode = String(req.query.mode || 'summary');
+    const registry = isRawMode(mode) ? SEQUENCE_RAW_COLUMNS : SEQUENCE_COLUMNS;
+    const defaults = isRawMode(mode) ? ['sample_ts', ...SEQUENCE_DEFAULTS] : SEQUENCE_DEFAULTS;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, registry, defaults);
+    const selectParts = requestedCols.map(c => `${registry[c].sql} as ${c}`);
+    const params: any[] = [id, fromIso, toIso];
+    if (isRawMode(mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const result = await pool.query(`
+        with deltas as (
+          select
+            sample_ts, relid, schemaname, relname,
+            greatest(blks_read - lag(blks_read) over w, 0) as total_blks_read,
+            greatest(blks_hit - lag(blks_hit) over w, 0) as total_blks_hit
+          from fact.pg_sequence_io_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+          window w as (partition by relid order by sample_ts)
+        ),
+        shaped as (
+          select
+            sample_ts, relid, schemaname, relname,
+            coalesce(total_blks_read, 0)::bigint as total_blks_read,
+            coalesce(total_blks_hit, 0)::bigint as total_blks_hit,
+            case when coalesce(total_blks_read, 0) + coalesce(total_blks_hit, 0) > 0
+              then round((100.0 * coalesce(total_blks_hit, 0) / (coalesce(total_blks_read, 0) + coalesce(total_blks_hit, 0)))::numeric, 1)
+              else 100 end as hit_ratio
+          from deltas
+        )
+        select ${selectParts.join(', ')}
+        from shaped
+        where 1 = 1 ${cursorWhere}
+        order by sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('total_blks_read') ? 'total_blks_read' : requestedCols[0]);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1835,17 +1959,21 @@ router.get('/:id/sequences', async (req, res, next) => {
         where instance_pk = $1
           and sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by relid order by sample_ts)
+      ),
+      shaped as (
+        select
+          relid, schemaname, relname,
+          coalesce(sum(read_d), 0)::bigint as total_blks_read,
+          coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
+          case when sum(read_d) + sum(hit_d) > 0
+            then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
+            else 100 end as hit_ratio
+        from deltas
+        group by relid, schemaname, relname
       )
-      select
-        relid, schemaname, relname,
-        coalesce(sum(read_d), 0)::bigint as total_blks_read,
-        coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
-        case when sum(read_d) + sum(hit_d) > 0
-          then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
-          else 100 end as hit_ratio
-      from deltas
-      group by relid, schemaname, relname
-      order by total_blks_read desc nulls last
+      select ${selectParts.join(', ')}
+      from shaped
+      order by ${orderBy}
       limit 100
     `, [id, fromIso, toIso]);
     res.json(result.rows);
@@ -1961,10 +2089,84 @@ router.get('/:id/wal', async (req, res, next) => {
 
 // GET /api/instances/:id/slru — SLRU cache istatistikleri
 // Snapshot'lar arasındaki delta'yı window function ile hesaplar
+const SLRU_COLUMNS: ColumnRegistry = {
+  name: { sql: 'name', since: 13, label: 'SLRU' },
+  total_blks_zeroed: { sql: 'total_blks_zeroed', since: 13, label: 'Blks Zeroed' },
+  total_blks_hit: { sql: 'total_blks_hit', since: 13, label: 'Blks Hit' },
+  total_blks_read: { sql: 'total_blks_read', since: 13, label: 'Blks Read' },
+  total_blks_written: { sql: 'total_blks_written', since: 13, label: 'Blks Written' },
+  total_blks_exists: { sql: 'total_blks_exists', since: 13, label: 'Blks Exists' },
+  total_flushes: { sql: 'total_flushes', since: 13, label: 'Flushes' },
+  total_truncates: { sql: 'total_truncates', since: 13, label: 'Truncates' },
+  hit_ratio: { sql: 'hit_ratio', since: 13, label: 'Hit Ratio' },
+};
+const SLRU_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'sample_ts', since: 13, label: 'Zaman' },
+  ...SLRU_COLUMNS,
+};
+const SLRU_DEFAULTS = ['name', 'total_blks_hit', 'total_blks_read', 'total_blks_written', 'hit_ratio'];
+
+router.get('/:id/slru/columns', (_req, res) => {
+  res.json(columnsMetaResponse(SLRU_COLUMNS, SLRU_DEFAULTS));
+});
+
 router.get('/:id/slru', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const mode = String(req.query.mode || 'summary');
+    const registry = isRawMode(mode) ? SLRU_RAW_COLUMNS : SLRU_COLUMNS;
+    const defaults = isRawMode(mode) ? ['sample_ts', ...SLRU_DEFAULTS] : SLRU_DEFAULTS;
+    const requestedCols = parseColumns(req.query.columns as string | undefined, registry, defaults);
+    const selectParts = requestedCols.map(c => `${registry[c].sql} as ${c}`);
+    const params: any[] = [id, fromIso, toIso];
+    if (isRawMode(mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const result = await pool.query(`
+        with deltas as (
+          select
+            sample_ts,
+            name,
+            greatest(blks_zeroed - lag(blks_zeroed) over w, 0) as total_blks_zeroed,
+            greatest(blks_hit - lag(blks_hit) over w, 0) as total_blks_hit,
+            greatest(blks_read - lag(blks_read) over w, 0) as total_blks_read,
+            greatest(blks_written - lag(blks_written) over w, 0) as total_blks_written,
+            greatest(blks_exists - lag(blks_exists) over w, 0) as total_blks_exists,
+            greatest(flushes - lag(flushes) over w, 0) as total_flushes,
+            greatest(truncates - lag(truncates) over w, 0) as total_truncates
+          from fact.pg_slru_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+          window w as (partition by name order by sample_ts)
+        ),
+        shaped as (
+          select
+            sample_ts,
+            name,
+            coalesce(total_blks_zeroed, 0)::bigint as total_blks_zeroed,
+            coalesce(total_blks_hit, 0)::bigint as total_blks_hit,
+            coalesce(total_blks_read, 0)::bigint as total_blks_read,
+            coalesce(total_blks_written, 0)::bigint as total_blks_written,
+            coalesce(total_blks_exists, 0)::bigint as total_blks_exists,
+            coalesce(total_flushes, 0)::bigint as total_flushes,
+            coalesce(total_truncates, 0)::bigint as total_truncates,
+            case when coalesce(total_blks_read, 0) + coalesce(total_blks_hit, 0) > 0
+              then round((100.0 * coalesce(total_blks_hit, 0) / (coalesce(total_blks_read, 0) + coalesce(total_blks_hit, 0)))::numeric, 1)
+              else 100 end as hit_ratio
+          from deltas
+        )
+        select ${selectParts.join(', ')}
+        from shaped
+        where 1 = 1 ${cursorWhere}
+        order by sample_ts desc
+        limit $${params.length}
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('total_blks_read') ? 'total_blks_read' : requestedCols[0]);
     const result = await pool.query(`
       with deltas as (
         select
@@ -1980,22 +2182,26 @@ router.get('/:id/slru', async (req, res, next) => {
         where instance_pk = $1
           and sample_ts between $2::timestamptz and $3::timestamptz
         window w as (partition by name order by sample_ts)
+      ),
+      shaped as (
+        select
+          name,
+          coalesce(sum(zeroed_d), 0)::bigint as total_blks_zeroed,
+          coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
+          coalesce(sum(read_d), 0)::bigint as total_blks_read,
+          coalesce(sum(written_d), 0)::bigint as total_blks_written,
+          coalesce(sum(exists_d), 0)::bigint as total_blks_exists,
+          coalesce(sum(flushes_d), 0)::bigint as total_flushes,
+          coalesce(sum(truncates_d), 0)::bigint as total_truncates,
+          case when sum(read_d) + sum(hit_d) > 0
+            then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
+            else 100 end as hit_ratio
+        from deltas
+        group by name
       )
-      select
-        name,
-        coalesce(sum(zeroed_d), 0)::bigint as total_blks_zeroed,
-        coalesce(sum(hit_d), 0)::bigint as total_blks_hit,
-        coalesce(sum(read_d), 0)::bigint as total_blks_read,
-        coalesce(sum(written_d), 0)::bigint as total_blks_written,
-        coalesce(sum(exists_d), 0)::bigint as total_blks_exists,
-        coalesce(sum(flushes_d), 0)::bigint as total_flushes,
-        coalesce(sum(truncates_d), 0)::bigint as total_truncates,
-        case when sum(read_d) + sum(hit_d) > 0
-          then round((100.0 * sum(hit_d) / (sum(read_d) + sum(hit_d)))::numeric, 1)
-          else 100 end as hit_ratio
-      from deltas
-      group by name
-      order by total_blks_read desc nulls last
+      select ${selectParts.join(', ')}
+      from shaped
+      order by ${orderBy}
     `, [id, fromIso, toIso]);
     res.json(result.rows);
   } catch (err) {

@@ -58,14 +58,10 @@ export default function InstanceDetail() {
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
     const cluster = useQuery({ queryKey: ['inst-cluster', id], queryFn: () => apiGet<any>(`/instances/${id}/cluster`), enabled: !!id });
     // Snapshot-bazlı (range'den etkilenmez) — DB listesi, storage en son snapshot
-    const storage = useQuery({ queryKey: ['instance-storage', id], queryFn: () => apiGet<any>(`/instances/${id}/storage`), enabled: tab === 'storage' });
     // Range'e bağlı (zaman-serisi)
     const alerts = useQuery({ queryKey: ['inst-alerts', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}&${rangeQp}`), enabled: tab === 'alerts' });
     const jobruns = useQuery({ queryKey: ['inst-jobruns', id], queryFn: () => apiGet<any[]>(`/job-runs?limit=20`), enabled: tab === 'jobruns' });
-    const functions = useQuery({ queryKey: ['inst-functions', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/functions?${hoursQp}&${rangeQp}`), enabled: tab === 'functions' });
-    const sequences = useQuery({ queryKey: ['inst-sequences', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/sequences?${hoursQp}&${rangeQp}`), enabled: tab === 'sequences' });
     const walData = useQuery({ queryKey: ['inst-wal', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/wal?${hoursQp}&${rangeQp}`), enabled: tab === 'wal' });
-    const slruData = useQuery({ queryKey: ['inst-slru', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/instances/${id}/slru?${hoursQp}&${rangeQp}`), enabled: tab === 'slru' });
     // TPS — default'ta günlük 7 gün + saatlik 25 saat; kullanıcı aralık değiştirirse o aralığa
     const tpsData = useQuery({ queryKey: ['inst-tps', id, range.fromIso, range.toIso, rangeIsCustom], queryFn: () => apiGet<any>(`/instances/${id}/tps?${rangeQp}&custom=${rangeIsCustom ? 1 : 0}`), enabled: tab === 'tps' });
     const [settingsDiffDays, setSettingsDiffDays] = useState(30);
@@ -175,7 +171,7 @@ Seçim localStorage'da hatırlanır.`} />
             </div>
 
             {tab === 'overview' && <OverviewTab inst={inst} cap={cap} />}
-            {tab === 'storage' && <StorageTab data={storage.data} loading={storage.isLoading} />}
+            {tab === 'storage' && <StorageTab instancePk={Number(id)} pgMajor={cap?.pg_major} />}
             {tab === 'statements' && <StatementsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'databases' && <DatabasesTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} onSelectDb={(dbid) => { setSelectedDbid(dbid); setTab('tables'); }} />}
             {tab === 'tables' && <TableStatsTab instancePk={Number(id)} initialDbid={selectedDbid} range={range} />}
@@ -187,10 +183,10 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'wal_receiver' && <WalReceiverTab instancePk={Number(id)} range={range} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'conflicts' && <ConflictsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
-            {tab === 'functions' && <FunctionsTab data={functions.data} loading={functions.isLoading} />}
-            {tab === 'sequences' && <SequencesTab data={sequences.data} loading={sequences.isLoading} />}
+            {tab === 'functions' && <FunctionsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
+            {tab === 'sequences' && <SequencesTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} instancePk={Number(id)} range={range} />}
-            {tab === 'slru' && <SlruTab data={slruData.data} loading={slruData.isLoading} />}
+            {tab === 'slru' && <SlruTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
@@ -1807,60 +1803,218 @@ tablosundan tunable. Sınıflandırma saatte bir collector tarafından yenilenir
     );
 }
 
-function StorageTab({ data, loading }: { data: any; loading: boolean }) {
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const databases = data?.databases || [];
-    const tables = data?.tables || [];
-    const totalBytes = Number(data?.total_bytes || 0);
-    const collectorDbBytes = Number(data?.collector_db_bytes || 0);
-    const pct = collectorDbBytes > 0 ? totalBytes * 100 / collectorDbBytes : 0;
-    const maxDbBytes = Math.max(...databases.map((d: any) => Number(d.data_bytes || 0)), 1);
+function isFullPackageTextCol(col: string): boolean {
+    return col === 'sample_ts'
+        || col === 'datname'
+        || col === 'schemaname'
+        || col === 'relname'
+        || col === 'funcname'
+        || col === 'name';
+}
 
-    const dbColumns = [
-        { key: 'datname', header: 'Database' },
-        { key: 'data_bytes', header: 'Boyut', render: (r: any) => fmtBytes(r.data_bytes) },
-        { key: 'row_count', header: 'Satır', render: (r: any) => Number(r.row_count || 0).toLocaleString() },
-        {
-            key: 'share', header: 'Pay', render: (r: any) => {
-                const share = totalBytes > 0 ? Number(r.data_bytes || 0) * 100 / totalBytes : 0;
-                return (
-                    <div className="min-w-[160px]">
-                        <div className="h-2 bg-[#E2E8F0] rounded overflow-hidden">
-                            <div className="h-full bg-[#10B981]" style={{ width: `${Math.max(1, Number(r.data_bytes || 0) * 100 / maxDbBytes)}%` }} />
-                        </div>
-                        <div className="text-[10px] text-[#64748B] mt-1">{share.toFixed(1)}%</div>
-                    </div>
-                );
-            }
-        },
-    ];
-    const tableColumns = [
-        { key: 'source_table', header: 'Collector Tablosu' },
-        { key: 'datname', header: 'Database' },
-        { key: 'data_bytes', header: 'Boyut', render: (r: any) => fmtBytes(r.data_bytes) },
-        { key: 'row_count', header: 'Satır', render: (r: any) => Number(r.row_count || 0).toLocaleString() },
-    ];
+function fullPackageCell(col: string, val: any) {
+    if (col === 'sample_ts') return val ? <TimeAgo date={val} /> : '-';
+    if (val == null || val === '') return '-';
+    return fmtValue(col, val);
+}
+
+function FullPackageTable({
+    rows,
+    selectedCols,
+    colsMeta,
+    pgMajor,
+    widths,
+    setWidth,
+    sortKeys,
+    onSortToggle,
+    emptyTitle,
+}: {
+    rows: any[];
+    selectedCols: string[];
+    colsMeta: ColumnsMeta | undefined;
+    pgMajor?: number;
+    widths: Record<string, number>;
+    setWidth: (col: string, width: number) => void;
+    sortKeys: SortKey[];
+    onSortToggle: (col: string, additive: boolean) => void;
+    emptyTitle: string;
+}) {
+    if (rows.length === 0) {
+        return <EmptyState icon="i" title={emptyTitle} description="Secili filtrelerle eslesen kayit bulunamadi." />;
+    }
 
     return (
-        <div className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <InfoCard label="Bu Instance" value={fmtBytes(totalBytes)} />
-                <InfoCard label="Satır" value={Number(data?.total_rows || 0).toLocaleString()} />
-                <InfoCard label="Collector DB Payı" value={`${pct.toFixed(1)}%`} />
-            </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-[#64748B]">Database Kırılımı</h3>
-                    <span className="text-xs text-[#94A3B8]">Yaklaşık mantıksal boyut</span>
-                </div>
-                <DataTable columns={dbColumns} data={databases} />
-            </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Collector Tablo Kırılımı</h3>
-                <DataTable columns={tableColumns} data={tables} />
-            </div>
+        <div className="overflow-x-auto">
+            <table className="w-full text-sm stmt-resizable-table" style={{ tableLayout: 'fixed' }}>
+                <thead><tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                    {selectedCols.map(col => {
+                        const meta = colsMeta?.available.find(c => c.key === col);
+                        const align = isFullPackageTextCol(col) ? 'left' : 'right';
+                        return (
+                            <ResizableTh
+                                key={col}
+                                colKey={col}
+                                width={widths[col] ?? (isFullPackageTextCol(col) ? 180 : 140)}
+                                onResize={setWidth}
+                                align={align}
+                                sortKeys={sortKeys}
+                                onSortToggle={onSortToggle}
+                                className="py-2 px-3 text-xs font-semibold text-[#64748B] uppercase"
+                            >
+                                {meta?.label ?? col}
+                                {meta && pgMajor && meta.since > pgMajor && <span className="ml-1 text-[9px] text-[#94A3B8]">PG{meta.since}+</span>}
+                            </ResizableTh>
+                        );
+                    })}
+                </tr></thead>
+                <tbody>{rows.map((r: any, i: number) => (
+                    <tr key={`${r.sample_ts ?? r.relid ?? r.funcid ?? r.name ?? 'row'}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+                        {selectedCols.map(col => (
+                            <td key={col} className={`py-2 px-3 text-xs whitespace-nowrap truncate ${isFullPackageTextCol(col) ? '' : 'text-right font-mono'}`}>
+                                {fullPackageCell(col, r[col])}
+                            </td>
+                        ))}
+                    </tr>
+                ))}</tbody>
+            </table>
         </div>
     );
+}
+
+function DeltaStatsFullPackageTab({
+    instancePk,
+    range,
+    pgMajor,
+    resource,
+    title,
+    defaults,
+    storageBase,
+    defaultSort,
+    emptyTitle,
+}: {
+    instancePk: number;
+    range: TimeRange;
+    pgMajor?: number;
+    resource: 'functions' | 'sequences' | 'slru';
+    title: string;
+    defaults: string[];
+    storageBase: string;
+    defaultSort: SortKey;
+    emptyTitle: string;
+}) {
+    const [mode, setMode] = useState<ViewMode>('summary');
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([defaultSort]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: [`${resource}-columns-meta`, instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/${resource}/columns`),
+        staleTime: 3600_000,
+    });
+    const rawDefaults = useMemo(() => ['sample_ts', ...defaults], [defaults]);
+    const rawMeta = useMemo(() => withSampleTsMeta(colsMeta, rawDefaults), [colsMeta, rawDefaults]);
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(`${storageBase}.cols`, defaults, colsMeta);
+    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns(`${storageBase}.raw.cols`, rawDefaults, rawMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths(`${storageBase}.widths`);
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam, from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: [`instance-${resource}`, instancePk, range.fromIso, range.toIso, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/${resource}?${qp}`),
+        enabled: Number.isFinite(instancePk) && mode === 'summary',
+    });
+    const rows = data || [];
+
+    if (mode === 'raw') {
+        return (
+            <div className="space-y-3">
+                <DataKindBanner kind="delta" description="Ham Delta: kayitlar sample_ts bazinda, toplama yapilmadan listelenir." />
+                <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
+                    <ViewModeToggle mode={mode} onChange={setMode} />
+                </div>
+                <RawDeltaTable
+                    basePath={`/instances/${instancePk}/${resource}`}
+                    baseParams={{ from: range.fromIso, to: range.toIso }}
+                    queryKey={[`instance-${resource}-raw`, instancePk, range.fromIso, range.toIso, mode]}
+                    selectedCols={rawSelectedCols}
+                    setSelectedCols={setRawSelectedCols}
+                    meta={rawMeta}
+                    pgMajor={pgMajor}
+                    storageKey={`${storageBase}.raw`}
+                    emptyTitle={`Ham ${title} delta satiri yok`}
+                />
+            </div>
+        );
+    }
+
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || defaults.length} />;
+
+    return (
+        <div className="space-y-3">
+            <DataKindBanner kind="delta" description="DELTA (periyot toplami): secili tarih araligindaki metrikler toplanarak gosterilir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
+                <ViewModeToggle mode={mode} onChange={setMode} />
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Sutun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Genislik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{rows.length} kayit</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <FullPackageTable rows={rows} selectedCols={selectedCols} colsMeta={colsMeta} pgMajor={pgMajor} widths={widths} setWidth={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} emptyTitle={emptyTitle} />
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title={`${title} Sutunlari`} />
+        </div>
+    );
+}
+
+function StorageFullPackageTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+    const defaults = ['datname', 'schemaname', 'relname', 'total_size_bytes', 'table_size_bytes', 'index_size_bytes'];
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'total_size_bytes', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['storage-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/storage/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.storage.cols', defaults, colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.storage.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-storage', instancePk, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/storage?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+    const rows = data || [];
+    const totalBytes = rows.reduce((sum, r: any) => sum + Number(r.total_size_bytes || 0), 0);
+
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || defaults.length} />;
+
+    return (
+        <div className="space-y-4">
+            <DataKindBanner kind="snapshot" description="Storage satirlari collector'daki en son pg_relation_size snapshot'indan okunur. Degerler anliktir, delta degildir." />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <InfoCard label="Toplam Relation Boyutu" value={fmtBytes(totalBytes)} />
+                <InfoCard label="Relation" value={rows.length.toLocaleString()} />
+                <InfoCard label="Database" value={new Set(rows.map((r: any) => r.datname).filter(Boolean)).size.toLocaleString()} />
+            </div>
+            <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Sutun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Genislik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{rows.length} relation</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <FullPackageTable rows={rows} selectedCols={selectedCols} colsMeta={colsMeta} pgMajor={pgMajor} widths={widths} setWidth={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} emptyTitle="Storage snapshot verisi yok" />
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="Storage Sutunlari" />
+        </div>
+    );
+}
+
+function StorageTab({ instancePk, pgMajor }: { instancePk: number; pgMajor?: number }) {
+    return <StorageFullPackageTab instancePk={instancePk} pgMajor={pgMajor} />;
 }
 
 function fmtBytes(value: any): string {
@@ -2669,36 +2823,36 @@ function ProgressSubTab({ instancePk, range, subType }: { instancePk: number; ra
     );
 }
 
-function FunctionsTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const columns = [
-        { key: 'datname', header: 'Database' },
-        { key: 'schemaname', header: 'Schema' },
-        { key: 'funcname', header: 'Fonksiyon' },
-        { key: 'total_calls', header: 'Calls', render: (r: any) => Number(r.total_calls).toLocaleString(), className: 'text-right' },
-        { key: 'total_time_ms', header: 'Toplam (ms)', render: (r: any) => Number(r.total_time_ms).toFixed(2), className: 'text-right' },
-        { key: 'self_time_ms', header: 'Self (ms)', render: (r: any) => Number(r.self_time_ms).toFixed(2), className: 'text-right' },
-        { key: 'avg_time_ms', header: 'Avg (ms)', render: (r: any) => Number(r.avg_time_ms).toFixed(3), className: 'text-right' },
-    ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Fonksiyon verisi yok (pg_stat_user_functions)" /></div>;
+function FunctionsTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    return (
+        <DeltaStatsFullPackageTab
+            instancePk={instancePk}
+            range={range}
+            pgMajor={pgMajor}
+            resource="functions"
+            title="Functions"
+            defaults={['datname', 'schemaname', 'funcname', 'total_calls', 'total_time_ms', 'avg_time_ms']}
+            storageBase="pgstat.instance.functions"
+            defaultSort={{ col: 'total_time_ms', dir: 'desc' }}
+            emptyTitle="Fonksiyon verisi yok (pg_stat_user_functions)"
+        />
+    );
 }
 
-function SequencesTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const columns = [
-        { key: 'schemaname', header: 'Schema' },
-        { key: 'relname', header: 'Sequence' },
-        { key: 'total_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_blks_read).toLocaleString(), className: 'text-right' },
-        { key: 'total_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_blks_hit).toLocaleString(), className: 'text-right' },
-        {
-            key: 'hit_ratio', header: 'Hit Ratio', render: (r: any) => (
-                <span className={Number(r.hit_ratio) < 90 ? 'text-red-600 font-medium' : 'text-green-600'}>
-                    {Number(r.hit_ratio).toFixed(1)}%
-                </span>
-            ), className: 'text-right'
-        },
-    ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="Sequence I/O verisi yok" /></div>;
+function SequencesTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    return (
+        <DeltaStatsFullPackageTab
+            instancePk={instancePk}
+            range={range}
+            pgMajor={pgMajor}
+            resource="sequences"
+            title="Sequences"
+            defaults={['schemaname', 'relname', 'total_blks_read', 'total_blks_hit', 'hit_ratio']}
+            storageBase="pgstat.instance.sequences"
+            defaultSort={{ col: 'total_blks_read', dir: 'desc' }}
+            emptyTitle="Sequence I/O verisi yok"
+        />
+    );
 }
 
 function WalArchiveTab({ data, loading, instancePk, range }: { data: any | undefined; loading: boolean; instancePk: number; range: TimeRange }) {
@@ -2798,24 +2952,23 @@ function WalArchiveTab({ data, loading, instancePk, range }: { data: any | undef
     );
 }
 
-function SlruTab({ data, loading }: { data: any[] | undefined; loading: boolean }) {
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const columns = [
-        { key: 'name', header: 'SLRU' },
-        { key: 'total_blks_hit', header: 'Blks Hit', render: (r: any) => Number(r.total_blks_hit).toLocaleString(), className: 'text-right' },
-        { key: 'total_blks_read', header: 'Blks Read', render: (r: any) => Number(r.total_blks_read).toLocaleString(), className: 'text-right' },
-        {
-            key: 'hit_ratio', header: 'Hit Ratio', render: (r: any) => (
-                <span className={Number(r.hit_ratio) < 90 ? 'text-red-600 font-medium' : 'text-green-600'}>
-                    {Number(r.hit_ratio).toFixed(1)}%
-                </span>
-            ), className: 'text-right'
-        },
-        { key: 'total_blks_written', header: 'Written', render: (r: any) => Number(r.total_blks_written).toLocaleString(), className: 'text-right' },
-        { key: 'total_flushes', header: 'Flushes', render: (r: any) => Number(r.total_flushes).toLocaleString(), className: 'text-right' },
-        { key: 'total_truncates', header: 'Truncates', render: (r: any) => Number(r.total_truncates).toLocaleString(), className: 'text-right' },
-    ];
-    return <div className="bg-white rounded-lg shadow-sm p-4"><DataTable columns={columns} data={data || []} emptyText="SLRU verisi yok (PG13+)" /></div>;
+function SlruTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    if (pgMajor != null && pgMajor < 13) {
+        return <EmptyState icon="i" title="SLRU PG13+ gerektirir" description="pg_stat_slru PostgreSQL 13 ve sonraki surumlerde bulunur." />;
+    }
+    return (
+        <DeltaStatsFullPackageTab
+            instancePk={instancePk}
+            range={range}
+            pgMajor={pgMajor}
+            resource="slru"
+            title="SLRU"
+            defaults={['name', 'total_blks_hit', 'total_blks_read', 'total_blks_written', 'hit_ratio']}
+            storageBase="pgstat.instance.slru"
+            defaultSort={{ col: 'total_blks_read', dir: 'desc' }}
+            emptyTitle="SLRU verisi yok (PG13+)"
+        />
+    );
 }
 
 function TpsTab({ data, loading, custom }: { data: any | undefined; loading: boolean; custom: boolean }) {
