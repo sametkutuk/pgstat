@@ -46,11 +46,16 @@ export default function Insights() {
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4 mb-4 flex flex-wrap gap-3 items-center">
                 <div>
                     <label className="block text-xs text-[#64748B] mb-1">Instance</label>
-                    <InstanceTypeahead
-                        instances={activeInstances}
-                        value={instancePk}
-                        onChange={setInstancePk}
-                    />
+                    <select
+                        value={instancePk ?? ''}
+                        onChange={e => setInstancePk(e.target.value ? Number(e.target.value) : null)}
+                        className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px]"
+                    >
+                        <option value="">— Bir instance seçin —</option>
+                        {activeInstances.map(i => (
+                            <option key={i.instance_pk} value={i.instance_pk}>{i.display_name}</option>
+                        ))}
+                    </select>
                 </div>
                 <div>
                     <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
@@ -92,54 +97,6 @@ function PlaceholderTab({ title, description }: { title: string; description: st
     return <EmptyState icon="🚧" title={title} description={description} />;
 }
 
-// =========================================================================
-// InstanceTypeahead — uncontrolled input + datalist
-// Kullanici elle yazar veya datalist'ten secer.
-// Match bulunca onChange(instance_pk) parent'a gider.
-// =========================================================================
-function InstanceTypeahead({
-    instances,
-    value,
-    onChange,
-}: {
-    instances: Instance[];
-    value: number | null;
-    onChange: (v: number | null) => void;
-}) {
-    const selected = instances.find(i => i.instance_pk === value);
-
-    function handleInput(e: React.ChangeEvent<HTMLInputElement>) {
-        const val = e.target.value;
-        if (val === '') {
-            onChange(null);
-            return;
-        }
-        const match = instances.find(i => i.display_name === val);
-        if (match) {
-            onChange(match.instance_pk);
-        }
-        // Match yoksa parent'a gönderme — kullanıcı henüz yazıyor olabilir
-    }
-
-    return (
-        <>
-            <input
-                type="text"
-                list="instances-datalist"
-                defaultValue={selected?.display_name ?? ''}
-                key={value ?? 'empty'}
-                onInput={handleInput}
-                placeholder="Instance ara veya seç..."
-                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px] focus:outline-none focus:border-[#3B82F6]"
-            />
-            <datalist id="instances-datalist">
-                {instances.map(i => (
-                    <option key={i.instance_pk} value={i.display_name} />
-                ))}
-            </datalist>
-        </>
-    );
-}
 
 // =========================================================================
 // Top Exec Time Card (ilk pilot başlık)
