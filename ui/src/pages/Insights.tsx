@@ -250,7 +250,11 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
             {isLoading ? (
                 <div className="p-4"><SkeletonTable rows={8} cols={9} /></div>
             ) : !data || data.length === 0 ? (
-                <EmptyState icon="📭" title="Veri yok" description="Bu pencerede henüz sorgu kaydı toplanmamış." />
+                <EmptyState
+                    icon="📭"
+                    title="Veri yok"
+                    description="Bu pencerede sorgu kaydı yok. Tarih aralığını genişletin (örn. 24sa veya 7g) ya da daha yoğun workload'lı bir instance seçin."
+                />
             ) : (
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
