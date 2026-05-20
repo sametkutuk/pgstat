@@ -87,7 +87,7 @@ public class WorkloadClassifier {
                   where d.sample_ts > now() - make_interval(hours => ?)
                   group by ss.instance_pk, ss.dbid
                 )
-                select s.instance_pk, s.dbid, dbr.datname,
+                select dbr.instance_pk, dbr.dbid, dbr.datname,
                        coalesce(s.calls, 0) as calls,
                        coalesce(s.avg_ms, 0) as avg_ms,
                        coalesce(s.rows_per_call, 0) as rows_per_call,
