@@ -7,6 +7,7 @@ const links = [
     { to: '/', label: 'Dashboard', icon: '📊' },
     { to: '/instances', label: 'Instances', icon: '🖥️' },
     { to: '/statements', label: 'Statements', icon: '📝' },
+    { to: '/insights', label: 'Insights', icon: '🔍' },
     { to: '/alerts', label: 'Alerts', icon: '🔔' },
     { to: '/jobs', label: 'Job Runs', icon: '⚙️' },
     { to: '/reports/history', label: 'Raporlar', icon: '📜' },

@@ -16,6 +16,7 @@ import AlertsHub from './pages/AlertsHub';
 import ClusterDetail from './pages/ClusterDetail';
 import HealthReport from './pages/HealthReport';
 import ReportHistory from './pages/ReportHistory';
+import Insights from './pages/Insights';
 import ClusterQuery from './pages/ClusterQuery';
 import ClusterGroupDetail from './pages/ClusterGroupDetail';
 import GrafanaEmbed from './pages/GrafanaEmbed';
@@ -60,6 +61,7 @@ function App() {
                 <Route path="/alerts/templates" element={<AlertsHub />} />
                 <Route path="/alerts/:id" element={<Alerts />} />
                 <Route path="/jobs" element={<JobRuns />} />
+                <Route path="/insights" element={<Insights />} />
                 <Route path="/reports/history" element={<ReportHistory />} />
                 <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
                 {/* /clusters → Instances Hub'da kümeler view'ına redirect */}
