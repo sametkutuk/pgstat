@@ -1989,6 +1989,121 @@ router.get('/:id/sequences', async (req, res, next) => {
 //   wal_file_count, period_wal_size_byte
 // pg_stat_wal'dan gelen wal_records/wal_fpi/wal_bytes ise PG13+ icin
 // fact.pg_cluster_delta'da metric_family='pg_stat_wal' olarak tutulur.
+// ============================================================================
+// WAL Position — TAM PAKET (snapshot from pg_wal_snapshot)
+// ============================================================================
+const WAL_POSITION_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'sample_ts', since: 10, label: 'Zaman' },
+  current_wal_lsn: { sql: 'current_wal_lsn', since: 10, label: 'LSN' },
+  current_wal_file: { sql: 'current_wal_file', since: 10, label: 'WAL Dosyası' },
+  period_wal_size_byte: { sql: 'period_wal_size_byte', since: 10, label: 'Periyot WAL Üretimi' },
+  wal_directory_size_byte: { sql: 'wal_directory_size_byte', since: 10, label: 'pg_wal/ Boyutu' },
+  wal_file_count: { sql: 'wal_file_count', since: 10, label: 'Dosya Sayısı' },
+};
+const WAL_POSITION_DEFAULTS = ['sample_ts', 'current_wal_lsn', 'period_wal_size_byte', 'wal_directory_size_byte', 'wal_file_count'];
+
+router.get('/:id/wal-position/columns', (_req, res) => {
+  res.json(columnsMetaResponse(WAL_POSITION_COLUMNS, WAL_POSITION_DEFAULTS));
+});
+
+router.get('/:id/wal-position', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const requestedCols = parseColumns(req.query.columns as string | undefined, WAL_POSITION_COLUMNS, WAL_POSITION_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${WAL_POSITION_COLUMNS[c].sql} as ${c}`);
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('sample_ts') ? 'sample_ts' : requestedCols[0]);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_wal_snapshot
+      where instance_pk = $1
+        and sample_ts between $2::timestamptz and $3::timestamptz
+      order by ${orderBy}
+    `, [id, fromIso, toIso]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================================
+// pg_stat_wal — TAM PAKET (pivot from cluster_delta)
+// ============================================================================
+const STAT_WAL_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 'max(sample_ts)', since: 13, label: 'Zaman' },
+  wal_records: { sql: "sum(case when metric_name='wal_records' then metric_value_num end)", since: 13, label: 'WAL Records' },
+  wal_fpi: { sql: "sum(case when metric_name='wal_fpi' then metric_value_num end)", since: 13, label: 'WAL FPI' },
+  wal_bytes: { sql: "sum(case when metric_name='wal_bytes' then metric_value_num end)", since: 13, label: 'WAL Bytes' },
+  wal_buffers_full: { sql: "sum(case when metric_name='wal_buffers_full' then metric_value_num end)", since: 13, label: 'WAL Buffers Full' },
+  wal_write: { sql: "sum(case when metric_name='wal_write' then metric_value_num end)", since: 14, label: 'WAL Write' },
+  wal_sync: { sql: "sum(case when metric_name='wal_sync' then metric_value_num end)", since: 14, label: 'WAL Sync' },
+  wal_write_time: { sql: "sum(case when metric_name='wal_write_time' then metric_value_num end)", since: 14, label: 'WAL Write Time' },
+  wal_sync_time: { sql: "sum(case when metric_name='wal_sync_time' then metric_value_num end)", since: 14, label: 'WAL Sync Time' },
+  stats_reset: { sql: "max(case when metric_name='stats_reset' then metric_value_num end)", since: 14, label: 'Stats Reset' },
+};
+const STAT_WAL_DEFAULTS = ['wal_records', 'wal_bytes', 'wal_fpi', 'wal_buffers_full', 'wal_write_time'];
+const STAT_WAL_RAW_COLUMNS: ColumnRegistry = {
+  sample_ts: { sql: 's.sample_ts', since: 13, label: 'Zaman' },
+  ...STAT_WAL_COLUMNS,
+};
+const STAT_WAL_RAW_DEFAULTS = ['sample_ts', ...STAT_WAL_DEFAULTS];
+
+router.get('/:id/stat-wal/columns', (_req, res) => {
+  res.json(columnsMetaResponse(STAT_WAL_COLUMNS, STAT_WAL_DEFAULTS));
+});
+
+router.get('/:id/stat-wal', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+
+    if (isRawMode(req.query.mode)) {
+      const limit = parseRawLimit(req.query.limit);
+      const requestedCols = parseColumns(req.query.columns as string | undefined, STAT_WAL_RAW_COLUMNS, STAT_WAL_RAW_DEFAULTS);
+      const rawCols = requestedCols.includes('sample_ts') ? requestedCols : ['sample_ts', ...requestedCols];
+      const params: any[] = [id, fromIso, toIso];
+      const cursorWhere = addRawCursorWhere(params, req.query.cursor, 'sample_ts');
+      params.push(limit);
+      const selectCols = rawCols
+        .map(c => c === 'sample_ts' ? 's.sample_ts' : clusterMetricRawExpr(STAT_WAL_RAW_COLUMNS, c, 'pg_stat_wal'))
+        .join(',\n        ');
+
+      const result = await pool.query(`
+        with samples as (
+          select distinct instance_pk, sample_ts
+          from fact.pg_cluster_delta
+          where instance_pk = $1
+            and metric_family = 'pg_stat_wal'
+            and sample_ts between $2::timestamptz and $3::timestamptz
+            ${cursorWhere}
+          order by sample_ts desc
+          limit $${params.length}
+        )
+        select ${selectCols}
+        from samples s
+        order by s.sample_ts desc
+      `, params);
+      res.json(rawPage(result.rows, limit));
+      return;
+    }
+
+    const requestedCols = parseColumns(req.query.columns as string | undefined, STAT_WAL_COLUMNS, STAT_WAL_DEFAULTS);
+    const selectParts = requestedCols.map(c => `${STAT_WAL_COLUMNS[c].sql} as ${c}`);
+    const orderBy = parseGenericOrderBy(req.query.order_by as string | undefined, requestedCols, requestedCols.includes('wal_bytes') ? 'wal_bytes' : requestedCols[0]);
+    const result = await pool.query(`
+      select ${selectParts.join(', ')}
+      from fact.pg_cluster_delta
+      where instance_pk = $1
+        and metric_family = 'pg_stat_wal'
+        and sample_ts between $2::timestamptz and $3::timestamptz
+      order by ${orderBy}
+    `, [id, fromIso, toIso]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/:id/wal', async (req, res, next) => {
   try {
     const { id } = req.params;

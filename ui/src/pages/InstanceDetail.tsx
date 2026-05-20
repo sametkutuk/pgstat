@@ -51,8 +51,6 @@ export default function InstanceDetail() {
     const setRangeCustom = (r: TimeRange) => { setRangeIsCustom(true); setRange(r); };
     // Mevcut endpoint'lerin geri uyumluluğu için range'ten hours hesabı (preset bazlı kullanım)
     const rangeQp = `from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`;
-    const rangeHours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
-    const hoursQp = `hours=${rangeHours}`;
 
     const instance = useQuery({ queryKey: ['instance', id], queryFn: () => apiGet<any>(`/instances/${id}`) });
     const capability = useQuery({ queryKey: ['capability', id], queryFn: () => apiGet<any>(`/instances/${id}/capability`), enabled: !!id });
@@ -61,7 +59,6 @@ export default function InstanceDetail() {
     // Range'e bağlı (zaman-serisi)
     const alerts = useQuery({ queryKey: ['inst-alerts', id, range.fromIso, range.toIso], queryFn: () => apiGet<any[]>(`/alerts?instance_pk=${id}&${rangeQp}`), enabled: tab === 'alerts' });
     const jobruns = useQuery({ queryKey: ['inst-jobruns', id], queryFn: () => apiGet<any[]>(`/job-runs?limit=20`), enabled: tab === 'jobruns' });
-    const walData = useQuery({ queryKey: ['inst-wal', id, range.fromIso, range.toIso], queryFn: () => apiGet<any>(`/instances/${id}/wal?${hoursQp}&${rangeQp}`), enabled: tab === 'wal' });
     // TPS — default'ta günlük 7 gün + saatlik 25 saat; kullanıcı aralık değiştirirse o aralığa
     const tpsData = useQuery({ queryKey: ['inst-tps', id, range.fromIso, range.toIso, rangeIsCustom], queryFn: () => apiGet<any>(`/instances/${id}/tps?${rangeQp}&custom=${rangeIsCustom ? 1 : 0}`), enabled: tab === 'tps' });
     const [settingsDiffDays, setSettingsDiffDays] = useState(30);
@@ -185,7 +182,7 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'recovery_prefetch' && <RecoveryPrefetchTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
             {tab === 'functions' && <FunctionsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'sequences' && <SequencesTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
-            {tab === 'wal' && <WalArchiveTab data={walData.data} loading={walData.isLoading} instancePk={Number(id)} range={range} />}
+            {tab === 'wal' && <WalArchiveTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'slru' && <SlruTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'io_stats' && <IoStatsTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
@@ -1809,7 +1806,9 @@ function isFullPackageTextCol(col: string): boolean {
         || col === 'schemaname'
         || col === 'relname'
         || col === 'funcname'
-        || col === 'name';
+        || col === 'name'
+        || col === 'current_wal_lsn'
+        || col === 'current_wal_file';
 }
 
 function fullPackageCell(col: string, val: any) {
@@ -1895,7 +1894,7 @@ function DeltaStatsFullPackageTab({
     instancePk: number;
     range: TimeRange;
     pgMajor?: number;
-    resource: 'functions' | 'sequences' | 'slru';
+    resource: 'functions' | 'sequences' | 'slru' | 'stat-wal';
     title: string;
     defaults: string[];
     storageBase: string;
@@ -2855,100 +2854,91 @@ function SequencesTab({ instancePk, range, pgMajor }: { instancePk: number; rang
     );
 }
 
-function WalArchiveTab({ data, loading, instancePk, range }: { data: any | undefined; loading: boolean; instancePk: number; range: TimeRange }) {
-    const [mode, setMode] = useState<ViewMode>('summary');
-    const walRawMeta = useMemo<ColumnsMeta>(() => ({
-        defaults: ['sample_ts', 'current_wal_lsn', 'current_wal_file', 'period_wal_size_byte', 'wal_directory_size_byte', 'wal_file_count'],
-        available: [
-            { key: 'sample_ts', label: 'Zaman', since: 11 },
-            { key: 'current_wal_lsn', label: 'LSN', since: 11 },
-            { key: 'current_wal_file', label: 'WAL Dosyası', since: 11 },
-            { key: 'period_wal_size_byte', label: 'Üretilen', since: 11 },
-            { key: 'wal_directory_size_byte', label: 'pg_wal Boyut', since: 11 },
-            { key: 'wal_file_count', label: 'Dosya', since: 11 },
-        ],
-    }), []);
-    const { selected: rawSelectedCols, setSelected: setRawSelectedCols } = useDataColumns('pgstat.instance.wal.raw.cols', walRawMeta.defaults, walRawMeta);
+type WalSub = 'position' | 'stat';
 
-    if (mode === 'raw') {
-        return (
-            <div>
-                <div className="bg-white rounded-lg shadow-sm p-3 mb-3 flex flex-wrap gap-2 items-center">
-                    <ViewModeToggle mode={mode} onChange={setMode} />
-                </div>
-                <RawDeltaTable
-                    basePath={`/instances/${instancePk}/wal`}
-                    baseParams={{ from: range.fromIso, to: range.toIso }}
-                    queryKey={['inst-wal-raw', instancePk, range.fromIso, range.toIso, mode]}
-                    selectedCols={rawSelectedCols}
-                    setSelectedCols={setRawSelectedCols}
-                    meta={walRawMeta}
-                    storageKey="pgstat.instance.wal.raw"
-                    emptyTitle="Ham WAL snapshot satırı yok"
-                />
-            </div>
-        );
-    }
-    if (loading) return <SkeletonTable rows={5} cols={5} />;
-    const wal = data?.wal || [];
-    const statWal = data?.stat_wal || [];
-    const archiver = data?.archiver || [];
+function WalArchiveTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const [sub, setSub] = useState<WalSub>('position');
+    const tabs: { key: WalSub; label: string; since?: number }[] = [
+        { key: 'position', label: 'WAL Pozisyonu' },
+        { key: 'stat', label: 'pg_stat_wal', since: 13 },
+    ];
 
     return (
-        <div className="space-y-5">
-            <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
-                <ViewModeToggle mode={mode} onChange={setMode} />
+        <div>
+            <div className="flex gap-1 mb-3 flex-wrap">
+                {tabs.map(t => {
+                    const disabled = t.since != null && pgMajor != null && pgMajor < t.since;
+                    return (
+                        <button key={t.key} onClick={() => !disabled && setSub(t.key)} disabled={disabled}
+                            className={`px-3 py-1 text-xs rounded ${sub === t.key ? 'bg-[#3B82F6] text-white' : 'bg-white text-[#64748B] border border-[#E2E8F0]'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                            {t.label}{t.since && <span className="ml-1 text-[10px] opacity-75">PG{t.since}+</span>}
+                        </button>
+                    );
+                })}
             </div>
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">WAL Pozisyonu ve Disk</h3>
-                {wal.length === 0 ? (
-                    <div className="text-sm text-[#94A3B8] py-4 text-center">WAL verisi yok</div>
-                ) : (
-                    <DataTable columns={[
-                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
-                        { key: 'current_wal_lsn', header: 'LSN', render: (r: any) => <span className="font-mono text-xs">{r.current_wal_lsn || '—'}</span> },
-                        { key: 'current_wal_file', header: 'WAL Dosyası', render: (r: any) => <span className="font-mono text-xs">{r.current_wal_file || '—'}</span> },
-                        { key: 'period_wal_size_byte', header: 'Üretilen', render: (r: any) => formatBytesCompact(Number(r.period_wal_size_byte || 0)), className: 'text-right' },
-                        { key: 'wal_directory_size_byte', header: 'pg_wal/ Boyut', render: (r: any) => formatBytesCompact(Number(r.wal_directory_size_byte || 0)), className: 'text-right' },
-                        { key: 'wal_file_count', header: 'Dosya', render: (r: any) => Number(r.wal_file_count || 0).toLocaleString(), className: 'text-right' },
-                    ]} data={wal} />
-                )}
-            </div>
-
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">pg_stat_wal (PG13+)</h3>
-                {statWal.length === 0 ? (
-                    <div className="text-sm text-[#94A3B8] py-4 text-center">pg_stat_wal verisi yok (PG13 öncesi sürümlerde mevcut değildir)</div>
-                ) : (
-                    <DataTable columns={[
-                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
-                        { key: 'wal_records', header: 'Records', render: (r: any) => Number(r.wal_records || 0).toLocaleString(), className: 'text-right' },
-                        { key: 'wal_bytes', header: 'Bytes', render: (r: any) => formatBytesCompact(Number(r.wal_bytes || 0)), className: 'text-right' },
-                        { key: 'wal_fpi', header: 'FPI (Full Page)', render: (r: any) => Number(r.wal_fpi || 0).toLocaleString(), className: 'text-right' },
-                    ]} data={statWal} />
-                )}
-            </div>
-
-            <div className="bg-white rounded-lg shadow-sm p-4">
-                <h3 className="text-sm font-semibold text-[#64748B] mb-3">Archiver Durumu</h3>
-                {archiver.length === 0 ? (
-                    <div className="text-sm text-[#94A3B8] py-4 text-center">Archiver verisi yok (archive_mode kapalı olabilir)</div>
-                ) : (
-                    <DataTable columns={[
-                        { key: 'sample_ts', header: 'Zaman', render: (r: any) => <TimeAgo date={r.sample_ts} /> },
-                        { key: 'archived_count', header: 'Arşivlenen', render: (r: any) => Number(r.archived_count || 0).toLocaleString(), className: 'text-right' },
-                        { key: 'last_archived_wal', header: 'Son Arşiv WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_archived_wal || '—'}</span> },
-                        {
-                            key: 'failed_count', header: 'Başarısız', render: (r: any) => {
-                                const n = Number(r.failed_count || 0);
-                                return n > 0 ? <span className="text-red-600 font-medium">{n}</span> : <span className="text-green-600">0</span>;
-                            }, className: 'text-right'
-                        },
-                        { key: 'last_failed_wal', header: 'Son Hata WAL', render: (r: any) => <span className="font-mono text-xs">{r.last_failed_wal || '—'}</span> },
-                    ]} data={archiver} />
-                )}
-            </div>
+            {sub === 'position'
+                ? <WalPositionSubTab key={sub} instancePk={instancePk} range={range} pgMajor={pgMajor} />
+                : <StatWalSubTab key={sub} instancePk={instancePk} range={range} pgMajor={pgMajor} />}
         </div>
+    );
+}
+
+function WalPositionSubTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    const defaults = ['sample_ts', 'current_wal_lsn', 'period_wal_size_byte', 'wal_directory_size_byte', 'wal_file_count'];
+    const [sortKeys, setSortKeys] = useState<SortKey[]>([{ col: 'sample_ts', dir: 'desc' }]);
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const orderParam = sortKeysToParam(sortKeys);
+    const sortToggle = (col: string, additive: boolean) => setSortKeys(prev => toggleSort(prev, col, additive));
+    const { data: colsMeta } = useQuery<ColumnsMeta>({
+        queryKey: ['wal-position-columns-meta', instancePk],
+        queryFn: () => apiGet(`/instances/${instancePk}/wal-position/columns`),
+        staleTime: 3600_000,
+    });
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns('pgstat.instance.wal_position.cols', defaults, colsMeta);
+    const { widths, setWidth, reset: resetWidths } = useColumnWidths('pgstat.instance.wal_position.widths');
+    const qp = new URLSearchParams({ columns: selectedCols.join(','), order_by: orderParam, from: range.fromIso, to: range.toIso });
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['instance-wal-position', instancePk, range.fromIso, range.toIso, selectedCols.join(','), orderParam],
+        queryFn: () => apiGet<any[]>(`/instances/${instancePk}/wal-position?${qp}`),
+        enabled: Number.isFinite(instancePk),
+    });
+    const rows = data || [];
+
+    if (isLoading) return <SkeletonTable rows={5} cols={selectedCols.length || defaults.length} />;
+
+    return (
+        <div className="space-y-3">
+            <DataKindBanner kind="snapshot" description="WAL Pozisyonu: secili tarih araligindaki pg_wal_snapshot satirlari. Degerler snapshot'tir, delta toplami degildir." />
+            <div className="bg-white rounded-lg shadow-sm p-3 flex flex-wrap gap-2 items-center">
+                <button onClick={() => setColumnsModalOpen(true)} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Sutun ({selectedCols.length})</button>
+                <button onClick={resetWidths} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Genislik</button>
+                <button onClick={() => refetch()} className="px-3 py-1.5 text-sm text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">{isFetching ? '...' : 'Yenile'}</button>
+                <span className="text-xs text-[#94A3B8] ml-auto">{rows.length} kayit</span>
+            </div>
+            <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+                <FullPackageTable rows={rows} selectedCols={selectedCols} colsMeta={colsMeta} pgMajor={pgMajor} widths={widths} setWidth={setWidth} sortKeys={sortKeys} onSortToggle={sortToggle} emptyTitle="WAL pozisyon verisi yok" />
+            </div>
+            <DataColumnsModal open={columnsModalOpen} onClose={() => setColumnsModalOpen(false)} selected={selectedCols} onChange={setSelectedCols} meta={colsMeta} pgMajor={pgMajor} title="WAL Pozisyonu Sutunlari" />
+        </div>
+    );
+}
+
+function StatWalSubTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
+    if (pgMajor != null && pgMajor < 13) {
+        return <EmptyState icon="i" title="pg_stat_wal PG13+ gerektirir" description="Bu instance surumunde pg_stat_wal metrikleri toplanmaz." />;
+    }
+    return (
+        <DeltaStatsFullPackageTab
+            instancePk={instancePk}
+            range={range}
+            pgMajor={pgMajor}
+            resource="stat-wal"
+            title="pg_stat_wal"
+            defaults={['wal_records', 'wal_bytes', 'wal_fpi', 'wal_buffers_full', 'wal_write_time']}
+            storageBase="pgstat.instance.stat_wal"
+            defaultSort={{ col: 'wal_bytes', dir: 'desc' }}
+            emptyTitle="pg_stat_wal verisi yok"
+        />
     );
 }
 
