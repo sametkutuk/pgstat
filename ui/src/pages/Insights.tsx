@@ -121,12 +121,10 @@ type SortMode = 'time' | 'calls' | 'slow';
 
 function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
     const [sort, setSort] = useState<SortMode>('time');
-    const [minCalls, setMinCalls] = useState<number>(10);
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
 
-    const minCallsQp = sort === 'slow' ? `&min_calls=${minCalls}` : '';
     const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
     const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
 
@@ -139,9 +137,9 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
     });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls, search, datname],
+        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, search, datname],
         queryFn: () => apiGet<TopQueryRow[]>(
-            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}${searchQp}${datnameQp}`,
+            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
         ),
         enabled: instancePk != null && Number.isFinite(instancePk),
     });
@@ -220,21 +218,9 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                     ))}
                 </div>
                 {sort === 'slow' && (
-                    <div className="flex items-center gap-1.5">
-                        <label className="text-xs text-[#64748B]" title="Sadece bu sayıdan fazla çağrılan sorguları göster — tek-spike eleme">
-                            Min çağrı:
-                        </label>
-                        <select
-                            value={minCalls}
-                            onChange={e => setMinCalls(Number(e.target.value))}
-                            className="border border-[#E2E8F0] rounded px-2 py-1 text-xs bg-white"
-                        >
-                            <option value={10}>10</option>
-                            <option value={100}>100</option>
-                            <option value={1000}>1.000</option>
-                            <option value={10000}>10.000</option>
-                        </select>
-                    </div>
+                    <span className="text-[10px] text-[#94A3B8] italic" title="Sıralama mean_exec_time'a göre. Az çağrılan tek-spike sorgular dahil — gerçek üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştır.">
+                        ℹ tek-spike sorgular dahil
+                    </span>
                 )}
                 <button onClick={() => refetch()}
                     className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
