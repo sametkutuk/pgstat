@@ -15,6 +15,10 @@ router.get('/:id/top-queries', async (req, res, next) => {
         const { fromIso, toIso } = parseTimeRange(req.query, 1);
         const limit = parseLimit(req.query.limit, 20);
         const sort = String(req.query.sort || 'time').toLowerCase();
+        // Min cagri esigi — 'slow' mod icin tek-spike eleme.
+        // Whitelist'li, kullanici 10/100/1000/10000 secebilir, default 10.
+        const minCallsRaw = parseInt(String(req.query.min_calls || '10'), 10);
+        const minCalls = [10, 100, 1000, 10000].includes(minCallsRaw) ? minCallsRaw : 10;
 
         // Sıralama whitelist + having (slow modunda az çağrılan tek-spike eleme)
         let orderBy: string;
@@ -23,7 +27,7 @@ router.get('/:id/top-queries', async (req, res, next) => {
             orderBy = 'sum(d.calls_delta) desc nulls last';
         } else if (sort === 'slow') {
             orderBy = 'avg(d.mean_exec_time_ms) desc nulls last';
-            havingExtra = 'and sum(d.calls_delta) >= 10';
+            havingExtra = `and sum(d.calls_delta) >= ${minCalls}`;
         } else {
             // default: time
             orderBy = 'sum(d.total_exec_time_ms_delta) desc nulls last';

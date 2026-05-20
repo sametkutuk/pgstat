@@ -121,11 +121,14 @@ type SortMode = 'time' | 'calls' | 'slow';
 
 function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
     const [sort, setSort] = useState<SortMode>('time');
+    const [minCalls, setMinCalls] = useState<number>(10);
+
+    const minCallsQp = sort === 'slow' ? `&min_calls=${minCalls}` : '';
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort],
+        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls],
         queryFn: () => apiGet<TopQueryRow[]>(
-            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20`,
+            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}`,
         ),
         enabled: instancePk != null && Number.isFinite(instancePk),
     });
@@ -137,7 +140,7 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
         { key: 'time', label: 'Toplam Süre', tip: 'DB zamanını en çok yiyen sorgular (sum exec_time)' },
         { key: 'calls', label: 'Çağrı Sayısı', tip: 'En sık çalışan sorgular (sum calls). N+1 / ORM tespiti.' },
-        { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time, min 10 çağrı)' },
+        { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time). Min çağrı eşiği ile tek-spike eleme.' },
     ];
 
     return (
@@ -162,6 +165,23 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                         </button>
                     ))}
                 </div>
+                {sort === 'slow' && (
+                    <div className="flex items-center gap-1.5">
+                        <label className="text-xs text-[#64748B]" title="Sadece bu sayıdan fazla çağrılan sorguları göster — tek-spike eleme">
+                            Min çağrı:
+                        </label>
+                        <select
+                            value={minCalls}
+                            onChange={e => setMinCalls(Number(e.target.value))}
+                            className="border border-[#E2E8F0] rounded px-2 py-1 text-xs bg-white"
+                        >
+                            <option value={10}>10</option>
+                            <option value={100}>100</option>
+                            <option value={1000}>1.000</option>
+                            <option value={10000}>10.000</option>
+                        </select>
+                    </div>
+                )}
                 <button onClick={() => refetch()}
                     className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                     {isFetching ? '...' : 'Yenile'}
