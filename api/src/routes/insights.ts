@@ -37,17 +37,22 @@ router.get('/:id/top-queries', async (req, res, next) => {
         // Kullanici '%select%hotel%' yazarsa SQL text'i, sadece sayi yazarsa
         // queryid olarak yorumlanir.
         const searchRaw = (req.query.search as string || '').trim();
+        const datname = (req.query.datname as string || '').trim();
         const params: any[] = [id, fromIso, toIso];
         let searchWhere = '';
         if (searchRaw) {
             // Sadece rakam ve - ise queryid olarak dene (bigint signed)
             if (/^-?\d+$/.test(searchRaw)) {
                 params.push(searchRaw);
-                searchWhere = ` and ss.queryid::text = $${params.length}`;
+                searchWhere += ` and ss.queryid::text = $${params.length}`;
             } else {
                 params.push(searchRaw);
-                searchWhere = ` and qt.query_text ilike $${params.length}`;
+                searchWhere += ` and qt.query_text ilike $${params.length}`;
             }
+        }
+        if (datname) {
+            params.push(datname);
+            searchWhere += ` and dbr.datname = $${params.length}`;
         }
         params.push(limit);
 
@@ -86,6 +91,23 @@ router.get('/:id/top-queries', async (req, res, next) => {
     `, params);
 
         res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/databases — instance'a ait DB listesi (filtre dropdown'u icin)
+router.get('/:id/databases', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(`
+            select distinct dbr.datname
+            from dim.database_ref dbr
+            where dbr.instance_pk = $1
+              and dbr.datname is not null
+            order by dbr.datname
+        `, [id]);
+        res.json(result.rows.map((r: any) => r.datname));
     } catch (err) {
         next(err);
     }

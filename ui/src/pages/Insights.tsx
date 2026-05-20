@@ -124,14 +124,24 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
     const [minCalls, setMinCalls] = useState<number>(10);
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
+    const [datname, setDatname] = useState<string>('');
 
     const minCallsQp = sort === 'slow' ? `&min_calls=${minCalls}` : '';
     const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+
+    // Instance'a ait DB listesi (filtre dropdown'u icin)
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        enabled: instancePk != null && Number.isFinite(instancePk),
+        staleTime: 60_000,
+    });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls, search],
+        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls, search, datname],
         queryFn: () => apiGet<TopQueryRow[]>(
-            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}${searchQp}`,
+            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}${searchQp}${datnameQp}`,
         ),
         enabled: instancePk != null && Number.isFinite(instancePk),
     });
@@ -163,6 +173,17 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                     <p className="text-xs text-[#64748B]">Bu DB'nin zamanı nereye gidiyor? Sıralamayı değiştirerek farklı açılardan bak.</p>
                 </div>
                 <div className="flex items-center gap-1.5">
+                    <select
+                        value={datname}
+                        onChange={e => setDatname(e.target.value)}
+                        title="Bu database'deki sorgulara filtre uygula (boş = tüm DB'ler)"
+                        className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]"
+                    >
+                        <option value="">Tüm Database'ler</option>
+                        {(databases ?? []).map(d => (
+                            <option key={d} value={d}>{d}</option>
+                        ))}
+                    </select>
                     <input
                         type="text"
                         value={searchInput}
