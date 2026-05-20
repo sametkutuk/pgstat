@@ -86,18 +86,14 @@ export default function Insights() {
                 </div>
             </div>
 
-            {/* Sekme içeriği */}
-            {instancePk == null ? (
-                <EmptyState icon="🖥️" title="Instance seçin" description="Bir aktif instance seçerek başlayın." />
-            ) : (
-                <>
-                    {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} />}
-                    {tab === 'temp-spill' && <PlaceholderTab title="Temp Spill" description="work_mem yetersizliği yaşayan sorgular. Yakında." />}
-                    {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
-                    {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
-                    {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
-                </>
-            )}
+            {/* Sekme içeriği — Insights TopExecTimeCard her zaman render olur,
+                içinde null guard yapılır. Aksi halde Card unmount/remount olur
+                ve useQuery cache resetlenir. */}
+            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} />}
+            {tab === 'temp-spill' && <PlaceholderTab title="Temp Spill" description="work_mem yetersizliği yaşayan sorgular. Yakında." />}
+            {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
+            {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
+            {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
         </div>
     );
 }
@@ -202,7 +198,7 @@ interface TopQueryRow {
 
 type SortMode = 'time' | 'calls' | 'slow';
 
-function TopExecTimeCard({ instancePk, range }: { instancePk: number; range: TimeRange }) {
+function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
     const [sort, setSort] = useState<SortMode>('time');
 
     const { data, isLoading, isFetching, refetch } = useQuery({
@@ -210,8 +206,12 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number; range: Tim
         queryFn: () => apiGet<TopQueryRow[]>(
             `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20`,
         ),
-        enabled: Number.isFinite(instancePk),
+        enabled: instancePk != null && Number.isFinite(instancePk),
     });
+
+    if (instancePk == null) {
+        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+    }
 
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
         { key: 'time', label: 'Toplam Süre', tip: 'DB zamanını en çok yiyen sorgular (sum exec_time)' },
