@@ -159,7 +159,12 @@ function InstanceSearchSelect({
                             <button
                                 key={i.instance_pk}
                                 type="button"
-                                onClick={() => {
+                                // onMouseDown: outside-click listener'inin mousedown'da
+                                // setOpen(false) yapmasindan ONCE secim isleminin
+                                // tetiklenmesini saglar. onClick mousedown sonrasi
+                                // calistigi icin secim kaybediliyordu.
+                                onMouseDown={e => {
+                                    e.preventDefault();
                                     onChange(i.instance_pk);
                                     setOpen(false);
                                     setQuery('');
