@@ -122,7 +122,9 @@ function InstanceSearchSelect({
     const selected = instances.find(i => i.instance_pk === value);
     const selectedLabel = selected?.display_name ?? '';
 
-    // Input dışına tıklayınca kapat
+    // Input dışına tıklayınca kapat — click event'i kullaniyoruz (mousedown
+    // degil) cunku mousedown buton onClick'inden ONCE tetikleniyor ve
+    // outside saysiniyor.
     useEffect(() => {
         function onDocClick(e: MouseEvent) {
             if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -130,8 +132,8 @@ function InstanceSearchSelect({
                 setQuery('');
             }
         }
-        document.addEventListener('mousedown', onDocClick);
-        return () => document.removeEventListener('mousedown', onDocClick);
+        document.addEventListener('click', onDocClick);
+        return () => document.removeEventListener('click', onDocClick);
     }, []);
 
     const filtered = useMemo(() => {
@@ -159,12 +161,7 @@ function InstanceSearchSelect({
                             <button
                                 key={i.instance_pk}
                                 type="button"
-                                // onMouseDown: outside-click listener'inin mousedown'da
-                                // setOpen(false) yapmasindan ONCE secim isleminin
-                                // tetiklenmesini saglar. onClick mousedown sonrasi
-                                // calistigi icin secim kaybediliyordu.
-                                onMouseDown={e => {
-                                    e.preventDefault();
+                                onClick={() => {
                                     onChange(i.instance_pk);
                                     setOpen(false);
                                     setQuery('');
