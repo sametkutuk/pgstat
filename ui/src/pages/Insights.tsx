@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
@@ -33,17 +33,7 @@ export default function Insights() {
         staleTime: 60_000,
     });
 
-    const activeInstances = useMemo(
-        () => (instances.data ?? []).filter(i => i.is_active),
-        [instances.data],
-    );
-
-    // İlk yüklemede ilk instance'ı seç (render içinde setState yapmamak için useEffect)
-    useEffect(() => {
-        if (instancePk == null && activeInstances.length > 0) {
-            setInstancePk(activeInstances[0].instance_pk);
-        }
-    }, [instancePk, activeInstances]);
+    const activeInstances = (instances.data ?? []).filter(i => i.is_active);
 
     return (
         <div className="p-6 max-w-7xl mx-auto">
@@ -56,11 +46,16 @@ export default function Insights() {
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4 mb-4 flex flex-wrap gap-3 items-center">
                 <div>
                     <label className="block text-xs text-[#64748B] mb-1">Instance</label>
-                    <InstanceSearchSelect
-                        instances={activeInstances}
-                        value={instancePk}
-                        onChange={setInstancePk}
-                    />
+                    <select
+                        value={instancePk ?? ''}
+                        onChange={e => setInstancePk(e.target.value ? Number(e.target.value) : null)}
+                        className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px]"
+                    >
+                        <option value="">— Bir instance seçin —</option>
+                        {activeInstances.map(i => (
+                            <option key={i.instance_pk} value={i.instance_pk}>{i.display_name}</option>
+                        ))}
+                    </select>
                 </div>
                 <div>
                     <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
@@ -100,83 +95,6 @@ export default function Insights() {
 
 function PlaceholderTab({ title, description }: { title: string; description: string }) {
     return <EmptyState icon="🚧" title={title} description={description} />;
-}
-
-// =========================================================================
-// InstanceSearchSelect — text input ile filtrelenebilir dropdown
-// =========================================================================
-function InstanceSearchSelect({
-    instances,
-    value,
-    onChange,
-}: {
-    instances: Instance[];
-    value: number | null;
-    onChange: (v: number) => void;
-}) {
-    const [query, setQuery] = useState('');
-    const [open, setOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    // Seçili instance'ın display_name'i
-    const selected = instances.find(i => i.instance_pk === value);
-    const selectedLabel = selected?.display_name ?? '';
-
-    // Input dışına tıklayınca kapat — click event'i kullaniyoruz (mousedown
-    // degil) cunku mousedown buton onClick'inden ONCE tetikleniyor ve
-    // outside saysiniyor.
-    useEffect(() => {
-        function onDocClick(e: MouseEvent) {
-            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-                setOpen(false);
-                setQuery('');
-            }
-        }
-        document.addEventListener('click', onDocClick);
-        return () => document.removeEventListener('click', onDocClick);
-    }, []);
-
-    const filtered = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        if (!q) return instances;
-        return instances.filter(i => i.display_name.toLowerCase().includes(q));
-    }, [instances, query]);
-
-    return (
-        <div ref={containerRef} className="relative">
-            <input
-                type="text"
-                value={open ? query : selectedLabel}
-                onChange={e => { setQuery(e.target.value); setOpen(true); }}
-                onFocus={() => { setOpen(true); setQuery(''); }}
-                placeholder="Instance ara..."
-                className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px] focus:outline-none focus:border-[#3B82F6]"
-            />
-            {open && (
-                <div className="absolute z-10 mt-1 w-full max-h-72 overflow-y-auto bg-white border border-[#E2E8F0] rounded shadow-lg">
-                    {filtered.length === 0 ? (
-                        <div className="px-3 py-2 text-xs text-[#94A3B8]">Eşleşen instance yok</div>
-                    ) : (
-                        filtered.map(i => (
-                            <button
-                                key={i.instance_pk}
-                                type="button"
-                                onClick={() => {
-                                    onChange(i.instance_pk);
-                                    setOpen(false);
-                                    setQuery('');
-                                }}
-                                className={`w-full text-left px-3 py-1.5 text-sm hover:bg-[#F8FAFC] transition-colors ${i.instance_pk === value ? 'bg-[#EFF6FF] text-[#2563EB] font-medium' : 'text-[#1E293B]'
-                                    }`}
-                            >
-                                {i.display_name}
-                            </button>
-                        ))
-                    )}
-                </div>
-            )}
-        </div>
-    );
 }
 
 // =========================================================================
