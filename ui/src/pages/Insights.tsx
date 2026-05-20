@@ -233,6 +233,13 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
 };
 
 function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: number | null; range: TimeRange; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+    }
+    return <TopExecTimeCardInner instancePk={instancePk} range={range} instanceName={instanceName} />;
+}
+
+function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk: number; range: TimeRange; instanceName?: string }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
@@ -252,7 +259,6 @@ function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: numb
     const { data: databases } = useQuery({
         queryKey: ['insights-databases', instancePk],
         queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
-        enabled: instancePk != null && Number.isFinite(instancePk),
         staleTime: 60_000,
     });
 
@@ -261,7 +267,6 @@ function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: numb
         queryFn: () => apiGet<TopQueryRow[]>(
             `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
         ),
-        enabled: instancePk != null && Number.isFinite(instancePk),
     });
 
     const { data: trendData } = useQuery({
@@ -269,12 +274,7 @@ function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: numb
         queryFn: () => apiGet<DbTimeTrendPoint[]>(
             `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}`,
         ),
-        enabled: instancePk != null && Number.isFinite(instancePk),
     });
-
-    if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
-    }
 
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
         { key: 'time', label: 'Toplam Süre', tip: 'DB zamanını en çok yiyen sorgular (sum exec_time)' },
