@@ -122,13 +122,16 @@ type SortMode = 'time' | 'calls' | 'slow';
 function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [minCalls, setMinCalls] = useState<number>(10);
+    const [searchInput, setSearchInput] = useState<string>('');
+    const [search, setSearch] = useState<string>('');
 
     const minCallsQp = sort === 'slow' ? `&min_calls=${minCalls}` : '';
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
 
     const { data, isLoading, isFetching, refetch } = useQuery({
-        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls],
+        queryKey: ['insights-top-queries', instancePk, range.fromIso, range.toIso, sort, minCalls, search],
         queryFn: () => apiGet<TopQueryRow[]>(
-            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}`,
+            `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${minCallsQp}${searchQp}`,
         ),
         enabled: instancePk != null && Number.isFinite(instancePk),
     });
@@ -143,12 +146,42 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
         { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time). Min çağrı eşiği ile tek-spike eleme.' },
     ];
 
+    function applySearch() {
+        setSearch(searchInput.trim());
+    }
+
+    function clearSearch() {
+        setSearchInput('');
+        setSearch('');
+    }
+
     return (
         <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
             <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
-                <div className="flex-1">
+                <div className="flex-1 min-w-[200px]">
                     <h3 className="font-semibold text-[#1E293B]">Top Sorgular</h3>
                     <p className="text-xs text-[#64748B]">Bu DB'nin zamanı nereye gidiyor? Sıralamayı değiştirerek farklı açılardan bak.</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                    <input
+                        type="text"
+                        value={searchInput}
+                        onChange={e => setSearchInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                        placeholder="queryid veya %select%hotel%"
+                        title="QueryID (sayı) veya SQL text için ILIKE pattern (% wildcard). Enter ile uygula."
+                        className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]"
+                    />
+                    <button onClick={applySearch}
+                        className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">
+                        Ara
+                    </button>
+                    {search && (
+                        <button onClick={clearSearch} title="Aramayı temizle"
+                            className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                            ✕
+                        </button>
+                    )}
                 </div>
                 <div className="flex gap-1">
                     {sortButtons.map(b => (

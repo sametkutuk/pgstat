@@ -33,6 +33,24 @@ router.get('/:id/top-queries', async (req, res, next) => {
             orderBy = 'sum(d.total_exec_time_ms_delta) desc nulls last';
         }
 
+        // Arama: query text icin ILIKE pattern veya queryid tam eslesme
+        // Kullanici '%select%hotel%' yazarsa SQL text'i, sadece sayi yazarsa
+        // queryid olarak yorumlanir.
+        const searchRaw = (req.query.search as string || '').trim();
+        const params: any[] = [id, fromIso, toIso];
+        let searchWhere = '';
+        if (searchRaw) {
+            // Sadece rakam ve - ise queryid olarak dene (bigint signed)
+            if (/^-?\d+$/.test(searchRaw)) {
+                params.push(searchRaw);
+                searchWhere = ` and ss.queryid::text = $${params.length}`;
+            } else {
+                params.push(searchRaw);
+                searchWhere = ` and qt.query_text ilike $${params.length}`;
+            }
+        }
+        params.push(limit);
+
         const result = await pool.query(`
       with toplam as (
         select sum(d.total_exec_time_ms_delta) as total_ms
@@ -60,11 +78,12 @@ router.get('/:id/top-queries', async (req, res, next) => {
       left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
       where d.instance_pk = $1
         and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
       group by dbr.datname, ss.queryid, ss.query_text_id, qt.query_text, ss.statement_series_id
       having sum(d.total_exec_time_ms_delta) > 0 ${havingExtra}
       order by ${orderBy}
-      limit $4
-    `, [id, fromIso, toIso, limit]);
+      limit $${params.length}
+    `, params);
 
         res.json(result.rows);
     } catch (err) {
