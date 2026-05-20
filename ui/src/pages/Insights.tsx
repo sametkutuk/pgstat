@@ -93,8 +93,9 @@ function PlaceholderTab({ title, description }: { title: string; description: st
 }
 
 // =========================================================================
-// InstanceTypeahead — datalist tabanlı, native browser autocomplete
-// Yaz: 'etstur' → browser otomatik filtreliyor; seç → instance_pk parent'a gider
+// InstanceTypeahead — uncontrolled input + datalist
+// Kullanici elle yazar veya datalist'ten secer.
+// Match bulunca onChange(instance_pk) parent'a gider.
 // =========================================================================
 function InstanceTypeahead({
     instances,
@@ -106,23 +107,18 @@ function InstanceTypeahead({
     onChange: (v: number | null) => void;
 }) {
     const selected = instances.find(i => i.instance_pk === value);
-    const [text, setText] = useState<string>(selected?.display_name ?? '');
 
-    // value değişince input text'ini güncelle (örn. dışarıdan setInstancePk)
-    if (selected && text !== selected.display_name && text !== '') {
-        // intentional silent: kullanıcı yazıyor olabilir, ezme
-    }
-
-    function applyText(val: string) {
-        setText(val);
-        // Tam eşleşme arar — yazılan string bir instance display_name'i ise seç
-        const match = instances.find(i => i.display_name === val.trim());
+    function handleInput(e: React.ChangeEvent<HTMLInputElement>) {
+        const val = e.target.value;
+        if (val === '') {
+            onChange(null);
+            return;
+        }
+        const match = instances.find(i => i.display_name === val);
         if (match) {
             onChange(match.instance_pk);
-        } else if (val.trim() === '') {
-            onChange(null);
         }
-        // Aksi halde dokunma — kullanıcı yazıyor olabilir
+        // Match yoksa parent'a gönderme — kullanıcı henüz yazıyor olabilir
     }
 
     return (
@@ -130,8 +126,9 @@ function InstanceTypeahead({
             <input
                 type="text"
                 list="instances-datalist"
-                value={text}
-                onChange={e => applyText(e.target.value)}
+                defaultValue={selected?.display_name ?? ''}
+                key={value ?? 'empty'}
+                onInput={handleInput}
                 placeholder="Instance ara veya seç..."
                 className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px] focus:outline-none focus:border-[#3B82F6]"
             />
