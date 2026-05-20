@@ -5,6 +5,7 @@ import { apiGet } from '../api/client';
 import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
+import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 
 interface Instance {
     instance_pk: number;
@@ -119,11 +120,34 @@ interface TopQueryRow {
 
 type SortMode = 'time' | 'calls' | 'slow';
 
+// Top Sorgular tablosu için kolon meta — DataColumnsModal ile uyumlu
+const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
+    defaults: ['sql', 'datname', 'toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir'],
+    available: [
+        { key: 'sql', label: 'SQL', since: 11 },
+        { key: 'queryid', label: 'Query ID', since: 11 },
+        { key: 'datname', label: 'Database', since: 11 },
+        { key: 'toplam_cagri', label: 'Çağrı', since: 11 },
+        { key: 'toplam_dk', label: 'Toplam (dk)', since: 11 },
+        { key: 'pct', label: '% Toplam', since: 11 },
+        { key: 'min_ms', label: 'Min (ms)', since: 11 },
+        { key: 'ort_ms', label: 'Ort (ms)', since: 11 },
+        { key: 'max_ms', label: 'Max (ms)', since: 11 },
+        { key: 'toplam_satir', label: 'Satır', since: 11 },
+    ],
+};
+
 function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
+        'pgstat.insights.top-queries.cols',
+        TOP_QUERIES_COLUMNS_META.defaults,
+        TOP_QUERIES_COLUMNS_META,
+    );
 
     const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
     const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
@@ -217,11 +241,15 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                         </button>
                     ))}
                 </div>
-                {sort === 'slow' && (
-                    <span className="text-[10px] text-[#94A3B8] italic" title="Sıralama mean_exec_time'a göre. Az çağrılan tek-spike sorgular dahil — gerçek üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştır.">
+                {sort === 'slow' && search && (
+                    <span className="text-[10px] text-[#94A3B8] italic" title="Arama aktif — tek-spike sorgular da gösteriliyor. Üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştırın.">
                         ℹ tek-spike sorgular dahil
                     </span>
                 )}
+                <button onClick={() => setColumnsModalOpen(true)}
+                    className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                    ⚙️ Sütun ({selectedCols.length})
+                </button>
                 <button onClick={() => refetch()}
                     className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                     {isFetching ? '...' : 'Yenile'}
@@ -229,7 +257,7 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
             </div>
 
             {isLoading ? (
-                <div className="p-4"><SkeletonTable rows={8} cols={9} /></div>
+                <div className="p-4"><SkeletonTable rows={8} cols={selectedCols.length + 2} /></div>
             ) : !data || data.length === 0 ? (
                 <EmptyState
                     icon="📭"
@@ -242,55 +270,91 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                         <thead>
                             <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                                 <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
-                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
-                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Database</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Çağrı</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">%</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Min ms</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort ms</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Max ms</th>
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Satır</th>
+                                {selectedCols.map(col => {
+                                    const meta = TOP_QUERIES_COLUMNS_META.available.find(c => c.key === col);
+                                    const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir'].includes(col);
+                                    return (
+                                        <th key={col} className={`py-2 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${isRight ? 'text-right' : 'text-left'}`}>
+                                            {meta?.label ?? col}
+                                        </th>
+                                    );
+                                })}
                                 <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                             </tr>
                         </thead>
                         <tbody>
                             {data.map((row, i) => (
-                                <TopQueryRow key={`${row.statement_series_id}-${i}`} row={row} rank={i + 1} />
+                                <TopQueryRow key={`${row.statement_series_id}-${i}`} row={row} rank={i + 1} selectedCols={selectedCols} />
                             ))}
                         </tbody>
                     </table>
                 </div>
             )}
+
+            <DataColumnsModal
+                open={columnsModalOpen}
+                onClose={() => setColumnsModalOpen(false)}
+                selected={selectedCols}
+                onChange={setSelectedCols}
+                meta={TOP_QUERIES_COLUMNS_META}
+                title="⚙️ Top Sorgular Sütunları"
+            />
         </div>
     );
 }
 
-function TopQueryRow({ row, rank }: { row: TopQueryRow; rank: number }) {
+function TopQueryRow({ row, rank, selectedCols }: { row: TopQueryRow; rank: number; selectedCols: string[] }) {
     const pct = parseFloat(row.pct_of_total);
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
     const minMs = parseFloat(row.min_ms);
     const pctClass = pct >= 20 ? 'bg-red-100 text-red-700' : pct >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
 
+    function renderCell(col: string) {
+        switch (col) {
+            case 'sql':
+                return (
+                    <td key={col} className="py-2 px-3 max-w-md">
+                        <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
+                            {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                        </div>
+                    </td>
+                );
+            case 'queryid':
+                return (
+                    <td key={col} className="py-2 px-3 text-xs font-mono text-[#64748B] whitespace-nowrap">
+                        {row.queryid || '—'}
+                    </td>
+                );
+            case 'datname':
+                return <td key={col} className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>;
+            case 'toplam_cagri':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>;
+            case 'toplam_dk':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>;
+            case 'pct':
+                return (
+                    <td key={col} className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>%{pct}</span>
+                    </td>
+                );
+            case 'min_ms':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{minMs}</td>;
+            case 'ort_ms':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{ortMs}</td>;
+            case 'max_ms':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{maxMs}</td>;
+            case 'toplam_satir':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.toplam_satir).toLocaleString('tr-TR')}</td>;
+            default:
+                return <td key={col} className="py-2 px-3 text-xs text-[#94A3B8]">—</td>;
+        }
+    }
+
     return (
         <tr className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
-            <td className="py-2 px-3 max-w-md">
-                <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
-                    {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
-                </div>
-            </td>
-            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
-            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
-            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
-            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>%{pct}</span>
-            </td>
-            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{minMs}</td>
-            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{ortMs}</td>
-            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{maxMs}</td>
-            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.toplam_satir).toLocaleString('tr-TR')}</td>
+            {selectedCols.map(col => renderCell(col))}
             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                 <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay →</Link>
             </td>
