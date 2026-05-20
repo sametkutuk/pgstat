@@ -17,19 +17,31 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
             dbWhere = ` and dbr.datname = $${params.length}`;
         }
 
+        // Bucket granulu pencereye gore secilir — hourly aggregate'in gec
+        // gelmesi sorununu by-pass etmek icin fact.pgss_delta'dan okuyoruz.
+        //   <= 6 saat  → 5 dakika
+        //   <= 48 saat → 1 saat
+        //   otesi      → 1 gun
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = windowHours <= 6
+            ? `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`
+            : windowHours <= 48
+                ? `date_trunc('hour', d.sample_ts)`
+                : `date_trunc('day', d.sample_ts)`;
+
         const result = await pool.query(`
             select
-              h.bucket_start,
-              coalesce(sum(h.exec_time_ms_sum), 0)::double precision as total_ms,
-              coalesce(sum(h.calls_sum), 0)::bigint as total_calls
-            from agg.pgss_hourly h
-            join dim.statement_series ss on ss.statement_series_id = h.statement_series_id
+              ${bucketExpr} as bucket_start,
+              coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
+              coalesce(sum(d.calls_delta), 0)::bigint as total_calls
+            from fact.pgss_delta d
+            join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
             left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
-            where h.instance_pk = $1
-              and h.bucket_start between $2::timestamptz and $3::timestamptz
+            where d.instance_pk = $1
+              and d.sample_ts between $2::timestamptz and $3::timestamptz
               ${dbWhere}
-            group by h.bucket_start
-            order by h.bucket_start
+            group by bucket_start
+            order by bucket_start
         `, params);
         res.json(result.rows);
     } catch (err) {
@@ -48,9 +60,16 @@ router.get('/:id/query-trend', async (req, res, next) => {
             return;
         }
 
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = windowHours <= 6
+            ? `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`
+            : windowHours <= 48
+                ? `date_trunc('hour', d.sample_ts)`
+                : `date_trunc('day', d.sample_ts)`;
+
         const result = await pool.query(`
             select
-              date_trunc('hour', d.sample_ts) as bucket_start,
+              ${bucketExpr} as bucket_start,
               coalesce(sum(d.calls_delta), 0)::bigint as calls,
               coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
               min(d.min_exec_time_ms)::double precision as min_ms,
@@ -60,7 +79,7 @@ router.get('/:id/query-trend', async (req, res, next) => {
             where d.instance_pk = $1
               and d.statement_series_id = $2::bigint
               and d.sample_ts between $3::timestamptz and $4::timestamptz
-            group by date_trunc('hour', d.sample_ts)
+            group by bucket_start
             order by bucket_start
         `, [id, seriesIdRaw, fromIso, toIso]);
         res.json(result.rows);
