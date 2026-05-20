@@ -172,14 +172,33 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number; range: Tim
             </div>
 
             {isLoading ? (
-                <div className="p-4"><SkeletonTable rows={8} cols={5} /></div>
+                <div className="p-4"><SkeletonTable rows={8} cols={9} /></div>
             ) : !data || data.length === 0 ? (
                 <EmptyState icon="📭" title="Veri yok" description="Bu pencerede henüz sorgu kaydı toplanmamış." />
             ) : (
-                <div className="divide-y divide-[#F1F5F9]">
-                    {data.map((row, i) => (
-                        <TopQueryRow key={`${row.statement_series_id}-${i}`} row={row} rank={i + 1} />
-                    ))}
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Database</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Çağrı</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">%</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Min ms</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort ms</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Max ms</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Satır</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.map((row, i) => (
+                                <TopQueryRow key={`${row.statement_series_id}-${i}`} row={row} rank={i + 1} />
+                            ))}
+                        </tbody>
+                    </table>
                 </div>
             )}
         </div>
@@ -191,43 +210,29 @@ function TopQueryRow({ row, rank }: { row: TopQueryRow; rank: number }) {
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
     const minMs = parseFloat(row.min_ms);
-    const volatile = minMs > 0 && maxMs / minMs > 5;
+    const pctClass = pct >= 20 ? 'bg-red-100 text-red-700' : pct >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
 
     return (
-        <div className="p-3 hover:bg-[#F8FAFC] transition-colors">
-            <div className="flex items-start gap-3">
-                <div className="flex-shrink-0 w-6 text-center text-xs font-bold text-[#94A3B8] pt-1">#{rank}</div>
-                <div className="flex-1 min-w-0">
-                    <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
-                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#64748B]">
-                        <span>
-                            <span className="text-[#94A3B8]">DB:</span> <span className="text-[#1E293B]">{row.datname || '—'}</span>
-                        </span>
-                        <span>
-                            <span className="text-[#94A3B8]">Çağrı:</span> {Number(row.toplam_cagri).toLocaleString('tr-TR')}
-                        </span>
-                        <span>
-                            <span className="text-[#94A3B8]">Toplam:</span> <span className="font-semibold text-[#1E293B]">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</span>
-                            {pct > 0 && <span className={`ml-1.5 px-1.5 py-0.5 text-[10px] rounded font-semibold ${pct >= 20 ? 'bg-red-100 text-red-700' : pct >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>%{pct}</span>}
-                        </span>
-                        <span>
-                            <span className="text-[#94A3B8]">Süre/çağrı:</span> min <span className="text-[#1E293B]">{minMs}ms</span> · ort <span className="font-semibold text-[#1E293B]">{ortMs}ms</span> · max <span className="text-[#1E293B]">{maxMs}ms</span>
-                            {volatile && <span className="ml-1.5 px-1.5 py-0.5 text-[10px] rounded font-semibold bg-orange-100 text-orange-700" title="max/min > 5x — volatil sorgu (plan instability veya parametre varyasyonu)">volatil</span>}
-                        </span>
-                        <span>
-                            <span className="text-[#94A3B8]">Satır:</span> {Number(row.toplam_satir).toLocaleString('tr-TR')}
-                        </span>
-                    </div>
+        <tr className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
+            <td className="py-2 px-3 max-w-md">
+                <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
+                    {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                 </div>
-                <div className="flex-shrink-0">
-                    <Link to={`/statements/${row.statement_series_id}`}
-                        className="text-xs text-[#2563EB] hover:underline whitespace-nowrap">
-                        Detay →
-                    </Link>
-                </div>
-            </div>
-        </div>
+            </td>
+            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>%{pct}</span>
+            </td>
+            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{minMs}</td>
+            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{ortMs}</td>
+            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{maxMs}</td>
+            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.toplam_satir).toLocaleString('tr-TR')}</td>
+            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay →</Link>
+            </td>
+        </tr>
     );
 }
