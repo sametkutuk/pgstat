@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
@@ -6,6 +6,7 @@ import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
+import { Area, AreaChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -85,7 +86,7 @@ export default function Insights() {
             {/* Sekme içeriği — Insights TopExecTimeCard her zaman render olur,
                 içinde null guard yapılır. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
-            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} />}
+            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'temp-spill' && <PlaceholderTab title="Temp Spill" description="work_mem yetersizliği yaşayan sorgular. Yakında." />}
             {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
             {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
@@ -120,7 +121,101 @@ interface TopQueryRow {
 
 type SortMode = 'time' | 'calls' | 'slow';
 
+interface InsightTag {
+    key: string;
+    label: string;
+    icon: string;
+    className: string;
+    title: string;
+}
+
+interface DbTimeTrendPoint {
+    bucket_start: string;
+    total_ms: string | number;
+    total_calls: string | number;
+}
+
+interface QueryTrendPoint {
+    bucket_start: string;
+    calls: string | number;
+    total_ms: string | number;
+    min_ms: string | number | null;
+    avg_ms: string | number | null;
+    max_ms: string | number | null;
+}
+
+function toNum(value: unknown): number {
+    const n = Number(value ?? 0);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function calculateTags(row: TopQueryRow): InsightTag[] {
+    const pct = toNum(row.pct_of_total);
+    const avg = toNum(row.ort_ms);
+    const min = toNum(row.min_ms);
+    const max = toNum(row.max_ms);
+    const rows = toNum(row.toplam_satir);
+    const calls = toNum(row.toplam_cagri);
+    const tags: InsightTag[] = [];
+    if (pct >= 30) tags.push({ key: 'bottleneck', label: 'DB darboğazı', icon: '🔥', className: 'bg-red-100 text-red-700', title: 'Tek başına DB zamanının çoğunu yiyor — öncelikli optimize et' });
+    if (avg >= 1000) tags.push({ key: 'slow', label: 'Yavaş', icon: '🐢', className: 'bg-orange-100 text-orange-700', title: 'Ortalama 1sn+ yanıt — index/plan kontrol et' });
+    if (min > 0 && max / min > 10) tags.push({ key: 'volatile', label: 'Volatil', icon: '⚡', className: 'bg-amber-100 text-amber-700', title: 'Çağrı süresi çok değişiyor — plan instability veya parametre varyasyonu' });
+    if (rows === 0 && avg >= 100) tags.push({ key: 'no-work', label: 'İş yapmıyor', icon: '🌀', className: 'bg-purple-100 text-purple-700', title: 'Hiç satır dönmüyor ama yavaş — gereksiz filter/lock?' });
+    if (calls >= 10000) tags.push({ key: 'hot-path', label: 'Hot Path', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Çok sık çalışıyor — N+1 veya ORM aşırı çağrı olabilir' });
+    return tags;
+}
+
+function compactNumber(value: unknown): string {
+    const n = toNum(value);
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    if (Number.isInteger(n)) return n.toLocaleString('tr-TR');
+    return n.toFixed(1);
+}
+
+function formatDurationMs(ms: number): string {
+    if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)} dk`;
+    if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)} sn`;
+    return `${ms.toFixed(0)} ms`;
+}
+
+function formatBucket(value: string): string {
+    return new Date(value).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function rangeLabel(range: TimeRange): string {
+    const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
+    if (hours >= 24) return `son ${Math.round(hours / 24)} gün`;
+    return `son ${hours} saat`;
+}
+
+function ChartTooltip({ active, payload, label }: any) {
+    if (!active || !payload?.length) return null;
+    return (
+        <div className="bg-white border border-[#CBD5E1] shadow-sm rounded px-3 py-2 text-xs">
+            <div className="font-medium text-[#1E293B] mb-1">{label}</div>
+            {payload.map((p: any) => (
+                <div key={p.dataKey} className="flex items-center gap-2 text-[#64748B]">
+                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                    <span>{p.name}: <b>{compactNumber(p.value)}</b></span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 // Top Sorgular tablosu için kolon meta — DataColumnsModal ile uyumlu
+function InsightChart({ title, height, children }: { title: string; height: number; children: any }) {
+    return (
+        <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+            <h3 className="text-sm font-semibold text-[#64748B] mb-3">{title}</h3>
+            <ResponsiveContainer width="100%" height={height}>
+                {children}
+            </ResponsiveContainer>
+        </div>
+    );
+}
+
 const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
     defaults: ['sql', 'datname', 'toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir'],
     available: [
@@ -137,12 +232,13 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
     ],
 };
 
-function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; range: TimeRange }) {
+function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: number | null; range: TimeRange; instanceName?: string }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
+    const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
         'pgstat.insights.top-queries.cols',
         TOP_QUERIES_COLUMNS_META.defaults,
@@ -168,6 +264,14 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
         enabled: instancePk != null && Number.isFinite(instancePk),
     });
 
+    const { data: trendData } = useQuery({
+        queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname],
+        queryFn: () => apiGet<DbTimeTrendPoint[]>(
+            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}`,
+        ),
+        enabled: instancePk != null && Number.isFinite(instancePk),
+    });
+
     if (instancePk == null) {
         return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
     }
@@ -187,7 +291,64 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
         setSearch('');
     }
 
+    const rowsWithTags = useMemo(() => (data ?? []).map(row => ({ row, tags: calculateTags(row) })), [data]);
+    const tagCounts = useMemo(() => {
+        const counts: Record<string, { icon: string; count: number }> = {};
+        for (const item of rowsWithTags) {
+            for (const tag of item.tags) counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
+        }
+        return counts;
+    }, [rowsWithTags]);
+    const summary = useMemo(() => {
+        if (!data || data.length === 0) return null;
+        const totalMs = data.reduce((sum, r) => sum + toNum(r.toplam_exec_ms), 0);
+        const avgMs = data.reduce((sum, r) => sum + toNum(r.ort_ms), 0) / data.length;
+        return { totalMs, topPct: toNum(data[0]?.pct_of_total), avgMs };
+    }, [data]);
+    const chartData = useMemo(() => (trendData ?? []).map(p => ({
+        label: formatBucket(String(p.bucket_start)),
+        db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
+        calls: toNum(p.total_calls),
+    })), [trendData]);
+
     return (
+        <div className="space-y-4">
+            {summary && (
+                <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                        <span className="font-semibold text-[#1E293B]">📊 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
+                        <div>Toplam DB time: <b className="text-[#1E293B]">{formatDurationMs(summary.totalMs)}</b> · En yoğun sorgu: <b className="text-[#1E293B]">%{summary.topPct.toFixed(1)}</b></div>
+                        <div>Ortalama yanıt: <b className="text-[#1E293B]">{formatDurationMs(summary.avgMs)}</b> · Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}</div>
+                    </div>
+                </div>
+            )}
+
+            {chartData.length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <InsightChart title="DB Time Trend (Toplam)" height={200}>
+                        <AreaChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Area type="monotone" dataKey="db_minutes" name="DB dk" stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
+                        </AreaChart>
+                    </InsightChart>
+                    <InsightChart title="Throughput Trend" height={200}>
+                        <AreaChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Area type="monotone" dataKey="calls" name="Calls" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                        </AreaChart>
+                    </InsightChart>
+                </div>
+            )}
+
         <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
             <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
                 <div className="flex-1 min-w-[200px]">
@@ -284,7 +445,16 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                         </thead>
                         <tbody>
                             {data.map((row, i) => (
-                                <TopQueryRow key={`${row.statement_series_id}-${i}`} row={row} rank={i + 1} selectedCols={selectedCols} />
+                                <TopQueryRow
+                                    key={`${row.statement_series_id}-${i}`}
+                                    row={row}
+                                    rank={i + 1}
+                                    selectedCols={selectedCols}
+                                    instancePk={instancePk}
+                                    range={range}
+                                    expanded={expandedSeriesId === row.statement_series_id}
+                                    onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                />
                             ))}
                         </tbody>
                     </table>
@@ -300,15 +470,17 @@ function TopExecTimeCard({ instancePk, range }: { instancePk: number | null; ran
                 title="⚙️ Top Sorgular Sütunları"
             />
         </div>
+        </div>
     );
 }
 
-function TopQueryRow({ row, rank, selectedCols }: { row: TopQueryRow; rank: number; selectedCols: string[] }) {
+function TopQueryRow({ row, rank, selectedCols, instancePk, range, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; expanded: boolean; onToggle: () => void }) {
     const pct = parseFloat(row.pct_of_total);
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
     const minMs = parseFloat(row.min_ms);
     const pctClass = pct >= 20 ? 'bg-red-100 text-red-700' : pct >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+    const tags = calculateTags(row);
 
     function renderCell(col: string) {
         switch (col) {
@@ -318,6 +490,15 @@ function TopQueryRow({ row, rank, selectedCols }: { row: TopQueryRow; rank: numb
                         <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
                             {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                         </div>
+                        {tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                                {tags.map(tag => (
+                                    <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                        <span>{tag.icon}</span>{tag.label}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
                     </td>
                 );
             case 'queryid':
@@ -352,12 +533,83 @@ function TopQueryRow({ row, rank, selectedCols }: { row: TopQueryRow; rank: numb
     }
 
     return (
-        <tr className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors">
+        <>
+        <tr onClick={onToggle} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors cursor-pointer">
             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
             {selectedCols.map(col => renderCell(col))}
             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay →</Link>
+                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri aç'}>{expanded ? '-' : '+'}</button>
+                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
             </td>
         </tr>
+        {expanded && (
+            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                <td colSpan={selectedCols.length + 2} className="p-4">
+                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} />
+                </td>
+            </tr>
+        )}
+        </>
+    );
+}
+
+function QueryTrendPanel({ instancePk, seriesId, range }: { instancePk: number; seriesId: number; range: TimeRange }) {
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-query-trend', instancePk, seriesId, range.fromIso, range.toIso],
+        queryFn: () => apiGet<QueryTrendPoint[]>(
+            `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`,
+        ),
+        enabled: Number.isFinite(instancePk) && Number.isFinite(seriesId),
+    });
+
+    const chartData = useMemo(() => (data ?? []).map(p => {
+        const min = toNum(p.min_ms);
+        const max = toNum(p.max_ms);
+        return {
+            label: formatBucket(String(p.bucket_start)),
+            calls: toNum(p.calls),
+            total_ms: toNum(p.total_ms),
+            min_ms: min,
+            avg_ms: toNum(p.avg_ms),
+            max_ms: max,
+            range_ms: Math.max(0, max - min),
+        };
+    }), [data]);
+
+    if (isLoading) return <SkeletonTable rows={3} cols={3} />;
+    if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin trend verisi yok.</div>;
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <InsightChart title="Latency" height={150}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Line type="monotone" dataKey="avg_ms" name="Avg ms" stroke="#2563EB" strokeWidth={2} dot={false} />
+                </LineChart>
+            </InsightChart>
+            <InsightChart title="Throughput" height={150}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Area type="monotone" dataKey="calls" name="Calls" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="Min-Avg-Max Range" height={150}>
+                <ComposedChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Area type="monotone" dataKey="min_ms" stackId="range" stroke="transparent" fill="transparent" name="Min ms" />
+                    <Area type="monotone" dataKey="range_ms" stackId="range" stroke="transparent" fill="#E5E7EB" name="Max-Min ms" />
+                    <Line type="monotone" dataKey="avg_ms" name="Avg ms" stroke="#7C3AED" strokeWidth={2} dot={false} />
+                </ComposedChart>
+            </InsightChart>
+        </div>
     );
 }
