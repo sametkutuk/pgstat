@@ -6,7 +6,7 @@ import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
-import { Area, AreaChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -254,8 +254,31 @@ function formatDurationMs(ms: number): string {
     return `${ms.toFixed(0)} ms`;
 }
 
-function formatBucket(value: string): string {
-    return new Date(value).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+// Eksen tick'leri icin kisa label. Uzun pencerede gun ekle.
+function formatBucket(value: string, windowHours: number): string {
+    const d = new Date(value);
+    if (windowHours <= 24) {
+        return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    }
+    if (windowHours <= 7 * 24) {
+        // 7 gune kadar: "21.05 14:00"
+        return d.toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+    // 30 gun+: "21 May 12:00" (saat dahil cunku 6sa bucket)
+    return d.toLocaleString('tr-TR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+// Tooltip basligi icin tam tarih
+function formatBucketFull(value: string): string {
+    return new Date(value).toLocaleString('tr-TR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+    });
+}
+
+// Pencere uzunluguna gore gun ayraci ReferenceLine cizilecek mi?
+function shouldShowDaySeparators(windowHours: number): boolean {
+    return windowHours > 24;
 }
 
 function rangeLabel(range: TimeRange): string {
@@ -410,13 +433,18 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
         const avgMs = data.reduce((sum, r) => sum + toNum(r.ort_ms), 0) / data.length;
         return { totalMs, topPct: toNum(data[0]?.pct_of_total), avgMs };
     }, [data]);
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
     const chartData = useMemo<ChartDatum[]>(() => {
         const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
         return (trendData?.current ?? []).map(p => {
             const key = bucketKey(p.bucket_start);
             const previous = previousByBucket.get(key);
             return {
-                label: formatBucket(String(p.bucket_start)),
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
                 bucket_key: key,
                 current_db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
                 previous_db_minutes: previous ? +(toNum(previous.total_ms) / 60_000).toFixed(2) : null,
@@ -424,7 +452,26 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                 previous_calls: previous ? toNum(previous.total_calls) : null,
             };
         });
-    }, [trendData]);
+    }, [trendData, windowHours]);
+
+    // Gun ayraci ReferenceLine'lari: 00:00'a denk gelen bucket label'lari.
+    // Her bir local-day icin sadece bir tane (ilk denk gelen bucket) tut.
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                // Gun basina yakin ilk bucket (24sa+ pencerede saat granul. 1-6 arasi)
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
 
     return (
         <div className="space-y-4">
@@ -469,7 +516,10 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                            <Tooltip content={<ChartTooltip />} />
+                            <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
+                            {daySeparatorLabels.map(lbl => (
+                                <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                            ))}
                             {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
                             <Area type="monotone" dataKey="current_db_minutes" name="Şu an" stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
                         </AreaChart>
@@ -479,7 +529,10 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                            <Tooltip content={<ChartTooltip />} />
+                            <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
+                            {daySeparatorLabels.map(lbl => (
+                                <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                            ))}
                             {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
                             <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                         </AreaChart>
@@ -704,6 +757,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
         refetchInterval: autoRefresh ? 30_000 : false,
     });
 
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
     const chartData = useMemo<ChartDatum[]>(() => {
         const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
         return (data?.current ?? []).map(p => {
@@ -712,7 +769,8 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
             const min = toNum(p.min_ms);
             const max = toNum(p.max_ms);
             return {
-                label: formatBucket(String(p.bucket_start)),
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
                 bucket_key: key,
                 current_calls: toNum(p.calls),
                 previous_calls: previous ? toNum(previous.calls) : null,
@@ -724,10 +782,28 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                 range_ms: Math.max(0, max - min),
             };
         });
-    }, [data]);
+    }, [data, windowHours]);
+
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
 
     if (isLoading) return <SkeletonTable rows={3} cols={3} />;
     if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin trend verisi yok.</div>;
+
+    const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -736,7 +812,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`lat-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
                     {compareKey && <Line type="monotone" dataKey="previous_avg_ms" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
                     <Line type="monotone" dataKey="current_avg_ms" name="Şu an" stroke="#2563EB" strokeWidth={2} dot={false} />
                 </LineChart>
@@ -746,7 +825,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`q-tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
                     {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
                     <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                 </AreaChart>
@@ -756,7 +838,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`mam-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
                     <Area type="monotone" dataKey="min_ms" stackId="range" stroke="transparent" fill="transparent" name="Min ms" />
                     <Area type="monotone" dataKey="range_ms" stackId="range" stroke="transparent" fill="#E5E7EB" name="Max-Min ms" />
                     <Line type="monotone" dataKey="current_avg_ms" name="Avg ms" stroke="#7C3AED" strokeWidth={2} dot={false} />
