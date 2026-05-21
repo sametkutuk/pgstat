@@ -313,6 +313,16 @@ router.get('/:id/top-queries', async (req, res, next) => {
         round(avg(d.mean_exec_time_ms)::numeric, 2) as ort_ms,
         round(max(d.max_exec_time_ms)::numeric, 2) as max_ms,
         sum(d.rows_delta)::bigint as toplam_satir,
+        -- Cache hit % = hit / (hit + read). 0 ise null.
+        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+          then round((100.0 * sum(coalesce(d.shared_blks_hit_delta, 0))
+                      / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0))::numeric, 1)
+          else null end as cache_hit_pct,
+        round(avg(d.mean_plan_time_ms)::numeric, 2) as ort_plan_ms,
+        round((sum(coalesce(d.wal_bytes_delta, 0)) / 1024.0 / 1024.0)::numeric, 2) as wal_mb,
+        case when sum(d.calls_delta) > 0
+          then round((sum(coalesce(d.rows_delta, 0))::numeric / sum(d.calls_delta)::numeric), 1)
+          else 0 end as satir_per_cagri,
         ss.statement_series_id
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id

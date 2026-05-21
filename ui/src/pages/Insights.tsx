@@ -142,6 +142,10 @@ interface TopQueryRow {
     ort_ms: string;
     max_ms: string;
     toplam_satir: string;
+    cache_hit_pct: string | null;
+    ort_plan_ms: string | null;
+    wal_mb: string | null;
+    satir_per_cagri: string | null;
 }
 
 type SortMode = 'time' | 'calls' | 'slow';
@@ -417,6 +421,10 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
         { key: 'ort_ms', label: 'Ort (ms)', since: 11 },
         { key: 'max_ms', label: 'Max (ms)', since: 11 },
         { key: 'toplam_satir', label: 'Satır', since: 11 },
+        { key: 'cache_hit_pct', label: 'Cache Hit %', since: 11 },
+        { key: 'ort_plan_ms', label: 'Plan (ms)', since: 11 },
+        { key: 'wal_mb', label: 'WAL (MB)', since: 13 },
+        { key: 'satir_per_cagri', label: 'Satır/Çağrı', since: 11 },
     ],
 };
 
@@ -740,7 +748,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                                 <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                 {selectedCols.map(col => {
                                     const meta = TOP_QUERIES_COLUMNS_META.available.find(c => c.key === col);
-                                    const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir'].includes(col);
+                                    const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir', 'cache_hit_pct', 'ort_plan_ms', 'wal_mb', 'satir_per_cagri'].includes(col);
                                     return (
                                         <th key={col} className={`py-2 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${isRight ? 'text-right' : 'text-left'}`}>
                                             {meta?.label ?? col}
@@ -849,6 +857,25 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
                 return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{maxMs}</td>;
             case 'toplam_satir':
                 return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.toplam_satir).toLocaleString('tr-TR')}</td>;
+            case 'cache_hit_pct': {
+                if (row.cache_hit_pct == null) {
+                    return <td key={col} className="py-2 px-3 text-xs text-right text-[#94A3B8]">—</td>;
+                }
+                const hit = parseFloat(row.cache_hit_pct);
+                // < 90: kirmizi (disk-bound), < 99: sari, >= 99: yesil
+                const hitClass = hit < 90 ? 'bg-red-100 text-red-700' : hit < 99 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+                return (
+                    <td key={col} className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${hitClass}`}>%{hit}</span>
+                    </td>
+                );
+            }
+            case 'ort_plan_ms':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.ort_plan_ms == null ? '—' : Number(row.ort_plan_ms).toLocaleString('tr-TR')}</td>;
+            case 'wal_mb':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb == null ? '—' : Number(row.wal_mb).toLocaleString('tr-TR')}</td>;
+            case 'satir_per_cagri':
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.satir_per_cagri == null ? '—' : Number(row.satir_per_cagri).toLocaleString('tr-TR')}</td>;
             default:
                 return <td key={col} className="py-2 px-3 text-xs text-[#94A3B8]">—</td>;
         }
