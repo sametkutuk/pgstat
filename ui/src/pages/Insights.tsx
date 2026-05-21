@@ -518,16 +518,23 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
             const key = bucketKey(p.bucket_start);
             const previous = previousByBucket.get(key);
             const baseline = baselineByBucket.get(key);
+            const currentMin = +(toNum(p.total_ms) / 60_000).toFixed(2);
+            const baselineMin = baseline ? +(toNum(baseline.total_ms) / 60_000).toFixed(2) : null;
+            const currentCalls = toNum(p.total_calls);
+            const baselineCalls = baseline ? toNum(baseline.total_calls) : null;
             return {
                 label: formatBucket(String(p.bucket_start), windowHours),
                 bucket_iso: String(p.bucket_start),
                 bucket_key: key,
-                current_db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
+                current_db_minutes: currentMin,
                 previous_db_minutes: previous ? +(toNum(previous.total_ms) / 60_000).toFixed(2) : null,
-                baseline_db_minutes: baseline ? +(toNum(baseline.total_ms) / 60_000).toFixed(2) : null,
-                current_calls: toNum(p.total_calls),
-                previous_calls: previous ? toNum(previous.total_calls) : null,
-                baseline_calls: baseline ? toNum(baseline.total_calls) : null,
+                baseline_db_minutes: baselineMin,
+                // Stacked area icin "rest": baseline'dan current cikartilmis kalan
+                rest_db_minutes: baselineMin == null ? null : Math.max(0, +(baselineMin - currentMin).toFixed(2)),
+                current_calls: currentCalls,
+                previous_calls: previous ? toNum(previous.calls ?? previous.total_calls) : null,
+                baseline_calls: baselineCalls,
+                rest_calls: baselineCalls == null ? null : Math.max(0, baselineCalls - currentCalls),
             };
         });
     }, [trendData, windowHours]);
@@ -597,31 +604,29 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            {/* Filtreli seri (foreground) solda kendi ölçeginde; baseline (background) sagda kendi olceginde */}
-                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#2563EB' }} tickFormatter={compactNumber} />
-                            {hasBaseline && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#94A3B8' }} tickFormatter={compactNumber} />}
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
-                                <ReferenceLine key={`db-${lbl}`} yAxisId="left" x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                                <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
-                            {hasBaseline && <Area yAxisId="right" type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
-                            {compareKey && <Area yAxisId="left" type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area yAxisId="left" type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
+                            {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            {/* Stacked: filtreli alt, geri kalan ust — toplam baseline'a esit */}
+                            <Area type="monotone" stackId={hasBaseline ? 'total' : undefined} dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
+                            {hasBaseline && <Area type="monotone" stackId="total" dataKey="rest_db_minutes" name={datname ? `${datname} kalan` : 'Diger sorgular'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.6} strokeWidth={1} connectNulls />}
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={200}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#059669' }} tickFormatter={compactNumber} />
-                            {hasBaseline && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#94A3B8' }} tickFormatter={compactNumber} />}
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
-                                <ReferenceLine key={`tp-${lbl}`} yAxisId="left" x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                                <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
-                            {hasBaseline && <Area yAxisId="right" type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
-                            {compareKey && <Area yAxisId="left" type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area yAxisId="left" type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                            {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            <Area type="monotone" stackId={hasBaseline ? 'total' : undefined} dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#10B981" fillOpacity={0.7} strokeWidth={2} />
+                            {hasBaseline && <Area type="monotone" stackId="total" dataKey="rest_calls" name={datname ? `${datname} kalan` : 'Diger sorgular'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.6} strokeWidth={1} connectNulls />}
                         </AreaChart>
                     </InsightChart>
                 </div>
