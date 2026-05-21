@@ -826,14 +826,15 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
     );
 }
 
-function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number | string; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
     const compareQp = compareKey ? `&compare=${compareKey}` : '';
     const { data, isLoading } = useQuery({
         queryKey: ['insights-query-trend', instancePk, seriesId, range.fromIso, range.toIso, compareKey],
         queryFn: () => apiGet<TrendResponse<QueryTrendPoint>>(
             `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
         ),
-        enabled: Number.isFinite(instancePk) && Number.isFinite(seriesId),
+        // seriesId PG'den bigint donduğu icin string gelebilir; truthy check yeterli
+        enabled: instancePk != null && seriesId != null && String(seriesId).length > 0,
         refetchInterval: autoRefresh ? 30_000 : false,
     });
 
