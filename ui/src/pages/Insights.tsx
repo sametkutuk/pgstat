@@ -597,28 +597,31 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            {/* Filtreli seri (foreground) solda kendi ölçeginde; baseline (background) sagda kendi olceginde */}
+                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#2563EB' }} tickFormatter={compactNumber} />
+                            {hasBaseline && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#94A3B8' }} tickFormatter={compactNumber} />}
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
-                                <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                                <ReferenceLine key={`db-${lbl}`} yAxisId="left" x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
-                            {hasBaseline && <Area type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
-                            {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
+                            {hasBaseline && <Area yAxisId="right" type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
+                            {compareKey && <Area yAxisId="left" type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            <Area yAxisId="left" type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={200}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#059669' }} tickFormatter={compactNumber} />
+                            {hasBaseline && <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#94A3B8' }} tickFormatter={compactNumber} />}
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
-                                <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                                <ReferenceLine key={`tp-${lbl}`} yAxisId="left" x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
-                            {hasBaseline && <Area type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
-                            {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                            {hasBaseline && <Area yAxisId="right" type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
+                            {compareKey && <Area yAxisId="left" type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            <Area yAxisId="left" type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                 </div>
