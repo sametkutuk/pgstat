@@ -63,12 +63,21 @@ function pgssBucketAlignSql(windowHours: number, paramIndex: number): string {
     return `date_trunc('day', $${paramIndex}::timestamptz)`;
 }
 
-async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
+    if (searchRaw) {
+        if (/^-?\d+$/.test(searchRaw)) {
+            params.push(searchRaw);
+            dbWhere += ` and ss.queryid::text = $${params.length}`;
+        } else {
+            params.push(searchRaw);
+            dbWhere += ` and qt.query_text ilike $${params.length}`;
+        }
+    }
     if (datname) {
         params.push(datname);
-        dbWhere = ` and dbr.datname = $${params.length}`;
+        dbWhere += ` and dbr.datname = $${params.length}`;
     }
     const stepSql = pgssBucketStepSql(windowHours);
     // $2 ve $3 from/to. Grid'i bucket sinirina hizala.
@@ -82,6 +91,7 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
             coalesce(sum(d.calls_delta), 0)::bigint as total_calls
           from fact.pgss_delta d
           join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+          left join dim.query_text qt on qt.query_text_id = ss.query_text_id
           left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
           where d.instance_pk = $1
             and d.sample_ts between $2::timestamptz and $3::timestamptz
@@ -152,13 +162,14 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
             return;
         }
         const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
 
         // Bucket granulu pencereye gore secilir; fact.pgss_delta'dan okuyoruz.
         // <=6s: 5dk, <=7g: 1s, <=30g: 6s, >30g: 1g.
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const bucketExpr = pgssBucketExpr(windowHours);
 
-        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, bucketExpr, windowHours);
+        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -167,6 +178,7 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
                 datname,
+                searchRaw,
                 bucketExpr,
                 windowHours,
                 offset.intervalSql,
@@ -277,6 +289,7 @@ router.get('/:id/top-queries', async (req, res, next) => {
         ss.queryid::text as queryid,
         ss.query_text_id,
         left(qt.query_text, 200) as query_short,
+        qt.query_text as query_full,
         sum(d.calls_delta)::bigint as toplam_cagri,
         sum(d.total_exec_time_ms_delta)::bigint as toplam_exec_ms,
         round((sum(d.total_exec_time_ms_delta) / 1000.0 / 60.0)::numeric, 2) as toplam_dk,
