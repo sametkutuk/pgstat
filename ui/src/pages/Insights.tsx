@@ -542,6 +542,19 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
         const b = trendData?.baseline;
         return Array.isArray(b) && b.length > 0;
     }, [trendData]);
+    // Y-domain filtreli (current) serisinin max'ina gore — baseline asarsa
+    // grafik disina tasar (clipped). Boylece kucuk SQL ezilmez, baseline
+    // "buyuk yuk var" sinyalini gosterir.
+    const yDomainDbMinutes = useMemo<[number, number] | undefined>(() => {
+        if (!hasBaseline) return undefined;
+        const max = chartData.reduce((m, d) => Math.max(m, toNum(d.current_db_minutes)), 0);
+        return max > 0 ? [0, +(max * 1.15).toFixed(2)] : undefined;
+    }, [chartData, hasBaseline]);
+    const yDomainCalls = useMemo<[number, number] | undefined>(() => {
+        if (!hasBaseline) return undefined;
+        const max = chartData.reduce((m, d) => Math.max(m, toNum(d.current_calls)), 0);
+        return max > 0 ? [0, Math.ceil(max * 1.15)] : undefined;
+    }, [chartData, hasBaseline]);
 
     // Gun ayraci ReferenceLine'lari: 00:00'a denk gelen bucket label'lari.
     // Her bir local-day icin sadece bir tane (ilk denk gelen bucket) tut.
@@ -604,29 +617,29 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            {/* Y-axis filtreli serinin max'ina gore; baseline asarsa grafik disina taşar (clipped) */}
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainDbMinutes as any} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
+                            {hasBaseline && <Area type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            {/* Stacked: filtreli alt, geri kalan ust — toplam baseline'a esit */}
-                            <Area type="monotone" stackId={hasBaseline ? 'total' : undefined} dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
-                            {hasBaseline && <Area type="monotone" stackId="total" dataKey="rest_db_minutes" name={datname ? `${datname} kalan` : 'Diger sorgular'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.6} strokeWidth={1} connectNulls />}
+                            <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={200}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainCalls as any} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
+                            {hasBaseline && <Area type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" stackId={hasBaseline ? 'total' : undefined} dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#10B981" fillOpacity={0.7} strokeWidth={2} />
-                            {hasBaseline && <Area type="monotone" stackId="total" dataKey="rest_calls" name={datname ? `${datname} kalan` : 'Diger sorgular'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.6} strokeWidth={1} connectNulls />}
+                            <Area type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#10B981" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                 </div>
