@@ -268,7 +268,8 @@ function ChartTooltip({ active, payload, label }: any) {
     if (!active || !payload?.length) return null;
     const current = payload.find((p: any) => String(p.dataKey).startsWith('current_'));
     const previous = payload.find((p: any) => String(p.dataKey).startsWith('previous_'));
-    if (current) {
+    const hasPreviousSeries = payload.some((p: any) => String(p.dataKey).startsWith('previous_'));
+    if (current && hasPreviousSeries) {
         const currentValue = toNum(current.value);
         const previousValue = previous?.value == null ? null : toNum(previous.value);
         const delta = previousValue == null ? null : deltaLabel(currentValue, previousValue);
@@ -339,6 +340,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     const [datname, setDatname] = useState<string>('');
     const [columnsModalOpen, setColumnsModalOpen] = useState(false);
     const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
+    const [compareMode, setCompareModeState] = useState<CompareMode>(() => loadCompareMode());
     const { selected: selectedCols, setSelected: setSelectedCols } = useDataColumns(
         'pgstat.insights.top-queries.cols',
         TOP_QUERIES_COLUMNS_META.defaults,
@@ -347,6 +349,13 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
 
     const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
     const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+    const compareKey = compareMode === 'auto' ? compareForRange(range) : null;
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+
+    function setCompareMode(mode: CompareMode) {
+        setCompareModeState(mode);
+        window.localStorage.setItem('pgstat.insights.compare-mode', mode);
+    }
 
     // Instance'a ait DB listesi (filtre dropdown'u icin)
     const { data: databases } = useQuery({
@@ -365,9 +374,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     });
 
     const { data: trendData } = useQuery({
-        queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname],
-        queryFn: () => apiGet<DbTimeTrendPoint[]>(
-            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}`,
+        queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname, compareKey],
+        queryFn: () => apiGet<TrendResponse<DbTimeTrendPoint>>(
+            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}${compareQp}`,
         ),
         refetchInterval: autoRefresh ? 30_000 : false,
     });
@@ -401,11 +410,21 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
         const avgMs = data.reduce((sum, r) => sum + toNum(r.ort_ms), 0) / data.length;
         return { totalMs, topPct: toNum(data[0]?.pct_of_total), avgMs };
     }, [data]);
-    const chartData = useMemo(() => (trendData ?? []).map(p => ({
-        label: formatBucket(String(p.bucket_start)),
-        db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
-        calls: toNum(p.total_calls),
-    })), [trendData]);
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (trendData?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            return {
+                label: formatBucket(String(p.bucket_start)),
+                bucket_key: key,
+                current_db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
+                previous_db_minutes: previous ? +(toNum(previous.total_ms) / 60_000).toFixed(2) : null,
+                current_calls: toNum(p.total_calls),
+                previous_calls: previous ? toNum(previous.total_calls) : null,
+            };
+        });
+    }, [trendData]);
 
     return (
         <div className="space-y-4">
@@ -422,6 +441,27 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                 </div>
             )}
 
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
+                <span>Karşılaştırma:</span>
+                <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
+                    <button
+                        type="button"
+                        onClick={() => setCompareMode('auto')}
+                        className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}
+                    >
+                        Otomatik
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setCompareMode('off')}
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}
+                    >
+                        Kapalı
+                    </button>
+                </div>
+                {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
+            </div>
+
             {chartData.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <InsightChart title="DB Time Trend (Toplam)" height={200}>
@@ -430,7 +470,8 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                             <Tooltip content={<ChartTooltip />} />
-                            <Area type="monotone" dataKey="db_minutes" name="DB dk" stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
+                            {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            <Area type="monotone" dataKey="current_db_minutes" name="Şu an" stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={200}>
@@ -439,7 +480,8 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                             <Tooltip content={<ChartTooltip />} />
-                            <Area type="monotone" dataKey="calls" name="Calls" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                            {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                            <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                 </div>
@@ -549,6 +591,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                                     instancePk={instancePk}
                                     range={range}
                                     autoRefresh={autoRefresh}
+                                    compareKey={compareKey}
                                     expanded={expandedSeriesId === row.statement_series_id}
                                     onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
                                 />
@@ -571,7 +614,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     );
 }
 
-function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; autoRefresh: boolean; expanded: boolean; onToggle: () => void }) {
+function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, compareKey, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null; expanded: boolean; onToggle: () => void }) {
     const pct = parseFloat(row.pct_of_total);
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
@@ -642,7 +685,7 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
         {expanded && (
             <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                 <td colSpan={selectedCols.length + 2} className="p-4">
-                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} />
+                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
                 </td>
             </tr>
         )}
@@ -650,29 +693,38 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
     );
 }
 
-function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh }: { instancePk: number; seriesId: number; range: TimeRange; autoRefresh: boolean }) {
+function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
     const { data, isLoading } = useQuery({
-        queryKey: ['insights-query-trend', instancePk, seriesId, range.fromIso, range.toIso],
-        queryFn: () => apiGet<QueryTrendPoint[]>(
-            `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`,
+        queryKey: ['insights-query-trend', instancePk, seriesId, range.fromIso, range.toIso, compareKey],
+        queryFn: () => apiGet<TrendResponse<QueryTrendPoint>>(
+            `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
         ),
         enabled: Number.isFinite(instancePk) && Number.isFinite(seriesId),
         refetchInterval: autoRefresh ? 30_000 : false,
     });
 
-    const chartData = useMemo(() => (data ?? []).map(p => {
-        const min = toNum(p.min_ms);
-        const max = toNum(p.max_ms);
-        return {
-            label: formatBucket(String(p.bucket_start)),
-            calls: toNum(p.calls),
-            total_ms: toNum(p.total_ms),
-            min_ms: min,
-            avg_ms: toNum(p.avg_ms),
-            max_ms: max,
-            range_ms: Math.max(0, max - min),
-        };
-    }), [data]);
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (data?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            const min = toNum(p.min_ms);
+            const max = toNum(p.max_ms);
+            return {
+                label: formatBucket(String(p.bucket_start)),
+                bucket_key: key,
+                current_calls: toNum(p.calls),
+                previous_calls: previous ? toNum(previous.calls) : null,
+                total_ms: toNum(p.total_ms),
+                min_ms: min,
+                current_avg_ms: toNum(p.avg_ms),
+                previous_avg_ms: previous ? toNum(previous.avg_ms) : null,
+                max_ms: max,
+                range_ms: Math.max(0, max - min),
+            };
+        });
+    }, [data]);
 
     if (isLoading) return <SkeletonTable rows={3} cols={3} />;
     if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin trend verisi yok.</div>;
@@ -685,7 +737,8 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh }: { instanc
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Line type="monotone" dataKey="avg_ms" name="Avg ms" stroke="#2563EB" strokeWidth={2} dot={false} />
+                    {compareKey && <Line type="monotone" dataKey="previous_avg_ms" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="current_avg_ms" name="Şu an" stroke="#2563EB" strokeWidth={2} dot={false} />
                 </LineChart>
             </InsightChart>
             <InsightChart title="Throughput" height={150}>
@@ -694,7 +747,8 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh }: { instanc
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Area type="monotone" dataKey="calls" name="Calls" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                    {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                 </AreaChart>
             </InsightChart>
             <InsightChart title="Min-Avg-Max Range" height={150}>
@@ -705,7 +759,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh }: { instanc
                     <Tooltip content={<ChartTooltip />} />
                     <Area type="monotone" dataKey="min_ms" stackId="range" stroke="transparent" fill="transparent" name="Min ms" />
                     <Area type="monotone" dataKey="range_ms" stackId="range" stroke="transparent" fill="#E5E7EB" name="Max-Min ms" />
-                    <Line type="monotone" dataKey="avg_ms" name="Avg ms" stroke="#7C3AED" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="current_avg_ms" name="Avg ms" stroke="#7C3AED" strokeWidth={2} dot={false} />
                 </ComposedChart>
             </InsightChart>
         </div>

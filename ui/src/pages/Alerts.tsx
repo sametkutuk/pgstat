@@ -1,6 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPatch, apiPost } from '../api/client';
-import DataTable from '../components/common/DataTable';
 import Badge from '../components/common/Badge';
 import TimeAgo from '../components/common/TimeAgo';
 import LastUpdated from '../components/common/LastUpdated';
@@ -91,7 +90,6 @@ export default function Alerts() {
         onSuccess: () => {
             toast.success('Alert kuralları yeniden değerlendiriliyor...');
             // Önceki açık alert sayısı (mevcut data'dan)
-            const beforeOpen = (data || []).filter(a => a.status === 'open').length;
             const beforeIds = new Set((data || []).filter(a => a.status === 'open').map(a => a.alert_id));
             // 8s sonra yeni durumu çek, diff hesapla
             window.setTimeout(async () => {

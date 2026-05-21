@@ -4,46 +4,132 @@ import { parseTimeRange, parseLimit } from '../middleware/validation';
 
 const router = Router();
 
+type CompareKey = '1h' | '1d' | '1w' | '1m';
+
+const COMPARE_OFFSETS: Record<CompareKey, { seconds: number; intervalSql: string }> = {
+    '1h': { seconds: 3_600, intervalSql: `interval '1 hour'` },
+    '1d': { seconds: 86_400, intervalSql: `interval '1 day'` },
+    '1w': { seconds: 604_800, intervalSql: `interval '7 days'` },
+    '1m': { seconds: 2_592_000, intervalSql: `interval '30 days'` },
+};
+
+function parseCompareParam(value: unknown): CompareKey | null {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    if (raw === '1h' || raw === '1d' || raw === '1w' || raw === '1m') return raw;
+    throw new Error('Invalid compare');
+}
+
+function shiftedIso(iso: string, offsetSeconds: number): string {
+    return new Date(new Date(iso).getTime() - offsetSeconds * 1000).toISOString();
+}
+
+function pgssBucketExpr(windowHours: number): string {
+    if (windowHours <= 6) {
+        return `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`;
+    }
+    if (windowHours <= 7 * 24) {
+        return `date_trunc('hour', d.sample_ts)`;
+    }
+    if (windowHours <= 30 * 24) {
+        return `date_trunc('day', d.sample_ts) + make_interval(hours => (extract(hour from d.sample_ts)::int / 6) * 6)`;
+    }
+    return `date_trunc('day', d.sample_ts)`;
+}
+
+async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, bucketExpr: string, alignIntervalSql?: string) {
+    const params: any[] = [id, fromIso, toIso];
+    let dbWhere = '';
+    if (datname) {
+        params.push(datname);
+        dbWhere = ` and dbr.datname = $${params.length}`;
+    }
+    const alignedSelect = alignIntervalSql ? `, bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
+            coalesce(sum(d.calls_delta), 0)::bigint as total_calls
+          from fact.pgss_delta d
+          join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+          left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            ${dbWhere}
+          group by bucket_start
+        )
+        select
+          bucket_start${alignedSelect},
+          total_ms,
+          total_calls
+        from buckets
+        order by bucket_start
+    `, params);
+}
+
+async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, alignIntervalSql?: string) {
+    const alignedSelect = alignIntervalSql ? `, bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(d.calls_delta), 0)::bigint as calls,
+            coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
+            min(d.min_exec_time_ms)::double precision as min_ms,
+            avg(d.mean_exec_time_ms)::double precision as avg_ms,
+            max(d.max_exec_time_ms)::double precision as max_ms
+          from fact.pgss_delta d
+          where d.instance_pk = $1
+            and d.statement_series_id = $2::bigint
+            and d.sample_ts between $3::timestamptz and $4::timestamptz
+          group by bucket_start
+        )
+        select
+          bucket_start${alignedSelect},
+          calls,
+          total_ms,
+          min_ms,
+          avg_ms,
+          max_ms
+        from buckets
+        order by bucket_start
+    `, [id, seriesId, fromIso, toIso]);
+}
+
 // GET /api/insights/:id/db-time-trend?from=...&to=...[&datname=...]
 router.get('/:id/db-time-trend', async (req, res, next) => {
     try {
         const { id } = req.params;
         const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let dbWhere = '';
-        if (datname) {
-            params.push(datname);
-            dbWhere = ` and dbr.datname = $${params.length}`;
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
         }
+        const datname = (req.query.datname as string || '').trim();
 
-        // Bucket granulu pencereye gore secilir — hourly aggregate'in gec
-        // gelmesi sorununu by-pass etmek icin fact.pgss_delta'dan okuyoruz.
-        //   <= 6 saat  → 5 dakika
-        //   <= 48 saat → 1 saat
-        //   otesi      → 1 gun
+        // Bucket granulu pencereye gore secilir; fact.pgss_delta'dan okuyoruz.
+        // <=6s: 5dk, <=7g: 1s, <=30g: 6s, >30g: 1g.
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = windowHours <= 6
-            ? `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`
-            : windowHours <= 48
-                ? `date_trunc('hour', d.sample_ts)`
-                : `date_trunc('day', d.sample_ts)`;
+        const bucketExpr = pgssBucketExpr(windowHours);
 
-        const result = await pool.query(`
-            select
-              ${bucketExpr} as bucket_start,
-              coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
-              coalesce(sum(d.calls_delta), 0)::bigint as total_calls
-            from fact.pgss_delta d
-            join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
-            left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
-            where d.instance_pk = $1
-              and d.sample_ts between $2::timestamptz and $3::timestamptz
-              ${dbWhere}
-            group by bucket_start
-            order by bucket_start
-        `, params);
-        res.json(result.rows);
+        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, bucketExpr);
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchDbTimeTrend(
+                id,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                datname,
+                bucketExpr,
+                offset.intervalSql,
+            )).rows;
+        }
+        res.json({ current: current.rows, previous, compare });
     } catch (err) {
         next(err);
     }
@@ -54,6 +140,13 @@ router.get('/:id/query-trend', async (req, res, next) => {
     try {
         const { id } = req.params;
         const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
         const seriesIdRaw = String(req.query.series_id || '');
         if (!/^\d+$/.test(seriesIdRaw)) {
             res.status(400).json({ error: 'Invalid series_id' });
@@ -61,28 +154,22 @@ router.get('/:id/query-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = windowHours <= 6
-            ? `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`
-            : windowHours <= 48
-                ? `date_trunc('hour', d.sample_ts)`
-                : `date_trunc('day', d.sample_ts)`;
+        const bucketExpr = pgssBucketExpr(windowHours);
 
-        const result = await pool.query(`
-            select
-              ${bucketExpr} as bucket_start,
-              coalesce(sum(d.calls_delta), 0)::bigint as calls,
-              coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
-              min(d.min_exec_time_ms)::double precision as min_ms,
-              avg(d.mean_exec_time_ms)::double precision as avg_ms,
-              max(d.max_exec_time_ms)::double precision as max_ms
-            from fact.pgss_delta d
-            where d.instance_pk = $1
-              and d.statement_series_id = $2::bigint
-              and d.sample_ts between $3::timestamptz and $4::timestamptz
-            group by bucket_start
-            order by bucket_start
-        `, [id, seriesIdRaw, fromIso, toIso]);
-        res.json(result.rows);
+        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr);
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchQueryTrend(
+                id,
+                seriesIdRaw,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                bucketExpr,
+                offset.intervalSql,
+            )).rows;
+        }
+        res.json({ current: current.rows, previous, compare });
     } catch (err) {
         next(err);
     }
