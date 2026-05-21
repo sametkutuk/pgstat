@@ -618,7 +618,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                             {/* Y-axis filtreli serinin max'ina gore; baseline asarsa grafik disina taşar (clipped) */}
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainDbMinutes as any} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainDbMinutes as any} allowDataOverflow={hasBaseline} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
@@ -632,7 +632,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainCalls as any} />
+                            <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainCalls as any} allowDataOverflow={hasBaseline} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
