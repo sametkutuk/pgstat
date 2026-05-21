@@ -343,6 +343,187 @@ router.get('/:id/top-queries', async (req, res, next) => {
     }
 });
 
+// =========================================================================
+// TEMP SPILL sekmesi
+// =========================================================================
+
+// Top temp-spill sorgular — temp_blks_written desc, HAVING > 0.
+// Sadece geçici dosya yazan sorgulari listeler. 1 blok = 8KB.
+async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const params: any[] = [id, fromIso, toIso];
+    let dbWhere = '';
+    if (searchRaw) {
+        if (/^-?\d+$/.test(searchRaw)) {
+            params.push(searchRaw);
+            dbWhere += ` and ss.queryid::text = $${params.length}`;
+        } else {
+            params.push(searchRaw);
+            dbWhere += ` and qt.query_text ilike $${params.length}`;
+        }
+    }
+    if (datname) {
+        params.push(datname);
+        dbWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const stepSql = pgssBucketStepSql(windowHours);
+    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(d.temp_blks_written_delta), 0)::bigint as temp_blks_written,
+            coalesce(sum(d.temp_blks_read_delta), 0)::bigint as temp_blks_read,
+            coalesce(sum(d.calls_delta), 0)::bigint as calls
+          from fact.pgss_delta d
+          join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+          left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+          left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            ${dbWhere}
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.temp_blks_written, 0)::bigint as temp_blks_written,
+          coalesce(b.temp_blks_read, 0)::bigint as temp_blks_read,
+          coalesce(b.calls, 0)::bigint as calls
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+}
+
+// GET /api/insights/:id/temp-spill?sort=temp_written|temp_read&from=&to=&limit=20
+router.get('/:id/temp-spill', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        const limit = parseLimit(req.query.limit, 20);
+        const sort = String(req.query.sort || 'temp_written').toLowerCase();
+
+        let orderBy: string;
+        if (sort === 'temp_read') {
+            orderBy = 'sum(coalesce(d.temp_blks_read_delta, 0)) desc nulls last';
+        } else {
+            orderBy = 'sum(coalesce(d.temp_blks_written_delta, 0)) desc nulls last';
+        }
+
+        const searchRaw = (req.query.search as string || '').trim();
+        const datname = (req.query.datname as string || '').trim();
+        const params: any[] = [id, fromIso, toIso];
+        let searchWhere = '';
+        if (searchRaw) {
+            if (/^-?\d+$/.test(searchRaw)) {
+                params.push(searchRaw);
+                searchWhere += ` and ss.queryid::text = $${params.length}`;
+            } else {
+                params.push(searchRaw);
+                searchWhere += ` and qt.query_text ilike $${params.length}`;
+            }
+        }
+        if (datname) {
+            params.push(datname);
+            searchWhere += ` and dbr.datname = $${params.length}`;
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+      select
+        dbr.datname,
+        ss.queryid::text as queryid,
+        ss.query_text_id,
+        left(qt.query_text, 200) as query_short,
+        qt.query_text as query_full,
+        sum(d.calls_delta)::bigint as toplam_cagri,
+        sum(coalesce(d.temp_blks_written_delta, 0))::bigint as toplam_temp_written_blks,
+        sum(coalesce(d.temp_blks_read_delta, 0))::bigint as toplam_temp_read_blks,
+        -- 1 blok = 8 KB → MB icin / 128
+        round((sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)::numeric, 2) as temp_written_mb,
+        round((sum(coalesce(d.temp_blks_read_delta, 0)) / 128.0)::numeric, 2) as temp_read_mb,
+        -- Cagri basina ortalama temp MB
+        case when sum(d.calls_delta) > 0
+          then round(((sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)
+                      / sum(d.calls_delta)::numeric)::numeric, 4)
+          else null end as temp_written_mb_per_call,
+        sum(d.total_exec_time_ms_delta)::bigint as toplam_exec_ms,
+        round((sum(d.total_exec_time_ms_delta) / 1000.0 / 60.0)::numeric, 2) as toplam_dk,
+        round(avg(d.mean_exec_time_ms)::numeric, 2) as ort_ms,
+        sum(d.rows_delta)::bigint as toplam_satir,
+        ss.statement_series_id
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by dbr.datname, ss.queryid, ss.query_text_id, qt.query_text, ss.statement_series_id
+      having sum(coalesce(d.temp_blks_written_delta, 0)) > 0
+      order by ${orderBy}
+      limit $${params.length}
+    `, params);
+
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/temp-trend?from=&to=&datname=&search=&compare=&include_baseline=1
+router.get('/:id/temp-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
+        const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+        const baselineNeeded = includeBaseline && searchRaw !== '';
+
+        const [current, baselineRes] = await Promise.all([
+            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            baselineNeeded
+                ? fetchTempSpillData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                : Promise.resolve(null),
+        ]);
+
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchTempSpillData(
+                id,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                datname,
+                searchRaw,
+                bucketExpr,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+        const baseline = baselineRes ? baselineRes.rows : null;
+        res.json({ current: current.rows, previous, compare, baseline });
+    } catch (err) {
+        next(err);
+    }
+});
+
 // GET /api/insights/:id/databases — instance'a ait DB listesi (filtre dropdown'u icin)
 router.get('/:id/databases', async (req, res, next) => {
     try {

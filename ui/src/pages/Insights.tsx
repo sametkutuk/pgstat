@@ -111,7 +111,7 @@ export default function Insights() {
                 içinde null guard yapılır. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
             {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
-            {tab === 'temp-spill' && <PlaceholderTab title="Temp Spill" description="work_mem yetersizliği yaşayan sorgular. Yakında." />}
+            {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
             {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
             {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
@@ -1002,6 +1002,300 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <Line type="monotone" dataKey="max_ms" name="Max ms" stroke="#DC2626" strokeWidth={1.5} dot={false} connectNulls />
                 </LineChart>
             </InsightChart>
+        </div>
+    );
+}
+
+// =========================================================================
+// TEMP SPILL sekmesi
+// =========================================================================
+interface TempSpillRow {
+    datname: string | null;
+    queryid: string | null;
+    query_text_id: number | null;
+    statement_series_id: number;
+    query_short: string | null;
+    query_full: string | null;
+    toplam_cagri: string;
+    toplam_temp_written_blks: string;
+    toplam_temp_read_blks: string;
+    temp_written_mb: string;
+    temp_read_mb: string;
+    temp_written_mb_per_call: string | null;
+    toplam_exec_ms: string;
+    toplam_dk: string;
+    ort_ms: string;
+    toplam_satir: string;
+}
+
+type TempSortMode = 'temp_written' | 'temp_read';
+
+interface TempTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    temp_blks_written: string | number;
+    temp_blks_read: string | number;
+    calls: string | number;
+}
+
+function TempSpillCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+    }
+    return <TempSpillCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
+}
+
+function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    const [sort, setSort] = useState<TempSortMode>('temp_written');
+    const [searchInput, setSearchInput] = useState<string>('');
+    const [search, setSearch] = useState<string>('');
+    const [datname, setDatname] = useState<string>('');
+    const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
+    useEffect(() => {
+        try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
+    }, [compareMode]);
+
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+    const compareKey = compareMode === 'off' ? null : compareForRange(range);
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        staleTime: 60_000,
+        refetchInterval: false,
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['insights-temp-spill', instancePk, range.fromIso, range.toIso, sort, search, datname],
+        queryFn: () => apiGet<TempSpillRow[]>(
+            `/insights/${instancePk}/temp-spill?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const baselineQp = search ? `&include_baseline=1` : '';
+    const { data: trendData } = useQuery({
+        queryKey: ['insights-temp-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
+        queryFn: () => apiGet<TrendResponse<TempTrendPoint>>(
+            `/insights/${instancePk}/temp-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}${baselineQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        const baselineByBucket = new Map((trendData?.baseline ?? []).map(p => [bucketKey(p.bucket_start), p]));
+        return (trendData?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            const baseline = baselineByBucket.get(key);
+            const currentMb = +(toNum(p.temp_blks_written) / 128.0).toFixed(2);
+            const baselineMb = baseline ? +(toNum(baseline.temp_blks_written) / 128.0).toFixed(2) : null;
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_temp_mb: currentMb,
+                previous_temp_mb: previous ? +(toNum(previous.temp_blks_written) / 128.0).toFixed(2) : null,
+                baseline_temp_mb: baselineMb,
+                current_calls: toNum(p.calls),
+            };
+        });
+    }, [trendData, windowHours]);
+    const hasBaseline = useMemo(() => {
+        const b = trendData?.baseline;
+        return Array.isArray(b) && b.length > 0;
+    }, [trendData]);
+    const yDomainTempMb = useMemo<[number, number] | undefined>(() => {
+        if (!hasBaseline) return undefined;
+        const currentMax = chartData.reduce((m, d) => Math.max(m, toNum(d.current_temp_mb)), 0);
+        const baselineP70 = (() => {
+            const vals = chartData.map(d => toNum(d.baseline_temp_mb)).filter(v => v > 0);
+            if (vals.length === 0) return 0;
+            const sorted = [...vals].sort((a, b) => a - b);
+            return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.70))];
+        })();
+        const upper = Math.max(currentMax * 1.5, baselineP70);
+        return upper > 0 ? [0, +(upper * 1.05).toFixed(2)] : undefined;
+    }, [chartData, hasBaseline]);
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    const summary = useMemo(() => {
+        if (!data || data.length === 0) return null;
+        const totalMb = data.reduce((sum, r) => sum + toNum(r.temp_written_mb), 0);
+        const topShare = totalMb > 0 ? (toNum(data[0]?.temp_written_mb) / totalMb) * 100 : 0;
+        const overHundred = data.filter(r => toNum(r.temp_written_mb) > 100).length;
+        return { totalMb, topShare, overHundred };
+    }, [data]);
+
+    const sortButtons: { key: TempSortMode; label: string; tip: string }[] = [
+        { key: 'temp_written', label: 'Yazılan Temp', tip: 'sum(temp_blks_written) — work_mem yetmediginde diske yazilan' },
+        { key: 'temp_read', label: 'Okunan Temp', tip: 'sum(temp_blks_read) — disk\'ten geri okunan temp veri' },
+    ];
+
+    function applySearch() { setSearch(searchInput.trim()); }
+    function clearSearch() { setSearchInput(''); setSearch(''); }
+
+    return (
+        <div className="space-y-4">
+            {summary && (
+                <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                        <span className="font-semibold text-[#1E293B]">💾 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
+                        <div>Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
+                        <div>{'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b></div>
+                    </div>
+                </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
+                <span>Karşılaştırma:</span>
+                <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
+                    <button type="button" onClick={() => setCompareMode('auto')}
+                        className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
+                    <button type="button" onClick={() => setCompareMode('off')}
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                </div>
+                {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
+            </div>
+
+            {chartData.length > 0 && (
+                <InsightChart title="Temp Spill Trend (MB)" height={300}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainTempMb as any} allowDataOverflow={hasBaseline} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`tmp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {hasBaseline && <Area type="monotone" dataKey="baseline_temp_mb" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
+                        {compareKey && <Area type="monotone" dataKey="previous_temp_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_temp_mb" name={search ? 'Filtreli' : 'Şu an'} stroke="#D97706" fill="#FBBF24" fillOpacity={0.6} strokeWidth={2} />
+                    </AreaChart>
+                </InsightChart>
+            )}
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                        <h3 className="font-semibold text-[#1E293B]">Temp Spill Sorgular</h3>
+                        <p className="text-xs text-[#64748B]">work_mem yetmeyen ve disk'e temp dosyalar yazan sorgular. Sadece temp yazımı olanlar listelenir.</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <select value={datname} onChange={e => setDatname(e.target.value)}
+                            title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
+                            <option value="">Tüm Database'ler</option>
+                            {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                            placeholder="queryid veya %select%" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]" />
+                        <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
+                        {search && (
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">✕</button>
+                        )}
+                    </div>
+                    <div className="flex gap-1">
+                        {sortButtons.map(b => (
+                            <button key={b.key} onClick={() => setSort(b.key)} title={b.tip}
+                                className={`px-3 py-1.5 text-xs rounded border transition-colors ${sort === b.key ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'}`}>
+                                {b.label}
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={() => refetch()} className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        {isFetching ? '...' : 'Yenile'}
+                    </button>
+                </div>
+
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={7} /></div>
+                ) : !data || data.length === 0 ? (
+                    <EmptyState icon="📭" title="Temp spill yok"
+                        description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Yazılan (MB)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Okunan (MB)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Çağrı</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort (ms)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.map((row, i) => {
+                                    const writtenMb = toNum(row.temp_written_mb);
+                                    const writtenClass = writtenMb > 1000 ? 'bg-red-100 text-red-700' : writtenMb > 100 ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700';
+                                    return (
+                                        <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                            <td className="py-2 px-3 max-w-md">
+                                                <div className="flex items-start gap-2">
+                                                    <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
+                                                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                                    </div>
+                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                                                </div>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${writtenClass}`}>
+                                                    {Number(row.temp_written_mb).toLocaleString('tr-TR')}
+                                                </span>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.temp_read_mb).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <span className="inline-flex items-center gap-1">
+                                                    <span className="font-mono text-[#64748B]">{row.queryid || '—'}</span>
+                                                    <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
+                                                </span>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay</Link>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
