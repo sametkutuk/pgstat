@@ -347,15 +347,43 @@ function CopyIcon() {
     );
 }
 
+// HTTP+IP (secure context degil) ortamlarda navigator.clipboard.writeText
+// engellenir. Bu durumda gizli textarea + execCommand('copy') fallback'i.
+function copyTextFallback(value: string): boolean {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, value.length);
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch {
+        return false;
+    }
+}
+
 function CopyButton({ value, message, disabled }: { value: string; message: string; disabled?: boolean }) {
     const toast = useToast();
     async function copy(e: MouseEvent<HTMLButtonElement>) {
         e.stopPropagation();
         if (disabled || !value) return;
+        // Once modern API'yi dene, secure context degilse fallback
         try {
-            await navigator.clipboard.writeText(value);
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                toast.success(message);
+                return;
+            }
+        } catch { /* fallback'e dus */ }
+        if (copyTextFallback(value)) {
             toast.success(message);
-        } catch {
+        } else {
             toast.error('Kopyalama başarısız');
         }
     }
