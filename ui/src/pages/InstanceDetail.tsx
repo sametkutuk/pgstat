@@ -18,7 +18,7 @@ import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey
 import DataKindBanner from '../components/common/DataKindBanner';
 import ViewModeToggle, { type ViewMode } from '../components/common/ViewModeToggle';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings' | 'settings_diff';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -188,9 +188,10 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'bgwriter' && <BgWriterTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'checkpointer' && <CheckpointerTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'archiver' && <ArchiverTab instancePk={Number(id)} range={range} />}
-            {tab === 'progress' && <ProgressTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} isPrimary={cap?.is_primary ?? inst.is_primary} />}
+            {tab === 'progress' && <ProgressTab instancePk={Number(id)} range={range} pgMajor={cap?.pg_major} />}
             {tab === 'tps' && <TpsTab data={tpsData.data} loading={tpsData.isLoading} custom={rangeIsCustom} />}
             {tab === 'settings' && <SettingsTab instanceId={id!} onRefresh={() => refreshSettingsMut.mutate()} refreshing={refreshSettingsMut.isPending} />}
+            {tab === 'settings_diff' && <SettingsDiffTab data={settingsDiff.data} loading={settingsDiff.isLoading} days={settingsDiffDays} onDaysChange={setSettingsDiffDays} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
         </div >
@@ -493,13 +494,6 @@ function CapabilityCard({ name, desc, available, mode }: {
             </span>
         </div>
     );
-}
-
-function fmtMs(ms: number): string {
-    if (!Number.isFinite(ms)) return '-';
-    if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}dk`;
-    if (ms >= 1_000) return `${(ms / 1_000).toFixed(2)}s`;
-    return `${ms.toFixed(1)}ms`;
 }
 
 function fmtNum(n: number): string {
@@ -2748,7 +2742,7 @@ function RecoveryPrefetchTab({ instancePk, range, pgMajor, isPrimary }: { instan
 // =========================================================================
 type ProgressSub = 'vacuum' | 'analyze' | 'create_index' | 'basebackup' | 'copy' | 'cluster';
 
-function ProgressTab({ instancePk, range, pgMajor, isPrimary }: { instancePk: number; range: TimeRange; pgMajor?: number; isPrimary: boolean | null | undefined }) {
+function ProgressTab({ instancePk, range, pgMajor }: { instancePk: number; range: TimeRange; pgMajor?: number }) {
     const [sub, setSub] = useState<ProgressSub>('vacuum');
 
     const subs: { key: ProgressSub; label: string; since: number }[] = [
@@ -3047,14 +3041,6 @@ function TpsTab({ data, loading, custom }: { data: any | undefined; loading: boo
         </div>
     );
 }
-
-function formatBytesCompact(bytes: number): string {
-    if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-    if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-    if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
-    return `${bytes} B`;
-}
-
 
 // =========================================================================
 // Yapılandırma Değişiklikleri Tab — pg_settings snapshot diff
