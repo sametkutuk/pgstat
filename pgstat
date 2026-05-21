@@ -400,6 +400,19 @@ EOF
     fi
 
     # 4) Build — başarısız olursa net mesaj
+    #
+    # UI tarafini --no-cache ile zorla rebuild ediyoruz. Sebebi: Vite
+    # output bundle hash'i ayni kalsa bile (idempotent build), Docker
+    # COPY layer hash'i bazen invalide olmuyor ve container icinde eski
+    # /usr/share/nginx/html kaliyor. UI build hizli (~30sn), no-cache
+    # maliyeti dusuk; ama yanlis bundle'in production'a sizmasi pahali.
+    # api/collector daha agir (maven, npm ci) — onlarda cache calismaya
+    # devam eder.
+    echo -e "${C}UI rebuild ediliyor (no-cache)...${N}"
+    if ! $COMPOSE build --no-cache ui 2>&1 | tail -5; then
+      fail "UI build başarısız. Detay: ./pgstat logs ui"
+    fi
+
     echo -e "${C}Container'lar yeniden inşa ediliyor...${N}"
     if ! $COMPOSE up -d --build 2>&1 | tail -8; then
       echo ""
