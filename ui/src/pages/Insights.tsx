@@ -148,7 +148,7 @@ interface TopQueryRow {
     satir_per_cagri: string | null;
 }
 
-type SortMode = 'time' | 'calls' | 'slow';
+type SortMode = 'time' | 'calls' | 'slow' | 'cache_miss' | 'wal' | 'plan' | 'temp';
 
 interface InsightTag {
     key: string;
@@ -489,7 +489,11 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
         { key: 'time', label: 'Toplam Süre', tip: 'DB zamanını en çok yiyen sorgular (sum exec_time)' },
         { key: 'calls', label: 'Çağrı Sayısı', tip: 'En sık çalışan sorgular (sum calls). N+1 / ORM tespiti.' },
-        { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time). Min çağrı eşiği ile tek-spike eleme.' },
+        { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time).' },
+        { key: 'cache_miss', label: 'Cache Miss', tip: 'En çok disk\'e giden sorgular (read / (hit+read)). Min 1000 blok eşiği ile tek-spike eleme.' },
+        { key: 'wal', label: 'WAL', tip: 'En çok WAL üreten sorgular (sum wal_bytes). Replication yükü.' },
+        { key: 'plan', label: 'Plan Süresi', tip: 'En çok plan zamanı harcayan sorgular (sum total_plan_time). Prepared statement değil yeniden planlananlar.' },
+        { key: 'temp', label: 'Temp Spill', tip: 'En çok geçici dosya yazan sorgular (sum temp_blks_written). work_mem yetersiz.' },
     ];
 
     function applySearch() {
