@@ -178,6 +178,10 @@ interface TrendResponse<T> {
     current: T[];
     previous: T[];
     compare: CompareKey | null;
+    // db-time-trend ?include_baseline=1 ile gelir. Search filtresi varken
+    // foreground'a karsi arka planda gosterilen "instance/DB toplami"
+    // serisi. Yoksa null.
+    baseline?: T[] | null;
 }
 
 interface ChartDatum {
@@ -463,10 +467,13 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
         refetchInterval: autoRefresh ? 30_000 : false,
     });
 
+    // Search aktifken backend baseline (search'siz, ayni datname) ekstra serisi de
+    // doner — grafikte arka planda gri alan olarak goruntulenir.
+    const baselineQp = search ? `&include_baseline=1` : '';
     const { data: trendData } = useQuery({
         queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
         queryFn: () => apiGet<TrendResponse<DbTimeTrendPoint>>(
-            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}`,
+            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}${baselineQp}`,
         ),
         refetchInterval: autoRefresh ? 30_000 : false,
     });
@@ -506,20 +513,28 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     );
     const chartData = useMemo<ChartDatum[]>(() => {
         const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        const baselineByBucket = new Map((trendData?.baseline ?? []).map(p => [bucketKey(p.bucket_start), p]));
         return (trendData?.current ?? []).map(p => {
             const key = bucketKey(p.bucket_start);
             const previous = previousByBucket.get(key);
+            const baseline = baselineByBucket.get(key);
             return {
                 label: formatBucket(String(p.bucket_start), windowHours),
                 bucket_iso: String(p.bucket_start),
                 bucket_key: key,
                 current_db_minutes: +(toNum(p.total_ms) / 60_000).toFixed(2),
                 previous_db_minutes: previous ? +(toNum(previous.total_ms) / 60_000).toFixed(2) : null,
+                baseline_db_minutes: baseline ? +(toNum(baseline.total_ms) / 60_000).toFixed(2) : null,
                 current_calls: toNum(p.total_calls),
                 previous_calls: previous ? toNum(previous.total_calls) : null,
+                baseline_calls: baseline ? toNum(baseline.total_calls) : null,
             };
         });
     }, [trendData, windowHours]);
+    const hasBaseline = useMemo(() => {
+        const b = trendData?.baseline;
+        return Array.isArray(b) && b.length > 0;
+    }, [trendData]);
 
     // Gun ayraci ReferenceLine'lari: 00:00'a denk gelen bucket label'lari.
     // Her bir local-day icin sadece bir tane (ilk denk gelen bucket) tut.
@@ -587,8 +602,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`db-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
+                            {hasBaseline && <Area type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_db_minutes" name="Şu an" stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
+                            <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#DBEAFE" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={200}>
@@ -600,8 +616,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             {daySeparatorLabels.map(lbl => (
                                 <ReferenceLine key={`tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                             ))}
+                            {hasBaseline && <Area type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.4} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                            <Area type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                 </div>
@@ -847,8 +864,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
         return (data?.current ?? []).map(p => {
             const key = bucketKey(p.bucket_start);
             const previous = previousByBucket.get(key);
-            const min = toNum(p.min_ms);
-            const max = toNum(p.max_ms);
+            // min/avg/max null kalir ki veri olmayan bucket'larda grafik 0'a inmesin
             return {
                 label: formatBucket(String(p.bucket_start), windowHours),
                 bucket_iso: String(p.bucket_start),
@@ -856,11 +872,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                 current_calls: toNum(p.calls),
                 previous_calls: previous ? toNum(previous.calls) : null,
                 total_ms: toNum(p.total_ms),
-                min_ms: min,
-                current_avg_ms: toNum(p.avg_ms),
-                previous_avg_ms: previous ? toNum(previous.avg_ms) : null,
-                max_ms: max,
-                range_ms: Math.max(0, max - min),
+                min_ms: p.min_ms == null ? null : toNum(p.min_ms),
+                current_avg_ms: p.avg_ms == null ? null : toNum(p.avg_ms),
+                previous_avg_ms: previous?.avg_ms == null ? null : toNum(previous.avg_ms),
+                max_ms: p.max_ms == null ? null : toNum(p.max_ms),
             };
         });
     }, [data, windowHours]);
@@ -914,8 +929,8 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                 </AreaChart>
             </InsightChart>
-            <InsightChart title="Min-Avg-Max Range" height={150}>
-                <ComposedChart data={chartData}>
+            <InsightChart title="Min / Avg / Max" height={150}>
+                <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
@@ -923,10 +938,10 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     {daySeparatorLabels.map(lbl => (
                         <ReferenceLine key={`mam-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                     ))}
-                    <Area type="monotone" dataKey="min_ms" stackId="range" stroke="transparent" fill="transparent" name="Min ms" />
-                    <Area type="monotone" dataKey="range_ms" stackId="range" stroke="transparent" fill="#E5E7EB" name="Max-Min ms" />
-                    <Line type="monotone" dataKey="current_avg_ms" name="Avg ms" stroke="#7C3AED" strokeWidth={2} dot={false} />
-                </ComposedChart>
+                    <Line type="monotone" dataKey="min_ms" name="Min ms" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                    <Line type="monotone" dataKey="current_avg_ms" name="Avg ms" stroke="#2563EB" strokeWidth={2} dot={false} connectNulls />
+                    <Line type="monotone" dataKey="max_ms" name="Max ms" stroke="#DC2626" strokeWidth={1.5} dot={false} connectNulls />
+                </LineChart>
             </InsightChart>
         </div>
     );

@@ -169,7 +169,21 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const bucketExpr = pgssBucketExpr(windowHours);
 
-        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours);
+        // Baseline = ayni pencere + datname filtresi var ama search YOK. Yani
+        // kullanici '%select%hotel%' yazdiginda foreground o sorgular,
+        // background DB'nin (veya tum instance'in) toplam yuku — karsilastirma
+        // baglami. Search uygulanmamissa baseline current ile ozdes oldugundan
+        // ekstra sorgu calistirma.
+        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+        const baselineNeeded = includeBaseline && searchRaw !== '';
+
+        const [current, baselineRes] = await Promise.all([
+            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            baselineNeeded
+                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                : Promise.resolve(null),
+        ]);
+
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -184,7 +198,8 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare });
+        const baseline = baselineRes ? baselineRes.rows : null;
+        res.json({ current: current.rows, previous, compare, baseline });
     } catch (err) {
         next(err);
     }
