@@ -624,7 +624,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
 
             {chartData.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <InsightChart title="DB Time Trend (Toplam)" height={280}>
+                    <InsightChart title="DB Time Trend (Toplam)" height={360}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
@@ -639,7 +639,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
-                    <InsightChart title="Throughput Trend" height={280}>
+                    <InsightChart title="Throughput Trend" height={360}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
