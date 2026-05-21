@@ -37,14 +37,43 @@ function pgssBucketExpr(windowHours: number): string {
     return `date_trunc('day', d.sample_ts)`;
 }
 
-async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, bucketExpr: string, alignIntervalSql?: string) {
+// pgssBucketExpr'e karsilik gelen bucket adimi. generate_series icin
+// kullanilir — boylece pencerede veri olmayan bucket'lar 0 ile doldurulur.
+function pgssBucketStepSql(windowHours: number): string {
+    if (windowHours <= 6) return `interval '5 minutes'`;
+    if (windowHours <= 7 * 24) return `interval '1 hour'`;
+    if (windowHours <= 30 * 24) return `interval '6 hours'`;
+    return `interval '1 day'`;
+}
+
+// Pencere baslangicini bucket sinirina hizala (generate_series'in ilk
+// noktasi grid ile uyumlu olsun).
+function pgssBucketAlignSql(windowHours: number, paramIndex: number): string {
+    if (windowHours <= 6) {
+        return `(date_trunc('hour', $${paramIndex}::timestamptz)
+                 + make_interval(mins => (extract(minute from $${paramIndex}::timestamptz)::int / 5) * 5))`;
+    }
+    if (windowHours <= 7 * 24) {
+        return `date_trunc('hour', $${paramIndex}::timestamptz)`;
+    }
+    if (windowHours <= 30 * 24) {
+        return `(date_trunc('day', $${paramIndex}::timestamptz)
+                 + make_interval(hours => (extract(hour from $${paramIndex}::timestamptz)::int / 6) * 6))`;
+    }
+    return `date_trunc('day', $${paramIndex}::timestamptz)`;
+}
+
+async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (datname) {
         params.push(datname);
         dbWhere = ` and dbr.datname = $${params.length}`;
     }
-    const alignedSelect = alignIntervalSql ? `, bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    const stepSql = pgssBucketStepSql(windowHours);
+    // $2 ve $3 from/to. Grid'i bucket sinirina hizala.
+    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
@@ -58,18 +87,26 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
             and d.sample_ts between $2::timestamptz and $3::timestamptz
             ${dbWhere}
           group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
         )
         select
-          bucket_start${alignedSelect},
-          total_ms,
-          total_calls
-        from buckets
-        order by bucket_start
+          g.bucket_start${alignedSelect},
+          coalesce(b.total_ms, 0)::double precision as total_ms,
+          coalesce(b.total_calls, 0)::bigint as total_calls
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
     `, params);
 }
 
-async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, alignIntervalSql?: string) {
-    const alignedSelect = alignIntervalSql ? `, bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssBucketStepSql(windowHours);
+    // $3 ve $4 from/to (1: id, 2: seriesId).
+    const gridStart = pgssBucketAlignSql(windowHours, 3);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
@@ -84,16 +121,21 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
             and d.statement_series_id = $2::bigint
             and d.sample_ts between $3::timestamptz and $4::timestamptz
           group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $4::timestamptz, ${stepSql}) gs
         )
         select
-          bucket_start${alignedSelect},
-          calls,
-          total_ms,
-          min_ms,
-          avg_ms,
-          max_ms
-        from buckets
-        order by bucket_start
+          g.bucket_start${alignedSelect},
+          coalesce(b.calls, 0)::bigint as calls,
+          coalesce(b.total_ms, 0)::double precision as total_ms,
+          b.min_ms,
+          b.avg_ms,
+          b.max_ms
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
     `, [id, seriesId, fromIso, toIso]);
 }
 
@@ -116,7 +158,7 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const bucketExpr = pgssBucketExpr(windowHours);
 
-        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, bucketExpr);
+        const current = await fetchDbTimeTrend(id, fromIso, toIso, datname, bucketExpr, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -126,6 +168,7 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 bucketExpr,
+                windowHours,
                 offset.intervalSql,
             )).rows;
         }
@@ -156,7 +199,7 @@ router.get('/:id/query-trend', async (req, res, next) => {
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const bucketExpr = pgssBucketExpr(windowHours);
 
-        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr);
+        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -166,6 +209,7 @@ router.get('/:id/query-trend', async (req, res, next) => {
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
                 bucketExpr,
+                windowHours,
                 offset.intervalSql,
             )).rows;
         }
