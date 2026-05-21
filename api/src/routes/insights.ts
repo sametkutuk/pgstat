@@ -264,19 +264,6 @@ router.get('/:id/top-queries', async (req, res, next) => {
             orderBy = 'sum(d.calls_delta) desc nulls last';
         } else if (sort === 'slow') {
             orderBy = 'avg(d.mean_exec_time_ms) desc nulls last';
-        } else if (sort === 'cache_miss') {
-            // En cok disk'e giden: read / (hit + read). Min toplam blok esigi
-            // tek-spike sorgulari elemek icin.
-            orderBy = `(case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 1000
-                        then sum(coalesce(d.shared_blks_read_delta, 0))::numeric
-                             / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)
-                        else null end) desc nulls last`;
-        } else if (sort === 'wal') {
-            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0)) desc nulls last';
-        } else if (sort === 'plan') {
-            orderBy = 'sum(coalesce(d.total_plan_time_ms_delta, 0)) desc nulls last';
-        } else if (sort === 'temp') {
-            orderBy = 'sum(coalesce(d.temp_blks_written_delta, 0)) desc nulls last';
         } else {
             // default: time
             orderBy = 'sum(d.total_exec_time_ms_delta) desc nulls last';
