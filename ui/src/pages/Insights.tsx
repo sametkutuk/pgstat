@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
@@ -28,17 +28,26 @@ export default function Insights() {
     const [tab, setTab] = useState<InsightTab>('top-exec');
     const [instancePk, setInstancePk] = useState<number | null>(null);
     const [range, setRange] = useState<TimeRange>(() => loadPersistedRange('insights-range'));
+    // Auto-refresh default kapali — kullanici acmak isterse 30sn'lik refetch
+    // devreye girer. Tercih localStorage'a persist.
+    const [autoRefresh, setAutoRefresh] = useState<boolean>(() => {
+        try { return localStorage.getItem('pgstat.insights.auto-refresh') === '1'; } catch { return false; }
+    });
+    useEffect(() => {
+        try { localStorage.setItem('pgstat.insights.auto-refresh', autoRefresh ? '1' : '0'); } catch { /* ignore */ }
+    }, [autoRefresh]);
 
     const instances = useQuery({
         queryKey: ['instances-list-insights'],
         queryFn: () => apiGet<Instance[]>('/instances'),
         staleTime: 60_000,
+        refetchInterval: false,
     });
 
     const activeInstances = (instances.data ?? []).filter(i => i.is_active);
 
     return (
-        <div className="p-6 max-w-7xl mx-auto">
+        <div className="p-6">
             {/* Başlık ve seçiciler */}
             <div className="mb-4">
                 <h1 className="text-2xl font-semibold text-[#1E293B] mb-1">🔍 Insights</h1>
@@ -63,6 +72,19 @@ export default function Insights() {
                     <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
                     <TimeRangePicker value={range} onChange={setRange} persistKey="insights-range" />
                 </div>
+                <div className="ml-auto">
+                    <label className="block text-xs text-[#64748B] mb-1">Otomatik Yenile</label>
+                    <button
+                        onClick={() => setAutoRefresh(v => !v)}
+                        title={autoRefresh ? '30 saniyede bir veriler yenileniyor — kapatmak icin tikla' : 'Veriler durağan — 30sn yenilenme istersen tikla'}
+                        className={`px-3 py-1.5 text-sm rounded border transition-colors ${autoRefresh
+                            ? 'border-[#10B981] text-[#047857] bg-[#ECFDF5]'
+                            : 'border-[#E2E8F0] text-[#64748B] bg-white hover:bg-[#F8FAFC]'
+                            }`}
+                    >
+                        {autoRefresh ? '🟢 Acik (30sn)' : '⏸ Kapali'}
+                    </button>
+                </div>
             </div>
 
             {/* Sekme bar */}
@@ -86,7 +108,7 @@ export default function Insights() {
             {/* Sekme içeriği — Insights TopExecTimeCard her zaman render olur,
                 içinde null guard yapılır. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
-            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'temp-spill' && <PlaceholderTab title="Temp Spill" description="work_mem yetersizliği yaşayan sorgular. Yakında." />}
             {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
             {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
@@ -131,12 +153,14 @@ interface InsightTag {
 
 interface DbTimeTrendPoint {
     bucket_start: string;
+    bucket_aligned?: string;
     total_ms: string | number;
     total_calls: string | number;
 }
 
 interface QueryTrendPoint {
     bucket_start: string;
+    bucket_aligned?: string;
     calls: string | number;
     total_ms: string | number;
     min_ms: string | number | null;
@@ -144,9 +168,60 @@ interface QueryTrendPoint {
     max_ms: string | number | null;
 }
 
+type CompareKey = '1h' | '1d' | '1w' | '1m';
+type CompareMode = 'auto' | 'off';
+
+interface TrendResponse<T> {
+    current: T[];
+    previous: T[];
+    compare: CompareKey | null;
+}
+
+interface ChartDatum {
+    label: string;
+    bucket_key: string;
+    [key: string]: string | number | null;
+}
+
 function toNum(value: unknown): number {
     const n = Number(value ?? 0);
     return Number.isFinite(n) ? n : 0;
+}
+
+function loadCompareMode(): CompareMode {
+    if (typeof window === 'undefined') return 'auto';
+    const saved = window.localStorage.getItem('pgstat.insights.compare-mode');
+    return saved === 'off' ? 'off' : 'auto';
+}
+
+function compareForRange(range: TimeRange): CompareKey {
+    const windowHours = (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000;
+    if (windowHours <= 6) return '1h';
+    if (windowHours <= 48) return '1d';
+    if (windowHours <= 7 * 24) return '1w';
+    return '1m';
+}
+
+function compareLabel(compare: CompareKey | null): string {
+    if (compare === '1h') return '1 saat önce';
+    if (compare === '1d') return '1 gün önce';
+    if (compare === '1w') return '1 hafta önce';
+    if (compare === '1m') return '1 ay önce';
+    return 'Geçmiş';
+}
+
+function bucketKey(value: string | undefined): string {
+    if (!value) return '';
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? new Date(time).toISOString() : value;
+}
+
+function deltaLabel(current: number, previous: number): string | null {
+    if (!Number.isFinite(previous) || previous === 0) return null;
+    const pct = (current / previous - 1) * 100;
+    if (!Number.isFinite(pct)) return null;
+    const sign = pct >= 0 ? '+' : '';
+    return `${sign}${pct.toFixed(0)}%`;
 }
 
 function calculateTags(row: TopQueryRow): InsightTag[] {
@@ -191,6 +266,24 @@ function rangeLabel(range: TimeRange): string {
 
 function ChartTooltip({ active, payload, label }: any) {
     if (!active || !payload?.length) return null;
+    const current = payload.find((p: any) => String(p.dataKey).startsWith('current_'));
+    const previous = payload.find((p: any) => String(p.dataKey).startsWith('previous_'));
+    if (current) {
+        const currentValue = toNum(current.value);
+        const previousValue = previous?.value == null ? null : toNum(previous.value);
+        const delta = previousValue == null ? null : deltaLabel(currentValue, previousValue);
+        return (
+            <div className="bg-white border border-[#CBD5E1] shadow-sm rounded px-3 py-2 text-xs min-w-[190px]">
+                <div className="font-medium text-[#1E293B] mb-1">{label}</div>
+                <div className="text-[#64748B]">
+                    Şu an: <b className="text-[#1E293B]">{compactNumber(currentValue)}</b>
+                    <span className="mx-1 text-[#CBD5E1]">|</span>
+                    Geçmiş: {previousValue == null ? <span className="text-[#94A3B8]">veri yok</span> : <b className="text-[#1E293B]">{compactNumber(previousValue)}</b>}
+                    {delta && <span className={`ml-1 font-semibold ${delta.startsWith('+') ? 'text-red-600' : 'text-emerald-600'}`}>({delta})</span>}
+                </div>
+            </div>
+        );
+    }
     return (
         <div className="bg-white border border-[#CBD5E1] shadow-sm rounded px-3 py-2 text-xs">
             <div className="font-medium text-[#1E293B] mb-1">{label}</div>
@@ -232,14 +325,14 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
     ],
 };
 
-function TopExecTimeCard({ instancePk, range, instanceName }: { instancePk: number | null; range: TimeRange; instanceName?: string }) {
+function TopExecTimeCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
         return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
     }
-    return <TopExecTimeCardInner instancePk={instancePk} range={range} instanceName={instanceName} />;
+    return <TopExecTimeCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
 
-function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk: number; range: TimeRange; instanceName?: string }) {
+function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
@@ -260,6 +353,7 @@ function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk:
         queryKey: ['insights-databases', instancePk],
         queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
         staleTime: 60_000,
+        refetchInterval: false,
     });
 
     const { data, isLoading, isFetching, refetch } = useQuery({
@@ -267,6 +361,7 @@ function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk:
         queryFn: () => apiGet<TopQueryRow[]>(
             `/insights/${instancePk}/top-queries?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
         ),
+        refetchInterval: autoRefresh ? 30_000 : false,
     });
 
     const { data: trendData } = useQuery({
@@ -274,6 +369,7 @@ function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk:
         queryFn: () => apiGet<DbTimeTrendPoint[]>(
             `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}`,
         ),
+        refetchInterval: autoRefresh ? 30_000 : false,
     });
 
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
@@ -452,6 +548,7 @@ function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk:
                                     selectedCols={selectedCols}
                                     instancePk={instancePk}
                                     range={range}
+                                    autoRefresh={autoRefresh}
                                     expanded={expandedSeriesId === row.statement_series_id}
                                     onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
                                 />
@@ -474,7 +571,7 @@ function TopExecTimeCardInner({ instancePk, range, instanceName }: { instancePk:
     );
 }
 
-function TopQueryRow({ row, rank, selectedCols, instancePk, range, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; expanded: boolean; onToggle: () => void }) {
+function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; autoRefresh: boolean; expanded: boolean; onToggle: () => void }) {
     const pct = parseFloat(row.pct_of_total);
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
@@ -545,7 +642,7 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, expanded, onT
         {expanded && (
             <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                 <td colSpan={selectedCols.length + 2} className="p-4">
-                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} />
+                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} />
                 </td>
             </tr>
         )}
@@ -553,13 +650,14 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, expanded, onT
     );
 }
 
-function QueryTrendPanel({ instancePk, seriesId, range }: { instancePk: number; seriesId: number; range: TimeRange }) {
+function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh }: { instancePk: number; seriesId: number; range: TimeRange; autoRefresh: boolean }) {
     const { data, isLoading } = useQuery({
         queryKey: ['insights-query-trend', instancePk, seriesId, range.fromIso, range.toIso],
         queryFn: () => apiGet<QueryTrendPoint[]>(
             `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}`,
         ),
         enabled: Number.isFinite(instancePk) && Number.isFinite(seriesId),
+        refetchInterval: autoRefresh ? 30_000 : false,
     });
 
     const chartData = useMemo(() => (data ?? []).map(p => {
