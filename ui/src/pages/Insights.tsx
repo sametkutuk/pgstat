@@ -542,18 +542,29 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
         const b = trendData?.baseline;
         return Array.isArray(b) && b.length > 0;
     }, [trendData]);
-    // Y-domain filtreli (current) serisinin max'ina gore — baseline asarsa
-    // grafik disina tasar (clipped). Boylece kucuk SQL ezilmez, baseline
-    // "buyuk yuk var" sinyalini gosterir.
+    // Y-domain hesabi: filtreli max'i kuvvetli, baseline'in p70'i sinirli
+    // gosterilsin. max(filtreli*1.5, baseline_p70). Boylece filtreli alan
+    // ezilmez ama baseline'in cogu icerde kalir; sadece outlier zirveler
+    // dısarı tasar. P70 percentile aritmetik ortalamadan daha stabil.
+    function percentile(values: number[], p: number): number {
+        if (values.length === 0) return 0;
+        const sorted = [...values].sort((a, b) => a - b);
+        const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * p));
+        return sorted[idx];
+    }
     const yDomainDbMinutes = useMemo<[number, number] | undefined>(() => {
         if (!hasBaseline) return undefined;
-        const max = chartData.reduce((m, d) => Math.max(m, toNum(d.current_db_minutes)), 0);
-        return max > 0 ? [0, +(max * 1.15).toFixed(2)] : undefined;
+        const currentMax = chartData.reduce((m, d) => Math.max(m, toNum(d.current_db_minutes)), 0);
+        const baselineP70 = percentile(chartData.map(d => toNum(d.baseline_db_minutes)).filter(v => v > 0), 0.70);
+        const upper = Math.max(currentMax * 1.5, baselineP70);
+        return upper > 0 ? [0, +(upper * 1.05).toFixed(2)] : undefined;
     }, [chartData, hasBaseline]);
     const yDomainCalls = useMemo<[number, number] | undefined>(() => {
         if (!hasBaseline) return undefined;
-        const max = chartData.reduce((m, d) => Math.max(m, toNum(d.current_calls)), 0);
-        return max > 0 ? [0, Math.ceil(max * 1.15)] : undefined;
+        const currentMax = chartData.reduce((m, d) => Math.max(m, toNum(d.current_calls)), 0);
+        const baselineP70 = percentile(chartData.map(d => toNum(d.baseline_calls)).filter(v => v > 0), 0.70);
+        const upper = Math.max(currentMax * 1.5, baselineP70);
+        return upper > 0 ? [0, Math.ceil(upper * 1.05)] : undefined;
     }, [chartData, hasBaseline]);
 
     // Gun ayraci ReferenceLine'lari: 00:00'a denk gelen bucket label'lari.
@@ -613,7 +624,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
 
             {chartData.length > 0 && (
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <InsightChart title="DB Time Trend (Toplam)" height={200}>
+                    <InsightChart title="DB Time Trend (Toplam)" height={280}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
@@ -628,7 +639,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                             <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
-                    <InsightChart title="Throughput Trend" height={200}>
+                    <InsightChart title="Throughput Trend" height={280}>
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
