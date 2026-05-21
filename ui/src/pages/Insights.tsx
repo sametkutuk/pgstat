@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
@@ -6,6 +7,7 @@ import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
+import { useToast } from '../components/common/Toast';
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
@@ -131,6 +133,7 @@ interface TopQueryRow {
     query_text_id: number | null;
     statement_series_id: number;
     query_short: string | null;
+    query_full: string | null;
     toplam_cagri: string;
     toplam_exec_ms: string;
     toplam_dk: string;
@@ -333,6 +336,42 @@ function InsightChart({ title, height, children }: { title: string; height: numb
     );
 }
 
+function CopyIcon() {
+    return (
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"
+            viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+    );
+}
+
+function CopyButton({ value, message, disabled }: { value: string; message: string; disabled?: boolean }) {
+    const toast = useToast();
+    async function copy(e: MouseEvent<HTMLButtonElement>) {
+        e.stopPropagation();
+        if (disabled || !value) return;
+        try {
+            await navigator.clipboard.writeText(value);
+            toast.success(message);
+        } catch {
+            toast.error('Kopyalama başarısız');
+        }
+    }
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            disabled={disabled || !value}
+            title="Kopyala"
+            className="inline-flex items-center justify-center p-1 rounded text-[#94A3B8] opacity-50 transition hover:opacity-100 hover:text-[#2563EB] hover:bg-[#F1F5F9] disabled:cursor-not-allowed disabled:opacity-20"
+        >
+            <CopyIcon />
+        </button>
+    );
+}
+
 const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
     defaults: ['sql', 'datname', 'toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir'],
     available: [
@@ -397,9 +436,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     });
 
     const { data: trendData } = useQuery({
-        queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname, compareKey],
+        queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
         queryFn: () => apiGet<TrendResponse<DbTimeTrendPoint>>(
-            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${datnameQp}${compareQp}`,
+            `/insights/${instancePk}/db-time-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}`,
         ),
         refetchInterval: autoRefresh ? 30_000 : false,
     });
@@ -676,12 +715,25 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
     const tags = calculateTags(row);
 
     function renderCell(col: string) {
+        if (col === 'queryid') {
+            return (
+                <td key={col} className="py-2 px-3 text-xs font-mono text-[#64748B] whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1">
+                        <span>{row.queryid || 'â€”'}</span>
+                        <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
+                    </span>
+                </td>
+            );
+        }
         switch (col) {
             case 'sql':
                 return (
                     <td key={col} className="py-2 px-3 max-w-md">
-                        <div className="font-mono text-xs text-[#1E293B] truncate" title={row.query_short ?? ''}>
-                            {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                        <div className="flex items-start gap-1">
+                            <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_full ?? row.query_short ?? ''}>
+                                {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                            </div>
+                            <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                         </div>
                         {tags.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1">
