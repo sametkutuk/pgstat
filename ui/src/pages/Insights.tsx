@@ -256,16 +256,43 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     const mbPerCall = toNum(row.temp_written_mb_per_call);
     const calls = toNum(row.toplam_cagri);
     const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
-    const text = (row.query_full || '').toLowerCase();
-    const isSort = /\b(order\s+by|group\s+by|distinct)\b/.test(text);
-    const hasJoin = /\sjoin\s/.test(text);
+    const queryLower = (row.query_full || '').toLowerCase();
+    const hasOrderBy = /\border\s+by\b/.test(queryLower);
+    const hasGroupBy = /\bgroup\s+by\b/.test(queryLower);
+    const hasDistinct = /\bdistinct\b/.test(queryLower);
+    const hasLimit = /\blimit\b/.test(queryLower);
+    const hasJoin = /\sjoin\s/.test(queryLower);
     const tags: InsightTag[] = [];
 
     if (mbPerCall >= 100) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: '💥', className: 'bg-red-100 text-red-700', title: 'Tek çağrıda 100MB+ temp yazıyor — work_mem ciddi yetersiz' });
     if (calls >= 1000 && mbPerCall >= 1) tags.push({ key: 'frequent-spill', label: 'Sürekli Spill', icon: '🔁', className: 'bg-orange-100 text-orange-700', title: 'Sık çağrılıyor ve her çağrıda temp yazıyor — toplu kazanç fırsatı' });
     if (rowsPerTempMb != null && rowsPerTempMb < 1000 && tempMb >= 10) tags.push({ key: 'inefficient', label: 'Verimsiz', icon: '🐌', className: 'bg-amber-100 text-amber-700', title: "1MB temp başına 1000'den az satır — ya filter çok geç çalışıyor ya da gereksiz sort" });
-    if (isSort) tags.push({ key: 'sort-spill', label: 'Sort Spill', icon: '📊', className: 'bg-blue-100 text-blue-700', title: 'Query ORDER BY / GROUP BY / DISTINCT içeriyor — sort spill olası. EXPLAIN ile doğrula' });
-    if (hasJoin && mbPerCall >= 10) tags.push({ key: 'hash-spill', label: 'Hash Spill', icon: '🔗', className: 'bg-purple-100 text-purple-700', title: 'JOIN var ve büyük temp spill — hash join work_mem aşıyor olabilir. EXPLAIN gerekli' });
+    if (hasOrderBy || hasGroupBy || hasDistinct) {
+        const reasons: string[] = [];
+        if (hasOrderBy) reasons.push('ORDER BY');
+        if (hasGroupBy) reasons.push('GROUP BY');
+        if (hasDistinct) reasons.push('DISTINCT');
+        const reasonText = reasons.join(' + ');
+        const limitHint = hasOrderBy && !hasLimit ? ' - LIMIT eksik, tum sonuc sort ediliyor olabilir' : '';
+        tags.push({
+            key: 'sort-spill',
+            label: 'Sort Spill',
+            icon: '📊',
+            className: 'bg-blue-100 text-blue-700',
+            title: `${reasonText} ile sort spill olasi.${limitHint} EXPLAIN ile dogrula.`,
+        });
+    }
+    if (hasJoin && mbPerCall >= 10) {
+        const joinCount = (queryLower.match(/\sjoin\s/g) || []).length;
+        const countText = joinCount > 1 ? `${joinCount} JOIN var` : 'JOIN var';
+        tags.push({
+            key: 'hash-spill',
+            label: 'Hash Spill',
+            icon: '🔗',
+            className: 'bg-purple-100 text-purple-700',
+            title: `${countText} ve buyuk temp spill - hash join work_mem asiyor olabilir. EXPLAIN gerekli.`,
+        });
+    }
     return tags;
 }
 
@@ -1061,6 +1088,7 @@ interface TempSpillRow {
     temp_written_mb: string;
     temp_read_mb: string;
     temp_written_mb_per_call: string | null;
+    max_temp_mb_per_call: string | null;
     avg_parallel_workers: string;
     recommended_work_mem_mb_min: string | null;
     temp_write_time_sec: string | null;
@@ -1341,7 +1369,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                 </div>
 
                 {isLoading ? (
-                    <div className="p-4"><SkeletonTable rows={8} cols={15} /></div>
+                    <div className="p-4"><SkeletonTable rows={8} cols={16} /></div>
                 ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="Temp spill yok"
                         description={totals?.work_mem_kb != null
@@ -1360,6 +1388,11 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="Tek cagri basina ortalama temp yazimi. Yuksekse work_mem ciddi yetersiz." className="cursor-help border-b border-dotted border-[#94A3B8]">{'MB/\u00c7a\u011fr\u0131'}</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="Tek sample periyodunda goruldugu en yuksek MB/cagri. Ortalama yerine outlier sinyali - en kotu durumu temsil eder." className="cursor-help border-b border-dotted border-[#94A3B8]">
+                                            Max MB/Cagri
+                                        </span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="Tek cagrida diske yazilan max temp'in worker basina dustugu MB. work_mem ayarini en az bu deger yapmak gerekir; sorgu birden fazla sort/hash icerirse daha fazla gerekebilir." className="cursor-help border-b border-dotted border-[#94A3B8]">
@@ -1430,6 +1463,11 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
                                                 {mbPerCall > 0 ? mbPerCall.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
+                                                {row.max_temp_mb_per_call == null
+                                                    ? '\u2014'
+                                                    : Number(row.max_temp_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
                                                 {row.recommended_work_mem_mb_min == null

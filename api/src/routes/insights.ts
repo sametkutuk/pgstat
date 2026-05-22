@@ -461,6 +461,17 @@ router.get('/:id/temp-spill', async (req, res, next) => {
           then round(((sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)
                       / sum(d.calls_delta)::numeric)::numeric, 4)
           else null end as temp_written_mb_per_call,
+        -- En kotu sample periyodundaki tek-cagri temp ortalamasi (MB).
+        -- Sample = collector cycle. 0 calls'a karsi nullif ile korunur.
+        round((
+          max(
+            case when d.calls_delta > 0
+              then (coalesce(d.temp_blks_written_delta, 0) / 128.0)
+                   / d.calls_delta::numeric
+              else 0
+            end
+          )
+        )::numeric, 2) as max_temp_mb_per_call,
         -- Cagri basina ortalama paralel worker sayisi. calls'a normalize edilmis toplam worker.
         case when sum(d.calls_delta) > 0
           then round((sum(coalesce(d.parallel_workers_launched_delta, 0))::numeric
