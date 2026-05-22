@@ -1054,6 +1054,8 @@ interface TempSpillRow {
     temp_written_mb: string;
     temp_read_mb: string;
     temp_written_mb_per_call: string | null;
+    avg_parallel_workers: string;
+    recommended_work_mem_mb_min: string | null;
     temp_write_time_sec: string | null;
     rows_per_temp_mb: string | null;
     pct_of_total_temp: string | null;
@@ -1301,7 +1303,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                 </div>
 
                 {isLoading ? (
-                    <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
+                    <div className="p-4"><SkeletonTable rows={8} cols={15} /></div>
                 ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="Temp spill yok"
                         description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
@@ -1318,6 +1320,11 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="Tek cagri basina ortalama temp yazimi. Yuksekse work_mem ciddi yetersiz." className="cursor-help border-b border-dotted border-[#94A3B8]">{'MB/\u00c7a\u011fr\u0131'}</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="Tek cagrida diske yazilan max temp'in worker basina dustugu MB. work_mem ayarini en az bu deger yapmak gerekir; sorgu birden fazla sort/hash icerirse daha fazla gerekebilir." className="cursor-help border-b border-dotted border-[#94A3B8]">
+                                            work_mem &ge; (MB)
+                                        </span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="Bu sorgu, instance'ın toplam temp yazımının % kaçı." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Temp</span>
@@ -1383,6 +1390,15 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
                                                 {mbPerCall > 0 ? mbPerCall.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
+                                                {row.recommended_work_mem_mb_min == null
+                                                    ? '\u2014'
+                                                    : (
+                                                        <span title={`Hesap: max temp/cagri (${Number(row.temp_written_mb_per_call ?? 0).toFixed(2)} MB) / ortalama paralel worker (${row.avg_parallel_workers}). Paralel yoksa bolucu=1.`}>
+                                                            {Number(row.recommended_work_mem_mb_min).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
+                                                        </span>
+                                                    )}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                                                 {pctTemp == null ? '\u2014' : (
