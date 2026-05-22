@@ -149,6 +149,39 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
     `, [id, seriesId, fromIso, toIso]);
 }
 
+async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssBucketStepSql(windowHours);
+    // $3 ve $4 from/to (1: id, 2: seriesId).
+    const gridStart = pgssBucketAlignSql(windowHours, 3);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(d.calls_delta), 0)::bigint as calls,
+            coalesce(sum(coalesce(d.temp_blks_written_delta, 0)), 0)::bigint as temp_written_blks,
+            coalesce(sum(coalesce(d.temp_blks_read_delta, 0)), 0)::bigint as temp_read_blks
+          from fact.pgss_delta d
+          where d.instance_pk = $1
+            and d.statement_series_id = $2::bigint
+            and d.sample_ts between $3::timestamptz and $4::timestamptz
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $4::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.calls, 0)::bigint as calls,
+          coalesce(b.temp_written_blks, 0)::bigint as temp_written_blks,
+          coalesce(b.temp_read_blks, 0)::bigint as temp_read_blks
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, [id, seriesId, fromIso, toIso]);
+}
+
 // GET /api/insights/:id/db-time-trend?from=...&to=...[&datname=...]
 router.get('/:id/db-time-trend', async (req, res, next) => {
     try {
@@ -231,6 +264,47 @@ router.get('/:id/query-trend', async (req, res, next) => {
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
             previous = (await fetchQueryTrend(
+                id,
+                seriesIdRaw,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                bucketExpr,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+        res.json({ current: current.rows, previous, compare });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/query-temp-trend?series_id=N&from=...&to=...
+router.get('/:id/query-temp-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
+        const seriesIdRaw = String(req.query.series_id || '');
+        if (!/^\d+$/.test(seriesIdRaw)) {
+            res.status(400).json({ error: 'Invalid series_id' });
+            return;
+        }
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchQueryTempTrend(
                 id,
                 seriesIdRaw,
                 shiftedIso(fromIso, offset.seconds),

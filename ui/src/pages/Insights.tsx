@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -173,6 +173,14 @@ interface QueryTrendPoint {
     min_ms: string | number | null;
     avg_ms: string | number | null;
     max_ms: string | number | null;
+}
+
+interface QueryTempTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    calls: string | number;
+    temp_written_blks: string | number;
+    temp_read_blks: string | number;
 }
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
@@ -1072,6 +1080,110 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
     );
 }
 
+function QueryTempTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number | string; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-query-temp-trend', instancePk, seriesId, range.fromIso, range.toIso, compareKey],
+        queryFn: () => apiGet<TrendResponse<QueryTempTrendPoint>>(
+            `/insights/${instancePk}/query-temp-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
+        ),
+        enabled: instancePk != null && seriesId != null && String(seriesId).length > 0,
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (data?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            const currentCalls = toNum(p.calls);
+            const previousCalls = previous ? toNum(previous.calls) : 0;
+            const currentTempMb = +(toNum(p.temp_written_blks) / 128.0).toFixed(2);
+            const previousTempMb = previous ? +(toNum(previous.temp_written_blks) / 128.0).toFixed(2) : null;
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_temp_mb: currentTempMb,
+                previous_temp_mb: previousTempMb,
+                current_calls: currentCalls,
+                previous_calls: previous ? previousCalls : null,
+                current_mb_per_call: currentCalls > 0 ? +(currentTempMb / Math.max(1, currentCalls)).toFixed(2) : 0,
+                previous_mb_per_call: previous ? (previousCalls > 0 ? +(Number(previousTempMb ?? 0) / Math.max(1, previousCalls)).toFixed(2) : 0) : null,
+            };
+        });
+    }, [data, windowHours]);
+
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    if (isLoading) return <SkeletonTable rows={3} cols={3} />;
+    if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin trend verisi yok.</div>;
+
+    const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <InsightChart title="Temp Yazimi (MB)" height={200}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qt-temp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Area type="monotone" dataKey="previous_temp_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_temp_mb" name="Su an" stroke="#D97706" fill="#FBBF24" fillOpacity={0.6} strokeWidth={2} />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="Cagri Sayisi" height={200}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qt-calls-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_calls" name="Su an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="MB/Cagri" height={200}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qt-mb-call-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Line type="monotone" dataKey="previous_mb_per_call" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="current_mb_per_call" name="Su an" stroke="#7C3AED" strokeWidth={2} dot={false} />
+                </LineChart>
+            </InsightChart>
+        </div>
+    );
+}
+
 // =========================================================================
 // TEMP SPILL sekmesi
 // =========================================================================
@@ -1134,6 +1246,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
     useEffect(() => {
         try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
@@ -1435,8 +1548,13 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
                                     const rowsPerTempClass = rowsPerTempMb == null ? 'text-[#64748B]' : rowsPerTempMb >= 10000 ? 'text-emerald-700' : rowsPerTempMb >= 1000 ? 'text-[#64748B]' : 'text-orange-700';
                                     const tags = calculateTempTags(row);
+                                    const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
-                                        <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                        <Fragment key={`${row.statement_series_id}-${i}`}>
+                                        <tr
+                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                        >
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
                                             <td className="py-2 px-3 max-w-md">
                                                 <div className="flex items-start gap-2">
@@ -1502,9 +1620,18 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                                 </span>
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay</Link>
+                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                                             </td>
                                         </tr>
+                                        {expanded && (
+                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                <td colSpan={16} className="p-4">
+                                                    <QueryTempTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </Fragment>
                                     );
                                 })}
                             </tbody>
