@@ -431,7 +431,11 @@ router.get('/:id/temp-spill', async (req, res, next) => {
             params.push(datname);
             searchWhere += ` and dbr.datname = $${params.length}`;
         }
+        const totalsParams = [...params];
         params.push(limit);
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
 
         const result = await pool.query(`
       with toplam_temp as (
@@ -482,7 +486,74 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        res.json(result.rows);
+        const [totalIoResult, topDbResult, peakResult] = await Promise.all([
+            pool.query(`
+      select coalesce((
+        sum(coalesce(d.temp_blk_write_time_ms_delta, 0))
+        + sum(coalesce(d.temp_blk_read_time_ms_delta, 0))
+      ) / 1000.0, 0)::double precision as total_temp_write_time_sec
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+    `, totalsParams),
+            pool.query(`
+      with per_db as (
+        select
+          dbr.datname,
+          sum(coalesce(d.temp_blks_written_delta, 0))::double precision as temp_blks
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by dbr.datname
+      ),
+      total as (
+        select sum(temp_blks) as total_blks from per_db
+      )
+      select
+        per_db.datname,
+        (per_db.temp_blks / 128.0)::double precision as mb,
+        (100.0 * per_db.temp_blks / nullif(total.total_blks, 0))::double precision as pct
+      from per_db, total
+      where per_db.temp_blks > 0
+      order by per_db.temp_blks desc
+      limit 1
+    `, totalsParams),
+            pool.query(`
+      select
+        ${bucketExpr} as bucket_start,
+        (sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)::double precision as mb
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by bucket_start
+      having sum(coalesce(d.temp_blks_written_delta, 0)) > 0
+      order by mb desc
+      limit 1
+    `, totalsParams),
+        ]);
+
+        const topDb = topDbResult.rows[0] ?? null;
+        const peak = peakResult.rows[0] ?? null;
+        res.json({
+            rows: result.rows,
+            totals: {
+                total_temp_write_time_sec: Number(totalIoResult.rows[0]?.total_temp_write_time_sec ?? 0),
+                top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
+                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+            },
+        });
     } catch (err) {
         next(err);
     }

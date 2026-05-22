@@ -283,6 +283,20 @@ function formatDurationMs(ms: number): string {
     return `${ms.toFixed(0)} ms`;
 }
 
+function formatDurationSec(sec: number): string {
+    if (sec >= 3600) {
+        const hours = Math.floor(sec / 3600);
+        const minutes = Math.floor((sec % 3600) / 60);
+        return `${hours} sa ${minutes} dk`;
+    }
+    if (sec >= 60) {
+        const minutes = Math.floor(sec / 60);
+        const seconds = Math.round(sec % 60);
+        return `${minutes} dk ${seconds} sn`;
+    }
+    return `${Math.round(sec)} sn`;
+}
+
 // Eksen tick'leri icin kisa label. Uzun pencerede gun ekle.
 function formatBucket(value: string, windowHours: number): string {
     const d = new Date(value);
@@ -1049,6 +1063,17 @@ interface TempSpillRow {
     toplam_satir: string;
 }
 
+interface TempSpillTotals {
+    total_temp_write_time_sec: number;
+    top_datname: { datname: string | null; mb: number; pct: number } | null;
+    peak: { bucket_start: string; mb: number } | null;
+}
+
+interface TempSpillResponse {
+    rows: TempSpillRow[];
+    totals: TempSpillTotals;
+}
+
 type TempSortMode = 'temp_written' | 'temp_read';
 
 interface TempTrendPoint {
@@ -1090,11 +1115,13 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
 
     const { data, isLoading, isFetching, refetch } = useQuery({
         queryKey: ['insights-temp-spill', instancePk, range.fromIso, range.toIso, sort, search, datname],
-        queryFn: () => apiGet<TempSpillRow[]>(
+        queryFn: () => apiGet<TempSpillResponse>(
             `/insights/${instancePk}/temp-spill?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
         ),
         refetchInterval: autoRefresh ? 30_000 : false,
     });
+    const rows = data?.rows ?? [];
+    const totals = data?.totals;
 
     const baselineQp = search ? `&include_baseline=1` : '';
     const { data: trendData } = useQuery({
@@ -1162,21 +1189,21 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
     }, [chartData, windowHours]);
 
     const summary = useMemo(() => {
-        if (!data || data.length === 0) return null;
-        const totalMb = data.reduce((sum, r) => sum + toNum(r.temp_written_mb), 0);
-        const topShare = totalMb > 0 ? (toNum(data[0]?.temp_written_mb) / totalMb) * 100 : 0;
-        const overHundred = data.filter(r => toNum(r.temp_written_mb) > 100).length;
+        if (rows.length === 0) return null;
+        const totalMb = rows.reduce((sum, r) => sum + toNum(r.temp_written_mb), 0);
+        const topShare = totalMb > 0 ? (toNum(rows[0]?.temp_written_mb) / totalMb) * 100 : 0;
+        const overHundred = rows.filter(r => toNum(r.temp_written_mb) > 100).length;
         return { totalMb, topShare, overHundred };
-    }, [data]);
+    }, [rows]);
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
-        for (const row of (data ?? [])) {
+        for (const row of rows) {
             for (const tag of calculateTempTags(row)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [data]);
+    }, [rows]);
 
     const sortButtons: { key: TempSortMode; label: string; tip: string }[] = [
         { key: 'temp_written', label: 'Yazılan Temp', tip: 'sum(temp_blks_written) — work_mem yetmediginde diske yazilan' },
@@ -1200,6 +1227,13 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                             {'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b>
                             <span className="mx-1">·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
+                        </div>
+                        <div className="md:col-span-2">
+                            Disk I/O süresi: <b className="text-[#1E293B]">{totals ? formatDurationSec(totals.total_temp_write_time_sec) : '\u2014'}</b>
+                            <span className="mx-1">·</span>
+                            En çok yazan DB: <b className="text-[#1E293B]">{totals?.top_datname ? `${totals.top_datname.datname ?? '\u2014'} (%${totals.top_datname.pct.toFixed(1)})` : '\u2014'}</b>
+                            <span className="mx-1">·</span>
+                            Pik anı: <b className="text-[#1E293B]">{totals?.peak ? `${formatBucketFull(totals.peak.bucket_start)} — ${totals.peak.mb.toFixed(1)} MB` : '\u2014'}</b>
                         </div>
                     </div>
                 </div>
@@ -1268,7 +1302,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
 
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
-                ) : !data || data.length === 0 ? (
+                ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="Temp spill yok"
                         description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
                 ) : (
@@ -1311,7 +1345,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                 </tr>
                             </thead>
                             <tbody>
-                                {data.map((row, i) => {
+                                {rows.map((row, i) => {
                                     const writtenMb = toNum(row.temp_written_mb);
                                     const writtenClass = writtenMb > 1000 ? 'bg-red-100 text-red-700' : writtenMb > 100 ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700';
                                     const mbPerCall = row.temp_written_mb_per_call == null ? 0 : toNum(row.temp_written_mb_per_call);
