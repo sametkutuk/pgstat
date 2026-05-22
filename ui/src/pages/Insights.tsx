@@ -251,6 +251,24 @@ function calculateTags(row: TopQueryRow): InsightTag[] {
     return tags;
 }
 
+function calculateTempTags(row: TempSpillRow): InsightTag[] {
+    const tempMb = toNum(row.temp_written_mb);
+    const mbPerCall = toNum(row.temp_written_mb_per_call);
+    const calls = toNum(row.toplam_cagri);
+    const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
+    const text = (row.query_full || '').toLowerCase();
+    const isSort = /\b(order\s+by|group\s+by|distinct)\b/.test(text);
+    const hasJoin = /\sjoin\s/.test(text);
+    const tags: InsightTag[] = [];
+
+    if (mbPerCall >= 100) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: '💥', className: 'bg-red-100 text-red-700', title: 'Tek çağrıda 100MB+ temp yazıyor — work_mem ciddi yetersiz' });
+    if (calls >= 1000 && mbPerCall >= 1) tags.push({ key: 'frequent-spill', label: 'Sürekli Spill', icon: '🔁', className: 'bg-orange-100 text-orange-700', title: 'Sık çağrılıyor ve her çağrıda temp yazıyor — toplu kazanç fırsatı' });
+    if (rowsPerTempMb != null && rowsPerTempMb < 1000 && tempMb >= 10) tags.push({ key: 'inefficient', label: 'Verimsiz', icon: '🐌', className: 'bg-amber-100 text-amber-700', title: "1MB temp başına 1000'den az satır — ya filter çok geç çalışıyor ya da gereksiz sort" });
+    if (isSort) tags.push({ key: 'sort-spill', label: 'Sort Spill', icon: '📊', className: 'bg-blue-100 text-blue-700', title: 'Query ORDER BY / GROUP BY / DISTINCT içeriyor — sort spill olası. EXPLAIN ile doğrula' });
+    if (hasJoin && mbPerCall >= 10) tags.push({ key: 'hash-spill', label: 'Hash Spill', icon: '🔗', className: 'bg-purple-100 text-purple-700', title: 'JOIN var ve büyük temp spill — hash join work_mem aşıyor olabilir. EXPLAIN gerekli' });
+    return tags;
+}
+
 function compactNumber(value: unknown): string {
     const n = toNum(value);
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -1150,6 +1168,15 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
         const overHundred = data.filter(r => toNum(r.temp_written_mb) > 100).length;
         return { totalMb, topShare, overHundred };
     }, [data]);
+    const tagCounts = useMemo(() => {
+        const counts: Record<string, { icon: string; count: number }> = {};
+        for (const row of (data ?? [])) {
+            for (const tag of calculateTempTags(row)) {
+                counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
+            }
+        }
+        return counts;
+    }, [data]);
 
     const sortButtons: { key: TempSortMode; label: string; tip: string }[] = [
         { key: 'temp_written', label: 'Yazılan Temp', tip: 'sum(temp_blks_written) — work_mem yetmediginde diske yazilan' },
@@ -1169,7 +1196,11 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
                         <div>Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
-                        <div>{'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b></div>
+                        <div>
+                            {'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b>
+                            <span className="mx-1">·</span>
+                            Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
+                        </div>
                     </div>
                 </div>
             )}
@@ -1289,6 +1320,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                     const tempWriteSec = row.temp_write_time_sec == null ? 0 : toNum(row.temp_write_time_sec);
                                     const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
                                     const rowsPerTempClass = rowsPerTempMb == null ? 'text-[#64748B]' : rowsPerTempMb >= 10000 ? 'text-emerald-700' : rowsPerTempMb >= 1000 ? 'text-[#64748B]' : 'text-orange-700';
+                                    const tags = calculateTempTags(row);
                                     return (
                                         <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
@@ -1299,6 +1331,15 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                                     </div>
                                                     <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                 </div>
+                                                {tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {tags.map(tag => (
+                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                <span>{tag.icon}</span>{tag.label}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
