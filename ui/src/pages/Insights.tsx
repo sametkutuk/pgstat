@@ -111,7 +111,7 @@ export default function Insights() {
                 içinde null guard yapılır. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
             {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
-            {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <PlaceholderTab title="WAL Spike" description="Anormal WAL üretimi olan periyotlar. Yakında." />}
             {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
             {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
@@ -295,6 +295,13 @@ function formatDurationSec(sec: number): string {
         return `${minutes} dk ${seconds} sn`;
     }
     return `${Math.round(sec)} sn`;
+}
+
+function formatBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${bytes} B`;
 }
 
 // Eksen tick'leri icin kisa label. Uzun pencerede gun ekle.
@@ -1069,6 +1076,7 @@ interface TempSpillTotals {
     total_temp_write_time_sec: number;
     top_datname: { datname: string | null; mb: number; pct: number } | null;
     peak: { bucket_start: string; mb: number } | null;
+    work_mem_kb: number | null;
 }
 
 interface TempSpillResponse {
@@ -1086,14 +1094,14 @@ interface TempTrendPoint {
     calls: string | number;
 }
 
-function TempSpillCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+function TempSpillCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
         return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
     }
-    return <TempSpillCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
+    return <TempSpillCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
 
-function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     const [sort, setSort] = useState<TempSortMode>('temp_written');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
@@ -1215,6 +1223,15 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
 
     function applySearch() { setSearch(searchInput.trim()); }
     function clearSearch() { setSearchInput(''); setSearch(''); }
+    function zoomToPeak() {
+        if (!totals?.peak) return;
+        const start = new Date(totals.peak.bucket_start);
+        const end = new Date(start.getTime() + 3600_000);
+        const nextRange = { fromIso: start.toISOString(), toIso: end.toISOString() };
+        onRangeChange(nextRange);
+        try { window.localStorage.setItem('insights-range', JSON.stringify(nextRange)); } catch { /* ignore */ }
+    }
+    const datnameIsActive = datname === totals?.top_datname?.datname;
 
     return (
         <div className="space-y-4">
@@ -1234,9 +1251,29 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                         <div className="md:col-span-2">
                             Disk I/O süresi: <b className="text-[#1E293B]">{totals ? formatDurationSec(totals.total_temp_write_time_sec) : '\u2014'}</b>
                             <span className="mx-1">·</span>
-                            En çok yazan DB: <b className="text-[#1E293B]">{totals?.top_datname ? `${totals.top_datname.datname ?? '\u2014'} (%${totals.top_datname.pct.toFixed(1)})` : '\u2014'}</b>
+                            En çok yazan DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (!datnameIsActive && totals.top_datname?.datname) setDatname(totals.top_datname.datname);
+                                    }}
+                                    title="Tikla - bu DB'yi filtre olarak uygula"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {totals.top_datname.datname ?? '\u2014'} (%{totals.top_datname.pct.toFixed(1)})
+                                </button>
+                            ) : '\u2014'}</b>
                             <span className="mx-1">·</span>
-                            Pik anı: <b className="text-[#1E293B]">{totals?.peak ? `${formatBucketFull(totals.peak.bucket_start)} — ${totals.peak.mb.toFixed(1)} MB` : '\u2014'}</b>
+                            Pik anı: <b className="text-[#1E293B]">{totals?.peak ? (
+                                <button
+                                    type="button"
+                                    onClick={zoomToPeak}
+                                    title="Tikla - date range pik saate daralsin"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {formatBucketFull(totals.peak.bucket_start)} — {totals.peak.mb.toFixed(1)} MB
+                                </button>
+                            ) : '\u2014'}</b>
                         </div>
                     </div>
                 </div>
@@ -1307,7 +1344,9 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                     <div className="p-4"><SkeletonTable rows={8} cols={15} /></div>
                 ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="Temp spill yok"
-                        description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
+                        description={totals?.work_mem_kb != null
+                            ? `Mevcut work_mem: ${formatBytes(totals.work_mem_kb * 1024)} - yeterli görünüyor.`
+                            : "Bu pencerede disk'e temp dosya yazan sorgu yok."} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
                         <table className="w-full text-sm">

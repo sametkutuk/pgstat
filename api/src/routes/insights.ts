@@ -504,7 +504,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [totalIoResult, topDbResult, peakResult] = await Promise.all([
+        const [totalIoResult, topDbResult, peakResult, workMemResult] = await Promise.all([
             pool.query(`
       select coalesce((
         sum(coalesce(d.temp_blk_write_time_ms_delta, 0))
@@ -560,16 +560,26 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       order by mb desc
       limit 1
     `, totalsParams),
+            pool.query(`
+      select setting_value::bigint as kb
+      from fact.pg_settings_snapshot
+      where instance_pk = $1
+        and setting_name = 'work_mem'
+      order by snapshot_ts desc
+      limit 1
+    `, [id]),
         ]);
 
         const topDb = topDbResult.rows[0] ?? null;
         const peak = peakResult.rows[0] ?? null;
+        const workMem = workMemResult.rows[0] ?? null;
         res.json({
             rows: result.rows,
             totals: {
                 total_temp_write_time_sec: Number(totalIoResult.rows[0]?.total_temp_write_time_sec ?? 0),
                 top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
                 peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+                work_mem_kb: workMem?.kb == null ? null : Number(workMem.kb),
             },
         });
     } catch (err) {
