@@ -1248,15 +1248,33 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Yazılan (MB)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">{'MB/\u00c7a\u011fr\u0131'}</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">% Toplam Temp</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp I/O (sn)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">{'Sat\u0131r/Temp MB'}</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Okunan (MB)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Çağrı</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort (ms)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="sum(temp_blks_written) × 8KB. work_mem yetmediğinde diske yazılan veri." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp Yazılan (MB)</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="Tek \u00e7a\u011fr\u0131 ba\u015f\u0131na ortalama temp yaz\u0131m\u0131. Y\u00fcksekse work_mem ciddi yetersiz." className="cursor-help border-b border-dotted border-[#94A3B8]">{'MB/\u00c7a\u011fr\u0131'}</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="Bu sorgu, instance'ın toplam temp yazımının % kaçı." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Temp</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="temp_blk_write_time + temp_blk_read_time toplamı (saniye). Exec time'ın ne kadarı disk temp I/O." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp I/O (sn)</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="1MB temp ba\u015f\u0131na d\u00f6n\u00fclen sat\u0131r say\u0131s\u0131. Y\u00fcksek = verimli (filter erken \u00e7al\u0131\u015fm\u0131\u015f), d\u00fc\u015f\u00fck = bo\u015fa temp yaz\u0131m\u0131." className="cursor-help border-b border-dotted border-[#94A3B8]">{'Sat\u0131r/Temp MB'}</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="Daha önce yazılan temp dosyaların geri okunması (genelde sort/hash sonrası)." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp Okunan (MB)</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="sum(calls). Bu sorgu pencerede toplam kaç defa çağrıldı." className="cursor-help border-b border-dotted border-[#94A3B8]">Çağrı</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="sum(total_exec_time) dakika cinsinden. Bu sorgunun toplam DB zamanı." className="cursor-help border-b border-dotted border-[#94A3B8]">Toplam (dk)</span>
+                                    </th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
+                                        <span title="avg(mean_exec_time_ms). Çağrı başına ortalama yanıt süresi." className="cursor-help border-b border-dotted border-[#94A3B8]">Ort (ms)</span>
+                                    </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                                 </tr>
