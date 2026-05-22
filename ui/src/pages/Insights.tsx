@@ -304,6 +304,26 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     return tags;
 }
 
+function calculateWALTags(row: WALSpikeRow): InsightTag[] {
+    const pct = toNum(row.pct_of_total_wal);
+    const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
+    const walRecords = toNum(row.toplam_wal_records);
+    const walBytesPerRow = row.wal_bytes_per_row == null ? null : toNum(row.wal_bytes_per_row);
+    const walMb = toNum(row.wal_mb);
+    const calls = toNum(row.toplam_cagri);
+    const walMbPerCall = row.wal_mb_per_call == null ? null : toNum(row.wal_mb_per_call);
+    const q = (row.query_full || '').toLowerCase();
+    const isDML = /^\s*(update|delete|insert)\b/.test(q);
+    const tags: InsightTag[] = [];
+
+    if (pct >= 30) tags.push({ key: 'wal-champion', label: 'WAL Sampiyonu', icon: '🔥', className: 'bg-red-100 text-red-700', title: 'Bu sorgu tek basina toplam WAL uretiminin %30+ kismini uretiyor. Replication lag in birincil kaynagi.' });
+    if (fpiRatio != null && fpiRatio > 0.5 && walRecords >= 100) tags.push({ key: 'fpi-heavy', label: 'FPI Heavy', icon: '📸', className: 'bg-orange-100 text-orange-700', title: 'Kayitlarin yaridan cogu full-page-image. Checkpoint sonrasi burst - checkpoint_timeout artirilabilir.' });
+    if (walBytesPerRow != null && walBytesPerRow >= 1024 && walMb >= 100) tags.push({ key: 'burst-writer', label: 'Burst Writer', icon: '📈', className: 'bg-amber-100 text-amber-700', title: 'Satir basina 1KB+ WAL - buyuk row, TOAST, ya da update wave-of-pain. TOAST compression veya selective update dusun.' });
+    if (calls >= 1000 && walMbPerCall != null && walMbPerCall >= 0.1) tags.push({ key: 'frequent-writer', label: 'Frequent Writer', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ve her cagrida WAL uretiyor - batch update e cevirmek bilesik kazanc.' });
+    if (isDML) tags.push({ key: 'update-heavy', label: 'Update Heavy', icon: '✏️', className: 'bg-purple-100 text-purple-700', title: 'UPDATE/DELETE/INSERT - yazma operasyonu WAL uretimi normaldir, ama hacim asiriysa optimize gerekli.' });
+    return tags;
+}
+
 function compactNumber(value: unknown): string {
     const n = toNum(value);
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -1805,6 +1825,15 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
         const topShare = totalWalBytes > 0 ? (toNum(rows[0]?.toplam_wal_bytes) / totalWalBytes) * 100 : 0;
         return { totalWalBytes, topShare };
     }, [rows, totals]);
+    const tagCounts = useMemo(() => {
+        const counts: Record<string, { icon: string; count: number }> = {};
+        for (const row of rows) {
+            for (const tag of calculateWALTags(row)) {
+                counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
+            }
+        }
+        return counts;
+    }, [rows]);
 
     const sortButtons: { key: WALSortMode; label: string; tip: string }[] = [
         { key: 'wal', label: 'Toplam WAL', tip: 'sum(wal_bytes) desc' },
@@ -1835,7 +1864,11 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
                         <div>Toplam WAL: <b className="text-[#1E293B]">{formatBytes(summary.totalWalBytes)}</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
-                        <div>FPI heavy sorgu: <b className={toNum(totals?.fpi_heavy_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals?.fpi_heavy_count ?? 0}</b> <span className="mx-1">·</span> Etiketler: <span className="text-[#94A3B8]">yok</span></div>
+                        <div>
+                            FPI heavy sorgu: <b className={toNum(totals?.fpi_heavy_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals?.fpi_heavy_count ?? 0}</b>
+                            <span className="mx-1">·</span>
+                            Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
+                        </div>
                         <div className="md:col-span-2">
                             En cok WAL ureten DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
                                 <button
@@ -1967,6 +2000,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctClass = pctWal == null ? 'bg-slate-100 text-slate-600' : pctWal >= 20 ? 'bg-red-100 text-red-700' : pctWal >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
                                     const fpiClass = fpiRatio == null ? 'bg-slate-100 text-slate-600' : fpiRatio > 0.5 ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600';
+                                    const tags = calculateWALTags(row);
                                     return (
                                         <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
@@ -1977,6 +2011,15 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     </div>
                                                     <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                 </div>
+                                                {tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {tags.map(tag => (
+                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                <span>{tag.icon}</span>{tag.label}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${walClass}`}>{walMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
