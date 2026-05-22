@@ -1204,6 +1204,106 @@ function QueryTempTrendPanel({ instancePk, seriesId, range, autoRefresh, compare
     );
 }
 
+function QueryWalTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number | string; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-query-wal-trend', instancePk, seriesId, range.fromIso, range.toIso, compareKey],
+        queryFn: () => apiGet<TrendResponse<QueryWalTrendPoint>>(
+            `/insights/${instancePk}/query-wal-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
+        ),
+        enabled: instancePk != null && seriesId != null && String(seriesId).length > 0,
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (data?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_wal_mb: +(toNum(p.wal_bytes) / 1048576.0).toFixed(2),
+                previous_wal_mb: previous ? +(toNum(previous.wal_bytes) / 1048576.0).toFixed(2) : null,
+                current_records: toNum(p.wal_records),
+                previous_records: previous ? toNum(previous.wal_records) : null,
+                current_fpi: toNum(p.wal_fpi),
+                previous_fpi: previous ? toNum(previous.wal_fpi) : null,
+            };
+        });
+    }, [data, windowHours]);
+
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    if (isLoading) return <SkeletonTable rows={3} cols={3} />;
+    if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin WAL trend verisi yok.</div>;
+
+    const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <InsightChart title="WAL Yazimi (MB)" height={200}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qw-wal-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Area type="monotone" dataKey="previous_wal_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_wal_mb" name="Su an" stroke="#7C3AED" fill="#DDD6FE" fillOpacity={0.65} strokeWidth={2} />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="WAL Kayit Sayisi" height={200}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qw-rec-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Area type="monotone" dataKey="previous_records" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_records" name="Su an" stroke="#0891B2" fill="#A5F3FC" strokeWidth={2} />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="FPI Trend" height={200}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qw-fpi-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Line type="monotone" dataKey="previous_fpi" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="current_fpi" name="Su an" stroke="#EA580C" strokeWidth={2} dot={false} />
+                </LineChart>
+            </InsightChart>
+        </div>
+    );
+}
+
 // =========================================================================
 // TEMP SPILL sekmesi
 // =========================================================================
@@ -1712,6 +1812,15 @@ interface WALTrendPoint {
     calls: string | number;
 }
 
+interface QueryWalTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    wal_bytes: string | number;
+    wal_records: string | number;
+    wal_fpi: string | number;
+    calls: string | number;
+}
+
 type WALSortMode = 'wal' | 'wal_per_call' | 'fpi_ratio' | 'wal_per_row';
 
 function WALSpikeCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
@@ -1726,6 +1835,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
     useEffect(() => {
         try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
@@ -2001,8 +2111,13 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
                                     const fpiClass = fpiRatio == null ? 'bg-slate-100 text-slate-600' : fpiRatio > 0.5 ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600';
                                     const tags = calculateWALTags(row);
+                                    const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
-                                        <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                        <Fragment key={`${row.statement_series_id}-${i}`}>
+                                        <tr
+                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                        >
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
                                             <td className="py-2 px-3 max-w-md">
                                                 <div className="flex items-start gap-2">
@@ -2032,8 +2147,19 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                             <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay</Link></td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
+                                            </td>
                                         </tr>
+                                        {expanded && (
+                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                <td colSpan={14} className="p-4">
+                                                    <QueryWalTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </Fragment>
                                     );
                                 })}
                             </tbody>
