@@ -418,6 +418,300 @@ router.get('/:id/top-queries', async (req, res, next) => {
 });
 
 // =========================================================================
+// WAL SPIKE sekmesi
+// =========================================================================
+
+async function fetchWalTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const params: any[] = [id, fromIso, toIso];
+    let dbWhere = '';
+    if (searchRaw) {
+        if (/^-?\d+$/.test(searchRaw)) {
+            params.push(searchRaw);
+            dbWhere += ` and ss.queryid::text = $${params.length}`;
+        } else {
+            params.push(searchRaw);
+            dbWhere += ` and qt.query_text ilike $${params.length}`;
+        }
+    }
+    if (datname) {
+        params.push(datname);
+        dbWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const stepSql = pgssBucketStepSql(windowHours);
+    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as wal_bytes,
+            coalesce(sum(coalesce(d.wal_records_delta, 0)), 0)::bigint as wal_records,
+            coalesce(sum(coalesce(d.wal_fpi_delta, 0)), 0)::bigint as wal_fpi,
+            coalesce(sum(d.calls_delta), 0)::bigint as calls
+          from fact.pgss_delta d
+          join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+          left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+          left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            ${dbWhere}
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.wal_bytes, 0)::double precision as wal_bytes,
+          coalesce(b.wal_records, 0)::bigint as wal_records,
+          coalesce(b.wal_fpi, 0)::bigint as wal_fpi,
+          coalesce(b.calls, 0)::bigint as calls
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+}
+
+// GET /api/insights/:id/wal-spike?sort=wal|wal_per_call|fpi_ratio|wal_per_row&from=&to=&limit=20
+router.get('/:id/wal-spike', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        const limit = parseLimit(req.query.limit, 20);
+        const sort = String(req.query.sort || 'wal').toLowerCase();
+
+        let orderBy: string;
+        if (sort === 'wal_per_call') {
+            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(d.calls_delta), 0) desc nulls last';
+        } else if (sort === 'fpi_ratio') {
+            orderBy = 'case when sum(coalesce(d.wal_records_delta, 0)) > 100 then sum(coalesce(d.wal_fpi_delta, 0))::numeric / nullif(sum(coalesce(d.wal_records_delta, 0)), 0) else null end desc nulls last';
+        } else if (sort === 'wal_per_row') {
+            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(coalesce(d.rows_delta, 0)), 0) desc nulls last';
+        } else {
+            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0)) desc nulls last';
+        }
+
+        const searchRaw = (req.query.search as string || '').trim();
+        const datname = (req.query.datname as string || '').trim();
+        const params: any[] = [id, fromIso, toIso];
+        let searchWhere = '';
+        if (searchRaw) {
+            if (/^-?\d+$/.test(searchRaw)) {
+                params.push(searchRaw);
+                searchWhere += ` and ss.queryid::text = $${params.length}`;
+            } else {
+                params.push(searchRaw);
+                searchWhere += ` and qt.query_text ilike $${params.length}`;
+            }
+        }
+        if (datname) {
+            params.push(datname);
+            searchWhere += ` and dbr.datname = $${params.length}`;
+        }
+        const totalsParams = [...params];
+        params.push(limit);
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const result = await pool.query(`
+      with toplam_wal as (
+        select sum(coalesce(d.wal_bytes_delta, 0)) as total_bytes
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+      )
+      select
+        dbr.datname,
+        ss.queryid::text as queryid,
+        ss.query_text_id,
+        ss.statement_series_id,
+        left(qt.query_text, 200) as query_short,
+        qt.query_text as query_full,
+        sum(d.calls_delta)::bigint as toplam_cagri,
+        sum(coalesce(d.wal_bytes_delta, 0))::bigint as toplam_wal_bytes,
+        round((sum(coalesce(d.wal_bytes_delta, 0)) / 1048576.0)::numeric, 2) as wal_mb,
+        sum(coalesce(d.wal_records_delta, 0))::bigint as toplam_wal_records,
+        sum(coalesce(d.wal_fpi_delta, 0))::bigint as toplam_wal_fpi,
+        case when sum(d.calls_delta) > 0
+          then round(((sum(coalesce(d.wal_bytes_delta, 0)) / 1048576.0) / sum(d.calls_delta)::numeric)::numeric, 4)
+          else null end as wal_mb_per_call,
+        round((
+          max(case when d.calls_delta > 0
+            then (coalesce(d.wal_bytes_delta, 0) / 1048576.0) / d.calls_delta::numeric
+            else 0 end)
+        )::numeric, 2) as max_wal_mb_per_call,
+        case when sum(coalesce(d.wal_records_delta, 0)) > 0
+          then round((sum(coalesce(d.wal_fpi_delta, 0))::numeric / sum(coalesce(d.wal_records_delta, 0))::numeric)::numeric, 4)
+          else null end as fpi_ratio,
+        round((100.0 * sum(coalesce(d.wal_bytes_delta, 0)) / nullif((select total_bytes from toplam_wal), 0))::numeric, 1) as pct_of_total_wal,
+        case when sum(coalesce(d.rows_delta, 0)) > 0
+          then round((sum(coalesce(d.wal_bytes_delta, 0))::numeric / sum(coalesce(d.rows_delta, 0))::numeric)::numeric, 2)
+          else null end as wal_bytes_per_row,
+        sum(d.total_exec_time_ms_delta)::bigint as toplam_exec_ms,
+        round((sum(d.total_exec_time_ms_delta) / 1000.0 / 60.0)::numeric, 2) as toplam_dk,
+        round(avg(d.mean_exec_time_ms)::numeric, 2) as ort_ms,
+        sum(d.rows_delta)::bigint as toplam_satir
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by dbr.datname, ss.queryid, ss.query_text_id, qt.query_text, ss.statement_series_id
+      having sum(coalesce(d.wal_bytes_delta, 0)) > 0
+      order by ${orderBy}
+      limit $${params.length}
+    `, params);
+
+        const [totalWalResult, topDbResult, peakResult, settingsResult] = await Promise.all([
+            pool.query(`
+      select coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as total_wal_bytes
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+    `, totalsParams),
+            pool.query(`
+      with per_db as (
+        select
+          dbr.datname,
+          sum(coalesce(d.wal_bytes_delta, 0))::double precision as wal_bytes
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by dbr.datname
+      ),
+      total as (
+        select sum(wal_bytes) as total_bytes from per_db
+      )
+      select
+        per_db.datname,
+        (per_db.wal_bytes / 1048576.0)::double precision as wal_mb,
+        (100.0 * per_db.wal_bytes / nullif(total.total_bytes, 0))::double precision as pct
+      from per_db, total
+      where per_db.wal_bytes > 0
+      order by per_db.wal_bytes desc
+      limit 1
+    `, totalsParams),
+            pool.query(`
+      select
+        ${bucketExpr} as bucket_start,
+        (sum(coalesce(d.wal_bytes_delta, 0)) / 1048576.0)::double precision as mb
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by bucket_start
+      having sum(coalesce(d.wal_bytes_delta, 0)) > 0
+      order by mb desc
+      limit 1
+    `, totalsParams),
+            pool.query(`
+      select distinct on (setting_name)
+        setting_name,
+        setting_value,
+        unit,
+        case
+          when setting_name = 'max_wal_size' and unit = 'kB' then setting_value::bigint
+          when setting_name = 'max_wal_size' and unit = 'MB' then setting_value::bigint * 1024
+          when setting_name = 'max_wal_size' and unit = 'GB' then setting_value::bigint * 1024 * 1024
+          when setting_name = 'max_wal_size' then setting_value::bigint
+          else null
+        end as kb
+      from fact.pg_settings_snapshot
+      where instance_pk = $1
+        and setting_name in ('max_wal_size', 'wal_compression')
+      order by setting_name, snapshot_ts desc
+    `, [id]),
+        ]);
+
+        const topDb = topDbResult.rows[0] ?? null;
+        const peak = peakResult.rows[0] ?? null;
+        const maxWalSize = settingsResult.rows.find((r: any) => r.setting_name === 'max_wal_size');
+        const walCompression = settingsResult.rows.find((r: any) => r.setting_name === 'wal_compression');
+        res.json({
+            rows: result.rows,
+            totals: {
+                total_wal_bytes: Number(totalWalResult.rows[0]?.total_wal_bytes ?? 0),
+                top_datname: topDb ? { datname: topDb.datname, wal_mb: Number(topDb.wal_mb), pct: Number(topDb.pct) } : null,
+                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+                max_wal_size_kb: maxWalSize?.kb == null ? null : Number(maxWalSize.kb),
+                wal_compression: walCompression?.setting_value ?? null,
+                fpi_heavy_count: result.rows.filter((r: any) => Number(r.fpi_ratio ?? 0) > 0.5).length,
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/wal-trend?from=&to=&datname=&search=&compare=&include_baseline=1
+router.get('/:id/wal-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
+        const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+        const baselineNeeded = includeBaseline && searchRaw !== '';
+
+        const [current, baselineRes] = await Promise.all([
+            fetchWalTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            baselineNeeded
+                ? fetchWalTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                : Promise.resolve(null),
+        ]);
+
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchWalTrendData(
+                id,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                datname,
+                searchRaw,
+                bucketExpr,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+        const baseline = baselineRes ? baselineRes.rows : null;
+        res.json({ current: current.rows, previous, compare, baseline });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// =========================================================================
 // TEMP SPILL sekmesi
 // =========================================================================
 
