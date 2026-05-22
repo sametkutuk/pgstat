@@ -1121,6 +1121,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
             `/insights/${instancePk}/temp-spill?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
         ),
         refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
     });
     const rows = data?.rows ?? [];
     const totals = data?.totals;
@@ -1308,7 +1309,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                     <EmptyState icon="📭" title="Temp spill yok"
                         description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
                 ) : (
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
