@@ -8,7 +8,7 @@ import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import { useToast } from '../components/common/Toast';
-import { Area, AreaChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -540,7 +540,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                 // Stacked area icin "rest": baseline'dan current cikartilmis kalan
                 rest_db_minutes: baselineMin == null ? null : Math.max(0, +(baselineMin - currentMin).toFixed(2)),
                 current_calls: currentCalls,
-                previous_calls: previous ? toNum(previous.calls ?? previous.total_calls) : null,
+                previous_calls: previous ? toNum(previous.total_calls) : null,
                 baseline_calls: baselineCalls,
                 rest_calls: baselineCalls == null ? null : Math.max(0, baselineCalls - currentCalls),
             };
@@ -1022,6 +1022,9 @@ interface TempSpillRow {
     temp_written_mb: string;
     temp_read_mb: string;
     temp_written_mb_per_call: string | null;
+    temp_write_time_sec: string | null;
+    rows_per_temp_mb: string | null;
+    pct_of_total_temp: string | null;
     toplam_exec_ms: string;
     toplam_dk: string;
     ort_ms: string;
@@ -1233,7 +1236,7 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                 </div>
 
                 {isLoading ? (
-                    <div className="p-4"><SkeletonTable rows={8} cols={7} /></div>
+                    <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
                 ) : !data || data.length === 0 ? (
                     <EmptyState icon="📭" title="Temp spill yok"
                         description="Bu pencerede disk'e temp dosya yazan sorgu yok. work_mem yeterli görünüyor." />
@@ -1246,6 +1249,10 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Yazılan (MB)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">{'MB/\u00c7a\u011fr\u0131'}</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">% Toplam Temp</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp I/O (sn)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">{'Sat\u0131r/Temp MB'}</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Temp Okunan (MB)</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Çağrı</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
@@ -1258,6 +1265,12 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                 {data.map((row, i) => {
                                     const writtenMb = toNum(row.temp_written_mb);
                                     const writtenClass = writtenMb > 1000 ? 'bg-red-100 text-red-700' : writtenMb > 100 ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700';
+                                    const mbPerCall = row.temp_written_mb_per_call == null ? 0 : toNum(row.temp_written_mb_per_call);
+                                    const pctTemp = row.pct_of_total_temp == null ? null : toNum(row.pct_of_total_temp);
+                                    const pctClass = pctTemp == null ? 'bg-slate-100 text-slate-600' : pctTemp >= 20 ? 'bg-red-100 text-red-700' : pctTemp >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+                                    const tempWriteSec = row.temp_write_time_sec == null ? 0 : toNum(row.temp_write_time_sec);
+                                    const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
+                                    const rowsPerTempClass = rowsPerTempMb == null ? 'text-[#64748B]' : rowsPerTempMb >= 10000 ? 'text-emerald-700' : rowsPerTempMb >= 1000 ? 'text-[#64748B]' : 'text-orange-700';
                                     return (
                                         <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
@@ -1274,6 +1287,22 @@ function TempSpillCardInner({ instancePk, range, autoRefresh, instanceName }: { 
                                                 <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${writtenClass}`}>
                                                     {Number(row.temp_written_mb).toLocaleString('tr-TR')}
                                                 </span>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
+                                                {mbPerCall > 0 ? mbPerCall.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                {pctTemp == null ? '\u2014' : (
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>
+                                                        %{pctTemp.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
+                                                {tempWriteSec > 0 ? tempWriteSec.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                            </td>
+                                            <td className={`py-2 px-3 text-xs text-right font-mono whitespace-nowrap ${rowsPerTempClass}`}>
+                                                {rowsPerTempMb == null ? '\u2014' : rowsPerTempMb.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.temp_read_mb).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>

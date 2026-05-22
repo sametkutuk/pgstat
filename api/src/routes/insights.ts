@@ -434,6 +434,12 @@ router.get('/:id/temp-spill', async (req, res, next) => {
         params.push(limit);
 
         const result = await pool.query(`
+      with toplam_temp as (
+        select sum(coalesce(d.temp_blks_written_delta, 0)) as total_blks
+        from fact.pgss_delta d
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+      )
       select
         dbr.datname,
         ss.queryid::text as queryid,
@@ -451,6 +457,13 @@ router.get('/:id/temp-spill', async (req, res, next) => {
           then round(((sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)
                       / sum(d.calls_delta)::numeric)::numeric, 4)
           else null end as temp_written_mb_per_call,
+        round((sum(coalesce(d.temp_blk_write_time_ms_delta, 0)) / 1000.0)::numeric, 2) as temp_write_time_sec,
+        case when sum(coalesce(d.temp_blks_written_delta, 0)) > 0
+          then round((sum(coalesce(d.rows_delta, 0))::numeric
+                      / (sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0))::numeric, 0)
+          else null end as rows_per_temp_mb,
+        round((100.0 * sum(coalesce(d.temp_blks_written_delta, 0))
+               / nullif((select total_blks from toplam_temp), 0))::numeric, 1) as pct_of_total_temp,
         sum(d.total_exec_time_ms_delta)::bigint as toplam_exec_ms,
         round((sum(d.total_exec_time_ms_delta) / 1000.0 / 60.0)::numeric, 2) as toplam_dk,
         round(avg(d.mean_exec_time_ms)::numeric, 2) as ort_ms,
