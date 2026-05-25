@@ -359,6 +359,14 @@ function formatBytes(bytes: number): string {
     return `${bytes} B`;
 }
 
+function formatKb(kb: number | null | undefined): string {
+    return kb == null ? '\u2014' : formatBytes(kb * 1024);
+}
+
+function formatMinutes(sec: number | null | undefined): string {
+    return sec == null ? '\u2014' : `${(sec / 60).toLocaleString('tr-TR', { maximumFractionDigits: 1 })} dk`;
+}
+
 // Eksen tick'leri icin kisa label. Uzun pencerede gun ekle.
 function formatBucket(value: string, windowHours: number): string {
     const d = new Date(value);
@@ -1796,6 +1804,20 @@ interface WALSpikeTotals {
     max_wal_size_kb: number | null;
     wal_compression: string | null;
     fpi_heavy_count: number;
+    wal_throughput_mb_per_sec: number;
+    replication_lag: { slot_name: string | null; lag_bytes: number; wal_status: string | null; active: boolean | null } | null;
+    spill_bytes_total: number;
+    tps: { commit_per_sec: number; rollback_per_sec: number; total_per_sec: number } | null;
+    archiver: { archived_count: number; last_archived_time: string | null; failed_count: number; last_failed_time: string | null; lag_seconds: number | null } | null;
+    wal_settings: {
+        max_wal_size_kb: number | null;
+        min_wal_size_kb: number | null;
+        checkpoint_timeout_sec: number | null;
+        checkpoint_completion_target: number | null;
+        wal_compression: string | null;
+        wal_level: string | null;
+        wal_buffers_kb: number | null;
+    };
 }
 
 interface WALSpikeResponse {
@@ -1963,6 +1985,18 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
         try { window.localStorage.setItem('insights-range', JSON.stringify(nextRange)); } catch { /* ignore */ }
     }
     const datnameIsActive = datname === totals?.top_datname?.datname;
+    const walSettings = totals?.wal_settings;
+    const replicationLagBytes = toNum(totals?.replication_lag?.lag_bytes);
+    const replicationLagClass = replicationLagBytes > 1024 * 1024 * 1024
+        ? 'text-red-700 font-semibold'
+        : replicationLagBytes > 100 * 1024 * 1024
+            ? 'text-orange-700 font-semibold'
+            : 'text-[#1E293B]';
+    const replicationStatus = totals?.replication_lag?.wal_status ?? '';
+    const replicationStatusClass = replicationStatus === 'lost' || replicationStatus === 'unreserved'
+        ? 'text-red-700 font-bold'
+        : 'text-[#1E293B]';
+    const showCompressionWarning = walSettings?.wal_compression === 'off' && toNum(totals?.fpi_heavy_count) >= 3;
 
     return (
         <div className="space-y-4">
@@ -1972,14 +2006,30 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                         <span className="font-semibold text-[#1E293B]">💾 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
-                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
-                        <div>Toplam WAL: <b className="text-[#1E293B]">{formatBytes(summary.totalWalBytes)}</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
+                    <div className="mt-2 space-y-1 text-xs text-[#64748B]">
                         <div>
-                            FPI heavy sorgu: <b className={toNum(totals?.fpi_heavy_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals?.fpi_heavy_count ?? 0}</b>
+                            Toplam WAL: <b className="text-[#1E293B]">{formatBytes(summary.totalWalBytes)}</b>
+                            <span className="mx-1">·</span>
+                            <b className="text-[#1E293B]">{toNum(totals?.wal_throughput_mb_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} MB/sn</b>
+                            <span className="mx-1">·</span>
+                            En yuksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b>
+                            <span className="mx-1">·</span>
+                            FPI heavy: <b className={toNum(totals?.fpi_heavy_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals?.fpi_heavy_count ?? 0}</b>
                             <span className="mx-1">·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
-                        <div className="md:col-span-2">
+                        <div>
+                            Pik ani: <b className="text-[#1E293B]">{totals?.peak ? (
+                                <button
+                                    type="button"
+                                    onClick={zoomToPeak}
+                                    title="Tikla - date range pik saate daralsin"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {formatBucketFull(totals.peak.bucket_start)} - {totals.peak.mb.toFixed(1)} MB
+                                </button>
+                            ) : '\u2014'}</b>
+                            <span className="mx-1">·</span>
                             En cok WAL ureten DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
                                 <button
                                     type="button"
@@ -1992,24 +2042,78 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     {totals.top_datname.datname ?? '\u2014'} (%{totals.top_datname.pct.toFixed(1)})
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
-                            Pik ani: <b className="text-[#1E293B]">{totals?.peak ? (
-                                <button
-                                    type="button"
-                                    onClick={zoomToPeak}
-                                    title="Tikla - date range pik saate daralsin"
-                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
-                                >
-                                    {formatBucketFull(totals.peak.bucket_start)} — {totals.peak.mb.toFixed(1)} MB
-                                </button>
-                            ) : '\u2014'}</b>
                         </div>
-                        <div className="md:col-span-2">
-                            Mevcut max_wal_size: <b className="text-[#1E293B]">{totals?.max_wal_size_kb != null ? formatBytes(totals.max_wal_size_kb * 1024) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
-                            WAL compression: <b className="text-[#1E293B]">{totals?.wal_compression ?? '\u2014'}</b>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            {totals?.replication_lag ? (
+                                <span>
+                                    Replication: <b className="text-[#1E293B]">{totals.replication_lag.slot_name ?? '\u2014'}</b>
+                                    <span className={`ml-1 ${replicationLagClass}`}>{formatBytes(replicationLagBytes)}</span>
+                                    <span className="ml-1">(</span><span className={replicationStatusClass}>{replicationStatus || '\u2014'}</span><span>)</span>
+                                    {!totals.replication_lag.active && <span className="text-orange-700"> (passive)</span>}
+                                </span>
+                            ) : (
+                                <span className="text-[#94A3B8]">Replication slot yok</span>
+                            )}
+                            {toNum(totals?.spill_bytes_total) > 0 && <span>Spill: <b className="text-[#1E293B]">{formatBytes(toNum(totals?.spill_bytes_total))}</b></span>}
+                            {totals?.tps && (
+                                <span>
+                                    TPS: <b className="text-[#1E293B]">{totals.tps.commit_per_sec.toFixed(1)} commit/sn</b>
+                                    {totals.tps.rollback_per_sec > 0 && <span> ({totals.tps.rollback_per_sec.toFixed(1)} rollback)</span>}
+                                </span>
+                            )}
                         </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            {totals?.archiver && (
+                                <span>
+                                    Archive: <b className="text-[#1E293B]">{totals.archiver.lag_seconds == null ? '\u2014' : `${Math.floor(totals.archiver.lag_seconds / 60)} dk once`}</b>
+                                    {totals.archiver.failed_count > 0 && <span className="text-red-700"> · failed: {totals.archiver.failed_count}</span>}
+                                </span>
+                            )}
+                            <span>Mevcut max_wal_size: <b className="text-[#1E293B]">{formatKb(walSettings?.max_wal_size_kb ?? totals?.max_wal_size_kb)}</b></span>
+                            <span>compression: <b className="text-[#1E293B]">{walSettings?.wal_compression ?? totals?.wal_compression ?? '\u2014'}</b></span>
+                            <span>checkpoint_timeout: <b className="text-[#1E293B]">{formatMinutes(walSettings?.checkpoint_timeout_sec)}</b></span>
+                        </div>
+                        {showCompressionWarning && (
+                            <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
+                                ⚠ WAL compression kapali ve {totals?.fpi_heavy_count ?? 0} sorgu FPI heavy. wal_compression=lz4 ayari ile FPI'lar %50-80 kuculur.
+                            </div>
+                        )}
                     </div>
+                    <details className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] mt-3">
+                        <summary className="px-4 py-2 cursor-pointer text-sm text-[#64748B] hover:bg-[#F8FAFC]">
+                            ⚙️ WAL & Checkpoint Parametreleri
+                        </summary>
+                        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                            <div title="Checkpoint arasi maksimum WAL hacmi. Astiginda zorla checkpoint tetiklenir.">
+                                <div className="text-[#94A3B8]">max_wal_size</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{formatKb(walSettings?.max_wal_size_kb ?? totals?.max_wal_size_kb)}</div>
+                            </div>
+                            <div title="Checkpoint arasi minimum WAL. Recycle icin korunan miktar.">
+                                <div className="text-[#94A3B8]">min_wal_size</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{formatKb(walSettings?.min_wal_size_kb)}</div>
+                            </div>
+                            <div title="Iki timed checkpoint arasi maksimum sure. Default 5dk.">
+                                <div className="text-[#94A3B8]">checkpoint_timeout</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{formatMinutes(walSettings?.checkpoint_timeout_sec)}</div>
+                            </div>
+                            <div title="Checkpoint I/O nun pencereye yayilma orani. 0.9 = checkpoint'in cogu I/O smooth.">
+                                <div className="text-[#94A3B8]">checkpoint_completion_target</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{walSettings?.checkpoint_completion_target ?? '\u2014'}</div>
+                            </div>
+                            <div title="WAL kayitlarini sikistir. lz4/zstd FPI'larin boyutunu yuzde 50-80 azaltir.">
+                                <div className="text-[#94A3B8]">wal_compression</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{walSettings?.wal_compression ?? totals?.wal_compression ?? '\u2014'}</div>
+                            </div>
+                            <div title="WAL detay seviyesi. replica=replication icin yeterli, logical=logical decoding.">
+                                <div className="text-[#94A3B8]">wal_level</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{walSettings?.wal_level ?? '\u2014'}</div>
+                            </div>
+                            <div title="WAL yazimi icin bellekten ayrilan buffer. Default shared_buffers/32, max 16MB.">
+                                <div className="text-[#94A3B8]">wal_buffers</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{formatKb(walSettings?.wal_buffers_kb)}</div>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             )}
 

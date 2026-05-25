@@ -591,7 +591,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const bucketExpr = pgssBucketExpr(windowHours);
 
-        const result = await pool.query(`
+        const resultPromise = pool.query(`
       with toplam_wal as (
         select sum(coalesce(d.wal_bytes_delta, 0)) as total_bytes
         from fact.pgss_delta d
@@ -646,7 +646,15 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [totalWalResult, topDbResult, peakResult, settingsResult] = await Promise.all([
+        const tpsParams: any[] = [id, fromIso, toIso];
+        let tpsDatnameWhere = '';
+        if (datname) {
+            tpsParams.push(datname);
+            tpsDatnameWhere = ` and dbr.datname = $${tpsParams.length}`;
+        }
+
+        const [result, totalWalResult, topDbResult, peakResult, settingsResult, replicationLagResult, spillBytesResult, tpsResult, archiverResult] = await Promise.all([
+            resultPromise,
             pool.query(`
       select coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as total_wal_bytes
       from fact.pgss_delta d
@@ -713,24 +721,152 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         end as kb
       from fact.pg_settings_snapshot
       where instance_pk = $1
-        and setting_name in ('max_wal_size', 'wal_compression')
+        and setting_name in (
+          'max_wal_size',
+          'min_wal_size',
+          'checkpoint_timeout',
+          'checkpoint_completion_target',
+          'wal_compression',
+          'wal_level',
+          'wal_buffers'
+        )
       order by setting_name, snapshot_ts desc
+    `, [id]),
+            pool.query(`
+      select
+        slot_name,
+        slot_lag_bytes as lag_bytes,
+        wal_status,
+        active
+      from fact.pg_replication_slot_snapshot s
+      where s.instance_pk = $1
+        and s.sample_ts = (
+          select max(sample_ts)
+          from fact.pg_replication_slot_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+        )
+      order by coalesce(slot_lag_bytes, 0) desc
+      limit 1
+    `, [id, fromIso, toIso]),
+            pool.query(`
+      select coalesce(sum(coalesce(spill_bytes, 0)), 0)::double precision as total
+      from fact.pg_replication_slot_snapshot s
+      where s.instance_pk = $1
+        and s.slot_type = 'logical'
+        and s.sample_ts = (
+          select max(sample_ts)
+          from fact.pg_replication_slot_snapshot
+          where instance_pk = $1
+            and sample_ts between $2::timestamptz and $3::timestamptz
+        )
+    `, [id, fromIso, toIso]),
+            pool.query(`
+      select
+        (sum(coalesce(d.xact_commit_delta, 0))::double precision / nullif(extract(epoch from ($3::timestamptz - $2::timestamptz)), 0)) as commit_per_sec,
+        (sum(coalesce(d.xact_rollback_delta, 0))::double precision / nullif(extract(epoch from ($3::timestamptz - $2::timestamptz)), 0)) as rollback_per_sec
+      from fact.pg_database_delta d
+      left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${tpsDatnameWhere}
+    `, tpsParams),
+            pool.query(`
+      select
+        archived_count,
+        last_archived_time,
+        failed_count,
+        last_failed_time,
+        extract(epoch from (now() - last_archived_time))::int as lag_seconds
+      from fact.pg_archiver_snapshot
+      where instance_pk = $1
+      order by sample_ts desc
+      limit 1
     `, [id]),
         ]);
 
         const topDb = topDbResult.rows[0] ?? null;
         const peak = peakResult.rows[0] ?? null;
-        const maxWalSize = settingsResult.rows.find((r: any) => r.setting_name === 'max_wal_size');
-        const walCompression = settingsResult.rows.find((r: any) => r.setting_name === 'wal_compression');
+        const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+        const sizeKb = (name: string): number | null => {
+            const row = settingByName.get(name) as any;
+            if (!row?.setting_value) return null;
+            const value = Number(row.setting_value);
+            if (!Number.isFinite(value)) return null;
+            const unit = String(row.unit ?? '');
+            if (unit === 'GB') return value * 1024 * 1024;
+            if (unit === 'MB') return value * 1024;
+            return value;
+        };
+        const durationSec = (name: string): number | null => {
+            const row = settingByName.get(name) as any;
+            if (!row?.setting_value) return null;
+            const value = Number(row.setting_value);
+            if (!Number.isFinite(value)) return null;
+            const unit = String(row.unit ?? '');
+            if (unit === 'min') return value * 60;
+            if (unit === 'ms') return value / 1000;
+            return value;
+        };
+        const textSetting = (name: string): string | null => {
+            const row = settingByName.get(name) as any;
+            return row?.setting_value == null ? null : String(row.setting_value);
+        };
+        const numberSetting = (name: string): number | null => {
+            const row = settingByName.get(name) as any;
+            if (row?.setting_value == null) return null;
+            const value = Number(row.setting_value);
+            return Number.isFinite(value) ? value : null;
+        };
+        const maxWalSizeKb = sizeKb('max_wal_size');
+        const walCompression = textSetting('wal_compression');
+        const totalWalBytes = Number(totalWalResult.rows[0]?.total_wal_bytes ?? 0);
+        const windowSeconds = Math.max(0, (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000);
+        const tpsRow = tpsResult.rows[0] ?? null;
+        const commitPerSec = Number(tpsRow?.commit_per_sec ?? 0);
+        const rollbackPerSec = Number(tpsRow?.rollback_per_sec ?? 0);
+        const totalTps = commitPerSec + rollbackPerSec;
+        const archiverRow = archiverResult.rows[0] ?? null;
+        const walSettings = {
+            max_wal_size_kb: maxWalSizeKb,
+            min_wal_size_kb: sizeKb('min_wal_size'),
+            checkpoint_timeout_sec: durationSec('checkpoint_timeout'),
+            checkpoint_completion_target: numberSetting('checkpoint_completion_target'),
+            wal_compression: walCompression,
+            wal_level: textSetting('wal_level'),
+            wal_buffers_kb: sizeKb('wal_buffers'),
+        };
+
         res.json({
             rows: result.rows,
             totals: {
-                total_wal_bytes: Number(totalWalResult.rows[0]?.total_wal_bytes ?? 0),
+                total_wal_bytes: totalWalBytes,
                 top_datname: topDb ? { datname: topDb.datname, wal_mb: Number(topDb.wal_mb), pct: Number(topDb.pct) } : null,
                 peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
-                max_wal_size_kb: maxWalSize?.kb == null ? null : Number(maxWalSize.kb),
-                wal_compression: walCompression?.setting_value ?? null,
+                max_wal_size_kb: maxWalSizeKb,
+                wal_compression: walCompression,
                 fpi_heavy_count: result.rows.filter((r: any) => Number(r.fpi_ratio ?? 0) > 0.5).length,
+                wal_throughput_mb_per_sec: windowSeconds > 0 ? totalWalBytes / 1048576.0 / windowSeconds : 0,
+                replication_lag: replicationLagResult.rows[0] ? {
+                    slot_name: replicationLagResult.rows[0].slot_name,
+                    lag_bytes: Number(replicationLagResult.rows[0].lag_bytes ?? 0),
+                    wal_status: replicationLagResult.rows[0].wal_status,
+                    active: replicationLagResult.rows[0].active,
+                } : null,
+                spill_bytes_total: Number(spillBytesResult.rows[0]?.total ?? 0),
+                tps: totalTps > 0 ? {
+                    commit_per_sec: commitPerSec,
+                    rollback_per_sec: rollbackPerSec,
+                    total_per_sec: totalTps,
+                } : null,
+                archiver: archiverRow ? {
+                    archived_count: Number(archiverRow.archived_count ?? 0),
+                    last_archived_time: archiverRow.last_archived_time ?? null,
+                    failed_count: Number(archiverRow.failed_count ?? 0),
+                    last_failed_time: archiverRow.last_failed_time ?? null,
+                    lag_seconds: archiverRow.lag_seconds == null ? null : Number(archiverRow.lag_seconds),
+                } : null,
+                wal_settings: walSettings,
             },
         });
     } catch (err) {
