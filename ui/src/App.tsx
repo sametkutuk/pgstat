@@ -1,27 +1,30 @@
+import { lazy, Suspense } from 'react';
+import type { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from './components/common/Toast';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
-import Dashboard from './pages/Dashboard';
-import Instances from './pages/Instances';
-import InstanceDetail from './pages/InstanceDetail';
-import DatabaseCleanup from './pages/DatabaseCleanup';
-import Statements from './pages/Statements';
-import StatementDetail from './pages/StatementDetail';
-import Alerts from './pages/Alerts';
-import JobRuns from './pages/JobRuns';
-import Settings from './pages/Settings';
-import AlertsHub from './pages/AlertsHub';
-import ClusterDetail from './pages/ClusterDetail';
-import HealthReport from './pages/HealthReport';
-import ReportHistory from './pages/ReportHistory';
-import Insights from './pages/Insights';
-import ClusterQuery from './pages/ClusterQuery';
-import ClusterGroupDetail from './pages/ClusterGroupDetail';
-import GrafanaEmbed from './pages/GrafanaEmbed';
-import Login from './pages/Login';
 import { getToken } from './api/client';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Instances = lazy(() => import('./pages/Instances'));
+const InstanceDetail = lazy(() => import('./pages/InstanceDetail'));
+const DatabaseCleanup = lazy(() => import('./pages/DatabaseCleanup'));
+const Statements = lazy(() => import('./pages/Statements'));
+const StatementDetail = lazy(() => import('./pages/StatementDetail'));
+const Alerts = lazy(() => import('./pages/Alerts'));
+const JobRuns = lazy(() => import('./pages/JobRuns'));
+const Settings = lazy(() => import('./pages/Settings'));
+const AlertsHub = lazy(() => import('./pages/AlertsHub'));
+const ClusterDetail = lazy(() => import('./pages/ClusterDetail'));
+const HealthReport = lazy(() => import('./pages/HealthReport'));
+const ReportHistory = lazy(() => import('./pages/ReportHistory'));
+const Insights = lazy(() => import('./pages/Insights'));
+const ClusterQuery = lazy(() => import('./pages/ClusterQuery'));
+const ClusterGroupDetail = lazy(() => import('./pages/ClusterGroupDetail'));
+const GrafanaEmbed = lazy(() => import('./pages/GrafanaEmbed'));
+const Login = lazy(() => import('./pages/Login'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,11 +36,22 @@ const queryClient = new QueryClient({
 });
 
 // Token yoksa login'e yönlendir
-function RequireAuth({ children }: { children: React.ReactNode }) {
+function RequireAuth({ children }: { children: ReactNode }) {
   if (!getToken()) {
     return <Navigate to="/login" replace />;
   }
   return <>{children}</>;
+}
+
+function PageLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-screen text-[#64748B]">
+      <div className="flex flex-col items-center gap-3">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#3B82F6] border-t-transparent"></div>
+        <span className="text-sm">Yukleniyor...</span>
+      </div>
+    </div>
+  );
 }
 
 function App() {
@@ -46,7 +60,8 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
           <BrowserRouter>
-            <Routes>
+            <Suspense fallback={<PageLoadingFallback />}>
+              <Routes>
               <Route path="/login" element={<Login />} />
               <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
                 <Route path="/" element={<Dashboard />} />
@@ -78,7 +93,8 @@ function App() {
                 <Route path="/grafana/:uid" element={<GrafanaEmbed />} />
                 <Route path="/grafana" element={<GrafanaEmbed />} />
               </Route>
-            </Routes>
+              </Routes>
+            </Suspense>
           </BrowserRouter>
         </ToastProvider>
       </QueryClientProvider>
