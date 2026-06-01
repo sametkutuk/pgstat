@@ -324,6 +324,22 @@ function calculateWALTags(row: WALSpikeRow): InsightTag[] {
     return tags;
 }
 
+function calculateCacheHitTags(row: CacheHitRow): InsightTag[] {
+    const hitPct = row.cache_hit_pct == null ? null : toNum(row.cache_hit_pct);
+    const diskReadMb = toNum(row.disk_read_mb);
+    const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
+    const calls = toNum(row.toplam_cagri);
+    const readBlksPerCall = row.read_blks_per_call == null ? null : toNum(row.read_blks_per_call);
+    const tags: InsightTag[] = [];
+
+    if (hitPct != null && hitPct < 50 && diskReadMb >= 100) tags.push({ key: 'cache-disaster', label: 'Cache Disaster', icon: '🔴', className: 'bg-red-100 text-red-700', title: "Cache hit %50 alti ve 100MB+ disk read. Bu sorgu shared_buffers'i resmen bypass ediyor." });
+    if (diskReadMb >= 1024) tags.push({ key: 'disk-heavy', label: 'Disk Heavy', icon: '🟠', className: 'bg-orange-100 text-orange-700', title: '1GB+ disk read - buyuk veri okuyor. Index ile selective scan veya partition pruning dusun.' });
+    if (ioBoundPct != null && ioBoundPct > 50) tags.push({ key: 'io-bound', label: 'I/O Bound', icon: '🐢', className: 'bg-amber-100 text-amber-700', title: 'Sorgu cogu zamani disk I/O bekledi (>%50 io_bound). PG15+ olmali; faster storage veya cache iyilestirme.' });
+    if (calls >= 1000 && hitPct != null && hitPct < 90) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ama her cagrida cache miss yapiyor. shared_buffers buyutmek veya prepared cache stratejisi.' });
+    if (readBlksPerCall != null && readBlksPerCall >= 10000) tags.push({ key: 'big-reader', label: 'Big Reader', icon: '📦', className: 'bg-purple-100 text-purple-700', title: 'Tek cagrida 10K+ blok (80MB+) okuyor - full table scan veya buyuk range scan.' });
+    return tags;
+}
+
 function compactNumber(value: unknown): string {
     const n = toNum(value);
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -1938,6 +1954,15 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
         { key: 'read_time', label: 'Read Time', tip: 'En uzun disk read bekleyen (PG15+).' },
         { key: 'low_hit_pct', label: 'Dusuk Hit %', tip: 'En dusuk cache hit orani (min 100 cagri esigi).' },
     ];
+    const tagCounts = useMemo(() => {
+        const counts: Record<string, { icon: string; count: number }> = {};
+        for (const row of rows) {
+            for (const tag of calculateCacheHitTags(row)) {
+                counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
+            }
+        }
+        return counts;
+    }, [rows]);
 
     function applySearch() { setSearch(searchInput.trim()); }
     function clearSearch() { setSearchInput(''); setSearch(''); }
@@ -1967,6 +1992,8 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                             )}
                             <span className="mx-1">·</span>
                             Heavy reader (&gt;100MB): <b className={toNum(totals.heavy_reader_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.heavy_reader_count}</b> sorgu
+                            <span className="mx-1">·</span>
+                            Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div>
                             En kotu DB: <b className="text-[#1E293B]">{totals.worst_datname ? (
@@ -2100,6 +2127,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctDiskClass = pctDiskRead == null ? 'bg-slate-100 text-slate-600' : pctDiskRead >= 20 ? 'bg-red-100 text-red-700' : pctDiskRead >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
                                     const ioClass = ioBoundPct == null ? 'bg-slate-100 text-slate-600' : ioBoundPct >= 50 ? 'bg-red-100 text-red-700' : ioBoundPct >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+                                    const tags = calculateCacheHitTags(row);
                                     return (
                                         <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
@@ -2110,6 +2138,15 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     </div>
                                                     <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                 </div>
+                                                {tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {tags.map(tag => (
+                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                <span>{tag.icon}</span>{tag.label}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </td>
                                             <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
