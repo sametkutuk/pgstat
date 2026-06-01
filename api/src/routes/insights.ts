@@ -5,6 +5,7 @@ import { parseTimeRange, parseLimit } from '../middleware/validation';
 const router = Router();
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
+type DataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
 
 const COMPARE_OFFSETS: Record<CompareKey, { seconds: number; intervalSql: string }> = {
     '1h': { seconds: 3_600, intervalSql: `interval '1 hour'` },
@@ -41,6 +42,46 @@ function pgssBucketExpr(windowHours: number): string {
     return bucketExprForTs(windowHours, 'd.sample_ts');
 }
 
+function pickPgssSource(windowHours: number): DataSource {
+    if (windowHours <= 7 * 24) return 'pgss_delta';
+    // pgss_daily is reserved for a later retention-aware pass; 7g+ uses hourly here.
+    return 'pgss_hourly';
+}
+
+function pgssStepSql(source: DataSource, windowHours: number): string {
+    if (source === 'pgss_delta' && windowHours <= 6) return `interval '5 minutes'`;
+    if (source === 'pgss_daily') return `interval '1 day'`;
+    return `interval '1 hour'`;
+}
+
+function pgssGridStartSql(source: DataSource, windowHours: number, paramIndex: number): string {
+    if (source === 'pgss_delta') return pgssBucketAlignSql(windowHours, paramIndex);
+    if (source === 'pgss_daily') return `date_trunc('day', $${paramIndex}::timestamptz)`;
+    return `date_trunc('hour', $${paramIndex}::timestamptz)`;
+}
+
+function pgssSourceTable(source: DataSource): string {
+    if (source === 'pgss_hourly') return 'agg.pgss_hourly';
+    if (source === 'pgss_daily') return 'agg.pgss_daily';
+    return 'fact.pgss_delta';
+}
+
+function pgssBucketForSource(source: DataSource, windowHours: number): string {
+    if (source === 'pgss_delta') return pgssBucketExpr(windowHours);
+    if (source === 'pgss_daily') return 'd.bucket_start::timestamptz';
+    return 'd.bucket_start';
+}
+
+function pgssTimeWhere(source: DataSource, fromParam: number, toParam: number): string {
+    if (source === 'pgss_delta') return `d.sample_ts between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+    if (source === 'pgss_daily') return `d.bucket_start::timestamptz between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+    return `d.bucket_start between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+}
+
+function pgssMetric(source: DataSource, deltaCol: string, sumCol: string, fallback = '0'): string {
+    return source === 'pgss_delta' ? deltaCol : (sumCol || fallback);
+}
+
 // pgssBucketExpr'e karsilik gelen bucket adimi. generate_series icin
 // kullanilir — boylece pencerede veri olmayan bucket'lar 0 ile doldurulur.
 function pgssBucketStepSql(windowHours: number): string {
@@ -67,7 +108,7 @@ function pgssBucketAlignSql(windowHours: number, paramIndex: number): string {
     return `date_trunc('day', $${paramIndex}::timestamptz)`;
 }
 
-async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -83,22 +124,26 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssBucketStepSql(windowHours);
-    // $2 ve $3 from/to. Grid'i bucket sinirina hizala.
-    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 2, 3);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
-            coalesce(sum(d.calls_delta), 0)::bigint as total_calls
-          from fact.pgss_delta d
+            coalesce(sum(${execExpr}), 0)::double precision as total_ms,
+            coalesce(sum(${callsExpr}), 0)::bigint as total_calls
+          from ${sourceTable} d
           join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
           left join dim.query_text qt on qt.query_text_id = ss.query_text_id
           left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
           where d.instance_pk = $1
-            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            and ${timeWhere}
             ${dbWhere}
           group by bucket_start
         ),
@@ -116,24 +161,31 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
     `, params);
 }
 
-async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours);
-    // $3 ve $4 from/to (1: id, 2: seriesId).
-    const gridStart = pgssBucketAlignSql(windowHours, 3);
+async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 3);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 3, 4);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
+    const minExpr = source === 'pgss_delta' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
+    const avgExpr = source === 'pgss_delta' ? 'avg(d.mean_exec_time_ms)::double precision' : 'null::double precision';
+    const maxExpr = source === 'pgss_delta' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls,
-            coalesce(sum(d.total_exec_time_ms_delta), 0)::double precision as total_ms,
-            min(d.min_exec_time_ms)::double precision as min_ms,
-            avg(d.mean_exec_time_ms)::double precision as avg_ms,
-            max(d.max_exec_time_ms)::double precision as max_ms
-          from fact.pgss_delta d
+            coalesce(sum(${callsExpr}), 0)::bigint as calls,
+            coalesce(sum(${execExpr}), 0)::double precision as total_ms,
+            ${minExpr} as min_ms,
+            ${avgExpr} as avg_ms,
+            ${maxExpr} as max_ms
+          from ${sourceTable} d
           where d.instance_pk = $1
             and d.statement_series_id = $2::bigint
-            and d.sample_ts between $3::timestamptz and $4::timestamptz
+            and ${timeWhere}
           group by bucket_start
         ),
         grid as (
@@ -153,22 +205,27 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours);
-    // $3 ve $4 from/to (1: id, 2: seriesId).
-    const gridStart = pgssBucketAlignSql(windowHours, 3);
+async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 3);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 3, 4);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
+    const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls,
-            coalesce(sum(coalesce(d.temp_blks_written_delta, 0)), 0)::bigint as temp_written_blks,
-            coalesce(sum(coalesce(d.temp_blks_read_delta, 0)), 0)::bigint as temp_read_blks
-          from fact.pgss_delta d
+            coalesce(sum(${callsExpr}), 0)::bigint as calls,
+            coalesce(sum(${tempWrittenExpr}), 0)::bigint as temp_written_blks,
+            coalesce(sum(${tempReadExpr}), 0)::bigint as temp_read_blks
+          from ${sourceTable} d
           where d.instance_pk = $1
             and d.statement_series_id = $2::bigint
-            and d.sample_ts between $3::timestamptz and $4::timestamptz
+            and ${timeWhere}
           group by bucket_start
         ),
         grid as (
@@ -221,23 +278,29 @@ async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string,
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours);
-    // $3 ve $4 from/to (1: id, 2: seriesId).
-    const gridStart = pgssBucketAlignSql(windowHours, 3);
+async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 3);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 3, 4);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
+    const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
+    const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(coalesce(d.shared_blks_hit_delta, 0)), 0)::bigint as hit_blks,
-            coalesce(sum(coalesce(d.shared_blks_read_delta, 0)), 0)::bigint as read_blks,
-            coalesce(sum(coalesce(d.shared_blk_read_time_ms_delta, 0)), 0)::double precision as read_time_ms,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls
-          from fact.pgss_delta d
+            coalesce(sum(${hitExpr}), 0)::bigint as hit_blks,
+            coalesce(sum(${readExpr}), 0)::bigint as read_blks,
+            coalesce(sum(${readTimeExpr}), 0)::double precision as read_time_ms,
+            coalesce(sum(${callsExpr}), 0)::bigint as calls
+          from ${sourceTable} d
           where d.instance_pk = $1
             and d.statement_series_id = $2::bigint
-            and d.sample_ts between $3::timestamptz and $4::timestamptz
+            and ${timeWhere}
           group by bucket_start
         ),
         grid as (
@@ -271,10 +334,8 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const datname = (req.query.datname as string || '').trim();
         const searchRaw = (req.query.search as string || '').trim();
 
-        // Bucket granulu pencereye gore secilir; fact.pgss_delta'dan okuyoruz.
-        // <=6s: 5dk, <=7g: 1s, <=30g: 6s, >30g: 1g.
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
         // Baseline = ayni pencere + datname filtresi var ama search YOK. Yani
         // kullanici '%select%hotel%' yazdiginda foreground o sorgular,
@@ -285,9 +346,9 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, source, windowHours),
             baselineNeeded
-                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', source, windowHours)
                 : Promise.resolve(null),
         ]);
 
@@ -300,13 +361,13 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 searchRaw,
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
     } catch (err) {
         next(err);
     }
@@ -331,9 +392,9 @@ router.get('/:id/query-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
-        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
+        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -342,12 +403,12 @@ router.get('/:id/query-trend', async (req, res, next) => {
                 seriesIdRaw,
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, data_source: source });
     } catch (err) {
         next(err);
     }
@@ -372,9 +433,9 @@ router.get('/:id/query-temp-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
-        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
+        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -383,12 +444,12 @@ router.get('/:id/query-temp-trend', async (req, res, next) => {
                 seriesIdRaw,
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, data_source: source });
     } catch (err) {
         next(err);
     }
@@ -454,9 +515,9 @@ router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
-        const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
+        const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -465,12 +526,12 @@ router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
                 seriesIdRaw,
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, data_source: source });
     } catch (err) {
         next(err);
     }
@@ -585,7 +646,7 @@ router.get('/:id/top-queries', async (req, res, next) => {
 // CACHE HIT sekmesi
 // =========================================================================
 
-async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -601,23 +662,30 @@ async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssBucketStepSql(windowHours);
-    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 2, 3);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
+    const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
+    const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(coalesce(d.shared_blks_hit_delta, 0)), 0)::bigint as hit_blks,
-            coalesce(sum(coalesce(d.shared_blks_read_delta, 0)), 0)::bigint as read_blks,
-            coalesce(sum(coalesce(d.shared_blk_read_time_ms_delta, 0)), 0)::double precision as read_time_ms,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls
-          from fact.pgss_delta d
+            coalesce(sum(${hitExpr}), 0)::bigint as hit_blks,
+            coalesce(sum(${readExpr}), 0)::bigint as read_blks,
+            coalesce(sum(${readTimeExpr}), 0)::double precision as read_time_ms,
+            coalesce(sum(${callsExpr}), 0)::bigint as calls
+          from ${sourceTable} d
           join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
           left join dim.query_text qt on qt.query_text_id = ss.query_text_id
           left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
           where d.instance_pk = $1
-            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            and ${timeWhere}
             ${dbWhere}
           group by bucket_start
         ),
@@ -859,15 +927,15 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, source, windowHours),
             baselineNeeded
-                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', source, windowHours)
                 : Promise.resolve(null),
         ]);
 
@@ -880,13 +948,13 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 searchRaw,
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
     } catch (err) {
         next(err);
     }
@@ -1785,7 +1853,7 @@ router.get('/:id/wal-trend', async (req, res, next) => {
 
 // Top temp-spill sorgular — temp_blks_written desc, HAVING > 0.
 // Sadece geçici dosya yazan sorgulari listeler. 1 blok = 8KB.
-async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -1801,22 +1869,28 @@ async function fetchTempSpillData(id: string, fromIso: string, toIso: string, da
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssBucketStepSql(windowHours);
-    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours);
+    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const sourceTable = pgssSourceTable(source);
+    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const timeWhere = pgssTimeWhere(source, 2, 3);
+    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+    const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
+    const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(d.temp_blks_written_delta), 0)::bigint as temp_blks_written,
-            coalesce(sum(d.temp_blks_read_delta), 0)::bigint as temp_blks_read,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls
-          from fact.pgss_delta d
+            coalesce(sum(${tempWrittenExpr}), 0)::bigint as temp_blks_written,
+            coalesce(sum(${tempReadExpr}), 0)::bigint as temp_blks_read,
+            coalesce(sum(${callsExpr}), 0)::bigint as calls
+          from ${sourceTable} d
           join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
           left join dim.query_text qt on qt.query_text_id = ss.query_text_id
           left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
           where d.instance_pk = $1
-            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            and ${timeWhere}
             ${dbWhere}
           group by bucket_start
         ),
@@ -2050,15 +2124,15 @@ router.get('/:id/temp-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const source = pickPgssSource(windowHours);
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, source, windowHours),
             baselineNeeded
-                ? fetchTempSpillData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                ? fetchTempSpillData(id, fromIso, toIso, datname, '', source, windowHours)
                 : Promise.resolve(null),
         ]);
 
@@ -2071,13 +2145,13 @@ router.get('/:id/temp-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 searchRaw,
-                bucketExpr,
+                source,
                 windowHours,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
     } catch (err) {
         next(err);
     }
