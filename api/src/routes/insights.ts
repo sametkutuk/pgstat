@@ -954,6 +954,48 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
     `, params);
 }
 
+async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const stepSql = pgssBucketStepSql(windowHours);
+    // $4 ve $5 from/to (1: id, 2: dbid, 3: relid).
+    const gridStart = pgssBucketAlignSql(windowHours, 4);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with snapshot_data as (
+          select
+            ${bucketExpr} as bucket_start,
+            avg(coalesce(d.n_dead_tup_estimate, 0))::bigint as dead_tup,
+            avg(coalesce(d.n_live_tup_estimate, 0))::bigint as live_tup,
+            sum(coalesce(d.n_tup_upd_delta, 0))::bigint as n_tup_upd,
+            sum(coalesce(d.n_tup_del_delta, 0))::bigint as n_tup_del,
+            sum(coalesce(d.n_tup_ins_delta, 0))::bigint as n_tup_ins,
+            sum(coalesce(d.vacuum_count_delta, 0) + coalesce(d.autovacuum_count_delta, 0))::bigint as vacuum_count,
+            sum(coalesce(d.analyze_count_delta, 0) + coalesce(d.autoanalyze_count_delta, 0))::bigint as analyze_count
+          from fact.pg_table_stat_delta d
+          where d.instance_pk = $1
+            and d.dbid = $2::oid
+            and d.relid = $3::oid
+            and d.sample_ts between $4::timestamptz and $5::timestamptz
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $5::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(s.dead_tup, 0)::bigint as dead_tup,
+          coalesce(s.live_tup, 0)::bigint as live_tup,
+          coalesce(s.n_tup_upd, 0)::bigint as n_tup_upd,
+          coalesce(s.n_tup_del, 0)::bigint as n_tup_del,
+          coalesce(s.n_tup_ins, 0)::bigint as n_tup_ins,
+          coalesce(s.vacuum_count, 0)::bigint as vacuum_count,
+          coalesce(s.analyze_count, 0)::bigint as analyze_count
+        from grid g
+        left join snapshot_data s on s.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, [id, dbid, relid, fromIso, toIso]);
+}
+
 // GET /api/insights/:id/vacuum-lag?sort=dead_tup|dead_pct|stale_vacuum|update_rate|mod_since_analyze&from=&to=&limit=20&datname=&search=
 router.get('/:id/vacuum-lag', async (req, res, next) => {
     try {
@@ -1243,6 +1285,51 @@ router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 searchRaw,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+
+        res.json({ current: current.rows, previous, compare });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/table-vacuum-trend?dbid=N&relid=M&from=&to=&compare=
+router.get('/:id/table-vacuum-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare' });
+            return;
+        }
+
+        const dbidRaw = String(req.query.dbid || '');
+        const relidRaw = String(req.query.relid || '');
+        if (!/^\d+$/.test(dbidRaw) || !/^\d+$/.test(relidRaw)) {
+            res.status(400).json({ error: 'Invalid dbid or relid' });
+            return;
+        }
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, bucketExpr, windowHours);
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchTableVacuumTrend(
+                id,
+                dbidRaw,
+                relidRaw,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                bucketExpr,
                 windowHours,
                 offset.intervalSql,
             )).rows;

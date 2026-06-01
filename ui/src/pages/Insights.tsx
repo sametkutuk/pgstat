@@ -8,7 +8,7 @@ import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import { useToast } from '../components/common/Toast';
-import { Area, AreaChart, Bar, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -2387,6 +2387,18 @@ interface VacuumLagTrendPoint {
     vacuum_count: string | number;
 }
 
+interface TableVacuumTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    dead_tup: string | number;
+    live_tup: string | number;
+    n_tup_upd: string | number;
+    n_tup_del: string | number;
+    n_tup_ins: string | number;
+    vacuum_count: string | number;
+    analyze_count: string | number;
+}
+
 type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
 
 function deadTuplePctClass(deadPct: number | null): string {
@@ -2416,6 +2428,109 @@ function formatDaysAgo(days: number | null | undefined): string {
     return `${days.toLocaleString('tr-TR', { maximumFractionDigits: 1 })} gun once`;
 }
 
+function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, range, autoRefresh, compareKey }: { instancePk: number; dbid: number | string; relid: number | string; schemaname: string; relname: string; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-table-vacuum-trend', instancePk, dbid, relid, range.fromIso, range.toIso, compareKey],
+        queryFn: () => apiGet<TrendResponse<TableVacuumTrendPoint>>(
+            `/insights/${instancePk}/table-vacuum-trend?dbid=${dbid}&relid=${relid}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
+        ),
+        enabled: instancePk != null && dbid != null && relid != null,
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (data?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_dead_tup: toNum(p.dead_tup),
+                previous_dead_tup: previous ? toNum(previous.dead_tup) : null,
+                current_upd_del: toNum(p.n_tup_upd) + toNum(p.n_tup_del),
+                previous_upd_del: previous ? toNum(previous.n_tup_upd) + toNum(previous.n_tup_del) : null,
+                current_vacuum_count: toNum(p.vacuum_count),
+                previous_vacuum_count: previous ? toNum(previous.vacuum_count) : null,
+            };
+        });
+    }, [data, windowHours]);
+
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    if (isLoading) return <SkeletonTable rows={3} cols={3} />;
+    if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu tablo icin trend verisi yok.</div>;
+
+    const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
+
+    return (
+        <div>
+            <div className="text-xs text-[#64748B] mb-2"><b>{schemaname}.{relname}</b> trendi</div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <InsightChart title="Dead Tuple Trend" height={200}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`tv-dead-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Area type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_dead_tup" name="Su an" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
+                    </AreaChart>
+                </InsightChart>
+                <InsightChart title="Update/Delete Activity" height={200}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`tv-upd-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Area type="monotone" dataKey="previous_upd_del" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_upd_del" name="Su an" stroke="#F59E0B" fill="#FEF3C7" fillOpacity={0.7} strokeWidth={2} connectNulls />
+                    </AreaChart>
+                </InsightChart>
+                <InsightChart title="Vacuum Aktivitesi" height={200}>
+                    <BarChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`tv-vac-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Bar dataKey="previous_vacuum_count" name={compareLabel(compareKey)} fill="#94A3B8" opacity={0.5} radius={[2, 2, 0, 0]} barSize={10} />}
+                        <Bar dataKey="current_vacuum_count" name="Su an" fill="#7C3AED" radius={[2, 2, 0, 0]} barSize={10} />
+                    </BarChart>
+                </InsightChart>
+            </div>
+        </div>
+    );
+}
+
 function VacuumLagCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
         return <EmptyState icon="ğŸ–¥ï¸" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
@@ -2428,6 +2543,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [expandedKey, setExpandedKey] = useState<string | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
     useEffect(() => {
         try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
@@ -2715,42 +2831,65 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                             </thead>
                             <tbody>
                                 {rows.map((row, i) => {
+                                    const rowKey = `${row.dbid}-${row.relid}`;
+                                    const expanded = expandedKey === rowKey;
                                     const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
                                     const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
                                     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
                                     const tags = calculateVacuumLagTags(row);
                                     return (
-                                        <tr key={`${row.dbid}-${row.relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
-                                            <td className="py-2 px-3 max-w-md">
-                                                <div className="font-mono text-xs text-[#1E293B] truncate" title={`${row.schemaname}.${row.relname}`}>
-                                                    {row.schemaname}.{row.relname}
-                                                </div>
-                                                {tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {tags.map(tag => (
-                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
-                                                                <span>{tag.icon}</span>{tag.label}
-                                                            </span>
-                                                        ))}
+                                        <Fragment key={rowKey}>
+                                            <tr
+                                                onClick={() => setExpandedKey(prev => prev === rowKey ? null : rowKey)}
+                                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                            >
+                                                <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                                <td className="py-2 px-3 max-w-md">
+                                                    <div className="font-mono text-xs text-[#1E293B] truncate" title={`${row.schemaname}.${row.relname}`}>
+                                                        {row.schemaname}.{row.relname}
                                                     </div>
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs whitespace-nowrap">
-                                                <span className="inline-block px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{row.datname || '\u2014'}</span>
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.n_dead_tup).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_live_tup).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{deadPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${deadTuplePctClass(deadPct)}`}>%{deadPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{daysSinceVacuum == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${vacuumAgeClass(daysSinceVacuum)}`}>{formatDaysAgo(daysSinceVacuum)}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.vacuum_count).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.update_per_sec == null ? '\u2014' : Number(row.update_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hotUpdPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${hotUpdateClass(hotUpdPct)}`}>%{hotUpdPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_mod_since_analyze).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <button type="button" className="text-[#94A3B8]" title="Trend panel sonraki PR'da" disabled>+</button>
-                                            </td>
-                                        </tr>
+                                                    {tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                            {tags.map(tag => (
+                                                                <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                    <span>{tag.icon}</span>{tag.label}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs whitespace-nowrap">
+                                                    <span className="inline-block px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{row.datname || '\u2014'}</span>
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.n_dead_tup).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_live_tup).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{deadPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${deadTuplePctClass(deadPct)}`}>%{deadPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{daysSinceVacuum == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${vacuumAgeClass(daysSinceVacuum)}`}>{formatDaysAgo(daysSinceVacuum)}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.vacuum_count).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.update_per_sec == null ? '\u2014' : Number(row.update_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hotUpdPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${hotUpdateClass(hotUpdPct)}`}>%{hotUpdPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_mod_since_analyze).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <button type="button" className="text-[#94A3B8]" title={expanded ? 'Kapat' : 'Grafikler'}>{expanded ? '\u2212' : '+'}</button>
+                                                </td>
+                                            </tr>
+                                            {expanded && (
+                                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                    <td colSpan={12} className="p-4">
+                                                        <TableVacuumTrendPanel
+                                                            instancePk={instancePk}
+                                                            dbid={row.dbid}
+                                                            relid={row.relid}
+                                                            schemaname={row.schemaname}
+                                                            relname={row.relname}
+                                                            range={range}
+                                                            autoRefresh={autoRefresh}
+                                                            compareKey={compareKey}
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </Fragment>
                                     );
                                 })}
                             </tbody>
