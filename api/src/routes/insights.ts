@@ -7,6 +7,16 @@ const router = Router();
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type DataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
 
+interface InstanceRetention {
+    raw_days: number;
+    hourly_days: number;
+    daily_days: number;
+}
+
+const DEFAULT_RETENTION: InstanceRetention = { raw_days: 7, hourly_days: 30, daily_days: 365 };
+const retentionCache = new Map<string, { value: InstanceRetention; expiresAt: number }>();
+const RETENTION_CACHE_TTL_MS = 60_000;
+
 const COMPARE_OFFSETS: Record<CompareKey, { seconds: number; intervalSql: string }> = {
     '1h': { seconds: 3_600, intervalSql: `interval '1 hour'` },
     '1d': { seconds: 86_400, intervalSql: `interval '1 day'` },
@@ -25,11 +35,36 @@ function shiftedIso(iso: string, offsetSeconds: number): string {
     return new Date(new Date(iso).getTime() - offsetSeconds * 1000).toISOString();
 }
 
-function bucketExprForTs(windowHours: number, tsExpr: string): string {
+async function getInstanceRetention(instancePk: string): Promise<InstanceRetention> {
+    const cached = retentionCache.get(instancePk);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const result = await pool.query(`
+        select
+          coalesce(rp.raw_retention_days, $2)::int as raw_days,
+          coalesce(rp.hourly_retention_days, $3)::int as hourly_days,
+          coalesce(rp.daily_retention_days, $4)::int as daily_days
+        from control.instance_inventory ii
+        left join control.retention_policy rp on rp.retention_policy_id = ii.retention_policy_id
+        where ii.instance_pk = $1::bigint
+        limit 1
+    `, [instancePk, DEFAULT_RETENTION.raw_days, DEFAULT_RETENTION.hourly_days, DEFAULT_RETENTION.daily_days]);
+
+    const row = result.rows[0] ?? DEFAULT_RETENTION;
+    const value: InstanceRetention = {
+        raw_days: Number(row.raw_days ?? DEFAULT_RETENTION.raw_days),
+        hourly_days: Number(row.hourly_days ?? DEFAULT_RETENTION.hourly_days),
+        daily_days: Number(row.daily_days ?? DEFAULT_RETENTION.daily_days),
+    };
+    retentionCache.set(instancePk, { value, expiresAt: Date.now() + RETENTION_CACHE_TTL_MS });
+    return value;
+}
+
+function bucketExprForTs(windowHours: number, tsExpr: string, rawDays = DEFAULT_RETENTION.raw_days): string {
     if (windowHours <= 6) {
         return `date_trunc('hour', ${tsExpr}) + make_interval(mins => (extract(minute from ${tsExpr})::int / 5) * 5)`;
     }
-    if (windowHours <= 7 * 24) {
+    if (windowHours <= rawDays * 24) {
         return `date_trunc('hour', ${tsExpr})`;
     }
     if (windowHours <= 30 * 24) {
@@ -38,24 +73,24 @@ function bucketExprForTs(windowHours: number, tsExpr: string): string {
     return `date_trunc('day', ${tsExpr})`;
 }
 
-function pgssBucketExpr(windowHours: number): string {
-    return bucketExprForTs(windowHours, 'd.sample_ts');
+function pgssBucketExpr(windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
+    return bucketExprForTs(windowHours, 'd.sample_ts', rawDays);
 }
 
-function pickPgssSource(windowHours: number): DataSource {
-    if (windowHours <= 7 * 24) return 'pgss_delta';
-    // pgss_daily is reserved for a later retention-aware pass; 7g+ uses hourly here.
+function pickPgssSource(windowHours: number, rawDays: number): DataSource {
+    if (windowHours <= rawDays * 24) return 'pgss_delta';
+    // pgss_daily is reserved for a later retention-aware pass; raw overflow uses hourly here.
     return 'pgss_hourly';
 }
 
-function pgssStepSql(source: DataSource, windowHours: number): string {
+function pgssStepSql(source: DataSource, windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
     if (source === 'pgss_delta' && windowHours <= 6) return `interval '5 minutes'`;
     if (source === 'pgss_daily') return `interval '1 day'`;
     return `interval '1 hour'`;
 }
 
-function pgssGridStartSql(source: DataSource, windowHours: number, paramIndex: number): string {
-    if (source === 'pgss_delta') return pgssBucketAlignSql(windowHours, paramIndex);
+function pgssGridStartSql(source: DataSource, windowHours: number, paramIndex: number, rawDays = DEFAULT_RETENTION.raw_days): string {
+    if (source === 'pgss_delta') return pgssBucketAlignSql(windowHours, paramIndex, rawDays);
     if (source === 'pgss_daily') return `date_trunc('day', $${paramIndex}::timestamptz)`;
     return `date_trunc('hour', $${paramIndex}::timestamptz)`;
 }
@@ -66,8 +101,8 @@ function pgssSourceTable(source: DataSource): string {
     return 'fact.pgss_delta';
 }
 
-function pgssBucketForSource(source: DataSource, windowHours: number): string {
-    if (source === 'pgss_delta') return pgssBucketExpr(windowHours);
+function pgssBucketForSource(source: DataSource, windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
+    if (source === 'pgss_delta') return pgssBucketExpr(windowHours, rawDays);
     if (source === 'pgss_daily') return 'd.bucket_start::timestamptz';
     return 'd.bucket_start';
 }
@@ -84,21 +119,21 @@ function pgssMetric(source: DataSource, deltaCol: string, sumCol: string, fallba
 
 // pgssBucketExpr'e karsilik gelen bucket adimi. generate_series icin
 // kullanilir — boylece pencerede veri olmayan bucket'lar 0 ile doldurulur.
-function pgssBucketStepSql(windowHours: number): string {
+function pgssBucketStepSql(windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
     if (windowHours <= 6) return `interval '5 minutes'`;
-    if (windowHours <= 7 * 24) return `interval '1 hour'`;
+    if (windowHours <= rawDays * 24) return `interval '1 hour'`;
     if (windowHours <= 30 * 24) return `interval '6 hours'`;
     return `interval '1 day'`;
 }
 
 // Pencere baslangicini bucket sinirina hizala (generate_series'in ilk
 // noktasi grid ile uyumlu olsun).
-function pgssBucketAlignSql(windowHours: number, paramIndex: number): string {
+function pgssBucketAlignSql(windowHours: number, paramIndex: number, rawDays = DEFAULT_RETENTION.raw_days): string {
     if (windowHours <= 6) {
         return `(date_trunc('hour', $${paramIndex}::timestamptz)
                  + make_interval(mins => (extract(minute from $${paramIndex}::timestamptz)::int / 5) * 5))`;
     }
-    if (windowHours <= 7 * 24) {
+    if (windowHours <= rawDays * 24) {
         return `date_trunc('hour', $${paramIndex}::timestamptz)`;
     }
     if (windowHours <= 30 * 24) {
@@ -108,7 +143,7 @@ function pgssBucketAlignSql(windowHours: number, paramIndex: number): string {
     return `date_trunc('day', $${paramIndex}::timestamptz)`;
 }
 
-async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -124,10 +159,10 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 2, 3);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
@@ -161,11 +196,11 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
     `, params);
 }
 
-async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 3);
+async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 3, 4);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
@@ -205,11 +240,11 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 3);
+async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 3, 4);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
@@ -243,10 +278,10 @@ async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours);
+async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const stepSql = pgssBucketStepSql(windowHours, rawDays);
     // $3 ve $4 from/to (1: id, 2: seriesId).
-    const gridStart = pgssBucketAlignSql(windowHours, 3);
+    const gridStart = pgssBucketAlignSql(windowHours, 3, rawDays);
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
@@ -278,11 +313,11 @@ async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string,
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 3);
+async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 3, 4);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
@@ -335,7 +370,8 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
         // Baseline = ayni pencere + datname filtresi var ama search YOK. Yani
         // kullanici '%select%hotel%' yazdiginda foreground o sorgular,
@@ -346,9 +382,9 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, source, windowHours),
+            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
             baselineNeeded
-                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', source, windowHours)
+                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
                 : Promise.resolve(null),
         ]);
 
@@ -363,11 +399,12 @@ router.get('/:id/db-time-trend', async (req, res, next) => {
                 searchRaw,
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -392,9 +429,10 @@ router.get('/:id/query-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
-        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
+        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -405,10 +443,11 @@ router.get('/:id/query-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare, data_source: source });
+        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -433,9 +472,10 @@ router.get('/:id/query-temp-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
-        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
+        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -446,10 +486,11 @@ router.get('/:id/query-temp-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare, data_source: source });
+        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -474,9 +515,10 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
-        const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours);
+        const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -487,10 +529,11 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 bucketExpr,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -515,9 +558,10 @@ router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
-        const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours);
+        const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -528,10 +572,11 @@ router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare, data_source: source });
+        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -646,7 +691,7 @@ router.get('/:id/top-queries', async (req, res, next) => {
 // CACHE HIT sekmesi
 // =========================================================================
 
-async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -662,10 +707,10 @@ async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 2, 3);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
@@ -748,7 +793,8 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         params.push(limit);
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
         const rowsPromise = pool.query(`
       with toplam_disk_read as (
@@ -904,6 +950,8 @@ router.get('/:id/cache-hit', async (req, res, next) => {
                 shared_buffers_kb: settingKb('shared_buffers'),
                 effective_cache_size_kb: settingKb('effective_cache_size'),
                 heavy_reader_count: Number(heavyReaderResult.rows[0]?.count ?? 0),
+                raw_retention_days: retention.raw_days,
+                hourly_retention_days: retention.hourly_days,
             },
         });
     } catch (err) {
@@ -927,15 +975,16 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, source, windowHours),
+            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
             baselineNeeded
-                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', source, windowHours)
+                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
                 : Promise.resolve(null),
         ]);
 
@@ -950,11 +999,12 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
                 searchRaw,
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -964,7 +1014,7 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
 // VACUUM LAG sekmesi
 // =========================================================================
 
-async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let searchWhere = '';
     if (searchRaw) {
@@ -976,11 +1026,11 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
         searchWhere += ` and dbr.datname = $${params.length}`;
     }
 
-    const stepSql = pgssBucketStepSql(windowHours);
-    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const stepSql = pgssBucketStepSql(windowHours, rawDays);
+    const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts');
-    const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts');
+    const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts', rawDays);
+    const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts', rawDays);
 
     return pool.query(`
         with filtered_data as (
@@ -1030,10 +1080,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
     `, params);
 }
 
-async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours);
+async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const stepSql = pgssBucketStepSql(windowHours, rawDays);
     // $4 ve $5 from/to (1: id, 2: dbid, 3: relid).
-    const gridStart = pgssBucketAlignSql(windowHours, 4);
+    const gridStart = pgssBucketAlignSql(windowHours, 4, rawDays);
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with snapshot_data as (
@@ -1272,10 +1322,11 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       order by setting_name, snapshot_ts desc
     `, [id]);
 
-        const [rowsResult, totalsResult, settingsResult] = await Promise.all([
+        const [rowsResult, totalsResult, settingsResult, retention] = await Promise.all([
             rowsPromise,
             totalsPromise,
             settingsPromise,
+            getInstanceRetention(id),
         ]);
 
         const settingsByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
@@ -1327,6 +1378,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
                     autovacuum_analyze_scale_factor: settingNumber('autovacuum_analyze_scale_factor'),
                     autovacuum_analyze_threshold: settingNumber('autovacuum_analyze_threshold'),
                 },
+                raw_retention_days: retention.raw_days,
             },
         });
     } catch (err) {
@@ -1350,8 +1402,9 @@ router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
         const datname = (req.query.datname as string || '').trim();
         const searchRaw = (req.query.search as string || '').trim();
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const retention = await getInstanceRetention(id);
 
-        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, windowHours);
+        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -1362,11 +1415,12 @@ router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
                 datname,
                 searchRaw,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
 
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -1393,9 +1447,10 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
         }
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
-        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, bucketExpr, windowHours);
+        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -1407,11 +1462,12 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 bucketExpr,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
 
-        res.json({ current: current.rows, previous, compare });
+        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -1421,7 +1477,7 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
 // WAL SPIKE sekmesi
 // =========================================================================
 
-async function fetchWalTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+async function fetchWalTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -1437,8 +1493,8 @@ async function fetchWalTrendData(id: string, fromIso: string, toIso: string, dat
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssBucketStepSql(windowHours);
-    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const stepSql = pgssBucketStepSql(windowHours, rawDays);
+    const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
     const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with buckets as (
@@ -1513,7 +1569,8 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         params.push(limit);
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
         const resultPromise = pool.query(`
       with toplam_wal as (
@@ -1791,6 +1848,8 @@ router.get('/:id/wal-spike', async (req, res, next) => {
                     lag_seconds: archiverRow.lag_seconds == null ? null : Number(archiverRow.lag_seconds),
                 } : null,
                 wal_settings: walSettings,
+                raw_retention_days: retention.raw_days,
+                hourly_retention_days: retention.hourly_days,
             },
         });
     } catch (err) {
@@ -1814,15 +1873,16 @@ router.get('/:id/wal-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchWalTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            fetchWalTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours, retention.raw_days),
             baselineNeeded
-                ? fetchWalTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                ? fetchWalTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours, retention.raw_days)
                 : Promise.resolve(null),
         ]);
 
@@ -1837,11 +1897,12 @@ router.get('/:id/wal-trend', async (req, res, next) => {
                 searchRaw,
                 bucketExpr,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline });
+        res.json({ current: current.rows, previous, compare, baseline, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -1853,7 +1914,7 @@ router.get('/:id/wal-trend', async (req, res, next) => {
 
 // Top temp-spill sorgular — temp_blks_written desc, HAVING > 0.
 // Sadece geçici dosya yazan sorgulari listeler. 1 blok = 8KB.
-async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, alignIntervalSql?: string) {
+async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -1869,10 +1930,10 @@ async function fetchTempSpillData(id: string, fromIso: string, toIso: string, da
         params.push(datname);
         dbWhere += ` and dbr.datname = $${params.length}`;
     }
-    const stepSql = pgssStepSql(source, windowHours);
-    const gridStart = pgssGridStartSql(source, windowHours, 2);
+    const stepSql = pgssStepSql(source, windowHours, rawDays);
+    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
     const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours);
+    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
     const timeWhere = pgssTimeWhere(source, 2, 3);
     const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
     const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
@@ -1945,7 +2006,8 @@ router.get('/:id/temp-spill', async (req, res, next) => {
         params.push(limit);
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const bucketExpr = pgssBucketExpr(windowHours);
+        const retention = await getInstanceRetention(id);
+        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
         const result = await pool.query(`
       with toplam_temp as (
@@ -2101,6 +2163,8 @@ router.get('/:id/temp-spill', async (req, res, next) => {
                 top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
                 peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
                 work_mem_kb: workMem?.kb == null ? null : Number(workMem.kb),
+                raw_retention_days: retention.raw_days,
+                hourly_retention_days: retention.hourly_days,
             },
         });
     } catch (err) {
@@ -2124,15 +2188,16 @@ router.get('/:id/temp-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const source = pickPgssSource(windowHours);
+        const retention = await getInstanceRetention(id);
+        const source = pickPgssSource(windowHours, retention.raw_days);
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
 
         const [current, baselineRes] = await Promise.all([
-            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, source, windowHours),
+            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
             baselineNeeded
-                ? fetchTempSpillData(id, fromIso, toIso, datname, '', source, windowHours)
+                ? fetchTempSpillData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
                 : Promise.resolve(null),
         ]);
 
@@ -2147,11 +2212,12 @@ router.get('/:id/temp-trend', async (req, res, next) => {
                 searchRaw,
                 source,
                 windowHours,
+                retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }

@@ -226,11 +226,16 @@ interface QueryTempTrendPoint {
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type CompareMode = 'auto' | 'off';
+type PgssDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
+const WEEK_WINDOW_HOURS = 168;
 
 interface TrendResponse<T> {
     current: T[];
     previous: T[];
     compare: CompareKey | null;
+    data_source?: PgssDataSource;
+    raw_retention_days?: number;
+    hourly_retention_days?: number;
     // db-time-trend ?include_baseline=1 ile gelir. Search filtresi varken
     // foreground'a karsi arka planda gosterilen "instance/DB toplami"
     // serisi. Yoksa null.
@@ -258,7 +263,7 @@ function compareForRange(range: TimeRange): CompareKey {
     const windowHours = (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000;
     if (windowHours <= 6) return '1h';
     if (windowHours <= 48) return '1d';
-    if (windowHours <= 7 * 24) return '1w';
+    if (windowHours <= WEEK_WINDOW_HOURS) return '1w';
     return '1m';
 }
 
@@ -485,8 +490,8 @@ function formatBucket(value: string, windowHours: number): string {
     if (windowHours <= 24) {
         return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
     }
-    if (windowHours <= 7 * 24) {
-        // 7 gune kadar: "21.05 14:00"
+    if (windowHours <= WEEK_WINDOW_HOURS) {
+        // Haftalik pencereye kadar: "21.05 14:00"
         return d.toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
     // 30 gun+: "21 May 12:00" (saat dahil cunku 6sa bucket)
@@ -966,7 +971,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                     description={
                         data && data.length === 0 && search
                             ? `'${search}' filtresine uyan sorgu yok. Aramayi temizleyin veya pencereyi genisletin.`
-                            : "Bu pencerede sorgu kaydi yok. Tarih araligini genisletin (orn. 24sa veya 7g) ya da daha yogun workload'li bir instance secin."
+                            : "Bu pencerede sorgu kaydi yok. Tarih araligini genisletin (orn. 24sa veya daha uzun) ya da daha yogun workload'li bir instance secin."
                     }
                 />
             ) : (
@@ -1605,6 +1610,8 @@ interface TempSpillTotals {
     top_datname: { datname: string | null; mb: number; pct: number } | null;
     peak: { bucket_start: string; mb: number } | null;
     work_mem_kb: number | null;
+    raw_retention_days?: number;
+    hourly_retention_days?: number;
 }
 
 interface TempSpillResponse {
@@ -2064,6 +2071,8 @@ interface CacheHitTotals {
     shared_buffers_kb: number | null;
     effective_cache_size_kb: number | null;
     heavy_reader_count: number;
+    raw_retention_days?: number;
+    hourly_retention_days?: number;
 }
 
 interface CacheHitResponse {
@@ -2485,6 +2494,7 @@ interface VacuumLagTotals {
         autovacuum_analyze_scale_factor: number | null;
         autovacuum_analyze_threshold: number | null;
     };
+    raw_retention_days?: number;
 }
 
 interface VacuumLagResponse {
@@ -2691,6 +2701,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     });
     const rows = data?.rows ?? [];
     const totals = data?.totals;
+    const rawDays = totals?.raw_retention_days ?? 7;
 
     const { data: trendData } = useQuery({
         queryKey: ['insights-vacuum-lag-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
@@ -2797,7 +2808,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                             <span className="mx-1">·</span>
                             Sismis tablo (Dead&gt;%20): <b className={totals.bloated_count > 0 ? 'text-red-700' : 'text-[#1E293B]'}>{totals.bloated_count}</b>
                             <span className="mx-1">·</span>
-                            Eski vacuum (&gt;7g): <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
+                            Eski vacuum: <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
                             <span className="mx-1">·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
@@ -2863,10 +2874,10 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 </div>
             )}
 
-            {windowHours > 7 * 24 && (
+            {windowHours > rawDays * 24 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800 mb-1">
-                    ⓘ Tablo istatistikleri 7 gun retention'da tutulur. {Math.max(1, Math.floor(windowHours / 24 - 7))} gun oncesi
-                    icin trend verisi mevcut degil; dead tuple ve vacuum aktivitesi son 7 gunluk pencerede gosterilir.
+                    ⓘ Tablo istatistikleri {rawDays} gun retention'da tutulur. {Math.max(1, Math.floor(windowHours / 24 - rawDays))} gun oncesi
+                    icin trend verisi mevcut degil; dead tuple ve vacuum aktivitesi son {rawDays} gunluk pencerede gosterilir.
                 </div>
             )}
 
@@ -3075,6 +3086,8 @@ interface WALSpikeTotals {
         wal_level: string | null;
         wal_buffers_kb: number | null;
     };
+    raw_retention_days?: number;
+    hourly_retention_days?: number;
 }
 
 interface WALSpikeResponse {
