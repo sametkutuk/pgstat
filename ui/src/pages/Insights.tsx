@@ -428,11 +428,11 @@ function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
     const nTupUpd = toNum(row.n_tup_upd);
     const tags: InsightTag[] = [];
 
-    if (deadPct != null && deadPct > 20 && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: 'ğŸ’€', className: 'bg-red-100 text-red-700', title: 'Dead tuple %20+ ve canli satir 1K+ - ciddi bloat, autovacuum tetiklenmiyor olabilir.' });
-    if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: 'â°', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
-    if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: 'ğŸ”¥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
-    if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: 'ğŸ“Š', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
-    if (hotUpdPct != null && hotUpdPct < 50 && nTupUpd > 1000) tags.push({ key: 'slow-hot', label: 'Slow HOT', icon: 'ğŸŒ', className: 'bg-purple-100 text-purple-700', title: "Update'lerin yarisi HOT degil - index bloat olusuyor. fillfactor 70-80 dusur." });
+    if (deadPct != null && deadPct > 20 && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: '💀', className: 'bg-red-100 text-red-700', title: 'Dead tuple %20+ ve canli satir 1K+ - ciddi bloat, autovacuum tetiklenmiyor olabilir.' });
+    if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: '⏰', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
+    if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: '🔥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
+    if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: '📊', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
+    if (hotUpdPct != null && hotUpdPct < 50 && nTupUpd > 1000) tags.push({ key: 'slow-hot', label: 'Slow HOT', icon: '🐌', className: 'bg-purple-100 text-purple-700', title: "Update'lerin yarisi HOT degil - index bloat olusuyor. fillfactor 70-80 dusur." });
     return tags;
 }
 
@@ -2656,9 +2656,17 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
     const [expandedKey, setExpandedKey] = useState<string | null>(null);
-    const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
+    // Vacuum Lag icin compare default 'off' — tablo bazli veri retention
+    // sinirindan dolayi gecmis donem genelde bos donuyor. Ayri localStorage
+    // anahtari ile digerlerinden bagimsiz tutuluyor.
+    const [compareMode, setCompareMode] = useState<CompareMode>(() => {
+        try {
+            const saved = window.localStorage.getItem('pgstat.insights.vacuum-compare-mode');
+            return saved === 'auto' ? 'auto' : 'off';
+        } catch { return 'off'; }
+    });
     useEffect(() => {
-        try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
+        try { window.localStorage.setItem('pgstat.insights.vacuum-compare-mode', compareMode); } catch { /* ignore */ }
     }, [compareMode]);
 
     const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
@@ -2780,17 +2788,17 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">ğŸ§¹ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">🧹 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-[#64748B]">
                         <div>
                             Toplam dead tuple: <b className="text-[#1E293B]">{totals.total_dead_tup.toLocaleString('tr-TR')}</b>
-                            <span className="mx-1">Â·</span>
+                            <span className="mx-1">·</span>
                             Sismis tablo (Dead&gt;%20): <b className={totals.bloated_count > 0 ? 'text-red-700' : 'text-[#1E293B]'}>{totals.bloated_count}</b>
-                            <span className="mx-1">Â·</span>
+                            <span className="mx-1">·</span>
                             Eski vacuum (&gt;7g): <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
-                            <span className="mx-1">Â·</span>
+                            <span className="mx-1">·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div>
@@ -2804,7 +2812,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     {totals.worst_dead_pct.schemaname}.{totals.worst_dead_pct.relname} (%{totals.worst_dead_pct.dead_pct.toFixed(1)}, {totals.worst_dead_pct.n_dead_tup.toLocaleString('tr-TR')} dead)
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">Â·</span>
+                            <span className="mx-1">·</span>
                             En eski vacuum: <b className="text-[#1E293B]">{totals.oldest_vacuum ? (
                                 <button
                                     type="button"
@@ -2819,7 +2827,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                     </div>
                     <details className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] mt-3">
                         <summary className="px-4 py-2 cursor-pointer text-sm text-[#64748B] hover:bg-[#F8FAFC]">
-                            ğŸ›  Autovacuum Parametreleri
+                            🛠 Autovacuum Parametreleri
                         </summary>
                         <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                             <div title="Autovacuum acik mi kapali mi. off ise dead tuple birikimi normaldir.">
@@ -2855,13 +2863,20 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 </div>
             )}
 
+            {windowHours > 7 * 24 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800 mb-1">
+                    ⓘ Tablo istatistikleri 7 gun retention'da tutulur. {Math.max(1, Math.floor(windowHours / 24 - 7))} gun oncesi
+                    icin trend verisi mevcut degil; dead tuple ve vacuum aktivitesi son 7 gunluk pencerede gosterilir.
+                </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
+                <span>Karşılaştırma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button type="button" onClick={() => setCompareMode('auto')}
                         className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
                     <button type="button" onClick={() => setCompareMode('off')}
-                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
             </div>
@@ -2921,7 +2936,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
                 ) : rows.length === 0 ? (
-                    <EmptyState icon="ğŸ“­" title="Vacuum lag yok" description={emptyDescription} />
+                    <EmptyState icon="📭" title="Vacuum lag yok" description={emptyDescription} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.dbid ?? ''}-${rows[0]?.relid ?? ''}`}>
                         <table className="w-full text-sm">
