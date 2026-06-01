@@ -8,7 +8,7 @@ import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import { useToast } from '../components/common/Toast';
-import { Area, AreaChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -25,6 +25,8 @@ const TABS: { key: InsightTab; label: string; icon: string }[] = [
     { key: 'cache-hit', label: 'Cache Hit', icon: '🎯' },
     { key: 'vacuum-lag', label: 'Vacuum Lag', icon: '🧹' },
 ];
+
+void PlaceholderTab;
 
 export default function Insights() {
     const [tab, setTab] = useState<InsightTab>('top-exec');
@@ -114,7 +116,7 @@ export default function Insights() {
             {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <WALSpikeCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
-            {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
+            {tab === 'vacuum-lag' && <VacuumLagCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
         </div>
     );
 }
@@ -337,6 +339,25 @@ function calculateCacheHitTags(row: CacheHitRow): InsightTag[] {
     if (ioBoundPct != null && ioBoundPct > 50) tags.push({ key: 'io-bound', label: 'I/O Bound', icon: '🐢', className: 'bg-amber-100 text-amber-700', title: 'Sorgu cogu zamani disk I/O bekledi (>%50 io_bound). PG15+ olmali; faster storage veya cache iyilestirme.' });
     if (calls >= 1000 && hitPct != null && hitPct < 90) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ama her cagrida cache miss yapiyor. shared_buffers buyutmek veya prepared cache stratejisi.' });
     if (readBlksPerCall != null && readBlksPerCall >= 10000) tags.push({ key: 'big-reader', label: 'Big Reader', icon: '📦', className: 'bg-purple-100 text-purple-700', title: 'Tek cagrida 10K+ blok (80MB+) okuyor - full table scan veya buyuk range scan.' });
+    return tags;
+}
+
+function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
+    const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
+    const nLiveTup = toNum(row.n_live_tup);
+    const nDeadTup = toNum(row.n_dead_tup);
+    const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
+    const updatePerSec = row.update_per_sec == null ? null : toNum(row.update_per_sec);
+    const nModSinceAnalyze = toNum(row.n_mod_since_analyze);
+    const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
+    const nTupUpd = toNum(row.n_tup_upd);
+    const tags: InsightTag[] = [];
+
+    if (deadPct != null && deadPct > 20 && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: 'ğŸ’€', className: 'bg-red-100 text-red-700', title: 'Dead tuple %20+ ve canli satir 1K+ - ciddi bloat, autovacuum tetiklenmiyor olabilir.' });
+    if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: 'â°', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
+    if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: 'ğŸ”¥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
+    if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: 'ğŸ“Š', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
+    if (hotUpdPct != null && hotUpdPct < 50 && nTupUpd > 1000) tags.push({ key: 'slow-hot', label: 'Slow HOT', icon: 'ğŸŒ', className: 'bg-purple-100 text-purple-700', title: "Update'lerin yarisi HOT degil - index bloat olusuyor. fillfactor 70-80 dusur." });
     return tags;
 }
 
@@ -2299,6 +2320,437 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                             </tr>
                                         )}
                                         </Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// VACUUM LAG sekmesi
+// =========================================================================
+interface VacuumLagRow {
+    dbid: number;
+    relid: number;
+    schemaname: string;
+    relname: string;
+    datname: string | null;
+    n_live_tup: string;
+    n_dead_tup: string;
+    n_mod_since_analyze: string;
+    dead_pct: string | null;
+    last_vacuum: string | null;
+    last_analyze: string | null;
+    days_since_vacuum: string | null;
+    days_since_analyze: string | null;
+    vacuum_count: string;
+    analyze_count: string;
+    n_tup_ins: string;
+    n_tup_upd: string;
+    n_tup_del: string;
+    n_tup_hot_upd: string;
+    hot_upd_pct: string | null;
+    update_per_sec: string | null;
+}
+
+interface VacuumLagTotals {
+    total_dead_tup: number;
+    worst_dead_pct: { schemaname: string; relname: string; datname: string | null; dead_pct: number; n_dead_tup: number } | null;
+    oldest_vacuum: { schemaname: string; relname: string; datname: string | null; days_since_vacuum: number } | null;
+    bloated_count: number;
+    stale_count: number;
+    autovacuum_settings: {
+        autovacuum: string | null;
+        autovacuum_max_workers: number | null;
+        autovacuum_naptime_sec: number | null;
+        autovacuum_vacuum_scale_factor: number | null;
+        autovacuum_vacuum_threshold: number | null;
+        autovacuum_analyze_scale_factor: number | null;
+        autovacuum_analyze_threshold: number | null;
+    };
+}
+
+interface VacuumLagResponse {
+    rows: VacuumLagRow[];
+    totals: VacuumLagTotals;
+}
+
+interface VacuumLagTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    total_dead_tup: string | number;
+    vacuum_count: string | number;
+}
+
+type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
+
+function deadTuplePctClass(deadPct: number | null): string {
+    if (deadPct == null) return 'bg-slate-100 text-slate-600';
+    if (deadPct > 20) return 'bg-red-100 text-red-700';
+    if (deadPct > 10) return 'bg-orange-100 text-orange-700';
+    if (deadPct > 5) return 'bg-amber-100 text-amber-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function vacuumAgeClass(days: number | null): string {
+    if (days == null) return 'bg-slate-100 text-slate-600';
+    if (days > 30) return 'bg-red-100 text-red-700';
+    if (days > 7) return 'bg-orange-100 text-orange-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function hotUpdateClass(hotPct: number | null): string {
+    if (hotPct == null) return 'bg-slate-100 text-slate-600';
+    if (hotPct > 80) return 'bg-emerald-100 text-emerald-700';
+    if (hotPct > 50) return 'bg-amber-100 text-amber-700';
+    return 'bg-red-100 text-red-700';
+}
+
+function formatDaysAgo(days: number | null | undefined): string {
+    if (days == null) return '\u2014';
+    return `${days.toLocaleString('tr-TR', { maximumFractionDigits: 1 })} gun once`;
+}
+
+function VacuumLagCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="ğŸ–¥ï¸" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
+    }
+    return <VacuumLagCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
+}
+
+function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
+    const [sort, setSort] = useState<VacuumSortMode>('dead_tup');
+    const [searchInput, setSearchInput] = useState<string>('');
+    const [search, setSearch] = useState<string>('');
+    const [datname, setDatname] = useState<string>('');
+    const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
+    useEffect(() => {
+        try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
+    }, [compareMode]);
+
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+    const compareKey = compareMode === 'off' ? null : compareForRange(range);
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        staleTime: 60_000,
+        refetchInterval: false,
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['insights-vacuum-lag', instancePk, range.fromIso, range.toIso, sort, search, datname],
+        queryFn: () => apiGet<VacuumLagResponse>(
+            `/insights/${instancePk}/vacuum-lag?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
+    });
+    const rows = data?.rows ?? [];
+    const totals = data?.totals;
+
+    const { data: trendData } = useQuery({
+        queryKey: ['insights-vacuum-lag-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
+        queryFn: () => apiGet<TrendResponse<VacuumLagTrendPoint>>(
+            `/insights/${instancePk}/vacuum-lag-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        return (trendData?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_dead_tup: toNum(p.total_dead_tup),
+                previous_dead_tup: previous ? toNum(previous.total_dead_tup) : null,
+                current_vacuum_count: toNum(p.vacuum_count),
+                previous_vacuum_count: previous ? toNum(previous.vacuum_count) : null,
+            };
+        });
+    }, [trendData, windowHours]);
+    const hasTrendData = useMemo(
+        () => chartData.some(d => toNum(d.current_dead_tup) > 0 || toNum(d.current_vacuum_count) > 0 || toNum(d.previous_dead_tup) > 0 || toNum(d.previous_vacuum_count) > 0),
+        [chartData],
+    );
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+    const tagCounts = useMemo(() => {
+        const counts: Record<string, { icon: string; count: number }> = {};
+        for (const row of rows) {
+            for (const tag of calculateVacuumLagTags(row)) {
+                counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
+            }
+        }
+        return counts;
+    }, [rows]);
+
+    const sortButtons: { key: VacuumSortMode; label: string; tip: string }[] = [
+        { key: 'dead_tup', label: 'Dead Tuple', tip: 'En cok dead tuple iceren tablolar.' },
+        { key: 'dead_pct', label: 'Dead %', tip: 'En sismis tablolar (live+dead > 1000 esikli).' },
+        { key: 'stale_vacuum', label: 'Eski Vacuum', tip: 'En uzun zamandir vacuum almayan tablolar.' },
+        { key: 'update_rate', label: 'Update/sn', tip: 'En cok update alan tablolar.' },
+        { key: 'mod_since_analyze', label: 'Stale Stats', tip: 'Son analyze sonrasi en cok degisim olan tablolar.' },
+    ];
+
+    function applySearch() { setSearch(searchInput.trim()); }
+    function clearSearch() { setSearchInput(''); setSearch(''); }
+    function focusRelation(relname: string) {
+        setSearchInput(relname);
+        setSearch(relname);
+    }
+
+    const vacuumSettings = totals?.autovacuum_settings;
+    const emptyDescription = `Tum tablolar guncel vacuum'lu gorunuyor (autovacuum: ${vacuumSettings?.autovacuum ?? '\u2014'}, max_workers: ${vacuumSettings?.autovacuum_max_workers ?? '\u2014'}).`;
+    const trendTooltip = ({ active, payload }: any) => {
+        if (!active || !payload?.length) return null;
+        const bucketIso = String((payload?.[0]?.payload as any)?.bucket_iso ?? '');
+        return (
+            <div className="bg-white border border-[#CBD5E1] shadow-sm rounded px-3 py-2 text-xs min-w-[210px]">
+                <div className="font-medium text-[#1E293B] mb-1">{formatBucketFull(bucketIso)}</div>
+                {payload.filter((p: any) => p.value != null).map((p: any) => (
+                    <div key={p.dataKey} className="flex items-center gap-2 text-[#64748B]">
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                        <span>{p.name}: <b className="text-[#1E293B]">{compactNumber(p.value)}</b></span>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    return (
+        <div className="space-y-4">
+            {totals && (
+                <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                        <span className="font-semibold text-[#1E293B]">ğŸ§¹ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
+                        {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
+                    </div>
+                    <div className="mt-2 space-y-1 text-xs text-[#64748B]">
+                        <div>
+                            Toplam dead tuple: <b className="text-[#1E293B]">{totals.total_dead_tup.toLocaleString('tr-TR')}</b>
+                            <span className="mx-1">Â·</span>
+                            Sismis tablo (Dead&gt;%20): <b className={totals.bloated_count > 0 ? 'text-red-700' : 'text-[#1E293B]'}>{totals.bloated_count}</b>
+                            <span className="mx-1">Â·</span>
+                            Eski vacuum (&gt;7g): <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
+                            <span className="mx-1">Â·</span>
+                            Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
+                        </div>
+                        <div>
+                            En sismis: <b className="text-[#1E293B]">{totals.worst_dead_pct ? (
+                                <button
+                                    type="button"
+                                    onClick={() => focusRelation(totals.worst_dead_pct?.relname || '')}
+                                    title="Tikla - bu tabloyu filtre olarak uygula"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {totals.worst_dead_pct.schemaname}.{totals.worst_dead_pct.relname} (%{totals.worst_dead_pct.dead_pct.toFixed(1)}, {totals.worst_dead_pct.n_dead_tup.toLocaleString('tr-TR')} dead)
+                                </button>
+                            ) : '\u2014'}</b>
+                            <span className="mx-1">Â·</span>
+                            En eski vacuum: <b className="text-[#1E293B]">{totals.oldest_vacuum ? (
+                                <button
+                                    type="button"
+                                    onClick={() => focusRelation(totals.oldest_vacuum?.relname || '')}
+                                    title="Tikla - bu tabloyu filtre olarak uygula"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {totals.oldest_vacuum.schemaname}.{totals.oldest_vacuum.relname} ({totals.oldest_vacuum.days_since_vacuum.toLocaleString('tr-TR', { maximumFractionDigits: 1 })} gun once)
+                                </button>
+                            ) : '\u2014'}</b>
+                        </div>
+                    </div>
+                    <details className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] mt-3">
+                        <summary className="px-4 py-2 cursor-pointer text-sm text-[#64748B] hover:bg-[#F8FAFC]">
+                            ğŸ›  Autovacuum Parametreleri
+                        </summary>
+                        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                            <div title="Autovacuum acik mi kapali mi. off ise dead tuple birikimi normaldir.">
+                                <div className="text-[#94A3B8]">autovacuum</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum ?? '\u2014'}</div>
+                            </div>
+                            <div title="Ayni anda kac autovacuum worker calisabilir.">
+                                <div className="text-[#94A3B8]">max_workers</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_max_workers ?? '\u2014'}</div>
+                            </div>
+                            <div title="Autovacuum launcher iki tarama arasinda ne kadar bekler.">
+                                <div className="text-[#94A3B8]">naptime</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_naptime_sec == null ? '\u2014' : `${vacuumSettings.autovacuum_naptime_sec.toLocaleString('tr-TR', { maximumFractionDigits: 0 })} sn`}</div>
+                            </div>
+                            <div title="Vacuum esigi icin live tuple uzerinden carpilan oran.">
+                                <div className="text-[#94A3B8]">vacuum_scale_factor</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_vacuum_scale_factor == null ? '\u2014' : `%${(vacuumSettings.autovacuum_vacuum_scale_factor * 100).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}`}</div>
+                            </div>
+                            <div title="Vacuum icin minimum degisen satir esigi.">
+                                <div className="text-[#94A3B8]">vacuum_threshold</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_vacuum_threshold == null ? '\u2014' : vacuumSettings.autovacuum_vacuum_threshold.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}</div>
+                            </div>
+                            <div title="Analyze esigi icin live tuple uzerinden carpilan oran.">
+                                <div className="text-[#94A3B8]">analyze_scale_factor</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_analyze_scale_factor == null ? '\u2014' : `%${(vacuumSettings.autovacuum_analyze_scale_factor * 100).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}`}</div>
+                            </div>
+                            <div title="Analyze icin minimum degisen satir esigi.">
+                                <div className="text-[#94A3B8]">analyze_threshold</div>
+                                <div className="font-mono font-semibold text-[#1E293B]">{vacuumSettings?.autovacuum_analyze_threshold == null ? '\u2014' : vacuumSettings.autovacuum_analyze_threshold.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}</div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
+                <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
+                    <button type="button" onClick={() => setCompareMode('auto')}
+                        className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
+                    <button type="button" onClick={() => setCompareMode('off')}
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
+                </div>
+                {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
+            </div>
+
+            {hasTrendData && (
+                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={300}>
+                    <ComposedChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} />
+                        <Tooltip content={trendTooltip} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`vacuum-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Line yAxisId="left" type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey) + ' dead'} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                        {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_vacuum_count" name={compareLabel(compareKey) + ' vacuum'} stroke="#CBD5E1" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                        <Area yAxisId="left" type="monotone" dataKey="current_dead_tup" name="Dead tuple" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
+                        <Bar yAxisId="right" dataKey="current_vacuum_count" name="Vacuum aktivitesi" fill="#7C3AED" radius={[2, 2, 0, 0]} barSize={12} />
+                    </ComposedChart>
+                </InsightChart>
+            )}
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                        <h3 className="font-semibold text-[#1E293B]">Vacuum Lag Tablolar</h3>
+                        <p className="text-xs text-[#64748B]">Dead tuple biriktiren ve gec vacuum alan tablolar.</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <select value={datname} onChange={e => setDatname(e.target.value)}
+                            title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
+                            <option value="">Tum Database'ler</option>
+                            {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                            placeholder="relname ara" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-48 focus:outline-none focus:border-[#3B82F6]" />
+                        <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
+                        {search && (
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Ã—</button>
+                        )}
+                    </div>
+                    <div className="flex gap-1">
+                        {sortButtons.map(b => (
+                            <button key={b.key} onClick={() => setSort(b.key)} title={b.tip}
+                                className={`px-3 py-1.5 text-xs rounded border transition-colors ${sort === b.key ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'}`}>
+                                {b.label}
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={() => refetch()} className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        {isFetching ? '...' : 'Yenile'}
+                    </button>
+                </div>
+
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
+                ) : rows.length === 0 ? (
+                    <EmptyState icon="ğŸ“­" title="Vacuum lag yok" description={emptyDescription} />
+                ) : (
+                    <div className="overflow-x-auto" key={`${sort}-${rows[0]?.dbid ?? ''}-${rows[0]?.relid ?? ''}`}>
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tablo</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tabloda update/delete'ten kalan dead tuple sayisi. Vacuum bunu temizler." className="cursor-help border-b border-dotted border-[#94A3B8]">Dead Tuple</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Live Tuple</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="n_dead_tup / (n_live + n_dead) yuzdesi. >%20 = bloat baslangici." className="cursor-help border-b border-dotted border-[#94A3B8]">Dead %</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Last vacuum veya autovacuum (en yenisi). Gun sayisi olarak." className="cursor-help border-b border-dotted border-[#94A3B8]">Son Vacuum</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Vacuum Sayisi</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Update/sn</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Heap-Only-Tuple update orani. Yuksek = index bloat dusuk." className="cursor-help border-b border-dotted border-[#94A3B8]">HOT Update %</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Son analyze'den bu yana degisen satir tahmini. autovacuum_analyze_threshold ile karsilastirilir." className="cursor-help border-b border-dotted border-[#94A3B8]">Mod Since Analyze</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, i) => {
+                                    const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
+                                    const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
+                                    const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
+                                    const tags = calculateVacuumLagTags(row);
+                                    return (
+                                        <tr key={`${row.dbid}-${row.relid}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                            <td className="py-2 px-3 max-w-md">
+                                                <div className="font-mono text-xs text-[#1E293B] truncate" title={`${row.schemaname}.${row.relname}`}>
+                                                    {row.schemaname}.{row.relname}
+                                                </div>
+                                                {tags.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {tags.map(tag => (
+                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                <span>{tag.icon}</span>{tag.label}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs whitespace-nowrap">
+                                                <span className="inline-block px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{row.datname || '\u2014'}</span>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.n_dead_tup).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_live_tup).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{deadPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${deadTuplePctClass(deadPct)}`}>%{deadPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{daysSinceVacuum == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${vacuumAgeClass(daysSinceVacuum)}`}>{formatDaysAgo(daysSinceVacuum)}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.vacuum_count).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.update_per_sec == null ? '\u2014' : Number(row.update_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hotUpdPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${hotUpdateClass(hotUpdPct)}`}>%{hotUpdPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_mod_since_analyze).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <button type="button" className="text-[#94A3B8]" title="Trend panel sonraki PR'da" disabled>+</button>
+                                            </td>
+                                        </tr>
                                     );
                                 })}
                             </tbody>

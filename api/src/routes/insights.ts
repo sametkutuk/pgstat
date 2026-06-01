@@ -24,17 +24,21 @@ function shiftedIso(iso: string, offsetSeconds: number): string {
     return new Date(new Date(iso).getTime() - offsetSeconds * 1000).toISOString();
 }
 
-function pgssBucketExpr(windowHours: number): string {
+function bucketExprForTs(windowHours: number, tsExpr: string): string {
     if (windowHours <= 6) {
-        return `date_trunc('hour', d.sample_ts) + make_interval(mins => (extract(minute from d.sample_ts)::int / 5) * 5)`;
+        return `date_trunc('hour', ${tsExpr}) + make_interval(mins => (extract(minute from ${tsExpr})::int / 5) * 5)`;
     }
     if (windowHours <= 7 * 24) {
-        return `date_trunc('hour', d.sample_ts)`;
+        return `date_trunc('hour', ${tsExpr})`;
     }
     if (windowHours <= 30 * 24) {
-        return `date_trunc('day', d.sample_ts) + make_interval(hours => (extract(hour from d.sample_ts)::int / 6) * 6)`;
+        return `date_trunc('day', ${tsExpr}) + make_interval(hours => (extract(hour from ${tsExpr})::int / 6) * 6)`;
     }
-    return `date_trunc('day', d.sample_ts)`;
+    return `date_trunc('day', ${tsExpr})`;
+}
+
+function pgssBucketExpr(windowHours: number): string {
+    return bucketExprForTs(windowHours, 'd.sample_ts');
 }
 
 // pgssBucketExpr'e karsilik gelen bucket adimi. generate_series icin
@@ -875,6 +879,376 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
         }
         const baseline = baselineRes ? baselineRes.rows : null;
         res.json({ current: current.rows, previous, compare, baseline });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// =========================================================================
+// VACUUM LAG sekmesi
+// =========================================================================
+
+async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, windowHours: number, alignIntervalSql?: string) {
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+        params.push(`%${searchRaw}%`);
+        searchWhere += ` and d.relname ilike $${params.length}`;
+    }
+    if (datname) {
+        params.push(datname);
+        searchWhere += ` and dbr.datname = $${params.length}`;
+    }
+
+    const stepSql = pgssBucketStepSql(windowHours);
+    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts');
+    const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts');
+
+    return pool.query(`
+        with filtered_data as (
+          select
+            d.sample_ts,
+            coalesce(d.n_dead_tup_estimate, 0)::bigint as n_dead_tup_estimate,
+            (coalesce(d.vacuum_count_delta, 0) + coalesce(d.autovacuum_count_delta, 0))::bigint as vacuum_count_delta
+          from fact.pg_table_stat_delta d
+          left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            ${searchWhere}
+        ),
+        snapshot_sums as (
+          select
+            sample_ts,
+            sum(n_dead_tup_estimate)::bigint as total_dead_tup
+          from filtered_data
+          group by sample_ts
+        ),
+        dead_buckets as (
+          select
+            ${snapshotBucketExpr} as bucket_start,
+            avg(s.total_dead_tup)::double precision as total_dead_tup
+          from snapshot_sums s
+          group by bucket_start
+        ),
+        vacuum_buckets as (
+          select
+            ${filteredBucketExpr} as bucket_start,
+            coalesce(sum(f.vacuum_count_delta), 0)::bigint as vacuum_count
+          from filtered_data f
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(db.total_dead_tup, 0)::bigint as total_dead_tup,
+          coalesce(vb.vacuum_count, 0)::bigint as vacuum_count
+        from grid g
+        left join dead_buckets db on db.bucket_start = g.bucket_start
+        left join vacuum_buckets vb on vb.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+}
+
+// GET /api/insights/:id/vacuum-lag?sort=dead_tup|dead_pct|stale_vacuum|update_rate|mod_since_analyze&from=&to=&limit=20&datname=&search=
+router.get('/:id/vacuum-lag', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        const limit = parseLimit(req.query.limit, 20);
+        const sort = String(req.query.sort || 'dead_tup').toLowerCase();
+
+        let orderBy = 'n_dead_tup desc nulls last, dead_pct desc nulls last';
+        if (sort === 'dead_pct') {
+            orderBy = 'case when (n_live_tup + n_dead_tup) > 1000 then dead_pct else null end desc nulls last, n_dead_tup desc nulls last';
+        } else if (sort === 'stale_vacuum') {
+            orderBy = 'case when n_dead_tup > 100 then days_since_vacuum else null end desc nulls last, n_dead_tup desc nulls last';
+        } else if (sort === 'update_rate') {
+            orderBy = 'update_per_sec desc nulls last, n_tup_upd desc nulls last';
+        } else if (sort === 'mod_since_analyze') {
+            orderBy = 'n_mod_since_analyze desc nulls last, dead_pct desc nulls last';
+        }
+
+        const searchRaw = (req.query.search as string || '').trim();
+        const datname = (req.query.datname as string || '').trim();
+        const params: any[] = [id, fromIso, toIso];
+        let searchWhere = '';
+        if (searchRaw) {
+            params.push(`%${searchRaw}%`);
+            searchWhere += ` and d.relname ilike $${params.length}`;
+        }
+        if (datname) {
+            params.push(datname);
+            searchWhere += ` and dbr.datname = $${params.length}`;
+        }
+
+        const baseParams = [...params];
+        params.push(limit);
+
+        const baseCtes = `
+      with filtered_data as (
+        select
+          d.instance_pk,
+          d.dbid::int as dbid,
+          d.relid::int as relid,
+          d.schemaname,
+          d.relname,
+          d.sample_ts,
+          dbr.datname,
+          d.n_live_tup_estimate,
+          d.n_dead_tup_estimate,
+          d.n_mod_since_analyze,
+          d.last_vacuum,
+          d.last_autovacuum,
+          d.last_analyze,
+          d.last_autoanalyze,
+          coalesce(d.vacuum_count_delta, 0)::bigint as vacuum_count_delta,
+          coalesce(d.autovacuum_count_delta, 0)::bigint as autovacuum_count_delta,
+          coalesce(d.analyze_count_delta, 0)::bigint as analyze_count_delta,
+          coalesce(d.autoanalyze_count_delta, 0)::bigint as autoanalyze_count_delta,
+          coalesce(d.n_tup_ins_delta, 0)::bigint as n_tup_ins_delta,
+          coalesce(d.n_tup_upd_delta, 0)::bigint as n_tup_upd_delta,
+          coalesce(d.n_tup_del_delta, 0)::bigint as n_tup_del_delta,
+          coalesce(d.n_tup_hot_upd_delta, 0)::bigint as n_tup_hot_upd_delta
+        from fact.pg_table_stat_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+      ),
+      latest_snapshot as (
+        select distinct on (instance_pk, dbid, relid)
+          dbid,
+          relid,
+          schemaname,
+          relname,
+          datname,
+          n_live_tup_estimate,
+          n_dead_tup_estimate,
+          n_mod_since_analyze,
+          last_vacuum,
+          last_autovacuum,
+          last_analyze,
+          last_autoanalyze
+        from filtered_data
+        order by instance_pk, dbid, relid, sample_ts desc
+      ),
+      delta_data as (
+        select
+          dbid,
+          relid,
+          sum(vacuum_count_delta + autovacuum_count_delta)::bigint as vacuum_count,
+          sum(analyze_count_delta + autoanalyze_count_delta)::bigint as analyze_count,
+          sum(n_tup_ins_delta)::bigint as n_tup_ins,
+          sum(n_tup_upd_delta)::bigint as n_tup_upd,
+          sum(n_tup_del_delta)::bigint as n_tup_del,
+          sum(n_tup_hot_upd_delta)::bigint as n_tup_hot_upd
+        from filtered_data
+        group by dbid, relid
+      ),
+      ranked as (
+        select
+          ls.dbid,
+          ls.relid,
+          ls.schemaname,
+          ls.relname,
+          ls.datname,
+          coalesce(ls.n_live_tup_estimate, 0)::bigint as n_live_tup,
+          coalesce(ls.n_dead_tup_estimate, 0)::bigint as n_dead_tup,
+          coalesce(ls.n_mod_since_analyze, 0)::bigint as n_mod_since_analyze,
+          case when coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0) > 0
+            then round((100.0 * coalesce(ls.n_dead_tup_estimate, 0)::numeric
+                        / nullif(coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0), 0))::numeric, 1)
+            else null end as dead_pct,
+          greatest(ls.last_vacuum, ls.last_autovacuum) as last_vacuum,
+          greatest(ls.last_analyze, ls.last_autoanalyze) as last_analyze,
+          case when greatest(ls.last_vacuum, ls.last_autovacuum) is not null
+            then round((extract(epoch from (now() - greatest(ls.last_vacuum, ls.last_autovacuum))) / 86400.0)::numeric, 1)
+            else null end as days_since_vacuum,
+          case when greatest(ls.last_analyze, ls.last_autoanalyze) is not null
+            then round((extract(epoch from (now() - greatest(ls.last_analyze, ls.last_autoanalyze))) / 86400.0)::numeric, 1)
+            else null end as days_since_analyze,
+          coalesce(dd.vacuum_count, 0)::bigint as vacuum_count,
+          coalesce(dd.analyze_count, 0)::bigint as analyze_count,
+          coalesce(dd.n_tup_ins, 0)::bigint as n_tup_ins,
+          coalesce(dd.n_tup_upd, 0)::bigint as n_tup_upd,
+          coalesce(dd.n_tup_del, 0)::bigint as n_tup_del,
+          coalesce(dd.n_tup_hot_upd, 0)::bigint as n_tup_hot_upd,
+          case when coalesce(dd.n_tup_upd, 0) > 0
+            then round((100.0 * coalesce(dd.n_tup_hot_upd, 0)::numeric / nullif(dd.n_tup_upd, 0))::numeric, 1)
+            else null end as hot_upd_pct,
+          case when extract(epoch from ($3::timestamptz - $2::timestamptz)) > 0
+            then round((coalesce(dd.n_tup_upd, 0)::numeric / extract(epoch from ($3::timestamptz - $2::timestamptz)))::numeric, 2)
+            else null end as update_per_sec
+        from latest_snapshot ls
+        left join delta_data dd on dd.dbid = ls.dbid and dd.relid = ls.relid
+      )
+    `;
+
+        const rowsPromise = pool.query(`
+      ${baseCtes}
+      select *
+      from ranked
+      order by ${orderBy}
+      limit $${params.length}
+    `, params);
+
+        const totalsPromise = pool.query(`
+      ${baseCtes}
+      select
+        coalesce(sum(n_dead_tup), 0)::bigint as total_dead_tup,
+        (
+          select row_to_json(w)
+          from (
+            select
+              schemaname,
+              relname,
+              datname,
+              dead_pct::double precision as dead_pct,
+              n_dead_tup::bigint as n_dead_tup
+            from ranked
+            where dead_pct is not null
+            order by dead_pct desc nulls last, n_dead_tup desc nulls last
+            limit 1
+          ) w
+        ) as worst_dead_pct,
+        (
+          select row_to_json(o)
+          from (
+            select
+              schemaname,
+              relname,
+              datname,
+              days_since_vacuum::double precision as days_since_vacuum
+            from ranked
+            where days_since_vacuum is not null
+            order by days_since_vacuum desc nulls last, n_dead_tup desc nulls last
+            limit 1
+          ) o
+        ) as oldest_vacuum,
+        count(*) filter (where dead_pct > 20 and n_live_tup > 1000)::int as bloated_count,
+        count(*) filter (where days_since_vacuum > 7 and n_dead_tup > 1000)::int as stale_count
+      from ranked
+    `, baseParams);
+
+        const settingsPromise = pool.query(`
+      select distinct on (setting_name)
+        setting_name,
+        setting_value,
+        unit
+      from fact.pg_settings_snapshot
+      where instance_pk = $1
+        and setting_name in (
+          'autovacuum',
+          'autovacuum_max_workers',
+          'autovacuum_naptime',
+          'autovacuum_vacuum_scale_factor',
+          'autovacuum_vacuum_threshold',
+          'autovacuum_analyze_scale_factor',
+          'autovacuum_analyze_threshold'
+        )
+      order by setting_name, snapshot_ts desc
+    `, [id]);
+
+        const [rowsResult, totalsResult, settingsResult] = await Promise.all([
+            rowsPromise,
+            totalsPromise,
+            settingsPromise,
+        ]);
+
+        const settingsByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+        const settingText = (name: string): string | null => {
+            const row = settingsByName.get(name) as any;
+            return row?.setting_value == null ? null : String(row.setting_value);
+        };
+        const settingNumber = (name: string): number | null => {
+            const row = settingsByName.get(name) as any;
+            if (row?.setting_value == null) return null;
+            const value = Number(row.setting_value);
+            if (!Number.isFinite(value)) return null;
+            const unit = String(row.unit || '').toLowerCase();
+            if (unit === 'ms') return value / 1000;
+            if (unit === 'min') return value * 60;
+            if (unit === 'h') return value * 3600;
+            return value;
+        };
+
+        const totalsRow = totalsResult.rows[0] ?? {};
+        const worstDead = totalsRow.worst_dead_pct as any;
+        const oldestVacuum = totalsRow.oldest_vacuum as any;
+
+        res.json({
+            rows: rowsResult.rows,
+            totals: {
+                total_dead_tup: Number(totalsRow.total_dead_tup ?? 0),
+                worst_dead_pct: worstDead ? {
+                    schemaname: worstDead.schemaname,
+                    relname: worstDead.relname,
+                    datname: worstDead.datname,
+                    dead_pct: Number(worstDead.dead_pct),
+                    n_dead_tup: Number(worstDead.n_dead_tup),
+                } : null,
+                oldest_vacuum: oldestVacuum ? {
+                    schemaname: oldestVacuum.schemaname,
+                    relname: oldestVacuum.relname,
+                    datname: oldestVacuum.datname,
+                    days_since_vacuum: Number(oldestVacuum.days_since_vacuum),
+                } : null,
+                bloated_count: Number(totalsRow.bloated_count ?? 0),
+                stale_count: Number(totalsRow.stale_count ?? 0),
+                autovacuum_settings: {
+                    autovacuum: settingText('autovacuum'),
+                    autovacuum_max_workers: settingNumber('autovacuum_max_workers'),
+                    autovacuum_naptime_sec: settingNumber('autovacuum_naptime'),
+                    autovacuum_vacuum_scale_factor: settingNumber('autovacuum_vacuum_scale_factor'),
+                    autovacuum_vacuum_threshold: settingNumber('autovacuum_vacuum_threshold'),
+                    autovacuum_analyze_scale_factor: settingNumber('autovacuum_analyze_scale_factor'),
+                    autovacuum_analyze_threshold: settingNumber('autovacuum_analyze_threshold'),
+                },
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/vacuum-lag-trend?from=&to=&datname=&search=&compare=
+router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
+
+        const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+
+        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, windowHours);
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchVacuumLagTrendData(
+                id,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                datname,
+                searchRaw,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+
+        res.json({ current: current.rows, previous, compare });
     } catch (err) {
         next(err);
     }
