@@ -553,6 +553,14 @@ router.get('/:id/top-queries', async (req, res, next) => {
         case when sum(d.calls_delta) > 0
           then round((sum(coalesce(d.rows_delta, 0))::numeric / sum(d.calls_delta)::numeric), 1)
           else 0 end as satir_per_cagri,
+        case when sum(coalesce(d.temp_blks_written_delta, 0)) > 0
+          then true else false end as has_temp_spill,
+        case when sum(coalesce(d.wal_bytes_delta, 0)) > 1048576
+          then true else false end as has_wal_writes,
+        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+           and (100.0 * sum(coalesce(d.shared_blks_hit_delta, 0))
+                / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)) < 90
+          then true else false end as has_cache_miss,
         ss.statement_series_id
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id

@@ -17,6 +17,11 @@ interface Instance {
 }
 
 type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag';
+type QueryCrossLinkTarget = Extract<InsightTab, 'temp-spill' | 'wal-spike' | 'cache-hit'>;
+type TopCrossLinkHandler = (targetTab: QueryCrossLinkTarget, queryid: string) => void;
+
+const PENDING_INSIGHTS_SEARCH_KEY = 'pgstat.insights.pending-search';
+const HEADER_HELP_CLASS = 'cursor-help border-b border-dotted border-[#94A3B8]';
 
 const TABS: { key: InsightTab; label: string; icon: string }[] = [
     { key: 'top-exec', label: 'Top Sorgular', icon: '⏱️' },
@@ -27,6 +32,22 @@ const TABS: { key: InsightTab; label: string; icon: string }[] = [
 ];
 
 void PlaceholderTab;
+
+function HeaderHelp({ title, label }: { title: string; label: string }) {
+    return <span title={title} className={HEADER_HELP_CLASS}>{label}</span>;
+}
+
+function consumePendingSearch(): string {
+    if (typeof window === 'undefined') return '';
+    try {
+        const pending = window.sessionStorage.getItem(PENDING_INSIGHTS_SEARCH_KEY);
+        if (pending) {
+            window.sessionStorage.removeItem(PENDING_INSIGHTS_SEARCH_KEY);
+            return pending;
+        }
+    } catch { /* ignore */ }
+    return '';
+}
 
 export default function Insights() {
     const [tab, setTab] = useState<InsightTab>('top-exec');
@@ -49,6 +70,12 @@ export default function Insights() {
     });
 
     const activeInstances = (instances.data ?? []).filter(i => i.is_active);
+    function handleTopCrossLinkClick(targetTab: QueryCrossLinkTarget, queryid: string) {
+        try {
+            window.sessionStorage.setItem(PENDING_INSIGHTS_SEARCH_KEY, queryid);
+        } catch { /* ignore */ }
+        setTab(targetTab);
+    }
 
     return (
         <div className="p-6">
@@ -112,7 +139,7 @@ export default function Insights() {
             {/* Sekme içeriği — Insights TopExecTimeCard her zaman render olur,
                 içinde null guard yapılır. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
-            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} onCrossLinkClick={handleTopCrossLinkClick} />}
             {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <WALSpikeCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
@@ -148,6 +175,9 @@ interface TopQueryRow {
     ort_plan_ms: string | null;
     wal_mb: string | null;
     satir_per_cagri: string | null;
+    has_temp_spill: boolean;
+    has_wal_writes: boolean;
+    has_cache_miss: boolean;
 }
 
 type SortMode = 'time' | 'calls' | 'slow';
@@ -158,6 +188,15 @@ interface InsightTag {
     icon: string;
     className: string;
     title: string;
+}
+
+interface QueryCrossLink {
+    key: string;
+    label: string;
+    icon: string;
+    className: string;
+    title: string;
+    targetTab: QueryCrossLinkTarget;
 }
 
 interface DbTimeTrendPoint {
@@ -259,6 +298,42 @@ function calculateTags(row: TopQueryRow): InsightTag[] {
     if (rows === 0 && avg >= 100) tags.push({ key: 'no-work', label: 'İş yapmıyor', icon: '🌀', className: 'bg-purple-100 text-purple-700', title: 'Hiç satır dönmüyor ama yavaş — gereksiz filter/lock?' });
     if (calls >= 10000) tags.push({ key: 'hot-path', label: 'Hot Path', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Çok sık çalışıyor — N+1 veya ORM aşırı çağrı olabilir' });
     return tags;
+}
+
+function buildCrossLinks(row: TopQueryRow): QueryCrossLink[] {
+    if (!row.queryid) return [];
+    const links: QueryCrossLink[] = [];
+    if (row.has_temp_spill) {
+        links.push({
+            key: 'cross-temp',
+            label: 'Temp Spill',
+            icon: 'TMP',
+            className: 'bg-amber-50 text-amber-700 border border-amber-200',
+            title: 'Bu sorgu temp dosya yaziyor. Temp Spill sekmesinde detayli analiz.',
+            targetTab: 'temp-spill',
+        });
+    }
+    if (row.has_wal_writes) {
+        links.push({
+            key: 'cross-wal',
+            label: 'WAL Heavy',
+            icon: 'WAL',
+            className: 'bg-purple-50 text-purple-700 border border-purple-200',
+            title: '1MB+ WAL uretiyor. WAL Spike sekmesinde detay.',
+            targetTab: 'wal-spike',
+        });
+    }
+    if (row.has_cache_miss) {
+        links.push({
+            key: 'cross-cache',
+            label: 'Cache Miss',
+            icon: 'BUF',
+            className: 'bg-red-50 text-red-700 border border-red-200',
+            title: 'Cache hit %90 alti. Cache Hit sekmesinde detay.',
+            targetTab: 'cache-hit',
+        });
+    }
+    return links;
 }
 
 function calculateTempTags(row: TempSpillRow): InsightTag[] {
@@ -567,14 +642,25 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
     ],
 };
 
-function TopExecTimeCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+const TOP_QUERIES_HEADER_TITLES: Record<string, string> = {
+    toplam_cagri: 'sum(calls). Bu sorgu pencerede toplam kac defa cagrildi.',
+    toplam_dk: 'sum(total_exec_time) dakika cinsinden. DB time.',
+    pct: "Bu sorgu instance'in toplam exec time'inin yuzde kaci.",
+    min_ms: 'min(min_exec_time). Pencerede gorulen en kisa cagri.',
+    ort_ms: 'avg(mean_exec_time). Cagri basina ortalama yanit.',
+    max_ms: 'max(max_exec_time). En uzun cagri (outlier sinyali).',
+    toplam_satir: 'sum(rows). Toplam dondurulen satir sayisi.',
+    queryid: 'PostgreSQL queryid (bigint). Plan ailesi icin esleme anahtari.',
+};
+
+function TopExecTimeCard({ instancePk, range, autoRefresh, instanceName, onCrossLinkClick }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string; onCrossLinkClick: TopCrossLinkHandler }) {
     if (instancePk == null) {
         return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
     }
-    return <TopExecTimeCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
+    return <TopExecTimeCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} onCrossLinkClick={onCrossLinkClick} />;
 }
 
-function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, onCrossLinkClick }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string; onCrossLinkClick: TopCrossLinkHandler }) {
     const [sort, setSort] = useState<SortMode>('time');
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
@@ -877,7 +963,11 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                 <EmptyState
                     icon="📭"
                     title="Veri yok"
-                    description="Bu pencerede sorgu kaydı yok. Tarih aralığını genişletin (örn. 24sa veya 7g) ya da daha yoğun workload'lı bir instance seçin."
+                    description={
+                        data && data.length === 0 && search
+                            ? `'${search}' filtresine uyan sorgu yok. Aramayi temizleyin veya pencereyi genisletin.`
+                            : "Bu pencerede sorgu kaydi yok. Tarih araligini genisletin (orn. 24sa veya 7g) ya da daha yogun workload'li bir instance secin."
+                    }
                 />
             ) : (
                 <div className="overflow-x-auto">
@@ -888,9 +978,11 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                                 {selectedCols.map(col => {
                                     const meta = TOP_QUERIES_COLUMNS_META.available.find(c => c.key === col);
                                     const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir', 'cache_hit_pct', 'ort_plan_ms', 'wal_mb', 'satir_per_cagri'].includes(col);
+                                    const title = TOP_QUERIES_HEADER_TITLES[col];
+                                    const label = meta?.label ?? col;
                                     return (
                                         <th key={col} className={`py-2 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${isRight ? 'text-right' : 'text-left'}`}>
-                                            {meta?.label ?? col}
+                                            {title ? <HeaderHelp title={title} label={label} /> : label}
                                         </th>
                                     );
                                 })}
@@ -910,6 +1002,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
                                     compareKey={compareKey}
                                     expanded={expandedSeriesId === row.statement_series_id}
                                     onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                    onCrossLinkClick={onCrossLinkClick}
                                 />
                             ))}
                         </tbody>
@@ -930,13 +1023,14 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName }: 
     );
 }
 
-function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, compareKey, expanded, onToggle }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null; expanded: boolean; onToggle: () => void }) {
+function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, compareKey, expanded, onToggle, onCrossLinkClick }: { row: TopQueryRow; rank: number; selectedCols: string[]; instancePk: number; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null; expanded: boolean; onToggle: () => void; onCrossLinkClick: TopCrossLinkHandler }) {
     const pct = parseFloat(row.pct_of_total);
     const ortMs = parseFloat(row.ort_ms);
     const maxMs = parseFloat(row.max_ms);
     const minMs = parseFloat(row.min_ms);
     const pctClass = pct >= 20 ? 'bg-red-100 text-red-700' : pct >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
     const tags = calculateTags(row);
+    const crossLinks = buildCrossLinks(row);
 
     function renderCell(col: string) {
         if (col === 'queryid') {
@@ -965,6 +1059,24 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
                                     <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
                                         <span>{tag.icon}</span>{tag.label}
                                     </span>
+                                ))}
+                            </div>
+                        )}
+                        {crossLinks.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                                {crossLinks.map(link => (
+                                    <button
+                                        key={link.key}
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (row.queryid) onCrossLinkClick(link.targetTab, row.queryid);
+                                        }}
+                                        title={link.title}
+                                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${link.className} hover:opacity-80 cursor-pointer`}
+                                    >
+                                        <span>{link.icon}</span>{link.label} -&gt;
+                                    </button>
                                 ))}
                             </div>
                         )}
@@ -1519,8 +1631,8 @@ function TempSpillCard({ instancePk, range, onRangeChange, autoRefresh, instance
 
 function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     const [sort, setSort] = useState<TempSortMode>('temp_written');
-    const [searchInput, setSearchInput] = useState<string>('');
-    const [search, setSearch] = useState<string>('');
+    const [search, setSearch] = useState<string>(() => consumePendingSearch());
+    const [searchInput, setSearchInput] = useState<string>(search);
     const [datname, setDatname] = useState<string>('');
     const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
@@ -1809,7 +1921,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="avg(mean_exec_time_ms). Çağrı başına ortalama yanıt süresi." className="cursor-help border-b border-dotted border-[#94A3B8]">Ort (ms)</span>
                                     </th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="PostgreSQL queryid (bigint). Plan ailesi icin esleme anahtari." label="Query ID" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                                 </tr>
                             </thead>
@@ -2002,8 +2114,8 @@ function CacheHitCard({ instancePk, range, onRangeChange, autoRefresh, instanceN
 
 function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     const [sort, setSort] = useState<CacheSortMode>('cache_miss');
-    const [searchInput, setSearchInput] = useState<string>('');
-    const [search, setSearch] = useState<string>('');
+    const [search, setSearch] = useState<string>(() => consumePendingSearch());
+    const [searchInput, setSearchInput] = useState<string>(search);
     const [datname, setDatname] = useState<string>('');
     const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
@@ -2247,17 +2359,17 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="hit / (hit + read). 100% = tum okuma shared_buffers'tan, <50% = ciddi disk-bound." className="cursor-help border-b border-dotted border-[#94A3B8]">Cache Hit %</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="sum(shared_blks_read) x 8KB. Bu sorgunun disk'e gitme miktari." className="cursor-help border-b border-dotted border-[#94A3B8]">Disk Read (MB)</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek cagri basina ortalama disk okuma. Yuksekse her cagri shared_buffers'i bypass ediyor." className="cursor-help border-b border-dotted border-[#94A3B8]">Read/Cagri (MB)</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek cagri basina kac 8KB blok okundu. Yuksek = scan tabloyu komple geziyor." className="cursor-help border-b border-dotted border-[#94A3B8]">Blocks/Cagri</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="hit / (hit + read). %100 = tum okuma cache'den. <%50 = ciddi disk-bound." label="Cache Hit %" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(shared_blks_read) x 8KB. Bu sorgunun diske gitme miktari." label="Disk Read (MB)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tek cagri basina ortalama disk okuma." label="Read/Cagri (MB)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tek cagri basina kac 8KB blok okundu. Yuksek = scan tabloyu komple gezi." label="Blocks/Cagri" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Bu sorgu instance'in toplam disk read'inin yuzde kaci." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Disk Read</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Sorgu exec zamaninin yuzde kaci disk I/O bekledi. >50% = disk darbogazi." className="cursor-help border-b border-dotted border-[#94A3B8]">I/O Bound %</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="shared_blk_read_time toplami. PG15+ gerektirir, eski PG'lerde 0 gorunur." className="cursor-help border-b border-dotted border-[#94A3B8]">Disk Read Time (sn)</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Cagri</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort (ms)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Sorgu exec zamaninin yuzde kaci disk I/O bekledi." label="I/O Bound %" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="shared_blk_read_time toplami. PG15+ gerektirir." label="Disk Read Time (sn)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(calls). Bu sorgu pencerede toplam kac defa cagrildi." label="Cagri" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(total_exec_time) dakika cinsinden. DB time." label="Toplam (dk)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="avg(mean_exec_time). Cagri basina ortalama yanit." label="Ort (ms)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="PostgreSQL queryid (bigint). Plan ailesi icin esleme anahtari." label="Query ID" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                                 </tr>
                             </thead>
@@ -2818,14 +2930,14 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tablo</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tabloda update/delete'ten kalan dead tuple sayisi. Vacuum bunu temizler." className="cursor-help border-b border-dotted border-[#94A3B8]">Dead Tuple</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Live Tuple</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="n_dead_tup / (n_live + n_dead) yuzdesi. >%20 = bloat baslangici." className="cursor-help border-b border-dotted border-[#94A3B8]">Dead %</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Last vacuum veya autovacuum (en yenisi). Gun sayisi olarak." className="cursor-help border-b border-dotted border-[#94A3B8]">Son Vacuum</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Vacuum Sayisi</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Update/sn</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Heap-Only-Tuple update orani. Yuksek = index bloat dusuk." className="cursor-help border-b border-dotted border-[#94A3B8]">HOT Update %</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Son analyze'den bu yana degisen satir tahmini. autovacuum_analyze_threshold ile karsilastirilir." className="cursor-help border-b border-dotted border-[#94A3B8]">Mod Since Analyze</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tabloda update/delete'ten kalan dead tuple. Vacuum bunu temizler." label="Dead Tuple" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="n_live_tup_estimate (latest snapshot)." label="Live Tuple" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="dead / (live + dead). >%20 = bloat baslangici." label="Dead %" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Last vacuum veya autovacuum (en yenisi). Gun sayisi." label="Son Vacuum" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Pencerede tablo kac kez vacuum/autovacuum aldi." label="Vacuum Sayisi" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Saniyede ortalama update sayisi." label="Update/sn" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Heap-Only-Tuple update orani. Yuksek = index bloat dusuk." label="HOT Update %" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Son analyze sonrasi degisen satir tahmini." label="Mod Since Analyze" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                                 </tr>
                             </thead>
@@ -2984,8 +3096,8 @@ function WALSpikeCard({ instancePk, range, onRangeChange, autoRefresh, instanceN
 
 function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     const [sort, setSort] = useState<WALSortMode>('wal');
-    const [searchInput, setSearchInput] = useState<string>('');
-    const [search, setSearch] = useState<string>('');
+    const [search, setSearch] = useState<string>(() => consumePendingSearch());
+    const [searchInput, setSearchInput] = useState<string>(search);
     const [datname, setDatname] = useState<string>('');
     const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
@@ -3312,8 +3424,10 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                     <div className="p-4"><SkeletonTable rows={8} cols={14} /></div>
                 ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="WAL üretimi yok"
-                        description={totals?.max_wal_size_kb != null
-                            ? `Mevcut max_wal_size: ${formatBytes(totals.max_wal_size_kb * 1024)}`
+                        description={totals?.wal_settings?.max_wal_size_kb != null
+                            ? `Bu pencerede WAL ureten sorgu yok. Mevcut max_wal_size: ${formatBytes(totals.wal_settings.max_wal_size_kb * 1024)}.`
+                            : totals?.max_wal_size_kb != null
+                                ? `Bu pencerede WAL ureten sorgu yok. Mevcut max_wal_size: ${formatBytes(totals.max_wal_size_kb * 1024)}.`
                             : "Bu pencerede WAL ureten sorgu yok."} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
@@ -3323,16 +3437,16 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="sum(wal_bytes_delta). Bu sorgunun urettigi toplam WAL bayti - replication yukunu besler." className="cursor-help border-b border-dotted border-[#94A3B8]">WAL (MB)</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek cagri basina ortalama WAL bayti. Yuksekse her cagrida buyuk replication trafigi." className="cursor-help border-b border-dotted border-[#94A3B8]">WAL/Cagri</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek sample periyodunda gorulen en yuksek WAL/cagri (outlier sinyali)." className="cursor-help border-b border-dotted border-[#94A3B8]">Max WAL/Cagri</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Bu sorgu instance'in toplam WAL uretiminin yuzde kaci." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam WAL</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="wal_fpi / wal_records. Checkpoint sonrasi tum sayfayi yazma sikligi. >0.5 = burst writer." className="cursor-help border-b border-dotted border-[#94A3B8]">FPI Orani</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Satir basina WAL bayti. Yuksekse buyuk row, TOAST, veya update wave-of-pain." className="cursor-help border-b border-dotted border-[#94A3B8]">WAL/Row</span></th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Cagri</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort (ms)</th>
-                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(wal_bytes_delta). Bu sorgunun urettigi WAL bayti - replication yukunu besler." label="WAL (MB)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tek cagri basina ortalama WAL bayti." label="WAL/Cagri" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tek sample periyodunda gorulen en yuksek WAL/cagri (outlier)." label="Max WAL/Cagri" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Bu sorgu instance'in toplam WAL uretiminin yuzde kaci." label="% Toplam WAL" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="wal_fpi / wal_records. >0.5 = checkpoint sonrasi burst." label="FPI Orani" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Satir basina WAL bayti. Yuksekse buyuk row, TOAST veya update wave-of-pain." label="WAL/Row" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(calls). Bu sorgu pencerede toplam kac defa cagrildi." label="Cagri" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="sum(total_exec_time) dakika cinsinden. DB time." label="Toplam (dk)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="avg(mean_exec_time). Cagri basina ortalama yanit." label="Ort (ms)" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="PostgreSQL queryid (bigint). Plan ailesi icin esleme anahtari." label="Query ID" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
                                 </tr>
                             </thead>
