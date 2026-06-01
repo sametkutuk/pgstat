@@ -1328,6 +1328,117 @@ function QueryWalTrendPanel({ instancePk, seriesId, range, autoRefresh, compareK
     );
 }
 
+function QueryCacheHitTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey }: { instancePk: number; seriesId: number | string; range: TimeRange; autoRefresh: boolean; compareKey: CompareKey | null }) {
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-query-cache-hit-trend', instancePk, seriesId, range.fromIso, range.toIso, compareKey],
+        queryFn: () => apiGet<TrendResponse<QueryCacheHitTrendPoint>>(
+            `/insights/${instancePk}/query-cache-hit-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
+        ),
+        enabled: instancePk != null && seriesId != null && String(seriesId).length > 0,
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((data?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        const hitPct = (hitBlks: number, readBlks: number): number | null => {
+            const total = hitBlks + readBlks;
+            return total > 0 ? +(100 * hitBlks / total).toFixed(1) : null;
+        };
+
+        return (data?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            const currentHitBlks = toNum(p.hit_blks);
+            const currentReadBlks = toNum(p.read_blks);
+            const previousHitBlks = previous ? toNum(previous.hit_blks) : 0;
+            const previousReadBlks = previous ? toNum(previous.read_blks) : 0;
+
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_hit_pct: hitPct(currentHitBlks, currentReadBlks),
+                previous_hit_pct: previous ? hitPct(previousHitBlks, previousReadBlks) : null,
+                current_disk_read_mb: +(currentReadBlks * 8.0 / 1024.0).toFixed(2),
+                previous_disk_read_mb: previous ? +(previousReadBlks * 8.0 / 1024.0).toFixed(2) : null,
+                current_read_time_sec: +(toNum(p.read_time_ms) / 1000.0).toFixed(2),
+                previous_read_time_sec: previous ? +(toNum(previous.read_time_ms) / 1000.0).toFixed(2) : null,
+            };
+        });
+    }, [data, windowHours]);
+
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    if (isLoading) return <SkeletonTable rows={3} cols={3} />;
+    if (chartData.length === 0) return <div className="text-xs text-[#94A3B8] py-4 text-center">Bu sorgu icin cache trend verisi yok.</div>;
+
+    const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
+
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <InsightChart title="Cache Hit % Trend" height={200}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} tickFormatter={(v) => `%${v}`} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    <ReferenceLine y={90} stroke="#94A3B8" strokeDasharray="3 3" />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qch-hit-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Line type="monotone" dataKey="previous_hit_pct" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="current_hit_pct" name="Su an" stroke="#10B981" strokeWidth={2} dot={false} connectNulls />
+                </LineChart>
+            </InsightChart>
+            <InsightChart title="Disk Read (MB) Trend" height={200}>
+                <AreaChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qch-read-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Area type="monotone" dataKey="previous_disk_read_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                    <Area type="monotone" dataKey="current_disk_read_mb" name="Su an" stroke="#F59E0B" fill="#FEF3C7" fillOpacity={0.7} strokeWidth={2} connectNulls />
+                </AreaChart>
+            </InsightChart>
+            <InsightChart title="Disk Read Time (sn) Trend" height={200}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                    {daySeparatorLabels.map(lbl => (
+                        <ReferenceLine key={`qch-time-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                    ))}
+                    {compareKey && <Line type="monotone" dataKey="previous_read_time_sec" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="current_read_time_sec" name="Su an" stroke="#7C3AED" strokeWidth={2} dot={false} connectNulls />
+                </LineChart>
+            </InsightChart>
+        </div>
+    );
+}
+
 // =========================================================================
 // TEMP SPILL sekmesi
 // =========================================================================
@@ -1836,6 +1947,15 @@ interface CacheHitTrendPoint {
     calls: string | number;
 }
 
+interface QueryCacheHitTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    hit_blks: string | number;
+    read_blks: string | number;
+    read_time_ms: string | number;
+    calls: string | number;
+}
+
 type CacheSortMode = 'cache_miss' | 'disk_read' | 'read_time' | 'low_hit_pct';
 
 function cacheHitClass(hitPct: number | null): string {
@@ -1864,6 +1984,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [expandedSeriesId, setExpandedSeriesId] = useState<number | null>(null);
     const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
     useEffect(() => {
         try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
@@ -2128,8 +2249,13 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
                                     const ioClass = ioBoundPct == null ? 'bg-slate-100 text-slate-600' : ioBoundPct >= 50 ? 'bg-red-100 text-red-700' : ioBoundPct >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const tags = calculateCacheHitTags(row);
+                                    const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
-                                        <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                        <Fragment key={`${row.statement_series_id}-${i}`}>
+                                        <tr
+                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                        >
                                             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
                                             <td className="py-2 px-3 max-w-md">
                                                 <div className="flex items-start gap-2">
@@ -2161,9 +2287,18 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay</Link>
+                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                                             </td>
                                         </tr>
+                                        {expanded && (
+                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                <td colSpan={15} className="p-4">
+                                                    <QueryCacheHitTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </Fragment>
                                     );
                                 })}
                             </tbody>
