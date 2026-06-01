@@ -113,7 +113,7 @@ export default function Insights() {
             {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <WALSpikeCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
-            {tab === 'cache-hit' && <PlaceholderTab title="Cache Hit Drop" description="DB seviyesinde cache hit ratio düşüşleri. Yakında." />}
+            {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'vacuum-lag' && <PlaceholderTab title="Vacuum Lag" description="Autovacuum gerideki tablolar, dead tuple birikimi. Yakında." />}
         </div>
     );
@@ -1760,6 +1760,373 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                             </tr>
                                         )}
                                         </Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// CACHE HIT sekmesi
+// =========================================================================
+interface CacheHitRow {
+    datname: string | null;
+    queryid: string | null;
+    query_text_id: number | null;
+    statement_series_id: number;
+    query_short: string | null;
+    query_full: string | null;
+    toplam_cagri: string;
+    toplam_hit_blks: string;
+    toplam_read_blks: string;
+    disk_read_mb: string;
+    cache_hit_pct: string | null;
+    disk_read_time_sec: string | null;
+    disk_read_mb_per_call: string | null;
+    read_blks_per_call: string | null;
+    pct_of_total_disk_read: string | null;
+    io_bound_pct: string | null;
+    toplam_exec_ms: string;
+    toplam_dk: string;
+    ort_ms: string;
+    toplam_satir: string;
+}
+
+interface CacheHitTotals {
+    instance_hit_pct: number | null;
+    worst_datname: { datname: string | null; hit_pct: number; disk_read_mb: number } | null;
+    peak: { bucket_start: string; mb: number } | null;
+    shared_buffers_kb: number | null;
+    effective_cache_size_kb: number | null;
+    heavy_reader_count: number;
+}
+
+interface CacheHitResponse {
+    rows: CacheHitRow[];
+    totals: CacheHitTotals;
+}
+
+interface CacheHitTrendPoint {
+    bucket_start: string;
+    bucket_aligned?: string;
+    hit_blks: string | number;
+    read_blks: string | number;
+    read_time_ms: string | number;
+    calls: string | number;
+}
+
+type CacheSortMode = 'cache_miss' | 'disk_read' | 'read_time' | 'low_hit_pct';
+
+function cacheHitClass(hitPct: number | null): string {
+    if (hitPct == null) return 'bg-slate-100 text-slate-600';
+    if (hitPct < 50) return 'bg-red-100 text-red-700';
+    if (hitPct < 90) return 'bg-amber-100 text-amber-700';
+    if (hitPct >= 99) return 'bg-emerald-100 text-emerald-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function diskReadClass(mb: number): string {
+    if (mb > 1024) return 'bg-red-100 text-red-700';
+    if (mb > 100) return 'bg-orange-100 text-orange-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function CacheHitCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+    }
+    return <CacheHitCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
+}
+
+function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
+    const [sort, setSort] = useState<CacheSortMode>('cache_miss');
+    const [searchInput, setSearchInput] = useState<string>('');
+    const [search, setSearch] = useState<string>('');
+    const [datname, setDatname] = useState<string>('');
+    const [compareMode, setCompareMode] = useState<CompareMode>(() => loadCompareMode());
+    useEffect(() => {
+        try { window.localStorage.setItem('pgstat.insights.compare-mode', compareMode); } catch { /* ignore */ }
+    }, [compareMode]);
+
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+    const compareKey = compareMode === 'off' ? null : compareForRange(range);
+    const compareQp = compareKey ? `&compare=${compareKey}` : '';
+
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        staleTime: 60_000,
+        refetchInterval: false,
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['insights-cache-hit', instancePk, range.fromIso, range.toIso, sort, search, datname],
+        queryFn: () => apiGet<CacheHitResponse>(
+            `/insights/${instancePk}/cache-hit?sort=${sort}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=20${searchQp}${datnameQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
+    });
+    const rows = data?.rows ?? [];
+    const totals = data?.totals;
+
+    const baselineQp = search ? `&include_baseline=1` : '';
+    const { data: trendData } = useQuery({
+        queryKey: ['insights-cache-hit-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
+        queryFn: () => apiGet<TrendResponse<CacheHitTrendPoint>>(
+            `/insights/${instancePk}/cache-hit-trend?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${searchQp}${datnameQp}${compareQp}${baselineQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+    });
+
+    const windowHours = useMemo(
+        () => (new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3_600_000,
+        [range.fromIso, range.toIso],
+    );
+    const chartData = useMemo<ChartDatum[]>(() => {
+        const previousByBucket = new Map((trendData?.previous ?? []).map(p => [bucketKey(p.bucket_aligned ?? p.bucket_start), p]));
+        const baselineByBucket = new Map((trendData?.baseline ?? []).map(p => [bucketKey(p.bucket_start), p]));
+        const hitPct = (hit: number, read: number): number | null => {
+            const total = hit + read;
+            return total > 0 ? +(100 * hit / total).toFixed(1) : null;
+        };
+        return (trendData?.current ?? []).map(p => {
+            const key = bucketKey(p.bucket_start);
+            const previous = previousByBucket.get(key);
+            const baseline = baselineByBucket.get(key);
+            return {
+                label: formatBucket(String(p.bucket_start), windowHours),
+                bucket_iso: String(p.bucket_start),
+                bucket_key: key,
+                current_hit_pct: hitPct(toNum(p.hit_blks), toNum(p.read_blks)),
+                previous_hit_pct: previous ? hitPct(toNum(previous.hit_blks), toNum(previous.read_blks)) : null,
+                baseline_hit_pct: baseline ? hitPct(toNum(baseline.hit_blks), toNum(baseline.read_blks)) : null,
+                current_disk_read_mb: +(toNum(p.read_blks) * 8.0 / 1024.0).toFixed(2),
+                current_calls: toNum(p.calls),
+            };
+        });
+    }, [trendData, windowHours]);
+    const hasBaseline = useMemo(() => {
+        const b = trendData?.baseline;
+        return Array.isArray(b) && b.length > 0;
+    }, [trendData]);
+    const daySeparatorLabels = useMemo<string[]>(() => {
+        if (!shouldShowDaySeparators(windowHours)) return [];
+        const seen = new Set<string>();
+        const labels: string[] = [];
+        for (const d of chartData) {
+            if (!d.bucket_iso || typeof d.bucket_iso !== 'string') continue;
+            const dt = new Date(d.bucket_iso);
+            const dayKey = dt.toLocaleDateString('tr-TR');
+            if (!seen.has(dayKey) && dt.getHours() < 6) {
+                seen.add(dayKey);
+                labels.push(d.label);
+            }
+        }
+        return labels;
+    }, [chartData, windowHours]);
+
+    const sortButtons: { key: CacheSortMode; label: string; tip: string }[] = [
+        { key: 'cache_miss', label: 'Cache Miss', tip: "En cok disk'e giden (shared_blks_read sum)." },
+        { key: 'disk_read', label: 'Disk Read', tip: 'En cok MB disk okuyan.' },
+        { key: 'read_time', label: 'Read Time', tip: 'En uzun disk read bekleyen (PG15+).' },
+        { key: 'low_hit_pct', label: 'Dusuk Hit %', tip: 'En dusuk cache hit orani (min 100 cagri esigi).' },
+    ];
+
+    function applySearch() { setSearch(searchInput.trim()); }
+    function clearSearch() { setSearchInput(''); setSearch(''); }
+    function zoomToPeak() {
+        if (!totals?.peak) return;
+        const start = new Date(totals.peak.bucket_start);
+        const end = new Date(start.getTime() + 3600_000);
+        const nextRange = { fromIso: start.toISOString(), toIso: end.toISOString() };
+        onRangeChange(nextRange);
+        try { window.localStorage.setItem('insights-range', JSON.stringify(nextRange)); } catch { /* ignore */ }
+    }
+    const worstDbIsActive = datname === totals?.worst_datname?.datname;
+    const instanceHitPct = totals?.instance_hit_pct == null ? null : toNum(totals.instance_hit_pct);
+
+    return (
+        <div className="space-y-4">
+            {totals && (
+                <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                        <span className="font-semibold text-[#1E293B]">🎯 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
+                    </div>
+                    <div className="mt-2 space-y-1 text-xs text-[#64748B]">
+                        <div>
+                            Instance hit %: {instanceHitPct == null ? <b className="text-[#94A3B8]">—</b> : (
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(instanceHitPct)}`}>%{instanceHitPct.toFixed(1)}</span>
+                            )}
+                            <span className="mx-1">·</span>
+                            Heavy reader (&gt;100MB): <b className={toNum(totals.heavy_reader_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.heavy_reader_count}</b> sorgu
+                        </div>
+                        <div>
+                            En kotu DB: <b className="text-[#1E293B]">{totals.worst_datname ? (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (!worstDbIsActive && totals.worst_datname?.datname) setDatname(totals.worst_datname.datname);
+                                    }}
+                                    title="Tikla - bu DB'yi filtre olarak uygula"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {totals.worst_datname.datname ?? '\u2014'} (%{totals.worst_datname.hit_pct.toFixed(1)})
+                                </button>
+                            ) : '\u2014'}</b>
+                            <span className="mx-1">·</span>
+                            Disk read piki: <b className="text-[#1E293B]">{totals.peak ? (
+                                <button
+                                    type="button"
+                                    onClick={zoomToPeak}
+                                    title="Tikla - date range pik saate daralsin"
+                                    className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
+                                >
+                                    {formatBucketFull(totals.peak.bucket_start)} - {totals.peak.mb.toFixed(1)} MB
+                                </button>
+                            ) : '\u2014'}</b>
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1">
+                            <span title="Buffer pool boyutu. Cache hit dusuk ise artirilabilir.">Mevcut shared_buffers: <b className="text-[#1E293B]">{formatKb(totals.shared_buffers_kb)}</b></span>
+                            <span title="Planner'in tahmini toplam OS+PG cache. Index secimi etkiler.">effective_cache_size: <b className="text-[#1E293B]">{formatKb(totals.effective_cache_size_kb)}</b></span>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
+                <span>Karşılaştırma:</span>
+                <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
+                    <button type="button" onClick={() => setCompareMode('auto')}
+                        className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
+                    <button type="button" onClick={() => setCompareMode('off')}
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                </div>
+                {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
+            </div>
+
+            {chartData.length > 0 && (
+                <InsightChart title="Cache Hit % Trend" height={300}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} tickFormatter={(v) => `%${v}`} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
+                        <ReferenceLine y={90} stroke="#94A3B8" strokeDasharray="3 3" label={{ value: '%90 sinir', position: 'right', fontSize: 10, fill: '#94A3B8' }} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`cache-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {hasBaseline && <Area type="monotone" dataKey="baseline_hit_pct" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
+                        {compareKey && <Area type="monotone" dataKey="previous_hit_pct" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_hit_pct" name={search ? 'Filtreli' : 'Şu an'} stroke="#10B981" fill="#D1FAE5" fillOpacity={0.65} strokeWidth={2} connectNulls />
+                    </AreaChart>
+                </InsightChart>
+            )}
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                        <h3 className="font-semibold text-[#1E293B]">Cache Hit Sorgular</h3>
+                        <p className="text-xs text-[#64748B]">Disk'e giden ve buffer cache hit oranı düşük sorgular.</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <select value={datname} onChange={e => setDatname(e.target.value)}
+                            title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
+                            <option value="">Tüm Database'ler</option>
+                            {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                            placeholder="queryid veya %select%" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]" />
+                        <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
+                        {search && (
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">×</button>
+                        )}
+                    </div>
+                    <div className="flex gap-1">
+                        {sortButtons.map(b => (
+                            <button key={b.key} onClick={() => setSort(b.key)} title={b.tip}
+                                className={`px-3 py-1.5 text-xs rounded border transition-colors ${sort === b.key ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'}`}>
+                                {b.label}
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={() => refetch()} className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        {isFetching ? '...' : 'Yenile'}
+                    </button>
+                </div>
+
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={15} /></div>
+                ) : rows.length === 0 ? (
+                    <EmptyState icon="📭" title="Tüm sorgular cache'den okunuyor"
+                        description={totals?.shared_buffers_kb != null
+                            ? `Mevcut shared_buffers: ${formatBytes(totals.shared_buffers_kb * 1024)} - yeterli görünüyor.`
+                            : "Bu pencerede disk'e giden sorgu yok."} />
+                ) : (
+                    <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="hit / (hit + read). 100% = tum okuma shared_buffers'tan, <50% = ciddi disk-bound." className="cursor-help border-b border-dotted border-[#94A3B8]">Cache Hit %</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="sum(shared_blks_read) x 8KB. Bu sorgunun disk'e gitme miktari." className="cursor-help border-b border-dotted border-[#94A3B8]">Disk Read (MB)</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek cagri basina ortalama disk okuma. Yuksekse her cagri shared_buffers'i bypass ediyor." className="cursor-help border-b border-dotted border-[#94A3B8]">Read/Cagri (MB)</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Tek cagri basina kac 8KB blok okundu. Yuksek = scan tabloyu komple geziyor." className="cursor-help border-b border-dotted border-[#94A3B8]">Blocks/Cagri</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Bu sorgu instance'in toplam disk read'inin yuzde kaci." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Disk Read</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="Sorgu exec zamaninin yuzde kaci disk I/O bekledi. >50% = disk darbogazi." className="cursor-help border-b border-dotted border-[#94A3B8]">I/O Bound %</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><span title="shared_blk_read_time toplami. PG15+ gerektirir, eski PG'lerde 0 gorunur." className="cursor-help border-b border-dotted border-[#94A3B8]">Disk Read Time (sn)</span></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Cagri</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Toplam (dk)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Ort (ms)</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Query ID</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, i) => {
+                                    const hitPct = row.cache_hit_pct == null ? null : toNum(row.cache_hit_pct);
+                                    const diskReadMb = toNum(row.disk_read_mb);
+                                    const pctDiskRead = row.pct_of_total_disk_read == null ? null : toNum(row.pct_of_total_disk_read);
+                                    const pctDiskClass = pctDiskRead == null ? 'bg-slate-100 text-slate-600' : pctDiskRead >= 20 ? 'bg-red-100 text-red-700' : pctDiskRead >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+                                    const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
+                                    const ioClass = ioBoundPct == null ? 'bg-slate-100 text-slate-600' : ioBoundPct >= 50 ? 'bg-red-100 text-red-700' : ioBoundPct >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
+                                    return (
+                                        <tr key={`${row.statement_series_id}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                            <td className="py-2 px-3 max-w-md">
+                                                <div className="flex items-start gap-2">
+                                                    <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
+                                                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                                    </div>
+                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                                                </div>
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${diskReadClass(diskReadMb)}`}>{diskReadMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.disk_read_mb_per_call == null ? '—' : Number(row.disk_read_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.read_blks_per_call == null ? '—' : Number(row.read_blks_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctDiskRead == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctDiskClass}`}>%{pctDiskRead.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{ioBoundPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${ioClass}`}>%{ioBoundPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{toNum(row.disk_read_time_sec) > 0 ? toNum(row.disk_read_time_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                <Link to={`/statements/${row.statement_series_id}`} className="text-[#2563EB] hover:underline">Detay</Link>
+                                            </td>
+                                        </tr>
                                     );
                                 })}
                             </tbody>

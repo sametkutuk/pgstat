@@ -494,6 +494,317 @@ router.get('/:id/top-queries', async (req, res, next) => {
 });
 
 // =========================================================================
+// CACHE HIT sekmesi
+// =========================================================================
+
+async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, alignIntervalSql?: string) {
+    const params: any[] = [id, fromIso, toIso];
+    let dbWhere = '';
+    if (searchRaw) {
+        if (/^-?\d+$/.test(searchRaw)) {
+            params.push(searchRaw);
+            dbWhere += ` and ss.queryid::text = $${params.length}`;
+        } else {
+            params.push(searchRaw);
+            dbWhere += ` and qt.query_text ilike $${params.length}`;
+        }
+    }
+    if (datname) {
+        params.push(datname);
+        dbWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const stepSql = pgssBucketStepSql(windowHours);
+    const gridStart = pgssBucketAlignSql(windowHours, 2);
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    return pool.query(`
+        with buckets as (
+          select
+            ${bucketExpr} as bucket_start,
+            coalesce(sum(coalesce(d.shared_blks_hit_delta, 0)), 0)::bigint as hit_blks,
+            coalesce(sum(coalesce(d.shared_blks_read_delta, 0)), 0)::bigint as read_blks,
+            coalesce(sum(coalesce(d.shared_blk_read_time_ms_delta, 0)), 0)::double precision as read_time_ms,
+            coalesce(sum(d.calls_delta), 0)::bigint as calls
+          from fact.pgss_delta d
+          join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+          left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+          left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+          where d.instance_pk = $1
+            and d.sample_ts between $2::timestamptz and $3::timestamptz
+            ${dbWhere}
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.hit_blks, 0)::bigint as hit_blks,
+          coalesce(b.read_blks, 0)::bigint as read_blks,
+          coalesce(b.read_time_ms, 0)::double precision as read_time_ms,
+          coalesce(b.calls, 0)::bigint as calls
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+}
+
+// GET /api/insights/:id/cache-hit?sort=cache_miss|disk_read|read_time|low_hit_pct&from=&to=&limit=20
+router.get('/:id/cache-hit', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        const limit = parseLimit(req.query.limit, 20);
+        const sort = String(req.query.sort || 'cache_miss').toLowerCase();
+
+        let orderBy: string;
+        let extraHaving = '';
+        if (sort === 'read_time') {
+            orderBy = 'sum(coalesce(d.shared_blk_read_time_ms_delta, 0)) desc nulls last';
+        } else if (sort === 'low_hit_pct') {
+            orderBy = '(100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)) asc nulls last';
+            extraHaving = ' and sum(d.calls_delta) > 100';
+        } else {
+            orderBy = 'sum(coalesce(d.shared_blks_read_delta, 0)) desc nulls last';
+            if (sort !== 'disk_read') {
+                extraHaving = ' and sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 100';
+            }
+        }
+
+        const searchRaw = (req.query.search as string || '').trim();
+        const datname = (req.query.datname as string || '').trim();
+        const params: any[] = [id, fromIso, toIso];
+        let searchWhere = '';
+        if (searchRaw) {
+            if (/^-?\d+$/.test(searchRaw)) {
+                params.push(searchRaw);
+                searchWhere += ` and ss.queryid::text = $${params.length}`;
+            } else {
+                params.push(searchRaw);
+                searchWhere += ` and qt.query_text ilike $${params.length}`;
+            }
+        }
+        if (datname) {
+            params.push(datname);
+            searchWhere += ` and dbr.datname = $${params.length}`;
+        }
+        const totalsParams = [...params];
+        params.push(limit);
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const rowsPromise = pool.query(`
+      with toplam_disk_read as (
+        select sum(coalesce(d.shared_blks_read_delta, 0)) as total_read_blks
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+      )
+      select
+        dbr.datname,
+        ss.queryid::text as queryid,
+        ss.query_text_id,
+        ss.statement_series_id,
+        left(qt.query_text, 200) as query_short,
+        qt.query_text as query_full,
+        sum(d.calls_delta)::bigint as toplam_cagri,
+        sum(coalesce(d.shared_blks_hit_delta, 0))::bigint as toplam_hit_blks,
+        sum(coalesce(d.shared_blks_read_delta, 0))::bigint as toplam_read_blks,
+        round((sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0)::numeric, 2) as disk_read_mb,
+        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+          then round((100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0))::numeric, 1)
+          else null end as cache_hit_pct,
+        round((sum(coalesce(d.shared_blk_read_time_ms_delta, 0)) / 1000.0)::numeric, 2) as disk_read_time_sec,
+        case when sum(d.calls_delta) > 0
+          then round(((sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0) / sum(d.calls_delta)::numeric)::numeric, 4)
+          else null end as disk_read_mb_per_call,
+        case when sum(d.calls_delta) > 0
+          then round((sum(coalesce(d.shared_blks_read_delta, 0))::numeric / sum(d.calls_delta)::numeric), 1)
+          else null end as read_blks_per_call,
+        case when (select total_read_blks from toplam_disk_read) > 0
+          then round((100.0 * sum(coalesce(d.shared_blks_read_delta, 0))::numeric / nullif((select total_read_blks from toplam_disk_read), 0))::numeric, 1)
+          else null end as pct_of_total_disk_read,
+        case when sum(d.total_exec_time_ms_delta) > 0
+          then round((100.0 * sum(coalesce(d.shared_blk_read_time_ms_delta, 0)) / sum(d.total_exec_time_ms_delta))::numeric, 1)
+          else null end as io_bound_pct,
+        sum(d.total_exec_time_ms_delta)::bigint as toplam_exec_ms,
+        round((sum(d.total_exec_time_ms_delta) / 1000.0 / 60.0)::numeric, 2) as toplam_dk,
+        round(avg(d.mean_exec_time_ms)::numeric, 2) as ort_ms,
+        sum(d.rows_delta)::bigint as toplam_satir
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by dbr.datname, ss.queryid, ss.query_text_id, qt.query_text, ss.statement_series_id
+      having sum(coalesce(d.shared_blks_read_delta, 0)) > 0${extraHaving}
+      order by ${orderBy}
+      limit $${params.length}
+    `, params);
+
+        const [rowsResult, instanceHitResult, worstDbResult, peakResult, settingsResult, heavyReaderResult] = await Promise.all([
+            rowsPromise,
+            pool.query(`
+      select
+        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+          then (100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0))::double precision
+          else null end as instance_hit_pct
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+    `, totalsParams),
+            pool.query(`
+      select
+        dbr.datname,
+        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+          then (100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0))::double precision
+          else null end as hit_pct,
+        (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0)::double precision as disk_read_mb
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by dbr.datname
+      having sum(coalesce(d.shared_blks_read_delta, 0)) > 0
+      order by hit_pct asc nulls last, disk_read_mb desc
+      limit 1
+    `, totalsParams),
+            pool.query(`
+      select
+        ${bucketExpr} as bucket_start,
+        (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0)::double precision as mb
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts between $2::timestamptz and $3::timestamptz
+        ${searchWhere}
+      group by bucket_start
+      having sum(coalesce(d.shared_blks_read_delta, 0)) > 0
+      order by mb desc
+      limit 1
+    `, totalsParams),
+            pool.query(`
+      select distinct on (setting_name)
+        setting_name,
+        setting_value,
+        unit,
+        case
+          when unit = 'kB' then setting_value::bigint
+          when unit = 'MB' then setting_value::bigint * 1024
+          when unit = 'GB' then setting_value::bigint * 1024 * 1024
+          else setting_value::bigint
+        end as kb
+      from fact.pg_settings_snapshot
+      where instance_pk = $1
+        and setting_name in ('shared_buffers', 'effective_cache_size')
+      order by setting_name, snapshot_ts desc
+    `, [id]),
+            pool.query(`
+      select count(*)::int as count
+      from (
+        select ss.statement_series_id
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by ss.statement_series_id
+        having (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0) >= 100
+      ) heavy
+    `, totalsParams),
+        ]);
+
+        const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+        const settingKb = (name: string): number | null => {
+            const row = settingByName.get(name) as any;
+            return row?.kb == null ? null : Number(row.kb);
+        };
+        const worstDb = worstDbResult.rows[0] ?? null;
+        const peak = peakResult.rows[0] ?? null;
+        res.json({
+            rows: rowsResult.rows,
+            totals: {
+                instance_hit_pct: instanceHitResult.rows[0]?.instance_hit_pct == null ? null : Number(instanceHitResult.rows[0].instance_hit_pct),
+                worst_datname: worstDb ? { datname: worstDb.datname, hit_pct: Number(worstDb.hit_pct), disk_read_mb: Number(worstDb.disk_read_mb) } : null,
+                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+                shared_buffers_kb: settingKb('shared_buffers'),
+                effective_cache_size_kb: settingKb('effective_cache_size'),
+                heavy_reader_count: Number(heavyReaderResult.rows[0]?.count ?? 0),
+            },
+        });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/cache-hit-trend?from=&to=&datname=&search=&compare=&include_baseline=1
+router.get('/:id/cache-hit-trend', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 1);
+        let compare: CompareKey | null = null;
+        try {
+            compare = parseCompareParam(req.query.compare);
+        } catch {
+            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+            return;
+        }
+        const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
+
+        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+        const bucketExpr = pgssBucketExpr(windowHours);
+
+        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+        const baselineNeeded = includeBaseline && searchRaw !== '';
+
+        const [current, baselineRes] = await Promise.all([
+            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours),
+            baselineNeeded
+                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours)
+                : Promise.resolve(null),
+        ]);
+
+        let previous: any[] = [];
+        if (compare) {
+            const offset = COMPARE_OFFSETS[compare];
+            previous = (await fetchCacheHitTrendData(
+                id,
+                shiftedIso(fromIso, offset.seconds),
+                shiftedIso(toIso, offset.seconds),
+                datname,
+                searchRaw,
+                bucketExpr,
+                windowHours,
+                offset.intervalSql,
+            )).rows;
+        }
+        const baseline = baselineRes ? baselineRes.rows : null;
+        res.json({ current: current.rows, previous, compare, baseline });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// =========================================================================
 // WAL SPIKE sekmesi
 // =========================================================================
 
