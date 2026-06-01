@@ -2645,7 +2645,7 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
 
 function VacuumLagCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
-        return <EmptyState icon="ğŸ–¥ï¸" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
+        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
     }
     return <VacuumLagCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
