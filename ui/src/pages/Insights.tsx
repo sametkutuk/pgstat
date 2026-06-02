@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
 import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
-import TimeRangePicker, { loadPersistedRange, type TimeRange } from '../components/common/TimeRangePicker';
+import TimeRangePicker, { loadPersistedRange, defaultRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import { useToast } from '../components/common/Toast';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -90,7 +90,22 @@ export default function Insights() {
                     <label className="block text-xs text-[#64748B] mb-1">Instance</label>
                     <select
                         value={instancePk ?? ''}
-                        onChange={e => setInstancePk(e.target.value ? Number(e.target.value) : null)}
+                        onChange={e => {
+                            const newPk = e.target.value ? Number(e.target.value) : null;
+                            setInstancePk(newPk);
+                            if (newPk != null && newPk !== instancePk) {
+                                // Instance degisti — range 24 saate sifirlanir
+                                const fresh = defaultRange(24);
+                                setRange(fresh);
+                                try {
+                                    window.localStorage.setItem('insights-range', JSON.stringify({
+                                        fromIso: fresh.fromIso,
+                                        toIso: fresh.toIso,
+                                        preset: 24,
+                                    }));
+                                } catch { /* ignore */ }
+                            }
+                        }}
                         className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px]"
                     >
                         <option value="">— Bir instance seçin —</option>
