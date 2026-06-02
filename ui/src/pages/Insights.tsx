@@ -226,14 +226,14 @@ interface QueryTempTrendPoint {
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type CompareMode = 'auto' | 'off';
-type PgssDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
+type TrendDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily' | 'pg_table_stat_delta' | 'pg_table_stat_hourly';
 const WEEK_WINDOW_HOURS = 168;
 
 interface TrendResponse<T> {
     current: T[];
     previous: T[];
     compare: CompareKey | null;
-    data_source?: PgssDataSource;
+    data_source?: TrendDataSource;
     raw_retention_days?: number;
     hourly_retention_days?: number;
     // db-time-trend ?include_baseline=1 ile gelir. Search filtresi varken
@@ -2701,7 +2701,6 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     });
     const rows = data?.rows ?? [];
     const totals = data?.totals;
-    const rawDays = totals?.raw_retention_days ?? 7;
 
     const { data: trendData } = useQuery({
         queryKey: ['insights-vacuum-lag-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
@@ -2874,12 +2873,6 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 </div>
             )}
 
-            {windowHours > rawDays * 24 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-800 mb-1">
-                    ⓘ Tablo istatistikleri {rawDays} gun retention'da tutulur. {Math.max(1, Math.floor(windowHours / 24 - rawDays))} gun oncesi
-                    icin trend verisi mevcut degil; dead tuple ve vacuum aktivitesi son {rawDays} gunluk pencerede gosterilir.
-                </div>
-            )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
                 <span>Karşılaştırma:</span>

@@ -471,6 +471,10 @@ public class JobOrchestrator {
             totalRows += hourlyRows;
             log.info("Saatlik rollup tamamlandi: {} satir", hourlyRows);
 
+            int tableStatHourlyRows = aggRepo.rollupTableStatHourly();
+            totalRows += tableStatHourlyRows;
+            log.info("Table stat saatlik rollup tamamlandi: {} satir", tableStatHourlyRows);
+
             // 3. Gunluk rollup — sadece UTC saat eslesirse, gunde 1 kez (idempotency guard)
             int dailyRollupHour = 1; // default
             int currentUtcHour = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).getHour();

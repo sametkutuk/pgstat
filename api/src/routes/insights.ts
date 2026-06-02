@@ -6,6 +6,7 @@ const router = Router();
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type DataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
+type TableStatSource = 'pg_table_stat_delta' | 'pg_table_stat_hourly';
 
 interface InstanceRetention {
     raw_days: number;
@@ -81,6 +82,10 @@ function pickPgssSource(windowHours: number, rawDays: number): DataSource {
     if (windowHours <= rawDays * 24) return 'pgss_delta';
     // pgss_daily is reserved for a later retention-aware pass; raw overflow uses hourly here.
     return 'pgss_hourly';
+}
+
+function pickTableStatSource(windowHours: number, rawDays: number): TableStatSource {
+    return windowHours <= rawDays * 24 ? 'pg_table_stat_delta' : 'pg_table_stat_hourly';
 }
 
 function pgssStepSql(source: DataSource, windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
@@ -1014,21 +1019,53 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
 // VACUUM LAG sekmesi
 // =========================================================================
 
-async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: TableStatSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
     const params: any[] = [id, fromIso, toIso];
     let searchWhere = '';
     if (searchRaw) {
         params.push(`%${searchRaw}%`);
-        searchWhere += ` and d.relname ilike $${params.length}`;
+        searchWhere += source === 'pg_table_stat_hourly'
+            ? ` and h.relname ilike $${params.length}`
+            : ` and d.relname ilike $${params.length}`;
     }
     if (datname) {
         params.push(datname);
         searchWhere += ` and dbr.datname = $${params.length}`;
     }
 
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    if (source === 'pg_table_stat_hourly') {
+        const stepSql = `interval '1 hour'`;
+        const gridStart = `date_trunc('hour', $2::timestamptz)`;
+        return pool.query(`
+        with buckets as (
+          select
+            h.bucket_start,
+            coalesce(sum(coalesce(h.n_dead_tup_last, 0)), 0)::double precision as total_dead_tup,
+            coalesce(sum(coalesce(h.vacuum_count_sum, 0) + coalesce(h.autovacuum_count_sum, 0)), 0)::bigint as vacuum_count
+          from agg.pg_table_stat_hourly h
+          left join dim.database_ref dbr on dbr.instance_pk = h.instance_pk and dbr.dbid = h.dbid
+          where h.instance_pk = $1
+            and h.bucket_start between $2::timestamptz and $3::timestamptz
+            ${searchWhere}
+          group by h.bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.total_dead_tup, 0)::bigint as total_dead_tup,
+          coalesce(b.vacuum_count, 0)::bigint as vacuum_count
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+    }
+
     const stepSql = pgssBucketStepSql(windowHours, rawDays);
     const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts', rawDays);
     const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts', rawDays);
 
@@ -1080,11 +1117,51 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
     `, params);
 }
 
-async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, source: TableStatSource, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+    if (source === 'pg_table_stat_hourly') {
+        const stepSql = `interval '1 hour'`;
+        const gridStart = `date_trunc('hour', $4::timestamptz)`;
+        return pool.query(`
+        with snapshot_data as (
+          select
+            h.bucket_start,
+            max(coalesce(h.n_dead_tup_last, 0))::bigint as dead_tup,
+            max(coalesce(h.n_live_tup_last, 0))::bigint as live_tup,
+            sum(coalesce(h.n_tup_upd_sum, 0))::bigint as n_tup_upd,
+            sum(coalesce(h.n_tup_del_sum, 0))::bigint as n_tup_del,
+            sum(coalesce(h.n_tup_ins_sum, 0))::bigint as n_tup_ins,
+            sum(coalesce(h.vacuum_count_sum, 0) + coalesce(h.autovacuum_count_sum, 0))::bigint as vacuum_count,
+            sum(coalesce(h.analyze_count_sum, 0) + coalesce(h.autoanalyze_count_sum, 0))::bigint as analyze_count
+          from agg.pg_table_stat_hourly h
+          where h.instance_pk = $1
+            and h.dbid = $2::oid
+            and h.relid = $3::oid
+            and h.bucket_start between $4::timestamptz and $5::timestamptz
+          group by h.bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $5::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(s.dead_tup, 0)::bigint as dead_tup,
+          coalesce(s.live_tup, 0)::bigint as live_tup,
+          coalesce(s.n_tup_upd, 0)::bigint as n_tup_upd,
+          coalesce(s.n_tup_del, 0)::bigint as n_tup_del,
+          coalesce(s.n_tup_ins, 0)::bigint as n_tup_ins,
+          coalesce(s.vacuum_count, 0)::bigint as vacuum_count,
+          coalesce(s.analyze_count, 0)::bigint as analyze_count
+        from grid g
+        left join snapshot_data s on s.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, [id, dbid, relid, fromIso, toIso]);
+    }
+
     const stepSql = pgssBucketStepSql(windowHours, rawDays);
     // $4 ve $5 from/to (1: id, 2: dbid, 3: relid).
     const gridStart = pgssBucketAlignSql(windowHours, 4, rawDays);
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
     return pool.query(`
         with snapshot_data as (
           select
@@ -1403,8 +1480,9 @@ router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
         const searchRaw = (req.query.search as string || '').trim();
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const retention = await getInstanceRetention(id);
+        const dataSource = pickTableStatSource(windowHours, retention.raw_days);
 
-        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, windowHours, retention.raw_days);
+        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, dataSource, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -1414,13 +1492,14 @@ router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
                 shiftedIso(toIso, offset.seconds),
                 datname,
                 searchRaw,
+                dataSource,
                 windowHours,
                 retention.raw_days,
                 offset.intervalSql,
             )).rows;
         }
 
-        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+        res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -1448,9 +1527,10 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+        const dataSource = pickTableStatSource(windowHours, retention.raw_days);
+        const bucketExpr = dataSource === 'pg_table_stat_hourly' ? 'h.bucket_start' : pgssBucketExpr(windowHours, retention.raw_days);
 
-        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
+        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, dataSource, bucketExpr, windowHours, retention.raw_days);
         let previous: any[] = [];
         if (compare) {
             const offset = COMPARE_OFFSETS[compare];
@@ -1460,6 +1540,7 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
                 relidRaw,
                 shiftedIso(fromIso, offset.seconds),
                 shiftedIso(toIso, offset.seconds),
+                dataSource,
                 bucketExpr,
                 windowHours,
                 retention.raw_days,
@@ -1467,7 +1548,7 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
             )).rows;
         }
 
-        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+        res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }

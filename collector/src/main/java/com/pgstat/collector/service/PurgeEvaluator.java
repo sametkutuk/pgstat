@@ -19,7 +19,7 @@ import java.util.Map;
  *     - Global hard drop (en uzun retention) sinirinin gerisindeki partisyonlari DROP
  *     - Arada kalan aralikta instance bazli batched DELETE
  *  2. SNAPSHOT tablolari icin saat bazli retention (cok daha kisa)
- *  3. agg.pgss_hourly / agg.pgss_daily icin ay bazli partition drop
+ *  3. hourly/daily agg tablolari icin ay bazli partition drop
  *  4. ops tablolari icin sabit 90 gun
  */
 @Component
@@ -55,6 +55,11 @@ public class PurgeEvaluator {
         "fact.pg_recovery_prefetch_snapshot",
         "fact.pg_user_function_snapshot",
         "fact.pg_sequence_io_snapshot"
+    };
+
+    private static final String[] HOURLY_AGG_TABLES = {
+        "agg.pgss_hourly",
+        "agg.pg_table_stat_hourly"
     };
 
     private final JdbcTemplate jdbc;
@@ -174,7 +179,7 @@ public class PurgeEvaluator {
     }
 
     // =========================================================================
-    // agg.pgss_hourly / pgss_daily purge
+    // Hourly/daily aggregate purge
     // =========================================================================
 
     private void purgeHourlyAgg() {
@@ -188,7 +193,9 @@ public class PurgeEvaluator {
         if (dropBefore == null) return;
 
         log.info("Hourly agg purge: drop siniri = {}", dropBefore);
-        dropPartitionsBefore("agg.pgss_hourly", dropBefore);
+        for (String table : HOURLY_AGG_TABLES) {
+            dropPartitionsBefore(table, dropBefore);
+        }
     }
 
     private void purgeDailyAgg() {

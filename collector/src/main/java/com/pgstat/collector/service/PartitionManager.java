@@ -19,7 +19,7 @@ import java.util.Set;
  *
  * Rollup job her calistiginda:
  *  - fact tablolari icin gelecek 14 gunluk daily partition
- *  - agg.pgss_hourly icin gelecek 2 aylik monthly partition
+ *  - hourly agg tablolari icin gelecek 2 aylik monthly partition
  *  - agg.pgss_daily icin gelecek 1 yillik yearly partition
  *
  * pg_inherits ile mevcut partisyonlari tarar, eksikleri CREATE TABLE ... PARTITION OF ile doldurur.
@@ -55,6 +55,12 @@ public class PartitionManager {
         "fact.pg_relation_size_snapshot",
         "fact.pg_sequence_state_snapshot",
         "fact.pg_database_freeze_snapshot"
+    };
+
+    /** Aylik partition gerektiren hourly aggregate tablolari */
+    private static final String[] MONTHLY_AGG_TABLES = {
+        "agg.pgss_hourly",
+        "agg.pg_table_stat_hourly"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -214,25 +220,33 @@ public class PartitionManager {
     }
 
     // =========================================================================
-    // Aylik agg.pgss_hourly partisyonlari (2 ay ileri)
+    // Aylik hourly aggregate partisyonlari (2 ay ileri)
     // =========================================================================
 
     private void ensureMonthlyPartitions() {
-        String parentTable = "agg.pgss_hourly";
-        Set<String> existing = findExistingPartitions(parentTable);
         YearMonth current = YearMonth.now();
 
-        for (int m = 0; m <= 2; m++) {
-            YearMonth month = current.plusMonths(m);
-            String suffix = month.format(MONTH_FMT);
-            String partitionName = "agg_pgss_hourly_" + suffix;
+        for (String parentTable : MONTHLY_AGG_TABLES) {
+            if (!isPartitionedTable(parentTable)) {
+                log.debug("Tablo partitioned degil veya yok, atlandi: {}", parentTable);
+                continue;
+            }
 
-            if (existing.contains(partitionName)) continue;
+            Set<String> existing = findExistingPartitions(parentTable);
+            String baseName = parentTable.replace(".", "_");
 
-            String fromDate = month.atDay(1).toString();
-            String toDate = month.plusMonths(1).atDay(1).toString();
+            for (int m = 0; m <= 2; m++) {
+                YearMonth month = current.plusMonths(m);
+                String suffix = month.format(MONTH_FMT);
+                String partitionName = baseName + "_" + suffix;
 
-            createPartition(parentTable, partitionName, fromDate, toDate);
+                if (existing.contains(partitionName)) continue;
+
+                String fromDate = month.atDay(1).toString();
+                String toDate = month.plusMonths(1).atDay(1).toString();
+
+                createPartition(parentTable, partitionName, fromDate, toDate);
+            }
         }
     }
 
