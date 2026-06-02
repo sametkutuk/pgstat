@@ -1042,7 +1042,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
           select
             h.bucket_start,
             coalesce(sum(coalesce(h.n_dead_tup_last, 0)), 0)::double precision as total_dead_tup,
-            coalesce(sum(coalesce(h.vacuum_count_sum, 0) + coalesce(h.autovacuum_count_sum, 0)), 0)::bigint as vacuum_count
+            coalesce(sum(coalesce(h.vacuum_count_sum, 0)), 0)::bigint as vacuum_count_manual,
+            coalesce(sum(coalesce(h.autovacuum_count_sum, 0)), 0)::bigint as vacuum_count_auto,
+            coalesce(sum(coalesce(h.analyze_count_sum, 0)), 0)::bigint as analyze_count_manual,
+            coalesce(sum(coalesce(h.autoanalyze_count_sum, 0)), 0)::bigint as analyze_count_auto
           from agg.pg_table_stat_hourly h
           left join dim.database_ref dbr on dbr.instance_pk = h.instance_pk and dbr.dbid = h.dbid
           where h.instance_pk = $1
@@ -1057,7 +1060,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
         select
           g.bucket_start${alignedSelect},
           coalesce(b.total_dead_tup, 0)::bigint as total_dead_tup,
-          coalesce(b.vacuum_count, 0)::bigint as vacuum_count
+          coalesce(b.vacuum_count_manual, 0)::bigint as vacuum_count_manual,
+          coalesce(b.vacuum_count_auto, 0)::bigint as vacuum_count_auto,
+          coalesce(b.analyze_count_manual, 0)::bigint as analyze_count_manual,
+          coalesce(b.analyze_count_auto, 0)::bigint as analyze_count_auto
         from grid g
         left join buckets b on b.bucket_start = g.bucket_start
         order by g.bucket_start
@@ -1074,7 +1080,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
           select
             d.sample_ts,
             coalesce(d.n_dead_tup_estimate, 0)::bigint as n_dead_tup_estimate,
-            (coalesce(d.vacuum_count_delta, 0) + coalesce(d.autovacuum_count_delta, 0))::bigint as vacuum_count_delta
+            coalesce(d.vacuum_count_delta, 0)::bigint as vacuum_count_manual_delta,
+            coalesce(d.autovacuum_count_delta, 0)::bigint as vacuum_count_auto_delta,
+            coalesce(d.analyze_count_delta, 0)::bigint as analyze_count_manual_delta,
+            coalesce(d.autoanalyze_count_delta, 0)::bigint as analyze_count_auto_delta
           from fact.pg_table_stat_delta d
           left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
           where d.instance_pk = $1
@@ -1098,7 +1107,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
         vacuum_buckets as (
           select
             ${filteredBucketExpr} as bucket_start,
-            coalesce(sum(f.vacuum_count_delta), 0)::bigint as vacuum_count
+            coalesce(sum(f.vacuum_count_manual_delta), 0)::bigint as vacuum_count_manual,
+            coalesce(sum(f.vacuum_count_auto_delta), 0)::bigint as vacuum_count_auto,
+            coalesce(sum(f.analyze_count_manual_delta), 0)::bigint as analyze_count_manual,
+            coalesce(sum(f.analyze_count_auto_delta), 0)::bigint as analyze_count_auto
           from filtered_data f
           group by bucket_start
         ),
@@ -1109,7 +1121,10 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
         select
           g.bucket_start${alignedSelect},
           coalesce(db.total_dead_tup, 0)::bigint as total_dead_tup,
-          coalesce(vb.vacuum_count, 0)::bigint as vacuum_count
+          coalesce(vb.vacuum_count_manual, 0)::bigint as vacuum_count_manual,
+          coalesce(vb.vacuum_count_auto, 0)::bigint as vacuum_count_auto,
+          coalesce(vb.analyze_count_manual, 0)::bigint as analyze_count_manual,
+          coalesce(vb.analyze_count_auto, 0)::bigint as analyze_count_auto
         from grid g
         left join dead_buckets db on db.bucket_start = g.bucket_start
         left join vacuum_buckets vb on vb.bucket_start = g.bucket_start
@@ -1131,8 +1146,10 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
             sum(coalesce(h.n_tup_upd_sum, 0))::bigint as n_tup_upd,
             sum(coalesce(h.n_tup_del_sum, 0))::bigint as n_tup_del,
             sum(coalesce(h.n_tup_ins_sum, 0))::bigint as n_tup_ins,
-            sum(coalesce(h.vacuum_count_sum, 0) + coalesce(h.autovacuum_count_sum, 0))::bigint as vacuum_count,
-            sum(coalesce(h.analyze_count_sum, 0) + coalesce(h.autoanalyze_count_sum, 0))::bigint as analyze_count
+            sum(coalesce(h.vacuum_count_sum, 0))::bigint as vacuum_count_manual,
+            sum(coalesce(h.autovacuum_count_sum, 0))::bigint as vacuum_count_auto,
+            sum(coalesce(h.analyze_count_sum, 0))::bigint as analyze_count_manual,
+            sum(coalesce(h.autoanalyze_count_sum, 0))::bigint as analyze_count_auto
           from agg.pg_table_stat_hourly h
           where h.instance_pk = $1
             and h.dbid = $2::oid
@@ -1151,8 +1168,10 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
           coalesce(s.n_tup_upd, 0)::bigint as n_tup_upd,
           coalesce(s.n_tup_del, 0)::bigint as n_tup_del,
           coalesce(s.n_tup_ins, 0)::bigint as n_tup_ins,
-          coalesce(s.vacuum_count, 0)::bigint as vacuum_count,
-          coalesce(s.analyze_count, 0)::bigint as analyze_count
+          coalesce(s.vacuum_count_manual, 0)::bigint as vacuum_count_manual,
+          coalesce(s.vacuum_count_auto, 0)::bigint as vacuum_count_auto,
+          coalesce(s.analyze_count_manual, 0)::bigint as analyze_count_manual,
+          coalesce(s.analyze_count_auto, 0)::bigint as analyze_count_auto
         from grid g
         left join snapshot_data s on s.bucket_start = g.bucket_start
         order by g.bucket_start
@@ -1171,8 +1190,10 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
             sum(coalesce(d.n_tup_upd_delta, 0))::bigint as n_tup_upd,
             sum(coalesce(d.n_tup_del_delta, 0))::bigint as n_tup_del,
             sum(coalesce(d.n_tup_ins_delta, 0))::bigint as n_tup_ins,
-            sum(coalesce(d.vacuum_count_delta, 0) + coalesce(d.autovacuum_count_delta, 0))::bigint as vacuum_count,
-            sum(coalesce(d.analyze_count_delta, 0) + coalesce(d.autoanalyze_count_delta, 0))::bigint as analyze_count
+            sum(coalesce(d.vacuum_count_delta, 0))::bigint as vacuum_count_manual,
+            sum(coalesce(d.autovacuum_count_delta, 0))::bigint as vacuum_count_auto,
+            sum(coalesce(d.analyze_count_delta, 0))::bigint as analyze_count_manual,
+            sum(coalesce(d.autoanalyze_count_delta, 0))::bigint as analyze_count_auto
           from fact.pg_table_stat_delta d
           where d.instance_pk = $1
             and d.dbid = $2::oid
@@ -1191,8 +1212,10 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
           coalesce(s.n_tup_upd, 0)::bigint as n_tup_upd,
           coalesce(s.n_tup_del, 0)::bigint as n_tup_del,
           coalesce(s.n_tup_ins, 0)::bigint as n_tup_ins,
-          coalesce(s.vacuum_count, 0)::bigint as vacuum_count,
-          coalesce(s.analyze_count, 0)::bigint as analyze_count
+          coalesce(s.vacuum_count_manual, 0)::bigint as vacuum_count_manual,
+          coalesce(s.vacuum_count_auto, 0)::bigint as vacuum_count_auto,
+          coalesce(s.analyze_count_manual, 0)::bigint as analyze_count_manual,
+          coalesce(s.analyze_count_auto, 0)::bigint as analyze_count_auto
         from grid g
         left join snapshot_data s on s.bucket_start = g.bucket_start
         order by g.bucket_start
