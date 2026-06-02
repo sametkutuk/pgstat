@@ -2673,12 +2673,16 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
                             <ReferenceLine key={`tv-vac-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                         ))}
                         {compareKey && <Line type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam'} stroke="#94A3B8" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
-                        <Line type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum*" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
                         <Line type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
                         <Line type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
                         <Line type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
                     </LineChart>
                 </InsightChart>
+                <p className="text-[10px] text-[#94A3B8] italic mt-1 lg:col-span-3"
+                   title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz. vacuumdb -f veya VACUUM FULL kullaniminda Manuel Vacuum line'i artmayabilir.">
+                    * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                </p>
             </div>
         </div>
     );
@@ -2937,11 +2941,15 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                         {compareKey && <Line yAxisId="left" type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey) + ' dead'} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
                         {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam aktivite'} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
                         <Area yAxisId="left" type="monotone" dataKey="current_dead_tup" name="Dead tuple" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
-                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum*" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
                         <Line yAxisId="right" type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
                     </ComposedChart>
+                    <p className="text-[10px] text-[#94A3B8] italic mt-1"
+                       title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz. vacuumdb -f veya VACUUM FULL kullaniminda Manuel Vacuum line'i artmayabilir.">
+                        * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                    </p>
                 </InsightChart>
             )}
 
