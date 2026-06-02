@@ -39,6 +39,147 @@ function HeaderHelp({ title, label }: { title: string; label: string }) {
     return <span title={title} className={HEADER_HELP_CLASS}>{label}</span>;
 }
 
+interface TabIntroProps {
+    storageKey: string;
+    summary: string;
+    whatItShows: string;
+    howToUse: string;
+    scenarios: Array<{ question: string; answer: string }>;
+}
+
+function TabIntro({ storageKey, summary, whatItShows, howToUse, scenarios }: TabIntroProps) {
+    const [open, setOpen] = useState<boolean>(() => {
+        try {
+            return window.localStorage.getItem(storageKey) !== '1';
+        } catch { return true; }
+    });
+
+    const close = (markSeen: boolean) => {
+        setOpen(false);
+        if (markSeen) {
+            try { window.localStorage.setItem(storageKey, '1'); } catch { /* ignore */ }
+        }
+    };
+
+    return (
+        <div className="mb-3">
+            <div className="flex items-start gap-2 text-sm text-[#64748B]">
+                <span className="text-[#1E293B]">{summary}</span>
+                <button
+                    type="button"
+                    onClick={() => setOpen(o => !o)}
+                    className="ml-auto text-[#3B82F6] hover:underline text-xs flex-shrink-0"
+                    title="Bu sekme hakkinda detay"
+                >
+                    {open ? 'x Kapat' : 'i Bu sekme nedir?'}
+                </button>
+            </div>
+
+            {open && (
+                <div className="mt-2 bg-[#F0F9FF] border border-[#BAE6FD] rounded-lg p-4 text-sm">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+                        <div>
+                            <h4 className="font-semibold text-[#1E293B] mb-1">Ne gosterir</h4>
+                            <p className="text-xs text-[#475569]">{whatItShows}</p>
+                        </div>
+                        <div>
+                            <h4 className="font-semibold text-[#1E293B] mb-1">Nasil kullanilir</h4>
+                            <p className="text-xs text-[#475569]">{howToUse}</p>
+                        </div>
+                        <div>
+                            <h4 className="font-semibold text-[#1E293B] mb-1">Senaryolar</h4>
+                            <ul className="text-xs text-[#475569] space-y-1">
+                                {scenarios.map((s, i) => (
+                                    <li key={i}>
+                                        <b className="text-[#1E293B]">{s.question}</b>
+                                        <br />
+                                        <span className="text-[#64748B]">- {s.answer}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#BAE6FD]">
+                        <button
+                            type="button"
+                            onClick={() => close(true)}
+                            className="text-xs text-[#475569] hover:text-[#1E293B]"
+                        >
+                            Anladim, bir daha gosterme
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => close(false)}
+                            className="text-xs text-[#475569] hover:text-[#1E293B]"
+                        >
+                            Sonra gosterilsin
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+const TAB_INTROS = {
+    topExec: {
+        storageKey: 'pgstat.insights.top-exec.intro-seen',
+        summary: "Top Sorgular: DB zamanini en cok yiyen SQL sorgulari. Performans tuning'in birinci duragi.",
+        whatItShows: 'Pencere icinde toplam exec time, cagri sayisi ve ortalama yaniti en yuksek sorgulari gosterir. Auto-badge ile DB darbogazi, yavas, volatil ve hot path sinyalleri gorunur.',
+        howToUse: 'Toplam Sure ile darbogaz adaylarini bul. Cagri Sayisi ile N+1 veya ORM problemlerini ara. Ortalama Yavaslik ile surekli yavas sorgulari yakala. Search ile queryid veya SQL pattern filtrele.',
+        scenarios: [
+            { question: 'DB neden yavasladi?', answer: "Top 5 sorguya bak; biri toplam DB time'in cogunu yiyorsa baslica aday odur." },
+            { question: 'ORM N+1 problem var mi?', answer: 'Cagri Sayisi sirala; 10K+ cagrili sorgular Hot Path rozeti alir.' },
+            { question: 'Bu sorgu ne kadar pahali?', answer: 'Tablo satirina tikla; Latency, Throughput ve Min-Avg-Max trendleri acilir.' },
+        ],
+    },
+    tempSpill: {
+        storageKey: 'pgstat.insights.temp-spill.intro-seen',
+        summary: 'Temp Spill: work_mem yetmediginde diske temp dosya yazan sorgular. Sort/hash optimizasyon sinyali.',
+        whatItShows: 'Sorgu basina kac MB temp yazildi, toplam temp uretimine katkisi, disk I/O suresi, satir/temp orani ve work_mem alt sinir tahmini.',
+        howToUse: 'Yazilan Temp ile en cok diske dokulen sorgulari bul. Mega Spill rozeti tek cagrida 100MB+ kaybi isaretler. Sort Spill ve Hash Spill rozetleri ORDER BY veya JOIN heuristikleridir.',
+        scenarios: [
+            { question: 'work_mem kac olmali?', answer: 'work_mem >= (MB) kolonuna bak; en yuksek deger alt sinirdir.' },
+            { question: 'Hangi sorgu sort spill yapiyor?', answer: 'Sort Spill rozeti ORDER BY, GROUP BY veya DISTINCT iceren sorgulari isaretler.' },
+            { question: 'Ne zaman bu spike olusuyor?', answer: 'Temp Spill Trend grafiginde saatlik volume gorunur. Pik anina tikla; pencere oraya odaklanir.' },
+        ],
+    },
+    walSpike: {
+        storageKey: 'pgstat.insights.wal-spike.intro-seen',
+        summary: 'WAL Spike: WAL uretimini en cok besleyen sorgular. Replication lag ve checkpoint frekansi kaynak teshisi.',
+        whatItShows: 'Sorgu basina WAL bayti, FPI orani, satir basina WAL maliyeti, instance toplam throughput, replication slot lag, archive lag, TPS ve WAL parametrelerini gosterir.',
+        howToUse: 'Toplam WAL ile replikasyon yuku kaynagini bul. FPI Orani 0.5 ustu olan sorgular checkpoint sonrasi burst yapabilir. WAL/Row yuksek ise TOAST veya buyuk update dalgasi olabilir.',
+        scenarios: [
+            { question: 'Replication lag artiyor, neden?', answer: 'Toplam WAL ile yuksek sorgulara bak; WAL Sampiyonu rozeti birincil kaynak olabilir.' },
+            { question: 'Checkpoint cok sik tetikleniyor mu?', answer: 'FPI heavy sorgu sayisi yuksekse wal_compression veya checkpoint ayarlarini kontrol et.' },
+            { question: 'Update wave-of-pain mi?', answer: 'Burst Writer rozeti satir basina 1KB+ WAL ureten sorgulari isaretler.' },
+        ],
+    },
+    cacheHit: {
+        storageKey: 'pgstat.insights.cache-hit.intro-seen',
+        summary: "Cache Hit: shared_buffers'tan kacan, diske giden sorgular. shared_buffers yetersizligi veya I/O darbogazi sinyali.",
+        whatItShows: 'Sorgu basina cache hit yuzdesi, diske giden MB, blok/cagri orani, exec zamaninin ne kadarinin disk I/O bekledigi ve instance shared_buffers ayarini gosterir.',
+        howToUse: 'Cache Miss ile en cok diske giden sorgulari bul. Hit yuzdesi 50 altinda ve 100MB+ disk read varsa Cache Disaster rozeti cikar. I/O Bound rozeti ciddi disk bekleme sinyalidir.',
+        scenarios: [
+            { question: 'shared_buffers buyutmem gerek mi?', answer: 'Instance hit yuzdesi dusuk ve heavy reader sayisi yuksekse buffer pool yetersiz olabilir.' },
+            { question: 'Hangi sorgu cache bypass ediyor?', answer: 'Big Reader rozeti tek cagrida 10K+ blok okuyan sorgulari isaretler.' },
+            { question: 'Disk I/O darbogazi mi?', answer: 'I/O Bound rozeti exec zamaninin buyuk bolumunun disk bekledigini gosterir.' },
+        ],
+    },
+    vacuumLag: {
+        storageKey: 'pgstat.insights.vacuum-lag.intro-seen',
+        summary: "Vacuum Lag: Dead tuple biriken ve gecikmis vacuum'lu tablolar. Autovacuum tuning ve bloat tespiti.",
+        whatItShows: 'Tablo basina dead/live tuple, dead yuzdesi, son vacuum tarihi, update hizi, HOT update orani, stale stats, instance toplam dead ve autovacuum ayarlarini gosterir.',
+        howToUse: 'Bloated rozetli tablolar onceliklidir. Stale Vacuum autovacuum yetismiyor olabilir. Dusuk HOT update fillfactor firsati, Stale Stats ise plan kalitesi riski demektir.',
+        scenarios: [
+            { question: 'Disk sisti, hangi tablo problem?', answer: 'Dead Tuple ile sirala; Bloated rozetli tablo birincil adaydir.' },
+            { question: 'Plan kalitesi dusuyor mu?', answer: 'Stale Stats rozetli tablolarda istatistik eskidir; analyze esiklerini kontrol et.' },
+            { question: 'Manuel vacuum kime yapayim?', answer: 'Bloated ve Stale Vacuum rozetlerinin kesisimi en kritik adaydir.' },
+            { question: 'Index bloat olusuyor mu?', answer: 'Slow HOT rozeti dusuk HOT update oranini ve index bloat riskini isaretler.' },
+        ],
+    },
+} satisfies Record<string, TabIntroProps>;
+
 function consumePendingSearch(): string {
     if (typeof window === 'undefined') return '';
     try {
@@ -843,6 +984,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
 
     return (
         <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.topExec} />
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -1788,6 +1930,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
 
     return (
         <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.tempSpill} />
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -2259,6 +2402,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
 
     return (
         <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.cacheHit} />
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -2836,6 +2980,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
 
     return (
         <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.vacuumLag} />
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -3312,6 +3457,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
 
     return (
         <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.walSpike} />
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
