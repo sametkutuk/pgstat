@@ -8,7 +8,7 @@ import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, defaultRange, type TimeRange } from '../components/common/TimeRangePicker';
 import DataColumnsModal, { useDataColumns, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import { useToast } from '../components/common/Toast';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Instance {
     instance_pk: number;
@@ -32,6 +32,8 @@ const TABS: { key: InsightTab; label: string; icon: string }[] = [
 ];
 
 void PlaceholderTab;
+void Bar;
+void BarChart;
 
 function HeaderHelp({ title, label }: { title: string; label: string }) {
     return <span title={title} className={HEADER_HELP_CLASS}>{label}</span>;
@@ -2521,7 +2523,10 @@ interface VacuumLagTrendPoint {
     bucket_start: string;
     bucket_aligned?: string;
     total_dead_tup: string | number;
-    vacuum_count: string | number;
+    vacuum_count_manual: string | number;
+    vacuum_count_auto: string | number;
+    analyze_count_manual: string | number;
+    analyze_count_auto: string | number;
 }
 
 interface TableVacuumTrendPoint {
@@ -2532,8 +2537,10 @@ interface TableVacuumTrendPoint {
     n_tup_upd: string | number;
     n_tup_del: string | number;
     n_tup_ins: string | number;
-    vacuum_count: string | number;
-    analyze_count: string | number;
+    vacuum_count_manual: string | number;
+    vacuum_count_auto: string | number;
+    analyze_count_manual: string | number;
+    analyze_count_auto: string | number;
 }
 
 type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
@@ -2593,8 +2600,13 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
                 previous_dead_tup: previous ? toNum(previous.dead_tup) : null,
                 current_upd_del: toNum(p.n_tup_upd) + toNum(p.n_tup_del),
                 previous_upd_del: previous ? toNum(previous.n_tup_upd) + toNum(previous.n_tup_del) : null,
-                current_vacuum_count: toNum(p.vacuum_count),
-                previous_vacuum_count: previous ? toNum(previous.vacuum_count) : null,
+                current_vacuum_manual: toNum(p.vacuum_count_manual),
+                current_vacuum_auto: toNum(p.vacuum_count_auto),
+                current_analyze_manual: toNum(p.analyze_count_manual),
+                current_analyze_auto: toNum(p.analyze_count_auto),
+                previous_activity_total: previous
+                    ? toNum(previous.vacuum_count_manual) + toNum(previous.vacuum_count_auto) + toNum(previous.analyze_count_manual) + toNum(previous.analyze_count_auto)
+                    : null,
             };
         });
     }, [data, windowHours]);
@@ -2650,18 +2662,22 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
                         <Area type="monotone" dataKey="current_upd_del" name="Su an" stroke="#F59E0B" fill="#FEF3C7" fillOpacity={0.7} strokeWidth={2} connectNulls />
                     </AreaChart>
                 </InsightChart>
-                <InsightChart title="Vacuum Aktivitesi" height={200}>
-                    <BarChart data={chartData}>
+                <InsightChart title="Vacuum & Analyze Aktivitesi" height={200}>
+                    <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                         <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                         <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
                         <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
                         {daySeparatorLabels.map(lbl => (
                             <ReferenceLine key={`tv-vac-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                         ))}
-                        {compareKey && <Bar dataKey="previous_vacuum_count" name={compareLabel(compareKey)} fill="#94A3B8" opacity={0.5} radius={[2, 2, 0, 0]} barSize={10} />}
-                        <Bar dataKey="current_vacuum_count" name="Su an" fill="#7C3AED" radius={[2, 2, 0, 0]} barSize={10} />
-                    </BarChart>
+                        {compareKey && <Line type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam'} stroke="#94A3B8" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
+                        <Line type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
+                    </LineChart>
                 </InsightChart>
             </div>
         </div>
@@ -2741,13 +2757,19 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 bucket_key: key,
                 current_dead_tup: toNum(p.total_dead_tup),
                 previous_dead_tup: previous ? toNum(previous.total_dead_tup) : null,
-                current_vacuum_count: toNum(p.vacuum_count),
-                previous_vacuum_count: previous ? toNum(previous.vacuum_count) : null,
+                current_vacuum_manual: toNum(p.vacuum_count_manual),
+                current_vacuum_auto: toNum(p.vacuum_count_auto),
+                current_analyze_manual: toNum(p.analyze_count_manual),
+                current_analyze_auto: toNum(p.analyze_count_auto),
+                current_activity_total: toNum(p.vacuum_count_manual) + toNum(p.vacuum_count_auto) + toNum(p.analyze_count_manual) + toNum(p.analyze_count_auto),
+                previous_activity_total: previous
+                    ? toNum(previous.vacuum_count_manual) + toNum(previous.vacuum_count_auto) + toNum(previous.analyze_count_manual) + toNum(previous.analyze_count_auto)
+                    : null,
             };
         });
     }, [trendData, windowHours]);
     const hasTrendData = useMemo(
-        () => chartData.some(d => toNum(d.current_dead_tup) > 0 || toNum(d.current_vacuum_count) > 0 || toNum(d.previous_dead_tup) > 0 || toNum(d.previous_vacuum_count) > 0),
+        () => chartData.some(d => toNum(d.current_dead_tup) > 0 || toNum(d.current_activity_total) > 0 || toNum(d.previous_dead_tup) > 0 || toNum(d.previous_activity_total) > 0),
         [chartData],
     );
     const daySeparatorLabels = useMemo<string[]>(() => {
@@ -2908,13 +2930,17 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                         <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
                         <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} />
                         <Tooltip content={trendTooltip} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
                         {daySeparatorLabels.map(lbl => (
                             <ReferenceLine key={`vacuum-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                         ))}
                         {compareKey && <Line yAxisId="left" type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey) + ' dead'} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
-                        {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_vacuum_count" name={compareLabel(compareKey) + ' vacuum'} stroke="#CBD5E1" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                        {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam aktivite'} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
                         <Area yAxisId="left" type="monotone" dataKey="current_dead_tup" name="Dead tuple" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
-                        <Bar yAxisId="right" dataKey="current_vacuum_count" name="Vacuum aktivitesi" fill="#7C3AED" radius={[2, 2, 0, 0]} barSize={12} />
+                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
+                        <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
                     </ComposedChart>
                 </InsightChart>
             )}
