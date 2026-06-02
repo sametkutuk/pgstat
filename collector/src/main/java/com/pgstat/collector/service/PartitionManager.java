@@ -8,10 +8,10 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -65,6 +65,8 @@ public class PartitionManager {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("yyyyMM");
+    private static final DateTimeFormatter PARTITION_BOUND_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssXXX");
+    private static final ZoneId PARTITION_ZONE = ZoneId.of("Europe/Istanbul");
 
     private final JdbcTemplate jdbc;
 
@@ -81,8 +83,6 @@ public class PartitionManager {
     public void initOnStartup() {
         try {
             log.info("Startup: partition'lar kontrol ediliyor...");
-            // Yanlis timezone ile olusturulmus partition'lari tespit edip yeniden olustur
-            repairMisalignedPartitions();
             ensureFuturePartitions();
             log.info("Startup: partition kontrolu tamamlandi.");
         } catch (Exception e) {
@@ -90,88 +90,14 @@ public class PartitionManager {
         }
     }
 
-    /**
-     * Onceki versiyonlardaki timezone bug'i nedeniyle yanlis range'li olusmus
-     * partition'lari tespit eder, ic verisi yoksa drop eder. Boylece yeni
-     * dogru range'li partition'in olusumu icin yer acilir.
-     *
-     * Yanlis partition: range'i UTC dilim sınırlarına denk gelmeyen (ornegin
-     * '2026-04-24 21:00:00+00' gibi).
-     */
-    private void repairMisalignedPartitions() {
-        // Once session timezone'u UTC'ye al — pg_get_expr() boylece UTC formatinda
-        // render eder, bound parse'i deterministik olur.
-        try {
-            jdbc.execute("SET SESSION TimeZone = 'UTC'");
-        } catch (Exception ignore) {}
-
-        for (String parentTable : DAILY_FACT_TABLES) {
-            try {
-                List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) as bound " +
-                    "FROM pg_inherits i " +
-                    "JOIN pg_class c ON c.oid = i.inhrelid " +
-                    "JOIN pg_class p ON p.oid = i.inhparent " +
-                    "JOIN pg_namespace ns ON ns.oid = p.relnamespace " +
-                    "WHERE ns.nspname || '.' || p.relname = ?", parentTable);
-
-                for (Map<String, Object> row : rows) {
-                    String relname = (String) row.get("relname");
-                    String bound = (String) row.get("bound");
-                    if (bound == null) continue;
-
-                    // UTC session'da dogru format: FROM ('2026-04-25 00:00:00+00') TO ('2026-04-26 00:00:00+00')
-                    // Bug'li format ornegi: FROM ('2026-04-24 21:00:00+00') TO ('2026-04-25 21:00:00+00')
-                    // Sadece UTC'de 00:00:00 ile baslamayan range'leri bug'li sayariz.
-                    if (bound.matches(".*FROM \\('\\d{4}-\\d{2}-\\d{2} (?!00:00:00\\+00)[^']*'\\).*")) {
-                        String schema = parentTable.split("\\.")[0];
-                        String fullName = schema + "." + relname;
-
-                        // Icerigi var mi?
-                        Long count = 0L;
-                        try {
-                            count = jdbc.queryForObject(
-                                "SELECT count(*) FROM " + fullName, Long.class);
-                        } catch (Exception ignore) {}
-
-                        if (count == null) count = 0L;
-
-                        try {
-                            // 1. Detach et (varsa veri korunur, partition standalone tablo olur)
-                            jdbc.execute("ALTER TABLE " + parentTable +
-                                " DETACH PARTITION " + fullName);
-                            // 2. Drop et (gerekirse rename ile arsivlenebilir; biz drop ediyoruz)
-                            jdbc.execute("DROP TABLE " + fullName);
-
-                            log.info("Yanlis range'li partition kaldirildi: {} ({} satir verisi vardi, range: {})",
-                                fullName, count, bound);
-                        } catch (Exception e) {
-                            // Detach basarisiz olursa direkt drop dene (PG'de bazen yapilabilir)
-                            try {
-                                jdbc.execute("DROP TABLE " + fullName);
-                                log.info("Yanlis range'li partition direkt silindi: {} ({} satir, range: {})",
-                                    fullName, count, bound);
-                            } catch (Exception ee) {
-                                log.warn("Yanlis range'li partition silinemedi {}: {}",
-                                    fullName, ee.getMessage());
-                            }
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Partition repair tarama hatasi {}: {}", parentTable, e.getMessage());
-            }
-        }
-    }
 
     /**
      * Gelecek partisyonlarin varligini kontrol eder ve eksikleri olusturur.
      * Rollup job tarafindan her calistiginda cagirilir.
-     * Repair adimi rollup'ta da calisir — yeni timezone bug'lari olusursa
-     * sonraki rollup'ta yakalanip duzeltilir.
+     * Mevcut partition'lara dokunmaz; sadece eksik gelecek partition'lari
+     * deterministik local midnight bound'lariyla olusturur.
      */
     public void ensureFuturePartitions() {
-        repairMisalignedPartitions();
         ensureDailyPartitions();
         ensureMonthlyPartitions();
         ensureYearlyPartitions();
@@ -191,7 +117,7 @@ public class PartitionManager {
     private static final int DAILY_LOOKAHEAD_DAYS  = 14;
 
     private void ensureDailyPartitions() {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(PARTITION_ZONE);
 
         for (String parentTable : DAILY_FACT_TABLES) {
             // Parent tablo gercekten partitioned mi? (V023+ tablolari migration
@@ -224,7 +150,7 @@ public class PartitionManager {
     // =========================================================================
 
     private void ensureMonthlyPartitions() {
-        YearMonth current = YearMonth.now();
+        YearMonth current = YearMonth.now(PARTITION_ZONE);
 
         for (String parentTable : MONTHLY_AGG_TABLES) {
             if (!isPartitionedTable(parentTable)) {
@@ -257,7 +183,7 @@ public class PartitionManager {
     private void ensureYearlyPartitions() {
         String parentTable = "agg.pgss_daily";
         Set<String> existing = findExistingPartitions(parentTable);
-        int currentYear = LocalDate.now().getYear();
+        int currentYear = LocalDate.now(PARTITION_ZONE).getYear();
 
         for (int y = 0; y <= 1; y++) {
             int year = currentYear + y;
@@ -309,13 +235,12 @@ public class PartitionManager {
     /**
      * Partition olusturur.
      *
-     * KRITIK: Sample_ts/snapshot_ts kolonlari timestamptz tipinde. Sadece
-     * '2026-04-25' yazarsak PG session timezone'da yorumlar (ornegin
-     * Europe/Istanbul +3 ise '2026-04-24 21:00 UTC' olur). Bu durumda
-     * partition aralik UTC veri ile uyusmaz, "no partition found" hatasi alinir.
+     * KRITIK: sample_ts/snapshot_ts kolonlari timestamptz tipinde. Date-only
+     * literal veya session timezone'a bagli hesap kullanmak aylik partition'lar
+     * arasinda 00:00 ve 03:00 gibi karisik bound'lar uretebilir.
      *
-     * Cozum: timestamptz literal'i UTC suffix ile acikca yazmak:
-     *   '2026-04-25 00:00:00+00'
+     * Cozum: tum bound'lari explicit Europe/Istanbul midnight offset'iyle yazmak:
+     *   '2026-06-01 00:00:00+03:00'
      */
     private void createPartition(String parentTable, String partitionName,
                                  String fromDate, String toDate) {
@@ -324,10 +249,8 @@ public class PartitionManager {
         String schema = parentParts[0];
         String fullPartitionName = schema + "." + partitionName.replace(schema + "_", "");
 
-        // Timestamptz icin UTC suffix ekle. Yearly partition'lar (yyyy formati)
-        // yearly olarak '2026-01-01 00:00:00+00' formatina cevrilir.
-        String fromTs = toUtcTimestamp(fromDate);
-        String toTs   = toUtcTimestamp(toDate);
+        String fromTs = toPartitionTimestamp(fromDate);
+        String toTs   = toPartitionTimestamp(toDate);
 
         String ddl = String.format(
             "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
@@ -368,12 +291,15 @@ public class PartitionManager {
         }
     }
 
-    /** "2026-04-25" → "2026-04-25 00:00:00+00", "2026" → "2026-01-01 00:00:00+00" */
-    private static String toUtcTimestamp(String dateOrYear) {
+    /** "2026-04-25" -> "2026-04-25 00:00:00+03:00", "2026" -> "2026-01-01 00:00:00+03:00" */
+    private static String toPartitionTimestamp(String dateOrYear) {
         if (dateOrYear.length() == 4) {
-            // Yearly format: "2026" → "2026-01-01 00:00:00+00"
-            return dateOrYear + "-01-01 00:00:00+00";
+            return LocalDate.of(Integer.parseInt(dateOrYear), 1, 1)
+                .atStartOfDay(PARTITION_ZONE)
+                .format(PARTITION_BOUND_FMT);
         }
-        return dateOrYear + " 00:00:00+00";
+        return LocalDate.parse(dateOrYear)
+            .atStartOfDay(PARTITION_ZONE)
+            .format(PARTITION_BOUND_FMT);
     }
 }
