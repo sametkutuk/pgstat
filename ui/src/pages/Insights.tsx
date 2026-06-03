@@ -3089,7 +3089,15 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
 
             {hasTrendData && (
                 <div>
-                <InsightChart title="Dead Tuple (sol) & Vacuum/Analyze alan tablo sayisi (sag)" height={300}>
+                <div className="flex items-center gap-2 mb-1 text-[11px]">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#CFFAFE] text-[#0E7490] font-medium">
+                        ← Sol Y: Dead tuple
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EDE9FE] text-[#6D28D9] font-medium">
+                        Sag Y: Vacuum/Analyze alan tablo sayisi →
+                    </span>
+                </div>
+                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={300}>
                     <ComposedChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                         <XAxis dataKey="label" tick={{ fontSize: 10 }} />
