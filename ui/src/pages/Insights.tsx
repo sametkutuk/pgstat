@@ -3088,14 +3088,12 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
             </div>
 
             {hasTrendData && (
-                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={300}>
+                <InsightChart title="Dead Tuple (sol) & Vacuum/Analyze alan tablo sayisi (sag)" height={300}>
                     <ComposedChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                         <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                        <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={compactNumber}
-                               label={{ value: 'Dead tuple', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#0891B2' } }} />
-                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false}
-                               label={{ value: 'Tablo sayisi / bucket', angle: 90, position: 'insideRight', style: { fontSize: 10, fill: '#7C3AED' } }} />
+                        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#0891B2' }} tickFormatter={compactNumber} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#7C3AED' }} allowDecimals={false} />
                         <Tooltip content={trendTooltip} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         {daySeparatorLabels.map(lbl => (
