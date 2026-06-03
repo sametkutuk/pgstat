@@ -795,6 +795,12 @@ router.get('/:id/cache-hit', async (req, res, next) => {
             searchWhere += ` and dbr.datname = $${params.length}`;
         }
         const totalsParams = [...params];
+        const dbCacheParams: any[] = [id, fromIso, toIso];
+        let dbCacheWhere = '';
+        if (datname) {
+            dbCacheParams.push(datname);
+            dbCacheWhere = ` and d.datname = $${dbCacheParams.length}`;
+        }
         params.push(limit);
 
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
@@ -860,17 +866,16 @@ router.get('/:id/cache-hit', async (req, res, next) => {
             rowsPromise,
             pool.query(`
       select
-        case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
-          then (100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0))::double precision
-          else null end as instance_hit_pct
-      from fact.pgss_delta d
-      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
-      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
-      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        case when sum(coalesce(d.blks_hit_delta, 0) + coalesce(d.blks_read_delta, 0)) > 0
+          then round((100.0 * sum(coalesce(d.blks_hit_delta, 0))
+                      / nullif(sum(coalesce(d.blks_hit_delta, 0) + coalesce(d.blks_read_delta, 0)), 0))::numeric, 1)::double precision
+          else null end as instance_hit_pct,
+        round((sum(coalesce(d.blks_read_delta, 0)) * 8.0 / 1024.0)::numeric, 2)::double precision as total_disk_read_mb
+      from fact.pg_database_delta d
       where d.instance_pk = $1
         and d.sample_ts between $2::timestamptz and $3::timestamptz
-        ${searchWhere}
-    `, totalsParams),
+        ${dbCacheWhere}
+    `, dbCacheParams),
             pool.query(`
       select
         dbr.datname,
@@ -950,6 +955,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
             rows: rowsResult.rows,
             totals: {
                 instance_hit_pct: instanceHitResult.rows[0]?.instance_hit_pct == null ? null : Number(instanceHitResult.rows[0].instance_hit_pct),
+                total_disk_read_mb: Number(instanceHitResult.rows[0]?.total_disk_read_mb ?? 0),
                 worst_datname: worstDb ? { datname: worstDb.datname, hit_pct: Number(worstDb.hit_pct), disk_read_mb: Number(worstDb.disk_read_mb) } : null,
                 peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
                 shared_buffers_kb: settingKb('shared_buffers'),
@@ -1233,6 +1239,8 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
         let orderBy = 'n_dead_tup desc nulls last, dead_pct desc nulls last';
         if (sort === 'dead_pct') {
             orderBy = 'case when (n_live_tup + n_dead_tup) > 1000 then dead_pct else null end desc nulls last, n_dead_tup desc nulls last';
+        } else if (sort === 'bloat_size') {
+            orderBy = 'dead_bytes_estimate desc nulls last, n_dead_tup desc nulls last';
         } else if (sort === 'stale_vacuum') {
             orderBy = 'case when n_dead_tup > 100 then days_since_vacuum else null end desc nulls last, n_dead_tup desc nulls last';
         } else if (sort === 'update_rate') {
@@ -1305,6 +1313,17 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
         from filtered_data
         order by instance_pk, dbid, relid, sample_ts desc
       ),
+      size_snapshot as (
+        select distinct on (instance_pk, dbid, schemaname, relname)
+          dbid::int as dbid,
+          schemaname,
+          relname,
+          total_size_bytes as total_bytes
+        from fact.pg_relation_size_snapshot
+        where instance_pk = $1
+          and snapshot_ts between $2::timestamptz and $3::timestamptz
+        order by instance_pk, dbid, schemaname, relname, snapshot_ts desc
+      ),
       delta_data as (
         select
           dbid,
@@ -1328,6 +1347,12 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
           coalesce(ls.n_live_tup_estimate, 0)::bigint as n_live_tup,
           coalesce(ls.n_dead_tup_estimate, 0)::bigint as n_dead_tup,
           coalesce(ls.n_mod_since_analyze, 0)::bigint as n_mod_since_analyze,
+          coalesce(ss.total_bytes, 0)::bigint as total_bytes,
+          case when (coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0)) > 0
+              and ss.total_bytes is not null
+            then round(ss.total_bytes::numeric * coalesce(ls.n_dead_tup_estimate, 0)::numeric
+                       / nullif(coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0), 0))::bigint
+            else null end as dead_bytes_estimate,
           case when coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0) > 0
             then round((100.0 * coalesce(ls.n_dead_tup_estimate, 0)::numeric
                         / nullif(coalesce(ls.n_live_tup_estimate, 0) + coalesce(ls.n_dead_tup_estimate, 0), 0))::numeric, 1)
@@ -1354,6 +1379,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
             else null end as update_per_sec
         from latest_snapshot ls
         left join delta_data dd on dd.dbid = ls.dbid and dd.relid = ls.relid
+        left join size_snapshot ss on ss.dbid = ls.dbid and ss.schemaname = ls.schemaname and ss.relname = ls.relname
       )
     `;
 
@@ -1369,6 +1395,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       ${baseCtes}
       select
         coalesce(sum(n_dead_tup), 0)::bigint as total_dead_tup,
+        coalesce(sum(dead_bytes_estimate), 0)::bigint as total_bloat_bytes,
         (
           select row_to_json(w)
           from (
@@ -1454,6 +1481,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
             rows: rowsResult.rows,
             totals: {
                 total_dead_tup: Number(totalsRow.total_dead_tup ?? 0),
+                total_bloat_bytes: Number(totalsRow.total_bloat_bytes ?? 0),
                 worst_dead_pct: worstDead ? {
                     schemaname: worstDead.schemaname,
                     relname: worstDead.relname,

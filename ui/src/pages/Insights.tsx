@@ -2226,6 +2226,7 @@ interface CacheHitRow {
 
 interface CacheHitTotals {
     instance_hit_pct: number | null;
+    total_disk_read_mb: number;
     worst_datname: { datname: string | null; hit_pct: number; disk_read_mb: number } | null;
     peak: { bucket_start: string; mb: number } | null;
     shared_buffers_kb: number | null;
@@ -2411,12 +2412,14 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-[#64748B]">
                         <div>
-                            Instance hit %: {instanceHitPct == null ? <b className="text-[#94A3B8]">—</b> : (
+                            <span title="pg_stat_database blks_hit / (blks_hit + blks_read). Tum DB I/O dahil; pgss takip etmedigi sistem sorgulari da bu yuzdeyi etkiler.">Instance hit %:</span> {instanceHitPct == null ? <b className="text-[#94A3B8]">-</b> : (
                                 <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(instanceHitPct)}`}>%{instanceHitPct.toFixed(1)}</span>
                             )}
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">|</span>
+                            Toplam disk read: <b className="text-[#1E293B]">{formatBytes(toNum(totals.total_disk_read_mb) * 1024 * 1024)}</b>
+                            <span className="mx-1">|</span>
                             Heavy reader (&gt;100MB): <b className={toNum(totals.heavy_reader_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.heavy_reader_count}</b> sorgu
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">|</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div>
@@ -2624,6 +2627,8 @@ interface VacuumLagRow {
     datname: string | null;
     n_live_tup: string;
     n_dead_tup: string;
+    total_bytes: string;
+    dead_bytes_estimate: string | null;
     n_mod_since_analyze: string;
     dead_pct: string | null;
     last_vacuum: string | null;
@@ -2642,6 +2647,7 @@ interface VacuumLagRow {
 
 interface VacuumLagTotals {
     total_dead_tup: number;
+    total_bloat_bytes: number;
     worst_dead_pct: { schemaname: string; relname: string; datname: string | null; dead_pct: number; n_dead_tup: number } | null;
     oldest_vacuum: { schemaname: string; relname: string; datname: string | null; days_since_vacuum: number } | null;
     bloated_count: number;
@@ -2687,13 +2693,20 @@ interface TableVacuumTrendPoint {
     analyze_count_auto: string | number;
 }
 
-type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
+type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'bloat_size' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
 
 function deadTuplePctClass(deadPct: number | null): string {
     if (deadPct == null) return 'bg-slate-100 text-slate-600';
     if (deadPct > 20) return 'bg-red-100 text-red-700';
     if (deadPct > 10) return 'bg-orange-100 text-orange-700';
     if (deadPct > 5) return 'bg-amber-100 text-amber-700';
+    return 'bg-slate-100 text-slate-600';
+}
+
+function bloatBytesClass(bytes: number | null): string {
+    if (bytes == null) return 'bg-slate-100 text-slate-600';
+    if (bytes > 1024 * 1024 * 1024) return 'bg-red-100 text-red-700';
+    if (bytes > 100 * 1024 * 1024) return 'bg-orange-100 text-orange-700';
     return 'bg-slate-100 text-slate-600';
 }
 
@@ -2948,6 +2961,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const sortButtons: { key: VacuumSortMode; label: string; tip: string }[] = [
         { key: 'dead_tup', label: 'Dead Tuple', tip: 'En cok dead tuple iceren tablolar.' },
         { key: 'dead_pct', label: 'Dead %', tip: 'En sismis tablolar (live+dead > 1000 esikli).' },
+        { key: 'bloat_size', label: 'Bloat MB', tip: 'En cok byte cinsinden bloat. dead_tup * (total_bytes / live+dead).' },
         { key: 'stale_vacuum', label: 'Eski Vacuum', tip: 'En uzun zamandir vacuum almayan tablolar.' },
         { key: 'update_rate', label: 'Update/sn', tip: 'En cok update alan tablolar.' },
         { key: 'mod_since_analyze', label: 'Stale Stats', tip: 'Son analyze sonrasi en cok degisim olan tablolar.' },
@@ -2991,6 +3005,8 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                         <div>
                             Toplam dead tuple: <b className="text-[#1E293B]">{totals.total_dead_tup.toLocaleString('tr-TR')}</b>
                             <span className="mx-1">·</span>
+                            Tahmini toplam bloat: <b className="text-[#1E293B]">{formatBytes(toNum(totals.total_bloat_bytes))}</b>
+                            <span className="mx-1">|</span>
                             Sismis tablo (Dead&gt;%20): <b className={totals.bloated_count > 0 ? 'text-red-700' : 'text-[#1E293B]'}>{totals.bloated_count}</b>
                             <span className="mx-1">·</span>
                             Eski vacuum: <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
@@ -3132,7 +3148,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 </div>
 
                 {isLoading ? (
-                    <div className="p-4"><SkeletonTable rows={8} cols={11} /></div>
+                    <div className="p-4"><SkeletonTable rows={8} cols={12} /></div>
                 ) : rows.length === 0 ? (
                     <EmptyState icon="📭" title="Vacuum lag yok" description={emptyDescription} />
                 ) : (
@@ -3146,6 +3162,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tabloda update/delete'ten kalan dead tuple. Vacuum bunu temizler." label="Dead Tuple" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="n_live_tup_estimate (latest snapshot)." label="Live Tuple" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="dead / (live + dead). >%20 = bloat baslangici." label="Dead %" /></th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tahmini bloat (dead tuple oraninin tablo boyutuna carpilmasi)." label="Bloat" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Last vacuum veya autovacuum (en yenisi). Gun sayisi." label="Son Vacuum" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Pencerede tablo kac kez vacuum/autovacuum aldi." label="Vacuum Sayisi" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Saniyede ortalama update sayisi." label="Update/sn" /></th>
@@ -3159,6 +3176,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     const rowKey = `${row.dbid}-${row.relid}`;
                                     const expanded = expandedKey === rowKey;
                                     const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
+                                    const bloatBytes = row.dead_bytes_estimate == null ? null : toNum(row.dead_bytes_estimate);
                                     const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
                                     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
                                     const tags = calculateVacuumLagTags(row);
@@ -3189,6 +3207,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.n_dead_tup).toLocaleString('tr-TR')}</td>
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_live_tup).toLocaleString('tr-TR')}</td>
                                                 <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{deadPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${deadTuplePctClass(deadPct)}`}>%{deadPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{bloatBytes == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${bloatBytesClass(bloatBytes)}`}>{formatBytes(bloatBytes)}</span>}</td>
                                                 <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{daysSinceVacuum == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${vacuumAgeClass(daysSinceVacuum)}`}>{formatDaysAgo(daysSinceVacuum)}</span>}</td>
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.vacuum_count).toLocaleString('tr-TR')}</td>
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.update_per_sec == null ? '\u2014' : Number(row.update_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
@@ -3200,7 +3219,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                             </tr>
                                             {expanded && (
                                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                                    <td colSpan={12} className="p-4">
+                                                    <td colSpan={13} className="p-4">
                                                         <TableVacuumTrendPanel
                                                             instancePk={instancePk}
                                                             dbid={row.dbid}
