@@ -3092,8 +3092,10 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                     <ComposedChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                         <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                        <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} />
+                        <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={compactNumber}
+                               label={{ value: 'Dead tuple', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#0891B2' } }} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false}
+                               label={{ value: 'Tablo sayisi / bucket', angle: 90, position: 'insideRight', style: { fontSize: 10, fill: '#7C3AED' } }} />
                         <Tooltip content={trendTooltip} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         {daySeparatorLabels.map(lbl => (
@@ -3107,9 +3109,14 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
                     </ComposedChart>
-                    <p className="text-[10px] text-[#94A3B8] italic mt-1"
-                       title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz. vacuumdb -f veya VACUUM FULL kullaniminda Manuel Vacuum line'i artmayabilir.">
-                        * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                    <p className="text-[10px] text-[#94A3B8] italic mt-1">
+                        Sol Y: instance toplam dead tuple sayisi (anlik snapshot).
+                        Sag Y: bucket icinde vacuum/analyze ALAN TABLO sayisi
+                        (saatte ornek 200 = o saatte 200 farkli tablo autovacuum aldi).
+                        <span title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz."
+                              className="block cursor-help">
+                            * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                        </span>
                     </p>
                 </InsightChart>
             )}
