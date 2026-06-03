@@ -3088,6 +3088,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
             </div>
 
             {hasTrendData && (
+                <div>
                 <InsightChart title="Dead Tuple (sol) & Vacuum/Analyze alan tablo sayisi (sag)" height={300}>
                     <ComposedChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
@@ -3107,16 +3108,17 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
                         <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
                     </ComposedChart>
-                    <p className="text-[10px] text-[#94A3B8] italic mt-1">
-                        Sol Y: instance toplam dead tuple sayisi (anlik snapshot).
-                        Sag Y: bucket icinde vacuum/analyze ALAN TABLO sayisi
-                        (saatte ornek 200 = o saatte 200 farkli tablo autovacuum aldi).
-                        <span title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz."
-                              className="block cursor-help">
-                            * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
-                        </span>
-                    </p>
                 </InsightChart>
+                <p className="text-[10px] text-[#94A3B8] italic px-4 pb-2">
+                    Sol Y: instance toplam dead tuple sayisi (anlik snapshot).
+                    Sag Y: bucket icinde vacuum/analyze ALAN TABLO sayisi
+                    (saatte ornek 200 = o saatte 200 farkli tablo autovacuum aldi).
+                    <span title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz."
+                          className="block cursor-help">
+                        * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                    </span>
+                </p>
+                </div>
             )}
 
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
