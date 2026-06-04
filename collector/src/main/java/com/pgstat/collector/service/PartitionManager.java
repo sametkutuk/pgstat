@@ -8,10 +8,10 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -22,7 +22,8 @@ import java.util.Set;
  *  - hourly agg tablolari icin gelecek 2 aylik monthly partition
  *  - agg.pgss_daily icin gelecek 1 yillik yearly partition
  *
- * pg_inherits ile mevcut partisyonlari tarar, eksikleri CREATE TABLE ... PARTITION OF ile doldurur.
+ * pg_inherits ile mevcut partition'lari tarar, eksikleri
+ * CREATE TABLE ... PARTITION OF ile doldurur.
  */
 @Component
 public class PartitionManager {
@@ -65,8 +66,6 @@ public class PartitionManager {
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("yyyyMM");
-    private static final DateTimeFormatter PARTITION_BOUND_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssXXX");
-    private static final ZoneId PARTITION_ZONE = ZoneId.of("Europe/Istanbul");
 
     private final JdbcTemplate jdbc;
 
@@ -90,12 +89,10 @@ public class PartitionManager {
         }
     }
 
-
     /**
-     * Gelecek partisyonlarin varligini kontrol eder ve eksikleri olusturur.
-     * Rollup job tarafindan her calistiginda cagirilir.
+     * Gelecek partition'larin varligini kontrol eder ve eksikleri olusturur.
      * Mevcut partition'lara dokunmaz; sadece eksik gelecek partition'lari
-     * deterministik local midnight bound'lariyla olusturur.
+     * DB session timezone'undaki deterministik midnight bound'lariyla olusturur.
      */
     public void ensureFuturePartitions() {
         ensureDailyPartitions();
@@ -104,53 +101,41 @@ public class PartitionManager {
     }
 
     // =========================================================================
-    // Gunluk fact partisyonlari (14 gun ileri)
+    // Gunluk fact partition'lari (dun + 14 gun ileri)
     // =========================================================================
 
-    /**
-     * Daily partition lookahead — dunden bugune + 14 gun ileri.
-     * Genis bir pencere acmak rollup job'in birkac gun fail etmesi durumunda
-     * collector'in veri yazmaya devam etmesini saglar.
-     * Dun de dahil cunku timezone farklari ve ge cikan insertler icin guvenli.
-     */
     private static final int DAILY_LOOKBEHIND_DAYS = 1;
     private static final int DAILY_LOOKAHEAD_DAYS  = 14;
 
     private void ensureDailyPartitions() {
-        LocalDate today = LocalDate.now(PARTITION_ZONE);
+        LocalDate today = LocalDate.now();
 
         for (String parentTable : DAILY_FACT_TABLES) {
-            // Parent tablo gercekten partitioned mi? (V023+ tablolari migration
-            // yoksa olmayabilir). Degilse bu tabloyu atla.
             if (!isPartitionedTable(parentTable)) {
                 log.debug("Tablo partitioned degil veya yok, atlandi: {}", parentTable);
                 continue;
             }
 
             Set<String> existing = findExistingPartitions(parentTable);
-            String baseName = parentTable.replace(".", "_"); // fact_pgss_delta
+            String baseName = parentTable.replace(".", "_");
 
             for (int d = -DAILY_LOOKBEHIND_DAYS; d <= DAILY_LOOKAHEAD_DAYS; d++) {
                 LocalDate day = today.plusDays(d);
-                String suffix = day.format(DATE_FMT);
-                String partitionName = baseName + "_" + suffix;
+                String partitionName = baseName + "_" + day.format(DATE_FMT);
 
                 if (existing.contains(partitionName)) continue;
 
-                String fromDate = day.toString(); // yyyy-MM-dd
-                String toDate = day.plusDays(1).toString();
-
-                createPartition(parentTable, partitionName, fromDate, toDate);
+                createPartition(parentTable, partitionName, boundsForDayOffset(d));
             }
         }
     }
 
     // =========================================================================
-    // Aylik hourly aggregate partisyonlari (2 ay ileri)
+    // Aylik hourly aggregate partition'lari (2 ay ileri)
     // =========================================================================
 
     private void ensureMonthlyPartitions() {
-        YearMonth current = YearMonth.now(PARTITION_ZONE);
+        YearMonth current = YearMonth.now();
 
         for (String parentTable : MONTHLY_AGG_TABLES) {
             if (!isPartitionedTable(parentTable)) {
@@ -163,27 +148,23 @@ public class PartitionManager {
 
             for (int m = 0; m <= 2; m++) {
                 YearMonth month = current.plusMonths(m);
-                String suffix = month.format(MONTH_FMT);
-                String partitionName = baseName + "_" + suffix;
+                String partitionName = baseName + "_" + month.format(MONTH_FMT);
 
                 if (existing.contains(partitionName)) continue;
 
-                String fromDate = month.atDay(1).toString();
-                String toDate = month.plusMonths(1).atDay(1).toString();
-
-                createPartition(parentTable, partitionName, fromDate, toDate);
+                createPartition(parentTable, partitionName, boundsForMonthOffset(m));
             }
         }
     }
 
     // =========================================================================
-    // Yillik agg.pgss_daily partisyonlari (1 yil ileri)
+    // Yillik agg.pgss_daily partition'lari (1 yil ileri)
     // =========================================================================
 
     private void ensureYearlyPartitions() {
         String parentTable = "agg.pgss_daily";
         Set<String> existing = findExistingPartitions(parentTable);
-        int currentYear = LocalDate.now(PARTITION_ZONE).getYear();
+        int currentYear = LocalDate.now().getYear();
 
         for (int y = 0; y <= 1; y++) {
             int year = currentYear + y;
@@ -191,10 +172,7 @@ public class PartitionManager {
 
             if (existing.contains(partitionName)) continue;
 
-            String fromDate = year + "-01-01";
-            String toDate = (year + 1) + "-01-01";
-
-            createPartition(parentTable, partitionName, fromDate, toDate);
+            createPartition(parentTable, partitionName, boundsForYearOffset(y));
         }
     }
 
@@ -202,7 +180,7 @@ public class PartitionManager {
     // Yardimci metotlar
     // =========================================================================
 
-    /** pg_inherits ile mevcut partisyonlari bulur. */
+    /** pg_inherits ile mevcut partition'lari bulur. */
     private Set<String> findExistingPartitions(String parentTable) {
         String[] parts = parentTable.split("\\.", 2);
         String schema = parts[0];
@@ -221,13 +199,10 @@ public class PartitionManager {
             table, schema
         );
 
-        // Partition isimleri schema prefix'siz doner; karsilastirma icin
-        // schema_table_suffix formatina cevir
         Set<String> result = new HashSet<>();
         for (String name : names) {
-            result.add(schema + "_" + name); // ornek: fact_pgss_delta_20260420
+            result.add(schema + "_" + name);
         }
-        // Ayrica raw ismi de ekle (karsilastirma kolayligi icin)
         result.addAll(names);
         return result;
     }
@@ -235,45 +210,114 @@ public class PartitionManager {
     /**
      * Partition olusturur.
      *
-     * KRITIK: sample_ts/snapshot_ts kolonlari timestamptz tipinde. Date-only
-     * literal veya session timezone'a bagli hesap kullanmak aylik partition'lar
-     * arasinda 00:00 ve 03:00 gibi karisik bound'lar uretebilir.
-     *
-     * Cozum: tum bound'lari explicit Europe/Istanbul midnight offset'iyle yazmak:
-     *   '2026-06-01 00:00:00+03:00'
+     * Bound hesaplari DB session timezone'unda yapilir. Java sadece partition
+     * ismini uretir; range timestamp'lerini kendi timezone'u ile formatlamaz.
      */
-    private void createPartition(String parentTable, String partitionName,
-                                 String fromDate, String toDate) {
-        // Partition ismi schema.name formatinda olmali
+    private void createPartition(String parentTable, String partitionName, PartitionBounds bounds) {
         String[] parentParts = parentTable.split("\\.", 2);
         String schema = parentParts[0];
+        String parentName = parentParts[1];
         String fullPartitionName = schema + "." + partitionName.replace(schema + "_", "");
 
-        String fromTs = toPartitionTimestamp(fromDate);
-        String toTs   = toPartitionTimestamp(toDate);
+        if (hasOverlappingPartition(schema, parentName, bounds)) {
+            log.debug("Partition range mevcut partition ile cakistigi icin atlandi: {} [{} -> {})",
+                fullPartitionName, bounds.lowerText(), bounds.upperText());
+            return;
+        }
 
         String ddl = String.format(
-            "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM ('%s') TO ('%s')",
-            fullPartitionName, parentTable, fromTs, toTs
+            "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%s) TO (%s)",
+            fullPartitionName, parentTable, bounds.lowerLiteral(), bounds.upperLiteral()
         );
 
         try {
             jdbc.execute(ddl);
-            log.info("Partition olusturuldu: {} [{} → {})", fullPartitionName, fromTs, toTs);
+            log.info("Partition olusturuldu: {} [{} -> {})",
+                fullPartitionName, bounds.lowerText(), bounds.upperText());
         } catch (Exception e) {
-            // Spring "bad SQL grammar" ile sariyor — gercek PG nedenini bul
             Throwable cause = e;
             while (cause.getCause() != null && cause.getCause() != cause) {
                 cause = cause.getCause();
             }
-            log.warn("Partition olusturma hatasi: {} — {} (gercek neden: {})",
-                    fullPartitionName, e.getMessage(), cause.getMessage());
+            log.warn("Partition olusturma hatasi: {} - {} (gercek neden: {})",
+                fullPartitionName, e.getMessage(), cause.getMessage());
+        }
+    }
+
+    /**
+     * DB'nin kendi session timezone'unda range bound uretir.
+     * Bu sayede aggregate partition'lari Java timezone'undan etkilenmeden
+     * ayni saat hizasinda kalir.
+     */
+    private PartitionBounds boundsForDayOffset(int offset) {
+        return queryBounds("day", "1 day", offset);
+    }
+
+    private PartitionBounds boundsForMonthOffset(int offset) {
+        return queryBounds("month", "1 month", offset);
+    }
+
+    private PartitionBounds boundsForYearOffset(int offset) {
+        return queryBounds("year", "1 year", offset);
+    }
+
+    private PartitionBounds queryBounds(String truncUnit, String intervalUnit, int offset) {
+        String sql = String.format("""
+            select quote_literal(lower_bound) as lower_literal,
+                   quote_literal(upper_bound) as upper_literal,
+                   lower_bound::text as lower_text,
+                   upper_bound::text as upper_text
+            from (
+                select date_trunc('%s', now() + (cast(? as int) * interval '%s')) as lower_bound,
+                       date_trunc('%s', now() + ((cast(? as int) + 1) * interval '%s')) as upper_bound
+            ) b
+            """, truncUnit, intervalUnit, truncUnit, intervalUnit);
+
+        Map<String, Object> row = jdbc.queryForMap(sql, offset, offset);
+        return new PartitionBounds(
+            String.valueOf(row.get("lower_literal")),
+            String.valueOf(row.get("upper_literal")),
+            String.valueOf(row.get("lower_text")),
+            String.valueOf(row.get("upper_text"))
+        );
+    }
+
+    /**
+     * CREATE denemeden once ayni parent altinda istenen range ile cakisik bir
+     * partition var mi bakar. Mevcut hatali partition'lar silinmez; sadece
+     * tekrar eden overlap WARN spam'i engellenir.
+     */
+    private boolean hasOverlappingPartition(String schema, String parentName, PartitionBounds bounds) {
+        try {
+            Integer count = jdbc.queryForObject("""
+                select count(*)
+                from (
+                    select regexp_match(
+                               pg_get_expr(child.relpartbound, child.oid),
+                               'FROM \\(''([^'']+)''\\) TO \\(''([^'']+)''\\)'
+                           ) as bound_match
+                    from pg_inherits i
+                    join pg_class parent on parent.oid = i.inhparent
+                    join pg_class child on child.oid = i.inhrelid
+                    join pg_namespace ns on ns.oid = parent.relnamespace
+                    where ns.nspname = ?
+                      and parent.relname = ?
+                ) p
+                where p.bound_match is not null
+                  and (p.bound_match)[1]::timestamptz < ?::timestamptz
+                  and (p.bound_match)[2]::timestamptz > ?::timestamptz
+                """, Integer.class, schema, parentName, bounds.upperText(), bounds.lowerText());
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.debug("Partition overlap pre-check atlandi: {}.{} [{} -> {}) - {}",
+                schema, parentName, bounds.lowerText(), bounds.upperText(), e.getMessage());
+            return false;
         }
     }
 
     /**
      * Parent tablonun gercekten partitioned olup olmadigini kontrol eder.
-     * V023+ migration'lar uygulanmadiysa veya tablo yoksa false doner.
+     * Migration'lar uygulanmadiysa veya tablo yoksa false doner.
      */
     private boolean isPartitionedTable(String parentTable) {
         try {
@@ -291,15 +335,10 @@ public class PartitionManager {
         }
     }
 
-    /** "2026-04-25" -> "2026-04-25 00:00:00+03:00", "2026" -> "2026-01-01 00:00:00+03:00" */
-    private static String toPartitionTimestamp(String dateOrYear) {
-        if (dateOrYear.length() == 4) {
-            return LocalDate.of(Integer.parseInt(dateOrYear), 1, 1)
-                .atStartOfDay(PARTITION_ZONE)
-                .format(PARTITION_BOUND_FMT);
-        }
-        return LocalDate.parse(dateOrYear)
-            .atStartOfDay(PARTITION_ZONE)
-            .format(PARTITION_BOUND_FMT);
-    }
+    private record PartitionBounds(
+        String lowerLiteral,
+        String upperLiteral,
+        String lowerText,
+        String upperText
+    ) {}
 }

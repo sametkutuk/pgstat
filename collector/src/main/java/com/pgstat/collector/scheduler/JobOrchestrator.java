@@ -36,10 +36,12 @@ import java.util.concurrent.Semaphore;
 public class JobOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(JobOrchestrator.class);
+    private static final long STARTUP_GRACE_MS = 30_000L;
 
     private final AdvisoryLockManager lockManager;
     private final CollectorProperties props;
     private final Executor collectorExecutor;
+    private final long startedAtMs = System.currentTimeMillis();
 
     // Collector'lar
     private final BootstrapHandler bootstrapHandler;
@@ -154,6 +156,12 @@ public class JobOrchestrator {
      */
     @Scheduled(fixedDelayString = "${pgstat.worker.poll-interval-ms:5000}")
     public void poll() {
+        long uptimeMs = System.currentTimeMillis() - startedAtMs;
+        if (uptimeMs < STARTUP_GRACE_MS) {
+            log.debug("Startup grace aktif, poll atlandi: kalanMs={}", STARTUP_GRACE_MS - uptimeMs);
+            return;
+        }
+
         // Pre-reset snapshot: pattern tespit edilen instance'lar icin
         // reset'ten 30sn once ekstra statements snapshot al
         try {
