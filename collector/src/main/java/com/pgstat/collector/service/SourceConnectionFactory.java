@@ -28,6 +28,8 @@ public class SourceConnectionFactory {
 
     /** Kaynak PG'lerde gorunecek uygulama adi */
     private static final String APPLICATION_NAME = "pgstat_collector";
+    private static final int MAX_RETRY = 1;
+    private static final long RETRY_DELAY_MS = 5_000L;
 
     private final SecretResolver secretResolver;
 
@@ -80,7 +82,7 @@ public class SourceConnectionFactory {
         log.debug("Baglanti aciliyor: {}:{}/{} (ssl={})",
                 instance.host(), instance.port(), dbname, instance.sslMode());
 
-        Connection conn = DriverManager.getConnection(url, props);
+        Connection conn = openWithRetry(url, props, instance);
 
         // Session-level timeout'lari ayarla
         configureSession(conn, instance.statementTimeoutMs(), instance.lockTimeoutMs());
@@ -100,6 +102,73 @@ public class SourceConnectionFactory {
                 "jdbc:postgresql://%s:%d/%s?connectTimeout=%d&sslmode=%s",
                 host, port, dbname, connectTimeoutSeconds, sslMode
         );
+    }
+
+    /**
+     * Sadece connection acma sirasindaki transient network hatalarinda retry yapar.
+     * Authentication/configuration hatalari retry edilmez.
+     */
+    private Connection openWithRetry(String url, Properties props, InstanceInfo instance) throws SQLException {
+        SQLException lastError = null;
+
+        for (int attempt = 0; attempt <= MAX_RETRY; attempt++) {
+            try {
+                return DriverManager.getConnection(url, props);
+            } catch (SQLException e) {
+                lastError = e;
+                if (attempt < MAX_RETRY && isTransientConnectionError(e)) {
+                    log.warn("Connection failed for instance pk={} (attempt {}/{}), retry in {}ms: {}",
+                        instance.instancePk(), attempt + 1, MAX_RETRY + 1, RETRY_DELAY_MS, e.getMessage());
+                    sleepBeforeRetry();
+                } else {
+                    throw e;
+                }
+            }
+        }
+
+        if (lastError != null) {
+            throw lastError;
+        }
+        throw new SQLException("Connection retry failed without SQLException");
+    }
+
+    private void sleepBeforeRetry() throws SQLException {
+        try {
+            Thread.sleep(RETRY_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Interrupted while waiting to retry", e);
+        }
+    }
+
+    private boolean isTransientConnectionError(SQLException e) {
+        String state = e.getSQLState();
+        if (state != null && state.startsWith("28")) {
+            return false;
+        }
+        if (state != null && state.startsWith("08")) {
+            return true;
+        }
+
+        Throwable cur = e;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("connection attempt failed")
+                        || lower.contains("connection refused")
+                        || lower.contains("connection reset")
+                        || lower.contains("connection timed out")
+                        || lower.contains("could not connect")
+                        || lower.contains("no route to host")
+                        || lower.contains("network is unreachable")) {
+                    return true;
+                }
+            }
+            cur = cur.getCause();
+        }
+
+        return false;
     }
 
     /**
