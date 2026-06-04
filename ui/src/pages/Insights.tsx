@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+﻿import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -16,7 +16,7 @@ interface Instance {
     is_active: boolean;
 }
 
-type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag';
+type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag' | 'long-ops';
 type QueryCrossLinkTarget = Extract<InsightTab, 'temp-spill' | 'wal-spike' | 'cache-hit'>;
 type TopCrossLinkHandler = (targetTab: QueryCrossLinkTarget, queryid: string) => void;
 
@@ -24,11 +24,12 @@ const PENDING_INSIGHTS_SEARCH_KEY = 'pgstat.insights.pending-search';
 const HEADER_HELP_CLASS = 'cursor-help border-b border-dotted border-[#94A3B8]';
 
 const TABS: { key: InsightTab; label: string; icon: string }[] = [
-    { key: 'top-exec', label: 'Top Sorgular', icon: '⏱️' },
-    { key: 'temp-spill', label: 'Temp Spill', icon: '💾' },
-    { key: 'wal-spike', label: 'WAL Spike', icon: '📈' },
-    { key: 'cache-hit', label: 'Cache Hit', icon: '🎯' },
-    { key: 'vacuum-lag', label: 'Vacuum Lag', icon: '🧹' },
+    { key: 'top-exec', label: 'Top Sorgular', icon: 'â±ï¸' },
+    { key: 'temp-spill', label: 'Temp Spill', icon: 'ğŸ’¾' },
+    { key: 'wal-spike', label: 'WAL Spike', icon: 'ğŸ“ˆ' },
+    { key: 'cache-hit', label: 'Cache Hit', icon: 'ğŸ¯' },
+    { key: 'vacuum-lag', label: 'Vacuum Lag', icon: 'ğŸ§¹' },
+    { key: 'long-ops', label: 'Long Operations', icon: 'OPS' },
 ];
 
 void PlaceholderTab;
@@ -178,7 +179,17 @@ const TAB_INTROS = {
             { question: 'Index bloat olusuyor mu?', answer: 'Slow HOT rozeti dusuk HOT update oranini ve index bloat riskini isaretler.' },
         ],
     },
-} satisfies Record<string, TabIntroProps>;
+    longOps: {
+        storageKey: 'pgstat.insights.long-ops.intro-seen',
+        summary: 'Long Operations: uzun suren VACUUM FULL, CLUSTER, REINDEX, CREATE INDEX, COPY ve long VACUUM olaylari.',
+        whatItShows: 'pg_stat_progress_* snapshot tablolarindan yakalanan operasyon baslangici, suresi, phase ve ilerleme yuzdesi.',
+        howToUse: 'Forensic icin kullan: belirli zaman penceresinde hangi agir operasyonlar calismis gor. PID ile pg_stat_activity kaydina baglanabilirsin.',
+        scenarios: [
+            { question: 'Dun gece sistemde ne calisiyordu?', answer: 'Range secip baslangic ve sure kolonlarina bak.' },
+            { question: 'VACUUM FULL sayilmiyor mu?', answer: 'pg_stat_user_tables vacuum_count saymayabilir; bu sekme progress snapshot ile yakalar.' },
+            { question: 'CREATE INDEX kim calistirdi?', answer: 'PID kolonu session/process id ipucudur.' },
+        ],
+    },} satisfies Record<string, TabIntroProps>;
 
 function consumePendingSearch(): string {
     if (typeof window === 'undefined') return '';
@@ -196,7 +207,7 @@ export default function Insights() {
     const [tab, setTab] = useState<InsightTab>('top-exec');
     const [instancePk, setInstancePk] = useState<number | null>(null);
     const [range, setRange] = useState<TimeRange>(() => loadPersistedRange('insights-range'));
-    // Auto-refresh default kapali — kullanici acmak isterse 30sn'lik refetch
+    // Auto-refresh default kapali â€” kullanici acmak isterse 30sn'lik refetch
     // devreye girer. Tercih localStorage'a persist.
     const [autoRefresh, setAutoRefresh] = useState<boolean>(() => {
         try { return localStorage.getItem('pgstat.insights.auto-refresh') === '1'; } catch { return false; }
@@ -222,10 +233,10 @@ export default function Insights() {
 
     return (
         <div className="p-6">
-            {/* Başlık ve seçiciler */}
+            {/* BaÅŸlÄ±k ve seÃ§iciler */}
             <div className="mb-4">
-                <h1 className="text-2xl font-semibold text-[#1E293B] mb-1">🔍 Insights</h1>
-                <p className="text-sm text-[#64748B]">Bir instance ve zaman aralığı seçin, pgstat sizin için anlamlı çıkarımlar üretir.</p>
+                <h1 className="text-2xl font-semibold text-[#1E293B] mb-1">ğŸ” Insights</h1>
+                <p className="text-sm text-[#64748B]">Bir instance ve zaman aralÄ±ÄŸÄ± seÃ§in, pgstat sizin iÃ§in anlamlÄ± Ã§Ä±karÄ±mlar Ã¼retir.</p>
             </div>
 
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4 mb-4 flex flex-wrap gap-3 items-center">
@@ -237,7 +248,7 @@ export default function Insights() {
                             const newPk = e.target.value ? Number(e.target.value) : null;
                             setInstancePk(newPk);
                             if (newPk != null && newPk !== instancePk) {
-                                // Instance degisti — range 24 saate sifirlanir
+                                // Instance degisti â€” range 24 saate sifirlanir
                                 const fresh = defaultRange(24);
                                 setRange(fresh);
                                 try {
@@ -251,27 +262,27 @@ export default function Insights() {
                         }}
                         className="border border-[#E2E8F0] rounded px-3 py-1.5 text-sm bg-white min-w-[280px]"
                     >
-                        <option value="">— Bir instance seçin —</option>
+                        <option value="">â€” Bir instance seÃ§in â€”</option>
                         {activeInstances.map(i => (
                             <option key={i.instance_pk} value={i.instance_pk}>{i.display_name}</option>
                         ))}
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
+                    <label className="block text-xs text-[#64748B] mb-1">Tarih AralÄ±ÄŸÄ±</label>
                     <TimeRangePicker value={range} onChange={setRange} persistKey="insights-range" />
                 </div>
                 <div className="ml-auto">
                     <label className="block text-xs text-[#64748B] mb-1">Otomatik Yenile</label>
                     <button
                         onClick={() => setAutoRefresh(v => !v)}
-                        title={autoRefresh ? '30 saniyede bir veriler yenileniyor — kapatmak icin tikla' : 'Veriler durağan — 30sn yenilenme istersen tikla'}
+                        title={autoRefresh ? '30 saniyede bir veriler yenileniyor â€” kapatmak icin tikla' : 'Veriler duraÄŸan â€” 30sn yenilenme istersen tikla'}
                         className={`px-3 py-1.5 text-sm rounded border transition-colors ${autoRefresh
                             ? 'border-[#10B981] text-[#047857] bg-[#ECFDF5]'
                             : 'border-[#E2E8F0] text-[#64748B] bg-white hover:bg-[#F8FAFC]'
                             }`}
                     >
-                        {autoRefresh ? '🟢 Acik (30sn)' : '⏸ Kapali'}
+                        {autoRefresh ? 'ğŸŸ¢ Acik (30sn)' : 'â¸ Kapali'}
                     </button>
                 </div>
             </div>
@@ -294,25 +305,26 @@ export default function Insights() {
                 </div>
             </div>
 
-            {/* Sekme içeriği — Insights TopExecTimeCard her zaman render olur,
-                içinde null guard yapılır. Aksi halde Card unmount/remount olur
+            {/* Sekme iÃ§eriÄŸi â€” Insights TopExecTimeCard her zaman render olur,
+                iÃ§inde null guard yapÄ±lÄ±r. Aksi halde Card unmount/remount olur
                 ve useQuery cache resetlenir. */}
             {tab === 'top-exec' && <TopExecTimeCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} onCrossLinkClick={handleTopCrossLinkClick} />}
             {tab === 'temp-spill' && <TempSpillCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'wal-spike' && <WALSpikeCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'vacuum-lag' && <VacuumLagCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'long-ops' && <LongOperationsCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
         </div>
     );
 }
 
 function PlaceholderTab({ title, description }: { title: string; description: string }) {
-    return <EmptyState icon="🚧" title={title} description={description} />;
+    return <EmptyState icon="ğŸš§" title={title} description={description} />;
 }
 
 
 // =========================================================================
-// Top Exec Time Card (ilk pilot başlık)
+// Top Exec Time Card (ilk pilot baÅŸlÄ±k)
 // =========================================================================
 interface TopQueryRow {
     datname: string | null;
@@ -384,7 +396,7 @@ interface QueryTempTrendPoint {
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type CompareMode = 'auto' | 'off';
-type TrendDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily' | 'pg_table_stat_delta' | 'pg_table_stat_hourly';
+type TrendDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily' | 'pg_wal_hourly' | 'pg_table_stat_delta' | 'pg_table_stat_hourly';
 const WEEK_WINDOW_HOURS = 168;
 
 interface TrendResponse<T> {
@@ -394,6 +406,7 @@ interface TrendResponse<T> {
     data_source?: TrendDataSource;
     raw_retention_days?: number;
     hourly_retention_days?: number;
+    raw_retention_limited?: boolean;
     // db-time-trend ?include_baseline=1 ile gelir. Search filtresi varken
     // foreground'a karsi arka planda gosterilen "instance/DB toplami"
     // serisi. Yoksa null.
@@ -426,11 +439,11 @@ function compareForRange(range: TimeRange): CompareKey {
 }
 
 function compareLabel(compare: CompareKey | null): string {
-    if (compare === '1h') return '1 saat önce';
-    if (compare === '1d') return '1 gün önce';
-    if (compare === '1w') return '1 hafta önce';
-    if (compare === '1m') return '1 ay önce';
-    return 'Geçmiş';
+    if (compare === '1h') return '1 saat Ã¶nce';
+    if (compare === '1d') return '1 gÃ¼n Ã¶nce';
+    if (compare === '1w') return '1 hafta Ã¶nce';
+    if (compare === '1m') return '1 ay Ã¶nce';
+    return 'GeÃ§miÅŸ';
 }
 
 function bucketKey(value: string | undefined): string {
@@ -455,11 +468,11 @@ function calculateTags(row: TopQueryRow): InsightTag[] {
     const rows = toNum(row.toplam_satir);
     const calls = toNum(row.toplam_cagri);
     const tags: InsightTag[] = [];
-    if (pct >= 30) tags.push({ key: 'bottleneck', label: 'DB darboğazı', icon: '🔥', className: 'bg-red-100 text-red-700', title: 'Tek başına DB zamanının çoğunu yiyor — öncelikli optimize et' });
-    if (avg >= 1000) tags.push({ key: 'slow', label: 'Yavaş', icon: '🐢', className: 'bg-orange-100 text-orange-700', title: 'Ortalama 1sn+ yanıt — index/plan kontrol et' });
-    if (min > 0 && max / min > 10) tags.push({ key: 'volatile', label: 'Volatil', icon: '⚡', className: 'bg-amber-100 text-amber-700', title: 'Çağrı süresi çok değişiyor — plan instability veya parametre varyasyonu' });
-    if (rows === 0 && avg >= 100) tags.push({ key: 'no-work', label: 'İş yapmıyor', icon: '🌀', className: 'bg-purple-100 text-purple-700', title: 'Hiç satır dönmüyor ama yavaş — gereksiz filter/lock?' });
-    if (calls >= 10000) tags.push({ key: 'hot-path', label: 'Hot Path', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Çok sık çalışıyor — N+1 veya ORM aşırı çağrı olabilir' });
+    if (pct >= 30) tags.push({ key: 'bottleneck', label: 'DB darboÄŸazÄ±', icon: 'ğŸ”¥', className: 'bg-red-100 text-red-700', title: 'Tek baÅŸÄ±na DB zamanÄ±nÄ±n Ã§oÄŸunu yiyor â€” Ã¶ncelikli optimize et' });
+    if (avg >= 1000) tags.push({ key: 'slow', label: 'YavaÅŸ', icon: 'ğŸ¢', className: 'bg-orange-100 text-orange-700', title: 'Ortalama 1sn+ yanÄ±t â€” index/plan kontrol et' });
+    if (min > 0 && max / min > 10) tags.push({ key: 'volatile', label: 'Volatil', icon: 'âš¡', className: 'bg-amber-100 text-amber-700', title: 'Ã‡aÄŸrÄ± sÃ¼resi Ã§ok deÄŸiÅŸiyor â€” plan instability veya parametre varyasyonu' });
+    if (rows === 0 && avg >= 100) tags.push({ key: 'no-work', label: 'Ä°ÅŸ yapmÄ±yor', icon: 'ğŸŒ€', className: 'bg-purple-100 text-purple-700', title: 'HiÃ§ satÄ±r dÃ¶nmÃ¼yor ama yavaÅŸ â€” gereksiz filter/lock?' });
+    if (calls >= 10000) tags.push({ key: 'hot-path', label: 'Hot Path', icon: 'ğŸ”', className: 'bg-blue-100 text-blue-700', title: 'Ã‡ok sÄ±k Ã§alÄ±ÅŸÄ±yor â€” N+1 veya ORM aÅŸÄ±rÄ± Ã§aÄŸrÄ± olabilir' });
     return tags;
 }
 
@@ -499,7 +512,7 @@ function buildCrossLinks(row: TopQueryRow): QueryCrossLink[] {
     return links;
 }
 
-function calculateTempTags(row: TempSpillRow): InsightTag[] {
+function calculateTempTags(row: TempSpillRow, p95MbPerCall?: number | null): InsightTag[] {
     const tempMb = toNum(row.temp_written_mb);
     const mbPerCall = toNum(row.temp_written_mb_per_call);
     const calls = toNum(row.toplam_cagri);
@@ -510,11 +523,12 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     const hasDistinct = /\bdistinct\b/.test(queryLower);
     const hasLimit = /\blimit\b/.test(queryLower);
     const hasJoin = /\sjoin\s/.test(queryLower);
+    const megaThreshold = Math.max(100, toNum(p95MbPerCall) * 2);
     const tags: InsightTag[] = [];
 
-    if (mbPerCall >= 100) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: '💥', className: 'bg-red-100 text-red-700', title: 'Tek çağrıda 100MB+ temp yazıyor — work_mem ciddi yetersiz' });
-    if (calls >= 1000 && mbPerCall >= 1) tags.push({ key: 'frequent-spill', label: 'Sürekli Spill', icon: '🔁', className: 'bg-orange-100 text-orange-700', title: 'Sık çağrılıyor ve her çağrıda temp yazıyor — toplu kazanç fırsatı' });
-    if (rowsPerTempMb != null && rowsPerTempMb < 1000 && tempMb >= 10) tags.push({ key: 'inefficient', label: 'Verimsiz', icon: '🐌', className: 'bg-amber-100 text-amber-700', title: "1MB temp başına 1000'den az satır — ya filter çok geç çalışıyor ya da gereksiz sort" });
+    if (mbPerCall >= megaThreshold) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: 'ğŸ’¥', className: 'bg-red-100 text-red-700', title: `Tek cagrida ${megaThreshold.toFixed(0)}MB+ temp yaziyor - p95 bazli kritik esik.` });
+    if (calls >= 1000 && mbPerCall >= 1) tags.push({ key: 'frequent-spill', label: 'SÃ¼rekli Spill', icon: 'ğŸ”', className: 'bg-orange-100 text-orange-700', title: 'SÄ±k Ã§aÄŸrÄ±lÄ±yor ve her Ã§aÄŸrÄ±da temp yazÄ±yor â€” toplu kazanÃ§ fÄ±rsatÄ±' });
+    if (rowsPerTempMb != null && rowsPerTempMb < 1000 && tempMb >= 10) tags.push({ key: 'inefficient', label: 'Verimsiz', icon: 'ğŸŒ', className: 'bg-amber-100 text-amber-700', title: "1MB temp baÅŸÄ±na 1000'den az satÄ±r â€” ya filter Ã§ok geÃ§ Ã§alÄ±ÅŸÄ±yor ya da gereksiz sort" });
     if (hasOrderBy || hasGroupBy || hasDistinct) {
         const reasons: string[] = [];
         if (hasOrderBy) reasons.push('ORDER BY');
@@ -525,7 +539,7 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
         tags.push({
             key: 'sort-spill',
             label: 'Sort Spill',
-            icon: '📊',
+            icon: 'ğŸ“Š',
             className: 'bg-blue-100 text-blue-700',
             title: `${reasonText} ile sort spill olasi.${limitHint} EXPLAIN ile dogrula.`,
         });
@@ -536,7 +550,7 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
         tags.push({
             key: 'hash-spill',
             label: 'Hash Spill',
-            icon: '🔗',
+            icon: 'ğŸ”—',
             className: 'bg-purple-100 text-purple-700',
             title: `${countText} ve buyuk temp spill - hash join work_mem asiyor olabilir. EXPLAIN gerekli.`,
         });
@@ -544,7 +558,7 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     return tags;
 }
 
-function calculateWALTags(row: WALSpikeRow): InsightTag[] {
+function calculateWALTags(row: WALSpikeRow, p95MbPerCall?: number | null): InsightTag[] {
     const pct = toNum(row.pct_of_total_wal);
     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
     const walRecords = toNum(row.toplam_wal_records);
@@ -554,33 +568,36 @@ function calculateWALTags(row: WALSpikeRow): InsightTag[] {
     const walMbPerCall = row.wal_mb_per_call == null ? null : toNum(row.wal_mb_per_call);
     const q = (row.query_full || '').toLowerCase();
     const isDML = /^\s*(update|delete|insert)\b/.test(q);
+    const frequentWalThreshold = Math.max(0.1, toNum(p95MbPerCall) * 1.5);
     const tags: InsightTag[] = [];
 
-    if (pct >= 30) tags.push({ key: 'wal-champion', label: 'WAL Sampiyonu', icon: '🔥', className: 'bg-red-100 text-red-700', title: 'Bu sorgu tek basina toplam WAL uretiminin %30+ kismini uretiyor. Replication lag in birincil kaynagi.' });
-    if (fpiRatio != null && fpiRatio > 0.5 && walRecords >= 100) tags.push({ key: 'fpi-heavy', label: 'FPI Heavy', icon: '📸', className: 'bg-orange-100 text-orange-700', title: 'Kayitlarin yaridan cogu full-page-image. Checkpoint sonrasi burst - checkpoint_timeout artirilabilir.' });
-    if (walBytesPerRow != null && walBytesPerRow >= 1024 && walMb >= 100) tags.push({ key: 'burst-writer', label: 'Burst Writer', icon: '📈', className: 'bg-amber-100 text-amber-700', title: 'Satir basina 1KB+ WAL - buyuk row, TOAST, ya da update wave-of-pain. TOAST compression veya selective update dusun.' });
-    if (calls >= 1000 && walMbPerCall != null && walMbPerCall >= 0.1) tags.push({ key: 'frequent-writer', label: 'Frequent Writer', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ve her cagrida WAL uretiyor - batch update e cevirmek bilesik kazanc.' });
-    if (isDML) tags.push({ key: 'update-heavy', label: 'Update Heavy', icon: '✏️', className: 'bg-purple-100 text-purple-700', title: 'UPDATE/DELETE/INSERT - yazma operasyonu WAL uretimi normaldir, ama hacim asiriysa optimize gerekli.' });
+    if (pct >= 30) tags.push({ key: 'wal-champion', label: 'WAL Sampiyonu', icon: 'ğŸ”¥', className: 'bg-red-100 text-red-700', title: 'Bu sorgu tek basina toplam WAL uretiminin %30+ kismini uretiyor. Replication lag in birincil kaynagi.' });
+    if (fpiRatio != null && fpiRatio > 0.5 && walRecords >= 100) tags.push({ key: 'fpi-heavy', label: 'FPI Heavy', icon: 'ğŸ“¸', className: 'bg-orange-100 text-orange-700', title: 'Kayitlarin yaridan cogu full-page-image. Checkpoint sonrasi burst - checkpoint_timeout artirilabilir.' });
+    if (walBytesPerRow != null && walBytesPerRow >= 1024 && walMb >= 100) tags.push({ key: 'burst-writer', label: 'Burst Writer', icon: 'ğŸ“ˆ', className: 'bg-amber-100 text-amber-700', title: 'Satir basina 1KB+ WAL - buyuk row, TOAST, ya da update wave-of-pain. TOAST compression veya selective update dusun.' });
+    if (calls >= 1000 && walMbPerCall != null && walMbPerCall >= frequentWalThreshold) tags.push({ key: 'frequent-writer', label: 'Frequent Writer', icon: 'ğŸ”', className: 'bg-blue-100 text-blue-700', title: `Sik calisiyor ve cagrida ${frequentWalThreshold.toFixed(2)}MB+ WAL uretiyor - p95 bazli esik.` });
+    if (isDML) tags.push({ key: 'update-heavy', label: 'Update Heavy', icon: 'âœï¸', className: 'bg-purple-100 text-purple-700', title: 'UPDATE/DELETE/INSERT - yazma operasyonu WAL uretimi normaldir, ama hacim asiriysa optimize gerekli.' });
     return tags;
 }
 
-function calculateCacheHitTags(row: CacheHitRow): InsightTag[] {
+function calculateCacheHitTags(row: CacheHitRow, hitP95Pct?: number | null): InsightTag[] {
     const hitPct = row.cache_hit_pct == null ? null : toNum(row.cache_hit_pct);
     const diskReadMb = toNum(row.disk_read_mb);
     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
     const calls = toNum(row.toplam_cagri);
     const readBlksPerCall = row.read_blks_per_call == null ? null : toNum(row.read_blks_per_call);
+    const disasterHitThreshold = hitP95Pct == null ? 50 : Math.min(50, Math.max(0, toNum(hitP95Pct)));
+    const frequentHitThreshold = hitP95Pct == null ? 90 : Math.min(90, Math.max(disasterHitThreshold + 10, toNum(hitP95Pct) + 10));
     const tags: InsightTag[] = [];
 
-    if (hitPct != null && hitPct < 50 && diskReadMb >= 100) tags.push({ key: 'cache-disaster', label: 'Cache Disaster', icon: '🔴', className: 'bg-red-100 text-red-700', title: "Cache hit %50 alti ve 100MB+ disk read. Bu sorgu shared_buffers'i resmen bypass ediyor." });
-    if (diskReadMb >= 1024) tags.push({ key: 'disk-heavy', label: 'Disk Heavy', icon: '🟠', className: 'bg-orange-100 text-orange-700', title: '1GB+ disk read - buyuk veri okuyor. Index ile selective scan veya partition pruning dusun.' });
-    if (ioBoundPct != null && ioBoundPct > 50) tags.push({ key: 'io-bound', label: 'I/O Bound', icon: '🐢', className: 'bg-amber-100 text-amber-700', title: 'Sorgu cogu zamani disk I/O bekledi (>%50 io_bound). PG15+ olmali; faster storage veya cache iyilestirme.' });
-    if (calls >= 1000 && hitPct != null && hitPct < 90) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ama her cagrida cache miss yapiyor. shared_buffers buyutmek veya prepared cache stratejisi.' });
-    if (readBlksPerCall != null && readBlksPerCall >= 10000) tags.push({ key: 'big-reader', label: 'Big Reader', icon: '📦', className: 'bg-purple-100 text-purple-700', title: 'Tek cagrida 10K+ blok (80MB+) okuyor - full table scan veya buyuk range scan.' });
+    if (hitPct != null && hitPct < disasterHitThreshold && diskReadMb >= 100) tags.push({ key: 'cache-disaster', label: 'Cache Disaster', icon: 'ğŸ”´', className: 'bg-red-100 text-red-700', title: `Cache hit %${disasterHitThreshold.toFixed(0)} alti ve 100MB+ disk read - p95 bazli esik.` });
+    if (diskReadMb >= 1024) tags.push({ key: 'disk-heavy', label: 'Disk Heavy', icon: 'ğŸŸ ', className: 'bg-orange-100 text-orange-700', title: '1GB+ disk read - buyuk veri okuyor. Index ile selective scan veya partition pruning dusun.' });
+    if (ioBoundPct != null && ioBoundPct > 50) tags.push({ key: 'io-bound', label: 'I/O Bound', icon: 'ğŸ¢', className: 'bg-amber-100 text-amber-700', title: 'Sorgu cogu zamani disk I/O bekledi (>%50 io_bound). PG15+ olmali; faster storage veya cache iyilestirme.' });
+    if (calls >= 1000 && hitPct != null && hitPct < frequentHitThreshold) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: 'ğŸ”', className: 'bg-blue-100 text-blue-700', title: `Sik calisiyor ama hit %${frequentHitThreshold.toFixed(0)} altinda - p95 bazli esik.` });
+    if (readBlksPerCall != null && readBlksPerCall >= 10000) tags.push({ key: 'big-reader', label: 'Big Reader', icon: 'ğŸ“¦', className: 'bg-purple-100 text-purple-700', title: 'Tek cagrida 10K+ blok (80MB+) okuyor - full table scan veya buyuk range scan.' });
     return tags;
 }
 
-function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
+function calculateVacuumLagTags(row: VacuumLagRow, deadP95Pct?: number | null): InsightTag[] {
     const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
     const nLiveTup = toNum(row.n_live_tup);
     const nDeadTup = toNum(row.n_dead_tup);
@@ -589,13 +606,14 @@ function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
     const nModSinceAnalyze = toNum(row.n_mod_since_analyze);
     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
     const nTupUpd = toNum(row.n_tup_upd);
+    const deadThreshold = Math.max(20, toNum(deadP95Pct) * 1.5);
     const tags: InsightTag[] = [];
 
-    if (deadPct != null && deadPct > 20 && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: '💀', className: 'bg-red-100 text-red-700', title: 'Dead tuple %20+ ve canli satir 1K+ - ciddi bloat, autovacuum tetiklenmiyor olabilir.' });
-    if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: '⏰', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
-    if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: '🔥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
-    if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: '📊', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
-    if (hotUpdPct != null && hotUpdPct < 50 && nTupUpd > 1000) tags.push({ key: 'slow-hot', label: 'Slow HOT', icon: '🐌', className: 'bg-purple-100 text-purple-700', title: "Update'lerin yarisi HOT degil - index bloat olusuyor. fillfactor 70-80 dusur." });
+    if (deadPct != null && deadPct > deadThreshold && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: 'ğŸ’€', className: 'bg-red-100 text-red-700', title: `Dead tuple %${deadThreshold.toFixed(0)}+ ve canli satir 1K+ - p95 bazli bloat esigi.` });
+    if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: 'â°', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
+    if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: 'ğŸ”¥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
+    if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: 'ğŸ“Š', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
+    if (hotUpdPct != null && hotUpdPct < 50 && nTupUpd > 1000) tags.push({ key: 'slow-hot', label: 'Slow HOT', icon: 'ğŸŒ', className: 'bg-purple-100 text-purple-700', title: "Update'lerin yarisi HOT degil - index bloat olusuyor. fillfactor 70-80 dusur." });
     return tags;
 }
 
@@ -671,7 +689,7 @@ function shouldShowDaySeparators(windowHours: number): boolean {
 
 function rangeLabel(range: TimeRange): string {
     const hours = Math.max(1, Math.round((new Date(range.toIso).getTime() - new Date(range.fromIso).getTime()) / 3600_000));
-    if (hours >= 24) return `son ${Math.round(hours / 24)} gün`;
+    if (hours >= 24) return `son ${Math.round(hours / 24)} gÃ¼n`;
     return `son ${hours} saat`;
 }
 
@@ -688,9 +706,9 @@ function ChartTooltip({ active, payload, label }: any) {
             <div className="bg-white border border-[#CBD5E1] shadow-sm rounded px-3 py-2 text-xs min-w-[190px]">
                 <div className="font-medium text-[#1E293B] mb-1">{label}</div>
                 <div className="text-[#64748B]">
-                    Şu an: <b className="text-[#1E293B]">{compactNumber(currentValue)}</b>
+                    Åu an: <b className="text-[#1E293B]">{compactNumber(currentValue)}</b>
                     <span className="mx-1 text-[#CBD5E1]">|</span>
-                    Geçmiş: {previousValue == null ? <span className="text-[#94A3B8]">veri yok</span> : <b className="text-[#1E293B]">{compactNumber(previousValue)}</b>}
+                    GeÃ§miÅŸ: {previousValue == null ? <span className="text-[#94A3B8]">veri yok</span> : <b className="text-[#1E293B]">{compactNumber(previousValue)}</b>}
                     {delta && <span className={`ml-1 font-semibold ${delta.startsWith('+') ? 'text-red-600' : 'text-emerald-600'}`}>({delta})</span>}
                 </div>
             </div>
@@ -709,7 +727,7 @@ function ChartTooltip({ active, payload, label }: any) {
     );
 }
 
-// Top Sorgular tablosu için kolon meta — DataColumnsModal ile uyumlu
+// Top Sorgular tablosu iÃ§in kolon meta â€” DataColumnsModal ile uyumlu
 function InsightChart({ title, height, children }: { title: string; height: number; children: any }) {
     return (
         <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
@@ -769,7 +787,7 @@ function CopyButton({ value, message, disabled }: { value: string; message: stri
         if (copyTextFallback(value)) {
             toast.success(message);
         } else {
-            toast.error('Kopyalama başarısız');
+            toast.error('Kopyalama baÅŸarÄ±sÄ±z');
         }
     }
     return (
@@ -791,17 +809,17 @@ const TOP_QUERIES_COLUMNS_META: ColumnsMeta = {
         { key: 'sql', label: 'SQL', since: 11 },
         { key: 'queryid', label: 'Query ID', since: 11 },
         { key: 'datname', label: 'Database', since: 11 },
-        { key: 'toplam_cagri', label: 'Çağrı', since: 11 },
+        { key: 'toplam_cagri', label: 'Ã‡aÄŸrÄ±', since: 11 },
         { key: 'toplam_dk', label: 'Toplam (dk)', since: 11 },
         { key: 'pct', label: '% Toplam', since: 11 },
         { key: 'min_ms', label: 'Min (ms)', since: 11 },
         { key: 'ort_ms', label: 'Ort (ms)', since: 11 },
         { key: 'max_ms', label: 'Max (ms)', since: 11 },
-        { key: 'toplam_satir', label: 'Satır', since: 11 },
+        { key: 'toplam_satir', label: 'SatÄ±r', since: 11 },
         { key: 'cache_hit_pct', label: 'Cache Hit %', since: 11 },
         { key: 'ort_plan_ms', label: 'Plan (ms)', since: 11 },
         { key: 'wal_mb', label: 'WAL (MB)', since: 13 },
-        { key: 'satir_per_cagri', label: 'Satır/Çağrı', since: 11 },
+        { key: 'satir_per_cagri', label: 'SatÄ±r/Ã‡aÄŸrÄ±', since: 11 },
     ],
 };
 
@@ -818,7 +836,7 @@ const TOP_QUERIES_HEADER_TITLES: Record<string, string> = {
 
 function TopExecTimeCard({ instancePk, range, autoRefresh, instanceName, onCrossLinkClick }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string; onCrossLinkClick: TopCrossLinkHandler }) {
     if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+        return <EmptyState icon="ğŸ–¥ï¸" title="Instance seÃ§in" description="YukarÄ±dan bir aktif instance seÃ§in." />;
     }
     return <TopExecTimeCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} onCrossLinkClick={onCrossLinkClick} />;
 }
@@ -864,7 +882,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
     });
 
     // Search aktifken backend baseline (search'siz, ayni datname) ekstra serisi de
-    // doner — grafikte arka planda gri alan olarak goruntulenir.
+    // doner â€” grafikte arka planda gri alan olarak goruntulenir.
     const baselineQp = search ? `&include_baseline=1` : '';
     const { data: trendData } = useQuery({
         queryKey: ['insights-db-time-trend', instancePk, range.fromIso, range.toIso, datname, search, compareKey],
@@ -875,9 +893,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
     });
 
     const sortButtons: { key: SortMode; label: string; tip: string }[] = [
-        { key: 'time', label: 'Toplam Süre', tip: 'DB zamanını en çok yiyen sorgular (sum exec_time)' },
-        { key: 'calls', label: 'Çağrı Sayısı', tip: 'En sık çalışan sorgular (sum calls). N+1 / ORM tespiti.' },
-        { key: 'slow', label: 'Ortalama Yavaşlık', tip: 'Sürekli yavaş olan sorgular (avg mean_exec_time). Min çağrı eşiği ile tek-spike eleme.' },
+        { key: 'time', label: 'Toplam SÃ¼re', tip: 'DB zamanÄ±nÄ± en Ã§ok yiyen sorgular (sum exec_time)' },
+        { key: 'calls', label: 'Ã‡aÄŸrÄ± SayÄ±sÄ±', tip: 'En sÄ±k Ã§alÄ±ÅŸan sorgular (sum calls). N+1 / ORM tespiti.' },
+        { key: 'slow', label: 'Ortalama YavaÅŸlÄ±k', tip: 'SÃ¼rekli yavaÅŸ olan sorgular (avg mean_exec_time). Min Ã§aÄŸrÄ± eÅŸiÄŸi ile tek-spike eleme.' },
     ];
 
     function applySearch() {
@@ -941,7 +959,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
     // Y-domain hesabi: filtreli max'i kuvvetli, baseline'in p70'i sinirli
     // gosterilsin. max(filtreli*1.5, baseline_p70). Boylece filtreli alan
     // ezilmez ama baseline'in cogu icerde kalir; sadece outlier zirveler
-    // dısarı tasar. P70 percentile aritmetik ortalamadan daha stabil.
+    // dÄ±sarÄ± tasar. P70 percentile aritmetik ortalamadan daha stabil.
     function percentile(values: number[], p: number): number {
         if (values.length === 0) return 0;
         const sorted = [...values].sort((a, b) => a - b);
@@ -988,18 +1006,18 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">📊 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">ğŸ“Š {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
-                        <div>Toplam DB time: <b className="text-[#1E293B]">{formatDurationMs(summary.totalMs)}</b> · En yoğun sorgu: <b className="text-[#1E293B]">%{summary.topPct.toFixed(1)}</b></div>
-                        <div>Ortalama yanıt: <b className="text-[#1E293B]">{formatDurationMs(summary.avgMs)}</b> · Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}</div>
+                        <div>Toplam DB time: <b className="text-[#1E293B]">{formatDurationMs(summary.totalMs)}</b> Â· En yoÄŸun sorgu: <b className="text-[#1E293B]">%{summary.topPct.toFixed(1)}</b></div>
+                        <div>Ortalama yanÄ±t: <b className="text-[#1E293B]">{formatDurationMs(summary.avgMs)}</b> Â· Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}</div>
                     </div>
                 </div>
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>Karşılaştırma:</span>
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button
                         type="button"
@@ -1013,7 +1031,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                         onClick={() => setCompareMode('off')}
                         className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}
                     >
-                        Kapalı
+                        KapalÄ±
                     </button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
@@ -1025,7 +1043,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                         <AreaChart data={chartData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                             <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                            {/* Y-axis filtreli serinin max'ina gore; baseline asarsa grafik disina taşar (clipped) */}
+                            {/* Y-axis filtreli serinin max'ina gore; baseline asarsa grafik disina taÅŸar (clipped) */}
                             <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} domain={yDomainDbMinutes as any} allowDataOverflow={hasBaseline} />
                             <Tooltip content={<ChartTooltip />} labelFormatter={(_l, p) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l))} />
                             {daySeparatorLabels.map(lbl => (
@@ -1033,7 +1051,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                             ))}
                             {hasBaseline && <Area type="monotone" dataKey="baseline_db_minutes" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_db_minutes" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Şu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
+                            <Area type="monotone" dataKey="current_db_minutes" name={search ? 'Filtreli' : 'Åu an'} stroke="#2563EB" fill="#3B82F6" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                     <InsightChart title="Throughput Trend" height={360}>
@@ -1047,7 +1065,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                             ))}
                             {hasBaseline && <Area type="monotone" dataKey="baseline_calls" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                             {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                            <Area type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Şu an'} stroke="#059669" fill="#10B981" fillOpacity={0.7} strokeWidth={2} />
+                            <Area type="monotone" dataKey="current_calls" name={search ? 'Filtreli' : 'Åu an'} stroke="#059669" fill="#10B981" fillOpacity={0.7} strokeWidth={2} />
                         </AreaChart>
                     </InsightChart>
                 </div>
@@ -1057,16 +1075,16 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
             <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
                 <div className="flex-1 min-w-[200px]">
                     <h3 className="font-semibold text-[#1E293B]">Top Sorgular</h3>
-                    <p className="text-xs text-[#64748B]">Bu DB'nin zamanı nereye gidiyor? Sıralamayı değiştirerek farklı açılardan bak.</p>
+                    <p className="text-xs text-[#64748B]">Bu DB'nin zamanÄ± nereye gidiyor? SÄ±ralamayÄ± deÄŸiÅŸtirerek farklÄ± aÃ§Ä±lardan bak.</p>
                 </div>
                 <div className="flex items-center gap-1.5">
                     <select
                         value={datname}
                         onChange={e => setDatname(e.target.value)}
-                        title="Bu database'deki sorgulara filtre uygula (boş = tüm DB'ler)"
+                        title="Bu database'deki sorgulara filtre uygula (boÅŸ = tÃ¼m DB'ler)"
                         className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]"
                     >
-                        <option value="">Tüm Database'ler</option>
+                        <option value="">TÃ¼m Database'ler</option>
                         {(databases ?? []).map(d => (
                             <option key={d} value={d}>{d}</option>
                         ))}
@@ -1077,7 +1095,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                         onChange={e => setSearchInput(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
                         placeholder="queryid veya %select%hotel%"
-                        title="QueryID (sayı) veya SQL text için ILIKE pattern (% wildcard). Enter ile uygula."
+                        title="QueryID (sayÄ±) veya SQL text iÃ§in ILIKE pattern (% wildcard). Enter ile uygula."
                         className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]"
                     />
                     <button onClick={applySearch}
@@ -1085,9 +1103,9 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                         Ara
                     </button>
                     {search && (
-                        <button onClick={clearSearch} title="Aramayı temizle"
+                        <button onClick={clearSearch} title="AramayÄ± temizle"
                             className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                            ✕
+                            âœ•
                         </button>
                     )}
                 </div>
@@ -1107,13 +1125,13 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                     ))}
                 </div>
                 {sort === 'slow' && search && (
-                    <span className="text-[10px] text-[#94A3B8] italic" title="Arama aktif — tek-spike sorgular da gösteriliyor. Üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştırın.">
-                        ℹ tek-spike sorgular dahil
+                    <span className="text-[10px] text-[#94A3B8] italic" title="Arama aktif â€” tek-spike sorgular da gÃ¶steriliyor. Ãœretim hot path iÃ§in 'Ã‡aÄŸrÄ± SayÄ±sÄ±' sÄ±ralamasÄ±yla karÅŸÄ±laÅŸtÄ±rÄ±n.">
+                        â„¹ tek-spike sorgular dahil
                     </span>
                 )}
                 <button onClick={() => setColumnsModalOpen(true)}
                     className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                    ⚙️ Sütun ({selectedCols.length})
+                    âš™ï¸ SÃ¼tun ({selectedCols.length})
                 </button>
                 <button onClick={() => refetch()}
                     className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
@@ -1125,7 +1143,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                 <div className="p-4"><SkeletonTable rows={8} cols={selectedCols.length + 2} /></div>
             ) : !data || data.length === 0 ? (
                 <EmptyState
-                    icon="📭"
+                    icon="ğŸ“­"
                     title="Veri yok"
                     description={
                         data && data.length === 0 && search
@@ -1180,7 +1198,7 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                 selected={selectedCols}
                 onChange={setSelectedCols}
                 meta={TOP_QUERIES_COLUMNS_META}
-                title="⚙️ Top Sorgular Sütunları"
+                title="âš™ï¸ Top Sorgular SÃ¼tunlarÄ±"
             />
         </div>
         </div>
@@ -1201,8 +1219,8 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
             return (
                 <td key={col} className="py-2 px-3 text-xs font-mono text-[#64748B] whitespace-nowrap">
                     <span className="inline-flex items-center gap-1">
-                        <span>{row.queryid || 'â€”'}</span>
-                        <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
+                        <span>{row.queryid || 'Ã¢â‚¬â€'}</span>
+                        <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandÄ±" disabled={!row.queryid} />
                     </span>
                 </td>
             );
@@ -1215,7 +1233,7 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
                             <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_full ?? row.query_short ?? ''}>
                                 {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                             </div>
-                            <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                            <CopyButton value={row.query_full ?? ''} message="SQL kopyalandÄ±" disabled={!row.query_full} />
                         </div>
                         {tags.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-1">
@@ -1249,11 +1267,11 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
             case 'queryid':
                 return (
                     <td key={col} className="py-2 px-3 text-xs font-mono text-[#64748B] whitespace-nowrap">
-                        {row.queryid || '—'}
+                        {row.queryid || 'â€”'}
                     </td>
                 );
             case 'datname':
-                return <td key={col} className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>;
+                return <td key={col} className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || 'â€”'}</td>;
             case 'toplam_cagri':
                 return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>;
             case 'toplam_dk':
@@ -1274,7 +1292,7 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
                 return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.toplam_satir).toLocaleString('tr-TR')}</td>;
             case 'cache_hit_pct': {
                 if (row.cache_hit_pct == null) {
-                    return <td key={col} className="py-2 px-3 text-xs text-right text-[#94A3B8]">—</td>;
+                    return <td key={col} className="py-2 px-3 text-xs text-right text-[#94A3B8]">â€”</td>;
                 }
                 const hit = parseFloat(row.cache_hit_pct);
                 // < 90: kirmizi (disk-bound), < 99: sari, >= 99: yesil
@@ -1286,13 +1304,13 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
                 );
             }
             case 'ort_plan_ms':
-                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.ort_plan_ms == null ? '—' : Number(row.ort_plan_ms).toLocaleString('tr-TR')}</td>;
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.ort_plan_ms == null ? 'â€”' : Number(row.ort_plan_ms).toLocaleString('tr-TR')}</td>;
             case 'wal_mb':
-                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb == null ? '—' : Number(row.wal_mb).toLocaleString('tr-TR')}</td>;
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb == null ? 'â€”' : Number(row.wal_mb).toLocaleString('tr-TR')}</td>;
             case 'satir_per_cagri':
-                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.satir_per_cagri == null ? '—' : Number(row.satir_per_cagri).toLocaleString('tr-TR')}</td>;
+                return <td key={col} className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.satir_per_cagri == null ? 'â€”' : Number(row.satir_per_cagri).toLocaleString('tr-TR')}</td>;
             default:
-                return <td key={col} className="py-2 px-3 text-xs text-[#94A3B8]">—</td>;
+                return <td key={col} className="py-2 px-3 text-xs text-[#94A3B8]">â€”</td>;
         }
     }
 
@@ -1302,7 +1320,7 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
             <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
             {selectedCols.map(col => renderCell(col))}
             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri aç'}>{expanded ? '-' : '+'}</button>
+                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri aÃ§'}>{expanded ? '-' : '+'}</button>
                 <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
             </td>
         </tr>
@@ -1324,7 +1342,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
         queryFn: () => apiGet<TrendResponse<QueryTrendPoint>>(
             `/insights/${instancePk}/query-trend?series_id=${seriesId}&from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}${compareQp}`,
         ),
-        // seriesId PG'den bigint donduğu icin string gelebilir; truthy check yeterli
+        // seriesId PG'den bigint donduÄŸu icin string gelebilir; truthy check yeterli
         enabled: instancePk != null && seriesId != null && String(seriesId).length > 0,
         refetchInterval: autoRefresh ? 30_000 : false,
     });
@@ -1376,6 +1394,12 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
     const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
 
     return (
+        <div className="space-y-2">
+            {data?.raw_retention_limited && (
+                <div className="rounded border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2 text-xs text-[#64748B]">
+                    Sorgu bazli WAL trend max {data.raw_retention_days ?? 7} gun gosterilir. Daha uzun pencerede genel WAL grafigi aggregate tablodan dolar.
+                </div>
+            )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             <InsightChart title="Latency" height={150}>
                 <LineChart data={chartData}>
@@ -1387,7 +1411,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                         <ReferenceLine key={`lat-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                     ))}
                     {compareKey && <Line type="monotone" dataKey="previous_avg_ms" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
-                    <Line type="monotone" dataKey="current_avg_ms" name="Şu an" stroke="#2563EB" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="current_avg_ms" name="Åu an" stroke="#2563EB" strokeWidth={2} dot={false} />
                 </LineChart>
             </InsightChart>
             <InsightChart title="Throughput" height={150}>
@@ -1400,7 +1424,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                         <ReferenceLine key={`q-tp-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
                     ))}
                     {compareKey && <Area type="monotone" dataKey="previous_calls" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                    <Area type="monotone" dataKey="current_calls" name="Şu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
+                    <Area type="monotone" dataKey="current_calls" name="Åu an" stroke="#059669" fill="#D1FAE5" strokeWidth={2} />
                 </AreaChart>
             </InsightChart>
             <InsightChart title="Min / Avg / Max" height={150}>
@@ -1417,6 +1441,7 @@ function QueryTrendPanel({ instancePk, seriesId, range, autoRefresh, compareKey 
                     <Line type="monotone" dataKey="max_ms" name="Max ms" stroke="#DC2626" strokeWidth={1.5} dot={false} connectNulls />
                 </LineChart>
             </InsightChart>
+        </div>
         </div>
     );
 }
@@ -1769,6 +1794,7 @@ interface TempSpillTotals {
     top_datname: { datname: string | null; mb: number; pct: number } | null;
     peak: { bucket_start: string; mb: number } | null;
     work_mem_kb: number | null;
+    temp_p95_mb_per_call?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -1776,6 +1802,170 @@ interface TempSpillTotals {
 interface TempSpillResponse {
     rows: TempSpillRow[];
     totals: TempSpillTotals;
+}
+
+interface LongOperationRow {
+    operation_type: string;
+    command: string | null;
+    pid: number | string | null;
+    datid: number | string | null;
+    datname: string | null;
+    relid: number | string | null;
+    schemaname: string | null;
+    relname: string | null;
+    first_seen: string;
+    last_seen: string;
+    duration_sec: number | string;
+    phase: string | null;
+    progress_pct: number | string | null;
+    source_table: string;
+}
+
+interface LongOperationsResponse {
+    rows: LongOperationRow[];
+    totals: {
+        total: number;
+        vacuum_full: number;
+        cluster: number;
+        reindex: number;
+        create_index: number;
+        copy: number;
+        long_vacuum: number;
+    };
+}
+
+function operationClass(type: string): string {
+    if (type === 'VACUUM FULL') return 'bg-red-100 text-red-700';
+    if (type === 'CLUSTER') return 'bg-orange-100 text-orange-700';
+    if (type === 'REINDEX') return 'bg-amber-100 text-amber-700';
+    if (type === 'CREATE INDEX') return 'bg-blue-100 text-blue-700';
+    if (type === 'COPY') return 'bg-purple-100 text-purple-700';
+    return 'bg-emerald-100 text-emerald-700';
+}
+
+function LongOperationsCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="OPS" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
+    }
+    return <LongOperationsCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
+}
+
+function LongOperationsCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    const [search, setSearch] = useState('');
+    const [searchInput, setSearchInput] = useState('');
+    const [datname, setDatname] = useState('');
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        staleTime: 60_000,
+        refetchInterval: false,
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['insights-long-operations', instancePk, range.fromIso, range.toIso, search, datname],
+        queryFn: () => apiGet<LongOperationsResponse>(
+            `/insights/${instancePk}/long-operations?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=50${searchQp}${datnameQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
+    });
+
+    const rows = data?.rows ?? [];
+    const totals = data?.totals;
+    const badges = [
+        { label: 'VACUUM FULL', count: totals?.vacuum_full ?? 0, className: 'bg-red-100 text-red-700' },
+        { label: 'CLUSTER', count: totals?.cluster ?? 0, className: 'bg-orange-100 text-orange-700' },
+        { label: 'REINDEX', count: totals?.reindex ?? 0, className: 'bg-amber-100 text-amber-700' },
+        { label: 'CREATE INDEX', count: totals?.create_index ?? 0, className: 'bg-blue-100 text-blue-700' },
+        { label: 'COPY', count: totals?.copy ?? 0, className: 'bg-purple-100 text-purple-700' },
+        { label: 'Uzun VACUUM', count: totals?.long_vacuum ?? 0, className: 'bg-emerald-100 text-emerald-700' },
+    ];
+
+    function applySearch() { setSearch(searchInput.trim()); }
+    function clearSearch() { setSearchInput(''); setSearch(''); }
+
+    return (
+        <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.longOps} />
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                    <span className="font-semibold text-[#1E293B]">OPS {instanceName || `Instance ${instancePk}`} - {rangeLabel(range)}</span>
+                    {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    {badges.map(b => (
+                        <span key={b.label} className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold ${b.className}`}>
+                            {b.label}: {b.count}
+                        </span>
+                    ))}
+                </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[220px]">
+                        <h3 className="font-semibold text-[#1E293B]">Long Operations</h3>
+                        <p className="text-xs text-[#64748B]">pg_stat_progress_* snapshot'larindan yakalanan uzun operasyon event listesi.</p>
+                    </div>
+                    <select value={datname} onChange={e => setDatname(e.target.value)}
+                        title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
+                        <option value="">Tum Database'ler</option>
+                        {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                        placeholder="pid veya tablo" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-52 focus:outline-none focus:border-[#3B82F6]" />
+                    <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
+                    {search && <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">x</button>}
+                    <button onClick={() => refetch()} className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        {isFetching ? '...' : 'Yenile'}
+                    </button>
+                </div>
+
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={8} /></div>
+                ) : rows.length === 0 ? (
+                    <EmptyState icon="OPS" title="Bu pencerede ozel operasyon yakalanmadi" description="60sn cycle nedeniyle kisa operasyonlar kacirilabilir." />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Operasyon</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tablo</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">PID</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Baslangic</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Sure</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Phase</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Progress %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, i) => (
+                                    <tr key={`${row.source_table}-${row.pid}-${row.relid}-${i}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                        <td className="py-2 px-3 whitespace-nowrap">
+                                            <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${operationClass(row.operation_type)}`}>{row.operation_type}</span>
+                                        </td>
+                                        <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '-'}</td>
+                                        <td className="py-2 px-3 text-xs font-mono text-[#1E293B] whitespace-nowrap">{row.schemaname && row.relname ? `${row.schemaname}.${row.relname}` : '-'}</td>
+                                        <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.pid ?? '-'}</td>
+                                        <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatBucketFull(row.first_seen)}</td>
+                                        <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{formatDurationSec(toNum(row.duration_sec))}</td>
+                                        <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{row.phase || '-'}</td>
+                                        <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{row.progress_pct == null ? '-' : `%${toNum(row.progress_pct).toFixed(1)}`}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
 
 type TempSortMode = 'temp_written' | 'temp_read';
@@ -1790,7 +1980,7 @@ interface TempTrendPoint {
 
 function TempSpillCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+        return <EmptyState icon="ğŸ–¥ï¸" title="Instance seÃ§in" description="YukarÄ±dan bir aktif instance seÃ§in." />;
     }
     return <TempSpillCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
@@ -1904,16 +2094,16 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateTempTags(row)) {
+            for (const tag of calculateTempTags(row, totals?.temp_p95_mb_per_call)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.temp_p95_mb_per_call]);
 
     const sortButtons: { key: TempSortMode; label: string; tip: string }[] = [
-        { key: 'temp_written', label: 'Yazılan Temp', tip: 'sum(temp_blks_written) — work_mem yetmediginde diske yazilan' },
-        { key: 'temp_read', label: 'Okunan Temp', tip: 'sum(temp_blks_read) — disk\'ten geri okunan temp veri' },
+        { key: 'temp_written', label: 'YazÄ±lan Temp', tip: 'sum(temp_blks_written) â€” work_mem yetmediginde diske yazilan' },
+        { key: 'temp_read', label: 'Okunan Temp', tip: 'sum(temp_blks_read) â€” disk\'ten geri okunan temp veri' },
     ];
 
     function applySearch() { setSearch(searchInput.trim()); }
@@ -1934,20 +2124,26 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">💾 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">ğŸ’¾ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
-                        <div>Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
+                        <div>
+                            Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b>
+                            <span className="mx-1">Â·</span>
+                            En yÃ¼ksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b>
+                            <span className="mx-1">Â·</span>
+                            Mevcut work_mem: <b className="text-[#1E293B]">{totals?.work_mem_kb == null ? '\u2014' : formatBytes(totals.work_mem_kb * 1024)}</b>
+                        </div>
                         <div>
                             {'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div className="md:col-span-2">
-                            Disk I/O süresi: <b className="text-[#1E293B]">{totals ? formatDurationSec(totals.total_temp_write_time_sec) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
-                            En çok yazan DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
+                            Disk I/O sÃ¼resi: <b className="text-[#1E293B]">{totals ? formatDurationSec(totals.total_temp_write_time_sec) : '\u2014'}</b>
+                            <span className="mx-1">Â·</span>
+                            En Ã§ok yazan DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
                                 <button
                                     type="button"
                                     onClick={() => {
@@ -1959,15 +2155,15 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     {totals.top_datname.datname ?? '\u2014'} (%{totals.top_datname.pct.toFixed(1)})
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
-                            Pik anı: <b className="text-[#1E293B]">{totals?.peak ? (
+                            <span className="mx-1">Â·</span>
+                            Pik anÄ±: <b className="text-[#1E293B]">{totals?.peak ? (
                                 <button
                                     type="button"
                                     onClick={zoomToPeak}
                                     title="Tikla - date range pik saate daralsin"
                                     className="underline decoration-dotted hover:text-[#2563EB] hover:decoration-solid"
                                 >
-                                    {formatBucketFull(totals.peak.bucket_start)} — {totals.peak.mb.toFixed(1)} MB
+                                    {formatBucketFull(totals.peak.bucket_start)} â€” {totals.peak.mb.toFixed(1)} MB
                                 </button>
                             ) : '\u2014'}</b>
                         </div>
@@ -1976,12 +2172,12 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>Karşılaştırma:</span>
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button type="button" onClick={() => setCompareMode('auto')}
                         className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
                     <button type="button" onClick={() => setCompareMode('off')}
-                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
             </div>
@@ -1998,7 +2194,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                         ))}
                         {hasBaseline && <Area type="monotone" dataKey="baseline_temp_mb" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                         {compareKey && <Area type="monotone" dataKey="previous_temp_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                        <Area type="monotone" dataKey="current_temp_mb" name={search ? 'Filtreli' : 'Şu an'} stroke="#D97706" fill="#FBBF24" fillOpacity={0.6} strokeWidth={2} />
+                        <Area type="monotone" dataKey="current_temp_mb" name={search ? 'Filtreli' : 'Åu an'} stroke="#D97706" fill="#FBBF24" fillOpacity={0.6} strokeWidth={2} />
                     </AreaChart>
                 </InsightChart>
             )}
@@ -2007,12 +2203,12 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                 <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
                     <div className="flex-1 min-w-[200px]">
                         <h3 className="font-semibold text-[#1E293B]">Temp Spill Sorgular</h3>
-                        <p className="text-xs text-[#64748B]">work_mem yetmeyen ve disk'e temp dosyalar yazan sorgular. Sadece temp yazımı olanlar listelenir.</p>
+                        <p className="text-xs text-[#64748B]">work_mem yetmeyen ve disk'e temp dosyalar yazan sorgular. Sadece temp yazÄ±mÄ± olanlar listelenir.</p>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <select value={datname} onChange={e => setDatname(e.target.value)}
                             title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
-                            <option value="">Tüm Database'ler</option>
+                            <option value="">TÃ¼m Database'ler</option>
                             {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                         <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
@@ -2020,7 +2216,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                             placeholder="queryid veya %select%" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]" />
                         <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
                         {search && (
-                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">✕</button>
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">âœ•</button>
                         )}
                     </div>
                     <div className="flex gap-1">
@@ -2039,9 +2235,9 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={16} /></div>
                 ) : rows.length === 0 ? (
-                    <EmptyState icon="📭" title="Temp spill yok"
+                    <EmptyState icon="ğŸ“­" title="Temp spill yok"
                         description={totals?.work_mem_kb != null
-                            ? `Mevcut work_mem: ${formatBytes(totals.work_mem_kb * 1024)} - yeterli görünüyor.`
+                            ? `Mevcut work_mem: ${formatBytes(totals.work_mem_kb * 1024)} - yeterli gÃ¶rÃ¼nÃ¼yor.`
                             : "Bu pencerede disk'e temp dosya yazan sorgu yok."} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
@@ -2052,7 +2248,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">SQL</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="sum(temp_blks_written) × 8KB. work_mem yetmediğinde diske yazılan veri." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp Yazılan (MB)</span>
+                                        <span title="sum(temp_blks_written) Ã— 8KB. work_mem yetmediÄŸinde diske yazÄ±lan veri." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp YazÄ±lan (MB)</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="Tek cagri basina ortalama temp yazimi. Yuksekse work_mem ciddi yetersiz." className="cursor-help border-b border-dotted border-[#94A3B8]">{'MB/\u00c7a\u011fr\u0131'}</span>
@@ -2068,25 +2264,25 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                         </span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="Bu sorgu, instance'ın toplam temp yazımının % kaçı." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Temp</span>
+                                        <span title="Bu sorgu, instance'Ä±n toplam temp yazÄ±mÄ±nÄ±n % kaÃ§Ä±." className="cursor-help border-b border-dotted border-[#94A3B8]">% Toplam Temp</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="temp_blk_write_time + temp_blk_read_time toplamı (saniye). Exec time'ın ne kadarı disk temp I/O." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp I/O (sn)</span>
+                                        <span title="temp_blk_write_time + temp_blk_read_time toplamÄ± (saniye). Exec time'Ä±n ne kadarÄ± disk temp I/O." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp I/O (sn)</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
                                         <span title="1MB temp basina dondurulen satir sayisi. Yuksek = verimli (filter erken calismis), dusuk = bosa temp yazimi." className="cursor-help border-b border-dotted border-[#94A3B8]">{'Sat\u0131r/Temp MB'}</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="Daha önce yazılan temp dosyaların geri okunması (genelde sort/hash sonrası)." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp Okunan (MB)</span>
+                                        <span title="Daha Ã¶nce yazÄ±lan temp dosyalarÄ±n geri okunmasÄ± (genelde sort/hash sonrasÄ±)." className="cursor-help border-b border-dotted border-[#94A3B8]">Temp Okunan (MB)</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="sum(calls). Bu sorgu pencerede toplam kaç defa çağrıldı." className="cursor-help border-b border-dotted border-[#94A3B8]">Çağrı</span>
+                                        <span title="sum(calls). Bu sorgu pencerede toplam kaÃ§ defa Ã§aÄŸrÄ±ldÄ±." className="cursor-help border-b border-dotted border-[#94A3B8]">Ã‡aÄŸrÄ±</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="sum(total_exec_time) dakika cinsinden. Bu sorgunun toplam DB zamanı." className="cursor-help border-b border-dotted border-[#94A3B8]">Toplam (dk)</span>
+                                        <span title="sum(total_exec_time) dakika cinsinden. Bu sorgunun toplam DB zamanÄ±." className="cursor-help border-b border-dotted border-[#94A3B8]">Toplam (dk)</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">
-                                        <span title="avg(mean_exec_time_ms). Çağrı başına ortalama yanıt süresi." className="cursor-help border-b border-dotted border-[#94A3B8]">Ort (ms)</span>
+                                        <span title="avg(mean_exec_time_ms). Ã‡aÄŸrÄ± baÅŸÄ±na ortalama yanÄ±t sÃ¼resi." className="cursor-help border-b border-dotted border-[#94A3B8]">Ort (ms)</span>
                                     </th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="PostgreSQL queryid (bigint). Plan ailesi icin esleme anahtari." label="Query ID" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
@@ -2102,7 +2298,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     const tempWriteSec = row.temp_write_time_sec == null ? 0 : toNum(row.temp_write_time_sec);
                                     const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
                                     const rowsPerTempClass = rowsPerTempMb == null ? 'text-[#64748B]' : rowsPerTempMb >= 10000 ? 'text-emerald-700' : rowsPerTempMb >= 1000 ? 'text-[#64748B]' : 'text-orange-700';
-                                    const tags = calculateTempTags(row);
+                                    const tags = calculateTempTags(row, totals?.temp_p95_mb_per_call);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
@@ -2116,7 +2312,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                                     <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
                                                         {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandÄ±" disabled={!row.query_full} />
                                                 </div>
                                                 {tags.length > 0 && (
                                                     <div className="flex flex-wrap gap-1 mt-1">
@@ -2128,7 +2324,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                                     </div>
                                                 )}
                                             </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || 'â€”'}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                                                 <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${writtenClass}`}>
                                                     {Number(row.temp_written_mb).toLocaleString('tr-TR')}
@@ -2170,8 +2366,8 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                                                 <span className="inline-flex items-center gap-1">
-                                                    <span className="font-mono text-[#64748B]">{row.queryid || '—'}</span>
-                                                    <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
+                                                    <span className="font-mono text-[#64748B]">{row.queryid || 'â€”'}</span>
+                                                    <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandÄ±" disabled={!row.queryid} />
                                                 </span>
                                             </td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
@@ -2232,6 +2428,7 @@ interface CacheHitTotals {
     shared_buffers_kb: number | null;
     effective_cache_size_kb: number | null;
     heavy_reader_count: number;
+    hit_p95_pct?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -2277,7 +2474,7 @@ function diskReadClass(mb: number): string {
 
 function CacheHitCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+        return <EmptyState icon="ğŸ–¥ï¸" title="Instance seÃ§in" description="YukarÄ±dan bir aktif instance seÃ§in." />;
     }
     return <CacheHitCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
@@ -2381,12 +2578,12 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateCacheHitTags(row)) {
+            for (const tag of calculateCacheHitTags(row, totals?.hit_p95_pct)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.hit_p95_pct]);
 
     function applySearch() { setSearch(searchInput.trim()); }
     function clearSearch() { setSearchInput(''); setSearch(''); }
@@ -2407,7 +2604,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">🎯 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">ğŸ¯ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-[#64748B]">
@@ -2435,7 +2632,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     {totals.worst_datname.datname ?? '\u2014'} (%{totals.worst_datname.hit_pct.toFixed(1)})
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Disk read piki: <b className="text-[#1E293B]">{totals.peak ? (
                                 <button
                                     type="button"
@@ -2456,12 +2653,12 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>Karşılaştırma:</span>
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button type="button" onClick={() => setCompareMode('auto')}
                         className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
                     <button type="button" onClick={() => setCompareMode('off')}
-                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
             </div>
@@ -2479,7 +2676,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                         ))}
                         {hasBaseline && <Area type="monotone" dataKey="baseline_hit_pct" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                         {compareKey && <Area type="monotone" dataKey="previous_hit_pct" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                        <Area type="monotone" dataKey="current_hit_pct" name={search ? 'Filtreli' : 'Şu an'} stroke="#10B981" fill="#D1FAE5" fillOpacity={0.65} strokeWidth={2} connectNulls />
+                        <Area type="monotone" dataKey="current_hit_pct" name={search ? 'Filtreli' : 'Åu an'} stroke="#10B981" fill="#D1FAE5" fillOpacity={0.65} strokeWidth={2} connectNulls />
                     </AreaChart>
                 </InsightChart>
             )}
@@ -2488,12 +2685,12 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                 <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
                     <div className="flex-1 min-w-[200px]">
                         <h3 className="font-semibold text-[#1E293B]">Cache Hit Sorgular</h3>
-                        <p className="text-xs text-[#64748B]">Disk'e giden ve buffer cache hit oranı düşük sorgular.</p>
+                        <p className="text-xs text-[#64748B]">Disk'e giden ve buffer cache hit oranÄ± dÃ¼ÅŸÃ¼k sorgular.</p>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <select value={datname} onChange={e => setDatname(e.target.value)}
                             title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
-                            <option value="">Tüm Database'ler</option>
+                            <option value="">TÃ¼m Database'ler</option>
                             {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                         <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
@@ -2501,7 +2698,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                             placeholder="queryid veya %select%" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]" />
                         <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
                         {search && (
-                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">×</button>
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Ã—</button>
                         )}
                     </div>
                     <div className="flex gap-1">
@@ -2520,9 +2717,9 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={15} /></div>
                 ) : rows.length === 0 ? (
-                    <EmptyState icon="📭" title="Tüm sorgular cache'den okunuyor"
+                    <EmptyState icon="ğŸ“­" title="TÃ¼m sorgular cache'den okunuyor"
                         description={totals?.shared_buffers_kb != null
-                            ? `Mevcut shared_buffers: ${formatBytes(totals.shared_buffers_kb * 1024)} - yeterli görünüyor.`
+                            ? `Mevcut shared_buffers: ${formatBytes(totals.shared_buffers_kb * 1024)} - yeterli gÃ¶rÃ¼nÃ¼yor.`
                             : "Bu pencerede disk'e giden sorgu yok."} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
@@ -2554,7 +2751,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctDiskClass = pctDiskRead == null ? 'bg-slate-100 text-slate-600' : pctDiskRead >= 20 ? 'bg-red-100 text-red-700' : pctDiskRead >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
                                     const ioClass = ioBoundPct == null ? 'bg-slate-100 text-slate-600' : ioBoundPct >= 50 ? 'bg-red-100 text-red-700' : ioBoundPct >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
-                                    const tags = calculateCacheHitTags(row);
+                                    const tags = calculateCacheHitTags(row, totals?.hit_p95_pct);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
@@ -2568,7 +2765,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
                                                         {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandÄ±" disabled={!row.query_full} />
                                                 </div>
                                                 {tags.length > 0 && (
                                                     <div className="flex flex-wrap gap-1 mt-1">
@@ -2580,18 +2777,18 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     </div>
                                                 )}
                                             </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || 'â€”'}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? 'â€”' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${diskReadClass(diskReadMb)}`}>{diskReadMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.disk_read_mb_per_call == null ? '—' : Number(row.disk_read_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.read_blks_per_call == null ? '—' : Number(row.read_blks_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctDiskRead == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctDiskClass}`}>%{pctDiskRead.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{ioBoundPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${ioClass}`}>%{ioBoundPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{toNum(row.disk_read_time_sec) > 0 ? toNum(row.disk_read_time_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.disk_read_mb_per_call == null ? 'â€”' : Number(row.disk_read_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.read_blks_per_call == null ? 'â€”' : Number(row.read_blks_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctDiskRead == null ? 'â€”' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctDiskClass}`}>%{pctDiskRead.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{ioBoundPct == null ? 'â€”' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${ioClass}`}>%{ioBoundPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{toNum(row.disk_read_time_sec) > 0 ? toNum(row.disk_read_time_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : 'â€”'}</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || 'â€”'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandÄ±" disabled={!row.queryid} /></span></td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                                                 <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
                                                 <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
@@ -2652,6 +2849,7 @@ interface VacuumLagTotals {
     oldest_vacuum: { schemaname: string; relname: string; datname: string | null; days_since_vacuum: number } | null;
     bloated_count: number;
     stale_count: number;
+    dead_p95_pct?: number | null;
     autovacuum_settings: {
         autovacuum: string | null;
         autovacuum_max_workers: number | null;
@@ -2847,7 +3045,7 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
 
 function VacuumLagCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+        return <EmptyState icon="ğŸ–¥ï¸Â" title="Instance seÃ§in" description="YukarÄ±dan bir aktif instance seÃ§in." />;
     }
     return <VacuumLagCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
@@ -2858,7 +3056,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
     const [expandedKey, setExpandedKey] = useState<string | null>(null);
-    // Vacuum Lag icin compare default 'off' — tablo bazli veri retention
+    // Vacuum Lag icin compare default 'off' â€” tablo bazli veri retention
     // sinirindan dolayi gecmis donem genelde bos donuyor. Ayri localStorage
     // anahtari ile digerlerinden bagimsiz tutuluyor.
     const [compareMode, setCompareMode] = useState<CompareMode>(() => {
@@ -2951,12 +3149,12 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateVacuumLagTags(row)) {
+            for (const tag of calculateVacuumLagTags(row, totals?.dead_p95_pct)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.dead_p95_pct]);
 
     const sortButtons: { key: VacuumSortMode; label: string; tip: string }[] = [
         { key: 'dead_tup', label: 'Dead Tuple', tip: 'En cok dead tuple iceren tablolar.' },
@@ -2998,19 +3196,19 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">🧹 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">ğŸ§¹ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-[#64748B]">
                         <div>
                             Toplam dead tuple: <b className="text-[#1E293B]">{totals.total_dead_tup.toLocaleString('tr-TR')}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Tahmini toplam bloat: <b className="text-[#1E293B]">{formatBytes(toNum(totals.total_bloat_bytes))}</b>
                             <span className="mx-1">|</span>
                             Sismis tablo (Dead&gt;%20): <b className={totals.bloated_count > 0 ? 'text-red-700' : 'text-[#1E293B]'}>{totals.bloated_count}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Eski vacuum: <b className={totals.stale_count > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals.stale_count}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div>
@@ -3024,7 +3222,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     {totals.worst_dead_pct.schemaname}.{totals.worst_dead_pct.relname} (%{totals.worst_dead_pct.dead_pct.toFixed(1)}, {totals.worst_dead_pct.n_dead_tup.toLocaleString('tr-TR')} dead)
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             En eski vacuum: <b className="text-[#1E293B]">{totals.oldest_vacuum ? (
                                 <button
                                     type="button"
@@ -3039,7 +3237,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                     </div>
                     <details className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] mt-3">
                         <summary className="px-4 py-2 cursor-pointer text-sm text-[#64748B] hover:bg-[#F8FAFC]">
-                            🛠 Autovacuum Parametreleri
+                            ğŸ›  Autovacuum Parametreleri
                         </summary>
                         <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                             <div title="Autovacuum acik mi kapali mi. off ise dead tuple birikimi normaldir.">
@@ -3077,12 +3275,12 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
 
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>Karşılaştırma:</span>
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button type="button" onClick={() => setCompareMode('auto')}
                         className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
                     <button type="button" onClick={() => setCompareMode('off')}
-                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
             </div>
@@ -3144,7 +3342,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                             placeholder="relname ara" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-48 focus:outline-none focus:border-[#3B82F6]" />
                         <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
                         {search && (
-                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Ã—</button>
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Ãƒâ€”</button>
                         )}
                     </div>
                     <div className="flex gap-1">
@@ -3163,7 +3361,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={12} /></div>
                 ) : rows.length === 0 ? (
-                    <EmptyState icon="📭" title="Vacuum lag yok" description={emptyDescription} />
+                    <EmptyState icon="ğŸ“­" title="Vacuum lag yok" description={emptyDescription} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.dbid ?? ''}-${rows[0]?.relid ?? ''}`}>
                         <table className="w-full text-sm">
@@ -3192,7 +3390,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     const bloatBytes = row.dead_bytes_estimate == null ? null : toNum(row.dead_bytes_estimate);
                                     const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
                                     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
-                                    const tags = calculateVacuumLagTags(row);
+                                    const tags = calculateVacuumLagTags(row, totals?.dead_p95_pct);
                                     return (
                                         <Fragment key={rowKey}>
                                             <tr
@@ -3305,6 +3503,7 @@ interface WALSpikeTotals {
         wal_level: string | null;
         wal_buffers_kb: number | null;
     };
+    wal_p95_mb_per_call?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -3336,7 +3535,7 @@ type WALSortMode = 'wal' | 'wal_per_call' | 'fpi_ratio' | 'wal_per_row';
 
 function WALSpikeCard({ instancePk, range, onRangeChange, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; onRangeChange: (range: TimeRange) => void; autoRefresh: boolean; instanceName?: string }) {
     if (instancePk == null) {
-        return <EmptyState icon="🖥️" title="Instance seçin" description="Yukarıdan bir aktif instance seçin." />;
+        return <EmptyState icon="ğŸ–¥ï¸" title="Instance seÃ§in" description="YukarÄ±dan bir aktif instance seÃ§in." />;
     }
     return <WALSpikeCardInner instancePk={instancePk} range={range} onRangeChange={onRangeChange} autoRefresh={autoRefresh} instanceName={instanceName} />;
 }
@@ -3449,12 +3648,12 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateWALTags(row)) {
+            for (const tag of calculateWALTags(row, totals?.wal_p95_mb_per_call)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.wal_p95_mb_per_call]);
 
     const sortButtons: { key: WALSortMode; label: string; tip: string }[] = [
         { key: 'wal', label: 'Toplam WAL', tip: 'sum(wal_bytes) desc' },
@@ -3493,19 +3692,19 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
             {summary && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                        <span className="font-semibold text-[#1E293B]">💾 {instanceName || `Instance ${instancePk}`} · {rangeLabel(range)}</span>
+                        <span className="font-semibold text-[#1E293B]">ğŸ’¾ {instanceName || `Instance ${instancePk}`} Â· {rangeLabel(range)}</span>
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 space-y-1 text-xs text-[#64748B]">
                         <div>
                             Toplam WAL: <b className="text-[#1E293B]">{formatBytes(summary.totalWalBytes)}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             <b className="text-[#1E293B]">{toNum(totals?.wal_throughput_mb_per_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} MB/sn</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             En yuksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             FPI heavy: <b className={toNum(totals?.fpi_heavy_count) > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{totals?.fpi_heavy_count ?? 0}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             Etiketler: {Object.values(tagCounts).length === 0 ? <span className="text-[#94A3B8]">yok</span> : Object.values(tagCounts).map(t => <span key={t.icon} className="mr-2">{t.icon} {t.count}</span>)}
                         </div>
                         <div>
@@ -3519,7 +3718,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     {formatBucketFull(totals.peak.bucket_start)} - {totals.peak.mb.toFixed(1)} MB
                                 </button>
                             ) : '\u2014'}</b>
-                            <span className="mx-1">·</span>
+                            <span className="mx-1">Â·</span>
                             En cok WAL ureten DB: <b className="text-[#1E293B]">{totals?.top_datname ? (
                                 <button
                                     type="button"
@@ -3556,7 +3755,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                             {totals?.archiver && (
                                 <span>
                                     Archive: <b className="text-[#1E293B]">{totals.archiver.lag_seconds == null ? '\u2014' : `${Math.floor(totals.archiver.lag_seconds / 60)} dk once`}</b>
-                                    {totals.archiver.failed_count > 0 && <span className="text-red-700"> · failed: {totals.archiver.failed_count}</span>}
+                                    {totals.archiver.failed_count > 0 && <span className="text-red-700"> Â· failed: {totals.archiver.failed_count}</span>}
                                 </span>
                             )}
                             <span>Mevcut max_wal_size: <b className="text-[#1E293B]">{formatKb(walSettings?.max_wal_size_kb ?? totals?.max_wal_size_kb)}</b></span>
@@ -3565,13 +3764,13 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                         </div>
                         {showCompressionWarning && (
                             <div className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">
-                                ⚠ WAL compression kapali ve {totals?.fpi_heavy_count ?? 0} sorgu FPI heavy. wal_compression=lz4 ayari ile FPI'lar %50-80 kuculur.
+                                âš  WAL compression kapali ve {totals?.fpi_heavy_count ?? 0} sorgu FPI heavy. wal_compression=lz4 ayari ile FPI'lar %50-80 kuculur.
                             </div>
                         )}
                     </div>
                     <details className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] mt-3">
                         <summary className="px-4 py-2 cursor-pointer text-sm text-[#64748B] hover:bg-[#F8FAFC]">
-                            ⚙️ WAL & Checkpoint Parametreleri
+                            âš™ï¸ WAL & Checkpoint Parametreleri
                         </summary>
                         <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                             <div title="Checkpoint arasi maksimum WAL hacmi. Astiginda zorla checkpoint tetiklenir.">
@@ -3608,12 +3807,12 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-[#64748B]">
-                <span>Karşılaştırma:</span>
+                <span>KarÅŸÄ±laÅŸtÄ±rma:</span>
                 <div className="inline-flex rounded border border-[#E2E8F0] bg-white overflow-hidden">
                     <button type="button" onClick={() => setCompareMode('auto')}
                         className={`px-3 py-1.5 ${compareMode === 'auto' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Otomatik</button>
                     <button type="button" onClick={() => setCompareMode('off')}
-                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>Kapalı</button>
+                        className={`px-3 py-1.5 border-l border-[#E2E8F0] ${compareMode === 'off' ? 'bg-[#EFF6FF] text-[#2563EB]' : 'hover:bg-[#F8FAFC]'}`}>KapalÄ±</button>
                 </div>
                 {compareKey && <span className="text-[#94A3B8]">{compareLabel(compareKey)}</span>}
             </div>
@@ -3630,7 +3829,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                         ))}
                         {hasBaseline && <Area type="monotone" dataKey="baseline_wal_mb" name={datname ? `${datname} toplam` : 'Instance toplam'} stroke="#94A3B8" fill="#E2E8F0" fillOpacity={0.5} strokeWidth={1} connectNulls />}
                         {compareKey && <Area type="monotone" dataKey="previous_wal_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                        <Area type="monotone" dataKey="current_wal_mb" name={search ? 'Filtreli' : 'Şu an'} stroke="#7C3AED" fill="#DDD6FE" fillOpacity={0.65} strokeWidth={2} />
+                        <Area type="monotone" dataKey="current_wal_mb" name={search ? 'Filtreli' : 'Åu an'} stroke="#7C3AED" fill="#DDD6FE" fillOpacity={0.65} strokeWidth={2} />
                     </AreaChart>
                 </InsightChart>
             )}
@@ -3644,7 +3843,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                     <div className="flex items-center gap-1.5">
                         <select value={datname} onChange={e => setDatname(e.target.value)}
                             title="Database filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]">
-                            <option value="">Tüm Database'ler</option>
+                            <option value="">TÃ¼m Database'ler</option>
                             {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                         <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
@@ -3652,7 +3851,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                             placeholder="queryid veya %update%" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]" />
                         <button onClick={applySearch} className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">Ara</button>
                         {search && (
-                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">×</button>
+                            <button onClick={clearSearch} className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">Ã—</button>
                         )}
                     </div>
                     <div className="flex gap-1">
@@ -3671,7 +3870,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                 {isLoading ? (
                     <div className="p-4"><SkeletonTable rows={8} cols={14} /></div>
                 ) : rows.length === 0 ? (
-                    <EmptyState icon="📭" title="WAL üretimi yok"
+                    <EmptyState icon="ğŸ“­" title="WAL Ã¼retimi yok"
                         description={totals?.wal_settings?.max_wal_size_kb != null
                             ? `Bu pencerede WAL ureten sorgu yok. Mevcut max_wal_size: ${formatBytes(totals.wal_settings.max_wal_size_kb * 1024)}.`
                             : totals?.max_wal_size_kb != null
@@ -3706,7 +3905,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctClass = pctWal == null ? 'bg-slate-100 text-slate-600' : pctWal >= 20 ? 'bg-red-100 text-red-700' : pctWal >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
                                     const fpiClass = fpiRatio == null ? 'bg-slate-100 text-slate-600' : fpiRatio > 0.5 ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600';
-                                    const tags = calculateWALTags(row);
+                                    const tags = calculateWALTags(row, totals?.wal_p95_mb_per_call);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
@@ -3720,7 +3919,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
                                                         {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
+                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandÄ±" disabled={!row.query_full} />
                                                 </div>
                                                 {tags.length > 0 && (
                                                     <div className="flex flex-wrap gap-1 mt-1">
@@ -3732,7 +3931,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                                     </div>
                                                 )}
                                             </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || 'â€”'}</td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${walClass}`}>{walMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb_per_call == null ? '\u2014' : Number(row.wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{row.max_wal_mb_per_call == null ? '\u2014' : Number(row.max_wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
@@ -3742,7 +3941,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
                                             <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
+                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || 'â€”'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandÄ±" disabled={!row.queryid} /></span></td>
                                             <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
                                                 <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
                                                 <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>

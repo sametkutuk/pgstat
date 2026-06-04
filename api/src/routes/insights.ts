@@ -538,7 +538,14 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
                 offset.intervalSql,
             )).rows;
         }
-        res.json({ current: current.rows, previous, compare, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+        res.json({
+            current: current.rows,
+            previous,
+            compare,
+            raw_retention_days: retention.raw_days,
+            hourly_retention_days: retention.hourly_days,
+            raw_retention_limited: windowHours > retention.raw_days * 24,
+        });
     } catch (err) {
         next(err);
     }
@@ -862,7 +869,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [rowsResult, instanceHitResult, worstDbResult, peakResult, settingsResult, heavyReaderResult] = await Promise.all([
+        const [rowsResult, instanceHitResult, worstDbResult, peakResult, settingsResult, heavyReaderResult, hitP95Result] = await Promise.all([
             rowsPromise,
             pool.query(`
       select
@@ -942,6 +949,25 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         having (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0) >= 100
       ) heavy
     `, totalsParams),
+            pool.query(`
+      select percentile_cont(0.05) within group (order by cache_hit_pct)::double precision as hit_p95_pct
+      from (
+        select
+          case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
+            then 100.0 * sum(coalesce(d.shared_blks_hit_delta, 0))::numeric
+              / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)
+            else null end as cache_hit_pct
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by ss.statement_series_id
+        having sum(coalesce(d.shared_blks_read_delta, 0)) > 0
+      ) x
+    `, totalsParams),
         ]);
 
         const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
@@ -961,6 +987,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
                 shared_buffers_kb: settingKb('shared_buffers'),
                 effective_cache_size_kb: settingKb('effective_cache_size'),
                 heavy_reader_count: Number(heavyReaderResult.rows[0]?.count ?? 0),
+                hit_p95_pct: hitP95Result.rows[0]?.hit_p95_pct == null ? null : Number(hitP95Result.rows[0].hit_p95_pct),
                 raw_retention_days: retention.raw_days,
                 hourly_retention_days: retention.hourly_days,
             },
@@ -1426,7 +1453,8 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
           ) o
         ) as oldest_vacuum,
         count(*) filter (where dead_pct > 20 and n_live_tup > 1000)::int as bloated_count,
-        count(*) filter (where days_since_vacuum > 7 and n_dead_tup > 1000)::int as stale_count
+        count(*) filter (where days_since_vacuum > 7 and n_dead_tup > 1000)::int as stale_count,
+        percentile_cont(0.95) within group (order by dead_pct)::double precision as dead_p95_pct
       from ranked
     `, baseParams);
 
@@ -1497,6 +1525,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
                 } : null,
                 bloated_count: Number(totalsRow.bloated_count ?? 0),
                 stale_count: Number(totalsRow.stale_count ?? 0),
+                dead_p95_pct: totalsRow.dead_p95_pct == null ? null : Number(totalsRow.dead_p95_pct),
                 autovacuum_settings: {
                     autovacuum: settingText('autovacuum'),
                     autovacuum_max_workers: settingNumber('autovacuum_max_workers'),
@@ -1610,6 +1639,45 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
 // =========================================================================
 
 async function fetchWalTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+    if (!datname && !searchRaw && windowHours > rawDays * 24) {
+        const params: any[] = [id, fromIso, toIso];
+        const stepSql = windowHours <= 30 * 24 ? `interval '6 hours'` : `interval '1 day'`;
+        const gridStart = windowHours <= 30 * 24
+            ? `date_trunc('day', $2::timestamptz) + make_interval(hours => (extract(hour from $2::timestamptz)::int / 6) * 6)`
+            : `date_trunc('day', $2::timestamptz)`;
+        const aggBucketExpr = windowHours <= 30 * 24
+            ? `date_trunc('day', d.hour_ts) + make_interval(hours => (extract(hour from d.hour_ts)::int / 6) * 6)`
+            : `date_trunc('day', d.hour_ts)`;
+        const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+        return pool.query(`
+        with buckets as (
+          select
+            ${aggBucketExpr} as bucket_start,
+            coalesce(sum(coalesce(d.wal_bytes_total, 0)), 0)::double precision as wal_bytes,
+            coalesce(sum(coalesce(d.wal_records_sum, 0)), 0)::bigint as wal_records,
+            coalesce(sum(coalesce(d.wal_fpi_sum, 0)), 0)::bigint as wal_fpi,
+            coalesce(sum(coalesce(d.calls_sum, 0)), 0)::bigint as calls
+          from agg.pg_wal_hourly d
+          where d.instance_pk = $1
+            and d.hour_ts between $2::timestamptz and $3::timestamptz
+          group by bucket_start
+        ),
+        grid as (
+          select gs as bucket_start
+          from generate_series(${gridStart}, $3::timestamptz, ${stepSql}) gs
+        )
+        select
+          g.bucket_start${alignedSelect},
+          coalesce(b.wal_bytes, 0)::double precision as wal_bytes,
+          coalesce(b.wal_records, 0)::bigint as wal_records,
+          coalesce(b.wal_fpi, 0)::bigint as wal_fpi,
+          coalesce(b.calls, 0)::bigint as calls
+        from grid g
+        left join buckets b on b.bucket_start = g.bucket_start
+        order by g.bucket_start
+    `, params);
+    }
+
     const params: any[] = [id, fromIso, toIso];
     let dbWhere = '';
     if (searchRaw) {
@@ -1766,7 +1834,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
             tpsDatnameWhere = ` and dbr.datname = $${tpsParams.length}`;
         }
 
-        const [result, totalWalResult, topDbResult, peakResult, settingsResult, replicationLagResult, spillBytesResult, tpsResult, archiverResult] = await Promise.all([
+        const [result, totalWalResult, topDbResult, peakResult, settingsResult, replicationLagResult, spillBytesResult, tpsResult, archiverResult, walP95Result] = await Promise.all([
             resultPromise,
             pool.query(`
       select coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as total_wal_bytes
@@ -1896,6 +1964,24 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       order by sample_ts desc
       limit 1
     `, [id]),
+            pool.query(`
+      select percentile_cont(0.95) within group (order by mb_per_call)::double precision as wal_p95_mb_per_call
+      from (
+        select
+          case when sum(d.calls_delta) > 0
+            then (sum(coalesce(d.wal_bytes_delta, 0)) / 1048576.0) / sum(d.calls_delta)::numeric
+            else null end as mb_per_call
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by ss.statement_series_id
+        having sum(coalesce(d.wal_bytes_delta, 0)) > 0
+      ) x
+    `, totalsParams),
         ]);
 
         const topDb = topDbResult.rows[0] ?? null;
@@ -1980,6 +2066,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
                     lag_seconds: archiverRow.lag_seconds == null ? null : Number(archiverRow.lag_seconds),
                 } : null,
                 wal_settings: walSettings,
+                wal_p95_mb_per_call: walP95Result.rows[0]?.wal_p95_mb_per_call == null ? null : Number(walP95Result.rows[0].wal_p95_mb_per_call),
                 raw_retention_days: retention.raw_days,
                 hourly_retention_days: retention.hourly_days,
             },
@@ -2007,6 +2094,7 @@ router.get('/:id/wal-trend', async (req, res, next) => {
         const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
         const retention = await getInstanceRetention(id);
         const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+        const dataSource = !datname && !searchRaw && windowHours > retention.raw_days * 24 ? 'pg_wal_hourly' : 'pgss_delta';
 
         const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
         const baselineNeeded = includeBaseline && searchRaw !== '';
@@ -2034,7 +2122,7 @@ router.get('/:id/wal-trend', async (req, res, next) => {
             )).rows;
         }
         const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+        res.json({ current: current.rows, previous, compare, baseline, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
     } catch (err) {
         next(err);
     }
@@ -2219,7 +2307,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [totalIoResult, topDbResult, peakResult, workMemResult] = await Promise.all([
+        const [totalIoResult, topDbResult, peakResult, workMemResult, tempP95Result] = await Promise.all([
             pool.query(`
       select coalesce((
         sum(coalesce(d.temp_blk_write_time_ms_delta, 0))
@@ -2283,6 +2371,24 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       order by snapshot_ts desc
       limit 1
     `, [id]),
+            pool.query(`
+      select percentile_cont(0.95) within group (order by mb_per_call)::double precision as temp_p95_mb_per_call
+      from (
+        select
+          case when sum(d.calls_delta) > 0
+            then (sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0) / sum(d.calls_delta)::numeric
+            else null end as mb_per_call
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+        left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+        where d.instance_pk = $1
+          and d.sample_ts between $2::timestamptz and $3::timestamptz
+          ${searchWhere}
+        group by ss.statement_series_id
+        having sum(coalesce(d.temp_blks_written_delta, 0)) > 0
+      ) x
+    `, totalsParams),
         ]);
 
         const topDb = topDbResult.rows[0] ?? null;
@@ -2295,6 +2401,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
                 top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
                 peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
                 work_mem_kb: workMem?.kb == null ? null : Number(workMem.kb),
+                temp_p95_mb_per_call: tempP95Result.rows[0]?.temp_p95_mb_per_call == null ? null : Number(tempP95Result.rows[0].temp_p95_mb_per_call),
                 raw_retention_days: retention.raw_days,
                 hourly_retention_days: retention.hourly_days,
             },
@@ -2350,6 +2457,161 @@ router.get('/:id/temp-trend', async (req, res, next) => {
         }
         const baseline = baselineRes ? baselineRes.rows : null;
         res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// GET /api/insights/:id/long-operations?from=&to=&datname=&search=&limit=50
+router.get('/:id/long-operations', async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const { fromIso, toIso } = parseTimeRange(req.query, 24);
+        const limit = parseLimit(req.query.limit, 50);
+        const datname = (req.query.datname as string || '').trim();
+        const searchRaw = (req.query.search as string || '').trim();
+
+        const params: any[] = [id, fromIso, toIso];
+        let filterWhere = '';
+        if (datname) {
+            params.push(datname);
+            filterWhere += ` and p.datname = $${params.length}`;
+        }
+        if (searchRaw) {
+            if (/^\d+$/.test(searchRaw)) {
+                params.push(searchRaw);
+                filterWhere += ` and p.pid::text = $${params.length}`;
+            } else {
+                params.push(`%${searchRaw}%`);
+                filterWhere += ` and (coalesce(rr.schemaname, '') ilike $${params.length} or coalesce(rr.relname, '') ilike $${params.length})`;
+            }
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+      with events as (
+        select
+          case when max(p.command) ilike '%cluster%' then 'CLUSTER' else 'VACUUM FULL' end as operation_type,
+          max(p.command) as command,
+          p.pid,
+          p.datid,
+          p.datname,
+          p.relid,
+          coalesce(rr.schemaname, '') as schemaname,
+          coalesce(rr.relname, '') as relname,
+          min(p.sample_ts) as first_seen,
+          max(p.sample_ts) as last_seen,
+          (extract(epoch from (max(p.sample_ts) - min(p.sample_ts)))::int + 60) as duration_sec,
+          (array_agg(p.phase order by p.sample_ts desc))[1] as phase,
+          case when max(coalesce(p.heap_blks_total, 0)) > 0
+            then round((100.0 * max(coalesce(p.heap_blks_scanned, 0))::numeric / nullif(max(coalesce(p.heap_blks_total, 0)), 0))::numeric, 1)
+            else null end as progress_pct,
+          'pg_progress_cluster_snapshot' as source_table
+        from fact.pg_progress_cluster_snapshot p
+        left join dim.relation_ref rr on rr.instance_pk = p.instance_pk and rr.dbid::bigint = p.datid and rr.relid::bigint = p.relid
+        where p.instance_pk = $1
+          and p.sample_ts between $2::timestamptz and $3::timestamptz
+          ${filterWhere}
+        group by p.pid, p.datid, p.datname, p.relid, rr.schemaname, rr.relname
+
+        union all
+
+        select
+          case when max(p.command) ilike '%reindex%' then 'REINDEX' else 'CREATE INDEX' end as operation_type,
+          max(p.command) as command,
+          p.pid,
+          p.datid,
+          p.datname,
+          p.relid,
+          coalesce(rr.schemaname, '') as schemaname,
+          coalesce(rr.relname, '') as relname,
+          min(p.sample_ts) as first_seen,
+          max(p.sample_ts) as last_seen,
+          (extract(epoch from (max(p.sample_ts) - min(p.sample_ts)))::int + 60) as duration_sec,
+          (array_agg(p.phase order by p.sample_ts desc))[1] as phase,
+          case when max(coalesce(p.blocks_total, 0)) > 0
+            then round((100.0 * max(coalesce(p.blocks_done, 0))::numeric / nullif(max(coalesce(p.blocks_total, 0)), 0))::numeric, 1)
+            when max(coalesce(p.tuples_total, 0)) > 0
+            then round((100.0 * max(coalesce(p.tuples_done, 0))::numeric / nullif(max(coalesce(p.tuples_total, 0)), 0))::numeric, 1)
+            else null end as progress_pct,
+          'pg_progress_create_index_snapshot' as source_table
+        from fact.pg_progress_create_index_snapshot p
+        left join dim.relation_ref rr on rr.instance_pk = p.instance_pk and rr.dbid::bigint = p.datid and rr.relid::bigint = p.relid
+        where p.instance_pk = $1
+          and p.sample_ts between $2::timestamptz and $3::timestamptz
+          ${filterWhere}
+        group by p.pid, p.datid, p.datname, p.relid, rr.schemaname, rr.relname
+
+        union all
+
+        select
+          'COPY' as operation_type,
+          max(p.command) as command,
+          p.pid,
+          p.datid,
+          p.datname,
+          p.relid,
+          coalesce(rr.schemaname, '') as schemaname,
+          coalesce(rr.relname, '') as relname,
+          min(p.sample_ts) as first_seen,
+          max(p.sample_ts) as last_seen,
+          (extract(epoch from (max(p.sample_ts) - min(p.sample_ts)))::int + 60) as duration_sec,
+          (array_agg(p.copy_type order by p.sample_ts desc))[1] as phase,
+          case when max(coalesce(p.bytes_total, 0)) > 0
+            then round((100.0 * max(coalesce(p.bytes_processed, 0))::numeric / nullif(max(coalesce(p.bytes_total, 0)), 0))::numeric, 1)
+            else null end as progress_pct,
+          'pg_progress_copy_snapshot' as source_table
+        from fact.pg_progress_copy_snapshot p
+        left join dim.relation_ref rr on rr.instance_pk = p.instance_pk and rr.dbid::bigint = p.datid and rr.relid::bigint = p.relid
+        where p.instance_pk = $1
+          and p.sample_ts between $2::timestamptz and $3::timestamptz
+          ${filterWhere}
+        group by p.pid, p.datid, p.datname, p.relid, rr.schemaname, rr.relname
+
+        union all
+
+        select
+          'VACUUM' as operation_type,
+          'VACUUM' as command,
+          p.pid,
+          p.datid,
+          p.datname,
+          p.relid,
+          coalesce(rr.schemaname, '') as schemaname,
+          coalesce(rr.relname, '') as relname,
+          min(p.sample_ts) as first_seen,
+          max(p.sample_ts) as last_seen,
+          (extract(epoch from (max(p.sample_ts) - min(p.sample_ts)))::int + 60) as duration_sec,
+          (array_agg(p.phase order by p.sample_ts desc))[1] as phase,
+          case when max(coalesce(p.heap_blks_total, 0)) > 0
+            then round((100.0 * max(coalesce(p.heap_blks_scanned, 0))::numeric / nullif(max(coalesce(p.heap_blks_total, 0)), 0))::numeric, 1)
+            else null end as progress_pct,
+          'pg_progress_vacuum_snapshot' as source_table
+        from fact.pg_progress_vacuum_snapshot p
+        left join dim.relation_ref rr on rr.instance_pk = p.instance_pk and rr.dbid::bigint = p.datid and rr.relid::bigint = p.relid
+        where p.instance_pk = $1
+          and p.sample_ts between $2::timestamptz and $3::timestamptz
+          ${filterWhere}
+        group by p.pid, p.datid, p.datname, p.relid, rr.schemaname, rr.relname
+        having count(*) >= 5
+      )
+      select *
+      from events
+      order by last_seen desc, duration_sec desc
+      limit $${params.length}
+    `, params);
+
+        const totals = {
+            total: result.rows.length,
+            vacuum_full: result.rows.filter((r: any) => r.operation_type === 'VACUUM FULL').length,
+            cluster: result.rows.filter((r: any) => r.operation_type === 'CLUSTER').length,
+            reindex: result.rows.filter((r: any) => r.operation_type === 'REINDEX').length,
+            create_index: result.rows.filter((r: any) => r.operation_type === 'CREATE INDEX').length,
+            copy: result.rows.filter((r: any) => r.operation_type === 'COPY').length,
+            long_vacuum: result.rows.filter((r: any) => r.operation_type === 'VACUUM').length,
+        };
+
+        res.json({ rows: result.rows, totals });
     } catch (err) {
         next(err);
     }
