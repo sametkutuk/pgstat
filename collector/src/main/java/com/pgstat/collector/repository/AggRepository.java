@@ -143,6 +143,46 @@ public class AggRepository {
     }
 
     /**
+     * Saatlik rollup: pgss_delta WAL metrics -> existing pg_wal_hourly.
+     * Existing V055 snapshot columns are kept compatible; new pgss columns are
+     * always refreshed with ON CONFLICT.
+     *
+     * @return affected row count
+     */
+    public int rollupWalHourly() {
+        return jdbc.update("""
+            insert into agg.pg_wal_hourly (
+              hour_ts,
+              instance_pk,
+              sample_count,
+              wal_bytes_total,
+              wal_bytes_sum,
+              wal_records_sum,
+              wal_fpi_sum,
+              calls_sum
+            )
+            select
+              date_trunc('hour', sample_ts) as hour_ts,
+              instance_pk,
+              count(*)::int as sample_count,
+              sum(coalesce(wal_bytes_delta, 0))::bigint as wal_bytes_total,
+              sum(coalesce(wal_bytes_delta, 0))::bigint as wal_bytes_sum,
+              sum(coalesce(wal_records_delta, 0))::bigint as wal_records_sum,
+              sum(coalesce(wal_fpi_delta, 0))::bigint as wal_fpi_sum,
+              sum(coalesce(calls_delta, 0))::bigint as calls_sum
+            from fact.pgss_delta
+            where sample_ts >= date_trunc('hour', now() - interval '1 hour')
+              and sample_ts <  date_trunc('hour', now())
+            group by date_trunc('hour', sample_ts), instance_pk
+            on conflict (hour_ts, instance_pk) do update
+              set wal_bytes_sum = excluded.wal_bytes_sum,
+                  wal_records_sum = excluded.wal_records_sum,
+                  wal_fpi_sum = excluded.wal_fpi_sum,
+                  calls_sum = excluded.calls_sum
+            """);
+    }
+
+    /**
      * Gunluk rollup: dunku gun icin pgss_hourly -> pgss_daily.
      * ON CONFLICT ile idempotent.
      *

@@ -16,7 +16,7 @@ interface Instance {
     is_active: boolean;
 }
 
-type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag';
+type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag' | 'long-ops';
 type QueryCrossLinkTarget = Extract<InsightTab, 'temp-spill' | 'wal-spike' | 'cache-hit'>;
 type TopCrossLinkHandler = (targetTab: QueryCrossLinkTarget, queryid: string) => void;
 
@@ -29,6 +29,7 @@ const TABS: { key: InsightTab; label: string; icon: string }[] = [
     { key: 'wal-spike', label: 'WAL Spike', icon: '📈' },
     { key: 'cache-hit', label: 'Cache Hit', icon: '🎯' },
     { key: 'vacuum-lag', label: 'Vacuum Lag', icon: '🧹' },
+    { key: 'long-ops', label: 'Long Operations', icon: 'OPS' },
 ];
 
 void PlaceholderTab;
@@ -178,6 +179,17 @@ const TAB_INTROS = {
             { question: 'Index bloat olusuyor mu?', answer: 'Slow HOT rozeti dusuk HOT update oranini ve index bloat riskini isaretler.' },
         ],
     },
+    longOps: {
+        storageKey: 'pgstat.insights.long-ops.intro-seen',
+        summary: 'Uzun suren operasyonlar - VACUUM FULL, CLUSTER, REINDEX, CREATE INDEX, COPY, uzun VACUUM olaylari.',
+        whatItShows: 'pg_stat_progress_* snapshot tablolarindan yakalanan operasyon baslangici, suresi, phase ve ilerleme yuzdesi.',
+        howToUse: 'Forensic icin kullan: belirli zaman penceresinde hangi agir operasyonlar calismis gor. PID ile pg_stat_activity kaydina baglanabilirsin.',
+        scenarios: [
+            { question: 'Dun gece sistemde ne calisiyordu?', answer: 'Range secip baslangic ve sure kolonlarina bak.' },
+            { question: 'VACUUM FULL sayilmiyor mu?', answer: 'pg_stat_user_tables vacuum_count saymayabilir; bu sekme progress snapshot ile yakalar.' },
+            { question: 'CREATE INDEX kim calistirdi?', answer: 'PID kolonu session/process id ipucudur.' },
+        ],
+    },
 } satisfies Record<string, TabIntroProps>;
 
 function consumePendingSearch(): string {
@@ -302,6 +314,7 @@ export default function Insights() {
             {tab === 'wal-spike' && <WALSpikeCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'vacuum-lag' && <VacuumLagCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'long-ops' && <LongOperationsCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
         </div>
     );
 }
@@ -384,7 +397,7 @@ interface QueryTempTrendPoint {
 
 type CompareKey = '1h' | '1d' | '1w' | '1m';
 type CompareMode = 'auto' | 'off';
-type TrendDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily' | 'pg_table_stat_delta' | 'pg_table_stat_hourly';
+type TrendDataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily' | 'pg_wal_hourly' | 'pg_table_stat_delta' | 'pg_table_stat_hourly';
 const WEEK_WINDOW_HOURS = 168;
 
 interface TrendResponse<T> {
@@ -394,6 +407,7 @@ interface TrendResponse<T> {
     data_source?: TrendDataSource;
     raw_retention_days?: number;
     hourly_retention_days?: number;
+    raw_retention_limited?: boolean;
     // db-time-trend ?include_baseline=1 ile gelir. Search filtresi varken
     // foreground'a karsi arka planda gosterilen "instance/DB toplami"
     // serisi. Yoksa null.
@@ -499,7 +513,7 @@ function buildCrossLinks(row: TopQueryRow): QueryCrossLink[] {
     return links;
 }
 
-function calculateTempTags(row: TempSpillRow): InsightTag[] {
+function calculateTempTags(row: TempSpillRow, p95MbPerCall?: number | null): InsightTag[] {
     const tempMb = toNum(row.temp_written_mb);
     const mbPerCall = toNum(row.temp_written_mb_per_call);
     const calls = toNum(row.toplam_cagri);
@@ -510,9 +524,10 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     const hasDistinct = /\bdistinct\b/.test(queryLower);
     const hasLimit = /\blimit\b/.test(queryLower);
     const hasJoin = /\sjoin\s/.test(queryLower);
+    const megaThreshold = Math.max(100, toNum(p95MbPerCall) * 2);
     const tags: InsightTag[] = [];
 
-    if (mbPerCall >= 100) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: '💥', className: 'bg-red-100 text-red-700', title: 'Tek çağrıda 100MB+ temp yazıyor — work_mem ciddi yetersiz' });
+    if (mbPerCall >= megaThreshold) tags.push({ key: 'mega-spill', label: 'Mega Spill', icon: 'SPILL', className: 'bg-red-100 text-red-700', title: 'High temp MB per call - work_mem may be too low.' });
     if (calls >= 1000 && mbPerCall >= 1) tags.push({ key: 'frequent-spill', label: 'Sürekli Spill', icon: '🔁', className: 'bg-orange-100 text-orange-700', title: 'Sık çağrılıyor ve her çağrıda temp yazıyor — toplu kazanç fırsatı' });
     if (rowsPerTempMb != null && rowsPerTempMb < 1000 && tempMb >= 10) tags.push({ key: 'inefficient', label: 'Verimsiz', icon: '🐌', className: 'bg-amber-100 text-amber-700', title: "1MB temp başına 1000'den az satır — ya filter çok geç çalışıyor ya da gereksiz sort" });
     if (hasOrderBy || hasGroupBy || hasDistinct) {
@@ -544,7 +559,7 @@ function calculateTempTags(row: TempSpillRow): InsightTag[] {
     return tags;
 }
 
-function calculateWALTags(row: WALSpikeRow): InsightTag[] {
+function calculateWALTags(row: WALSpikeRow, p95MbPerCall?: number | null): InsightTag[] {
     const pct = toNum(row.pct_of_total_wal);
     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
     const walRecords = toNum(row.toplam_wal_records);
@@ -554,33 +569,36 @@ function calculateWALTags(row: WALSpikeRow): InsightTag[] {
     const walMbPerCall = row.wal_mb_per_call == null ? null : toNum(row.wal_mb_per_call);
     const q = (row.query_full || '').toLowerCase();
     const isDML = /^\s*(update|delete|insert)\b/.test(q);
+    const frequentWalThreshold = Math.max(0.1, toNum(p95MbPerCall) * 1.5);
     const tags: InsightTag[] = [];
 
     if (pct >= 30) tags.push({ key: 'wal-champion', label: 'WAL Sampiyonu', icon: '🔥', className: 'bg-red-100 text-red-700', title: 'Bu sorgu tek basina toplam WAL uretiminin %30+ kismini uretiyor. Replication lag in birincil kaynagi.' });
     if (fpiRatio != null && fpiRatio > 0.5 && walRecords >= 100) tags.push({ key: 'fpi-heavy', label: 'FPI Heavy', icon: '📸', className: 'bg-orange-100 text-orange-700', title: 'Kayitlarin yaridan cogu full-page-image. Checkpoint sonrasi burst - checkpoint_timeout artirilabilir.' });
     if (walBytesPerRow != null && walBytesPerRow >= 1024 && walMb >= 100) tags.push({ key: 'burst-writer', label: 'Burst Writer', icon: '📈', className: 'bg-amber-100 text-amber-700', title: 'Satir basina 1KB+ WAL - buyuk row, TOAST, ya da update wave-of-pain. TOAST compression veya selective update dusun.' });
-    if (calls >= 1000 && walMbPerCall != null && walMbPerCall >= 0.1) tags.push({ key: 'frequent-writer', label: 'Frequent Writer', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ve her cagrida WAL uretiyor - batch update e cevirmek bilesik kazanc.' });
+    if (calls >= 1000 && walMbPerCall != null && walMbPerCall >= frequentWalThreshold) tags.push({ key: 'frequent-writer', label: 'Frequent Writer', icon: 'WAL', className: 'bg-blue-100 text-blue-700', title: 'Runs often and writes WAL on each call - batching may help.' });
     if (isDML) tags.push({ key: 'update-heavy', label: 'Update Heavy', icon: '✏️', className: 'bg-purple-100 text-purple-700', title: 'UPDATE/DELETE/INSERT - yazma operasyonu WAL uretimi normaldir, ama hacim asiriysa optimize gerekli.' });
     return tags;
 }
 
-function calculateCacheHitTags(row: CacheHitRow): InsightTag[] {
+function calculateCacheHitTags(row: CacheHitRow, hitP95Pct?: number | null): InsightTag[] {
     const hitPct = row.cache_hit_pct == null ? null : toNum(row.cache_hit_pct);
     const diskReadMb = toNum(row.disk_read_mb);
     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
     const calls = toNum(row.toplam_cagri);
     const readBlksPerCall = row.read_blks_per_call == null ? null : toNum(row.read_blks_per_call);
+    const disasterHitThreshold = hitP95Pct == null ? 50 : Math.min(50, Math.max(0, toNum(hitP95Pct)));
+    const frequentHitThreshold = hitP95Pct == null ? 90 : Math.min(90, Math.max(disasterHitThreshold + 10, toNum(hitP95Pct) + 10));
     const tags: InsightTag[] = [];
 
-    if (hitPct != null && hitPct < 50 && diskReadMb >= 100) tags.push({ key: 'cache-disaster', label: 'Cache Disaster', icon: '🔴', className: 'bg-red-100 text-red-700', title: "Cache hit %50 alti ve 100MB+ disk read. Bu sorgu shared_buffers'i resmen bypass ediyor." });
+    if (hitPct != null && hitPct < disasterHitThreshold && diskReadMb >= 100) tags.push({ key: 'cache-disaster', label: 'Cache Disaster', icon: 'MISS', className: 'bg-red-100 text-red-700', title: 'Low cache hit and 100MB+ disk read.' });
     if (diskReadMb >= 1024) tags.push({ key: 'disk-heavy', label: 'Disk Heavy', icon: '🟠', className: 'bg-orange-100 text-orange-700', title: '1GB+ disk read - buyuk veri okuyor. Index ile selective scan veya partition pruning dusun.' });
     if (ioBoundPct != null && ioBoundPct > 50) tags.push({ key: 'io-bound', label: 'I/O Bound', icon: '🐢', className: 'bg-amber-100 text-amber-700', title: 'Sorgu cogu zamani disk I/O bekledi (>%50 io_bound). PG15+ olmali; faster storage veya cache iyilestirme.' });
-    if (calls >= 1000 && hitPct != null && hitPct < 90) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: '🔁', className: 'bg-blue-100 text-blue-700', title: 'Sik calisiyor ama her cagrida cache miss yapiyor. shared_buffers buyutmek veya prepared cache stratejisi.' });
+    if (calls >= 1000 && hitPct != null && hitPct < frequentHitThreshold) tags.push({ key: 'frequent-miss', label: 'Frequent Miss', icon: 'MISS', className: 'bg-blue-100 text-blue-700', title: 'Runs often with repeated cache misses.' });
     if (readBlksPerCall != null && readBlksPerCall >= 10000) tags.push({ key: 'big-reader', label: 'Big Reader', icon: '📦', className: 'bg-purple-100 text-purple-700', title: 'Tek cagrida 10K+ blok (80MB+) okuyor - full table scan veya buyuk range scan.' });
     return tags;
 }
 
-function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
+function calculateVacuumLagTags(row: VacuumLagRow, deadP95Pct?: number | null): InsightTag[] {
     const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
     const nLiveTup = toNum(row.n_live_tup);
     const nDeadTup = toNum(row.n_dead_tup);
@@ -589,9 +607,10 @@ function calculateVacuumLagTags(row: VacuumLagRow): InsightTag[] {
     const nModSinceAnalyze = toNum(row.n_mod_since_analyze);
     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
     const nTupUpd = toNum(row.n_tup_upd);
+    const deadThreshold = Math.max(20, toNum(deadP95Pct) * 1.5);
     const tags: InsightTag[] = [];
 
-    if (deadPct != null && deadPct > 20 && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: '💀', className: 'bg-red-100 text-red-700', title: 'Dead tuple %20+ ve canli satir 1K+ - ciddi bloat, autovacuum tetiklenmiyor olabilir.' });
+    if (deadPct != null && deadPct > deadThreshold && nLiveTup > 1000) tags.push({ key: 'bloated', label: 'Bloated', icon: 'BLOAT', className: 'bg-red-100 text-red-700', title: 'High dead tuple ratio and 1K+ live rows - bloat risk.' });
     if (daysSinceVacuum != null && daysSinceVacuum > 7 && nDeadTup > 1000) tags.push({ key: 'stale-vacuum', label: 'Stale Vacuum', icon: '⏰', className: 'bg-orange-100 text-orange-700', title: 'Son vacuum 7+ gun once ve 1K+ dead tuple. autovacuum_vacuum_scale_factor dusurulebilir.' });
     if (updatePerSec != null && updatePerSec > 10 && nDeadTup > 5000) tags.push({ key: 'hot-updater', label: 'Hot Updater', icon: '🔥', className: 'bg-amber-100 text-amber-700', title: 'Saniyede 10+ update aliyor ve dead tuple birikiyor. fillfactor azaltmak HOT updatei artirir.' });
     if (nLiveTup > 1000 && nModSinceAnalyze > nLiveTup * 0.1) tags.push({ key: 'stale-stats', label: 'Stale Stats', icon: '📊', className: 'bg-blue-100 text-blue-700', title: 'Live satirin %10+ kadari analyze sonrasi degismis - istatistik eski, plan kalitesi dusuyor.' });
@@ -1581,46 +1600,53 @@ function QueryWalTrendPanel({ instancePk, seriesId, range, autoRefresh, compareK
     const tooltipLabelFmt = (_l: any, p: any) => formatBucketFull(String((p?.[0]?.payload as any)?.bucket_iso ?? _l));
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <InsightChart title="WAL Yazimi (MB)" height={200}>
-                <AreaChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
-                    {daySeparatorLabels.map(lbl => (
-                        <ReferenceLine key={`qw-wal-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
-                    ))}
-                    {compareKey && <Area type="monotone" dataKey="previous_wal_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                    <Area type="monotone" dataKey="current_wal_mb" name="Su an" stroke="#7C3AED" fill="#DDD6FE" fillOpacity={0.65} strokeWidth={2} />
-                </AreaChart>
-            </InsightChart>
-            <InsightChart title="WAL Kayit Sayisi" height={200}>
-                <AreaChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
-                    {daySeparatorLabels.map(lbl => (
-                        <ReferenceLine key={`qw-rec-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
-                    ))}
-                    {compareKey && <Area type="monotone" dataKey="previous_records" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
-                    <Area type="monotone" dataKey="current_records" name="Su an" stroke="#0891B2" fill="#A5F3FC" strokeWidth={2} />
-                </AreaChart>
-            </InsightChart>
-            <InsightChart title="FPI Trend" height={200}>
-                <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
-                    <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
-                    {daySeparatorLabels.map(lbl => (
-                        <ReferenceLine key={`qw-fpi-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
-                    ))}
-                    {compareKey && <Line type="monotone" dataKey="previous_fpi" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
-                    <Line type="monotone" dataKey="current_fpi" name="Su an" stroke="#EA580C" strokeWidth={2} dot={false} />
-                </LineChart>
-            </InsightChart>
+        <div className="space-y-2">
+            {data?.raw_retention_limited && (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Sorgu bazli WAL trend max {data.raw_retention_days ?? 7} gun gosterilir. Hourly aggregate'te sorgu bazli kirilim mevcut degil.
+                </div>
+            )}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <InsightChart title="WAL Yazimi (MB)" height={200}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`qw-wal-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Area type="monotone" dataKey="previous_wal_mb" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_wal_mb" name="Su an" stroke="#7C3AED" fill="#DDD6FE" fillOpacity={0.65} strokeWidth={2} />
+                    </AreaChart>
+                </InsightChart>
+                <InsightChart title="WAL Kayit Sayisi" height={200}>
+                    <AreaChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`qw-rec-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Area type="monotone" dataKey="previous_records" name={compareLabel(compareKey)} stroke="#94A3B8" fill="#F1F5F9" fillOpacity={0.25} strokeWidth={2} strokeDasharray="4 3" connectNulls />}
+                        <Area type="monotone" dataKey="current_records" name="Su an" stroke="#0891B2" fill="#A5F3FC" strokeWidth={2} />
+                    </AreaChart>
+                </InsightChart>
+                <InsightChart title="FPI Trend" height={200}>
+                    <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={compactNumber} />
+                        <Tooltip content={<ChartTooltip />} labelFormatter={tooltipLabelFmt} />
+                        {daySeparatorLabels.map(lbl => (
+                            <ReferenceLine key={`qw-fpi-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                        ))}
+                        {compareKey && <Line type="monotone" dataKey="previous_fpi" name={compareLabel(compareKey)} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                        <Line type="monotone" dataKey="current_fpi" name="Su an" stroke="#EA580C" strokeWidth={2} dot={false} />
+                    </LineChart>
+                </InsightChart>
+            </div>
         </div>
     );
 }
@@ -1737,6 +1763,205 @@ function QueryCacheHitTrendPanel({ instancePk, seriesId, range, autoRefresh, com
 }
 
 // =========================================================================
+// LONG OPERATIONS sekmesi
+// =========================================================================
+interface LongOperationRow {
+    operation_type: string;
+    command: string | null;
+    pid: string | number | null;
+    datid: string | number | null;
+    datname: string | null;
+    relid: string | number | null;
+    schemaname: string | null;
+    relname: string | null;
+    first_seen: string;
+    last_seen: string;
+    duration_sec: string | number;
+    phase: string | null;
+    progress_pct: string | number | null;
+    source_table: string;
+}
+
+interface LongOperationsResponse {
+    rows: LongOperationRow[];
+    totals: {
+        total: number;
+        vacuum_full: number;
+        cluster: number;
+        reindex: number;
+        create_index: number;
+        copy: number;
+        long_vacuum: number;
+    };
+}
+
+function operationClass(type: string): string {
+    switch (type) {
+        case 'VACUUM FULL':
+            return 'bg-red-100 text-red-700';
+        case 'CLUSTER':
+            return 'bg-orange-100 text-orange-700';
+        case 'REINDEX':
+            return 'bg-amber-100 text-amber-700';
+        case 'CREATE INDEX':
+            return 'bg-blue-100 text-blue-700';
+        case 'COPY':
+            return 'bg-purple-100 text-purple-700';
+        default:
+            return 'bg-emerald-100 text-emerald-700';
+    }
+}
+
+function LongOperationsCard({ instancePk, range, autoRefresh, instanceName }: { instancePk: number | null; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    if (instancePk == null) {
+        return <EmptyState icon="OPS" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
+    }
+    return <LongOperationsCardInner instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={instanceName} />;
+}
+
+function LongOperationsCardInner({ instancePk, range, autoRefresh, instanceName }: { instancePk: number; range: TimeRange; autoRefresh: boolean; instanceName?: string }) {
+    const [search, setSearch] = useState<string>('');
+    const [searchInput, setSearchInput] = useState<string>('');
+    const [datname, setDatname] = useState<string>('');
+
+    const searchQp = search ? `&search=${encodeURIComponent(search)}` : '';
+    const datnameQp = datname ? `&datname=${encodeURIComponent(datname)}` : '';
+
+    const { data: databases } = useQuery({
+        queryKey: ['insights-databases', instancePk],
+        queryFn: () => apiGet<string[]>(`/insights/${instancePk}/databases`),
+        staleTime: 60_000,
+        refetchInterval: false,
+    });
+
+    const { data, isLoading, isFetching, refetch } = useQuery({
+        queryKey: ['insights-long-operations', instancePk, range.fromIso, range.toIso, search, datname],
+        queryFn: () => apiGet<LongOperationsResponse>(
+            `/insights/${instancePk}/long-operations?from=${encodeURIComponent(range.fromIso)}&to=${encodeURIComponent(range.toIso)}&limit=50${searchQp}${datnameQp}`,
+        ),
+        refetchInterval: autoRefresh ? 30_000 : false,
+        staleTime: 0,
+    });
+
+    const rows = data?.rows ?? [];
+    const totals = data?.totals;
+
+    function applySearch() {
+        setSearch(searchInput.trim());
+    }
+
+    function clearSearch() {
+        setSearchInput('');
+        setSearch('');
+    }
+
+    return (
+        <div className="space-y-4">
+            <TabIntro {...TAB_INTROS.longOps} />
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <div className="text-sm text-[#64748B]">
+                            <span className="font-semibold text-[#1E293B]">Long Operations</span>
+                            <span className="mx-2 text-[#CBD5E1]">|</span>
+                            <span>{instanceName ?? `Instance ${instancePk}`}</span>
+                            <span className="mx-2 text-[#CBD5E1]">|</span>
+                            <span>{rangeLabel(range)}</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded bg-slate-100 px-2 py-1 text-slate-700">Total: <b>{totals?.total ?? 0}</b></span>
+                            <span className="rounded bg-red-100 px-2 py-1 text-red-700">FULL: <b>{totals?.vacuum_full ?? 0}</b></span>
+                            <span className="rounded bg-orange-100 px-2 py-1 text-orange-700">CLUSTER: <b>{totals?.cluster ?? 0}</b></span>
+                            <span className="rounded bg-amber-100 px-2 py-1 text-amber-700">REINDEX: <b>{totals?.reindex ?? 0}</b></span>
+                            <span className="rounded bg-blue-100 px-2 py-1 text-blue-700">INDEX: <b>{totals?.create_index ?? 0}</b></span>
+                            <span className="rounded bg-purple-100 px-2 py-1 text-purple-700">COPY: <b>{totals?.copy ?? 0}</b></span>
+                            <span className="rounded bg-emerald-100 px-2 py-1 text-emerald-700">VACUUM: <b>{totals?.long_vacuum ?? 0}</b></span>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <select
+                            value={datname}
+                            onChange={(e) => setDatname(e.target.value)}
+                            className="rounded border border-[#CBD5E1] bg-white px-2 py-1 text-xs text-[#1E293B]"
+                        >
+                            <option value="">Tum DB</option>
+                            {(databases ?? []).map(db => <option key={db} value={db}>{db}</option>)}
+                        </select>
+                        <input
+                            value={searchInput}
+                            onChange={(e) => setSearchInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') applySearch();
+                            }}
+                            placeholder="PID, schema veya tablo"
+                            className="w-56 rounded border border-[#CBD5E1] px-2 py-1 text-xs text-[#1E293B] placeholder:text-[#94A3B8]"
+                        />
+                        <button type="button" onClick={applySearch} className="rounded border border-[#CBD5E1] px-2 py-1 text-xs text-[#1E293B] hover:bg-[#F8FAFC]">Ara</button>
+                        {search && <button type="button" onClick={clearSearch} className="rounded border border-[#CBD5E1] px-2 py-1 text-xs text-[#64748B] hover:bg-[#F8FAFC]">Temizle</button>}
+                        <button type="button" onClick={() => refetch()} className="rounded border border-[#CBD5E1] px-2 py-1 text-xs text-[#64748B] hover:bg-[#F8FAFC]">
+                            {isFetching ? 'Yenileniyor' : 'Yenile'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-hidden">
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={8} /></div>
+                ) : rows.length === 0 ? (
+                    <EmptyState
+                        icon="OPS"
+                        title="Operasyon yok"
+                        description="Bu pencerede yakalanan ozel operasyon yok (60sn cycle - kisa olanlar kacirilabilir)."
+                    />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full text-sm">
+                            <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                                <tr>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Operasyon</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tablo</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">PID</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Baslangic</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Sure</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Phase</th>
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide">Progress %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map((row, idx) => {
+                                    const tableName = [row.schemaname, row.relname].filter(Boolean).join('.') || '\u2014';
+                                    const progress = row.progress_pct == null ? null : toNum(row.progress_pct);
+                                    return (
+                                        <tr key={`${row.operation_type}-${row.pid}-${row.first_seen}-${idx}`} className="border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                                            <td className="py-2 px-3 whitespace-nowrap">
+                                                <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${operationClass(row.operation_type)}`}>{row.operation_type}</span>
+                                                {row.command && <div className="mt-1 max-w-[220px] truncate text-[11px] text-[#94A3B8]" title={row.command}>{row.command}</div>}
+                                            </td>
+                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname ?? '\u2014'}</td>
+                                            <td className="py-2 px-3 text-xs font-mono text-[#1E293B] whitespace-nowrap">{tableName}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{row.pid ?? '\u2014'}</td>
+                                            <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatBucketFull(row.first_seen)}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{formatDurationSec(toNum(row.duration_sec))}</td>
+                                            <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{row.phase ?? '\u2014'}</td>
+                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
+                                                {progress == null ? '\u2014' : `%${progress.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}`}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// =========================================================================
 // TEMP SPILL sekmesi
 // =========================================================================
 interface TempSpillRow {
@@ -1769,6 +1994,7 @@ interface TempSpillTotals {
     top_datname: { datname: string | null; mb: number; pct: number } | null;
     peak: { bucket_start: string; mb: number } | null;
     work_mem_kb: number | null;
+    temp_p95_mb_per_call?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -1904,12 +2130,12 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateTempTags(row)) {
+            for (const tag of calculateTempTags(row, totals?.temp_p95_mb_per_call)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.temp_p95_mb_per_call]);
 
     const sortButtons: { key: TempSortMode; label: string; tip: string }[] = [
         { key: 'temp_written', label: 'Yazılan Temp', tip: 'sum(temp_blks_written) — work_mem yetmediginde diske yazilan' },
@@ -1939,6 +2165,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
                         <div>Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
+                        <div>Mevcut work_mem: <b className="text-[#1E293B]">{totals?.work_mem_kb == null ? '\u2014' : formatBytes(totals.work_mem_kb * 1024)}</b></div>
                         <div>
                             {'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b>
                             <span className="mx-1">·</span>
@@ -2102,7 +2329,7 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     const tempWriteSec = row.temp_write_time_sec == null ? 0 : toNum(row.temp_write_time_sec);
                                     const rowsPerTempMb = row.rows_per_temp_mb == null ? null : toNum(row.rows_per_temp_mb);
                                     const rowsPerTempClass = rowsPerTempMb == null ? 'text-[#64748B]' : rowsPerTempMb >= 10000 ? 'text-emerald-700' : rowsPerTempMb >= 1000 ? 'text-[#64748B]' : 'text-orange-700';
-                                    const tags = calculateTempTags(row);
+                                    const tags = calculateTempTags(row, totals?.temp_p95_mb_per_call);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
@@ -2232,6 +2459,7 @@ interface CacheHitTotals {
     shared_buffers_kb: number | null;
     effective_cache_size_kb: number | null;
     heavy_reader_count: number;
+    hit_p95_pct?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -2381,12 +2609,12 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateCacheHitTags(row)) {
+            for (const tag of calculateCacheHitTags(row, totals?.hit_p95_pct)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.hit_p95_pct]);
 
     function applySearch() { setSearch(searchInput.trim()); }
     function clearSearch() { setSearchInput(''); setSearch(''); }
@@ -2554,7 +2782,7 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctDiskClass = pctDiskRead == null ? 'bg-slate-100 text-slate-600' : pctDiskRead >= 20 ? 'bg-red-100 text-red-700' : pctDiskRead >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const ioBoundPct = row.io_bound_pct == null ? null : toNum(row.io_bound_pct);
                                     const ioClass = ioBoundPct == null ? 'bg-slate-100 text-slate-600' : ioBoundPct >= 50 ? 'bg-red-100 text-red-700' : ioBoundPct >= 20 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
-                                    const tags = calculateCacheHitTags(row);
+                                    const tags = calculateCacheHitTags(row, totals?.hit_p95_pct);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
@@ -2652,6 +2880,7 @@ interface VacuumLagTotals {
     oldest_vacuum: { schemaname: string; relname: string; datname: string | null; days_since_vacuum: number } | null;
     bloated_count: number;
     stale_count: number;
+    dead_p95_pct?: number | null;
     autovacuum_settings: {
         autovacuum: string | null;
         autovacuum_max_workers: number | null;
@@ -2951,12 +3180,12 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateVacuumLagTags(row)) {
+            for (const tag of calculateVacuumLagTags(row, totals?.dead_p95_pct)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.dead_p95_pct]);
 
     const sortButtons: { key: VacuumSortMode; label: string; tip: string }[] = [
         { key: 'dead_tup', label: 'Dead Tuple', tip: 'En cok dead tuple iceren tablolar.' },
@@ -3192,7 +3421,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                     const bloatBytes = row.dead_bytes_estimate == null ? null : toNum(row.dead_bytes_estimate);
                                     const daysSinceVacuum = row.days_since_vacuum == null ? null : toNum(row.days_since_vacuum);
                                     const hotUpdPct = row.hot_upd_pct == null ? null : toNum(row.hot_upd_pct);
-                                    const tags = calculateVacuumLagTags(row);
+                                    const tags = calculateVacuumLagTags(row, totals?.dead_p95_pct);
                                     return (
                                         <Fragment key={rowKey}>
                                             <tr
@@ -3305,6 +3534,7 @@ interface WALSpikeTotals {
         wal_level: string | null;
         wal_buffers_kb: number | null;
     };
+    wal_p95_mb_per_call?: number | null;
     raw_retention_days?: number;
     hourly_retention_days?: number;
 }
@@ -3449,12 +3679,12 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
     const tagCounts = useMemo(() => {
         const counts: Record<string, { icon: string; count: number }> = {};
         for (const row of rows) {
-            for (const tag of calculateWALTags(row)) {
+            for (const tag of calculateWALTags(row, totals?.wal_p95_mb_per_call)) {
                 counts[tag.key] = { icon: tag.icon, count: (counts[tag.key]?.count ?? 0) + 1 };
             }
         }
         return counts;
-    }, [rows]);
+    }, [rows, totals?.wal_p95_mb_per_call]);
 
     const sortButtons: { key: WALSortMode; label: string; tip: string }[] = [
         { key: 'wal', label: 'Toplam WAL', tip: 'sum(wal_bytes) desc' },
@@ -3706,7 +3936,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const pctClass = pctWal == null ? 'bg-slate-100 text-slate-600' : pctWal >= 20 ? 'bg-red-100 text-red-700' : pctWal >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600';
                                     const fpiRatio = row.fpi_ratio == null ? null : toNum(row.fpi_ratio);
                                     const fpiClass = fpiRatio == null ? 'bg-slate-100 text-slate-600' : fpiRatio > 0.5 ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600';
-                                    const tags = calculateWALTags(row);
+                                    const tags = calculateWALTags(row, totals?.wal_p95_mb_per_call);
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
