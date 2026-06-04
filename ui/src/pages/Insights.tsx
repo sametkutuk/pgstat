@@ -3089,20 +3089,18 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
 
             {hasTrendData && (
                 <div>
-                <div className="flex items-center gap-2 mb-1 text-[11px]">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#CFFAFE] text-[#0E7490] font-medium">
-                        ← Sol Y: Dead tuple
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#EDE9FE] text-[#6D28D9] font-medium">
-                        Sag Y: Vacuum/Analyze alan tablo sayisi →
-                    </span>
-                </div>
-                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={300}>
-                    <ComposedChart data={chartData}>
+                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={320}>
+                    <ComposedChart data={chartData} margin={{ top: 8, right: 50, left: 25, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
                         <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#0891B2' }} tickFormatter={compactNumber} />
-                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#7C3AED' }} allowDecimals={false} />
+                        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#0891B2' }} tickFormatter={compactNumber}
+                               label={{ value: 'Dead tuple', angle: -90, position: 'insideLeft',
+                                        style: { fontSize: 12, fill: '#0891B2', fontWeight: 600, textAnchor: 'middle' },
+                                        offset: 10 }} />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#7C3AED' }} allowDecimals={false}
+                               label={{ value: 'Tablo sayisi', angle: 90, position: 'insideRight',
+                                        style: { fontSize: 12, fill: '#7C3AED', fontWeight: 600, textAnchor: 'middle' },
+                                        offset: 10 }} />
                         <Tooltip content={trendTooltip} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         {daySeparatorLabels.map(lbl => (
