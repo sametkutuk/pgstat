@@ -2913,7 +2913,7 @@ public class AlertRuleEvaluator {
             case "database_metric.deadlocks"             -> "fact.pg_database_delta|deadlocks_delta|sample_ts";
             case "database_metric.temp_files"            -> "fact.pg_database_delta|temp_files_delta|sample_ts";
             case "database_metric.blk_read_time"         -> "fact.pg_database_delta|blk_read_time_delta|sample_ts";
-            case "database_metric.autovacuum_count"      -> "fact.pg_database_delta|autovacuum_count_delta|sample_ts";
+            case "database_metric.autovacuum_count"      -> "fact.pg_table_stat_delta|autovacuum_count_delta|sample_ts";
             case "database_metric.db_size_bytes"         -> "fact.pg_database_delta|db_size_bytes|sample_ts";
             case "replication_metric.replay_lag_bytes"   -> "fact.pg_replication_snapshot|replay_lag_bytes|snapshot_ts";
             case "statement_metric.calls"                -> "fact.pgss_delta|calls_delta|sample_ts";
