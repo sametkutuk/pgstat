@@ -46,16 +46,16 @@ public class SystemHealthEvaluator {
         this.alertService = alertService;
     }
 
-    @Scheduled(fixedDelay = 5 * 60 * 1000L)
+    @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 30_000L)
     public void evaluate() {
-        log.debug("SystemHealthEvaluator evaluate cycle started");
+        log.info("SystemHealthEvaluator evaluate cycle started");
         runCheck("stat_collection_failures", this::checkStatCollectionFailures);
         runCheck("partition_missing", this::checkPartitionMissing);
         runCheck("instance_unreachable", this::checkInstanceUnreachable);
         runCheck("collector_stale", this::checkCollectorStale);
         runCheck("cleanup_failed", this::checkCleanupFailed);
         runCheck("disk_full", this::checkDiskFull);
-        log.debug("SystemHealthEvaluator evaluate cycle finished");
+        log.info("SystemHealthEvaluator evaluate cycle finished");
     }
 
     private void runCheck(String name, Runnable check) {
