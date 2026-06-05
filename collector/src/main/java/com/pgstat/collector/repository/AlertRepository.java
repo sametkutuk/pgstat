@@ -191,7 +191,7 @@ public class AlertRepository {
             where status = 'open'
               and last_seen_at < now() - make_interval(mins => ?)
               and alert_code in (
-                -- AlertEvidenceResolver tum transient alert kodlarini kanit-bazli kapatiyor.
+                -- Stale auto-resolve closes transient alerts not refreshed recently.
                 -- Burada sadece stats_reset_detected kaldi: event tipi, manuel ACK daha
                 -- mantikli ama stale fallback gelecekte istenirse kapatabilir.
                 'stats_reset_detected'

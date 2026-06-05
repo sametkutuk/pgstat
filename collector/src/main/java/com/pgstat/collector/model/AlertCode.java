@@ -1,44 +1,19 @@
 package com.pgstat.collector.model;
 
 /**
- * Desteklenen alert kodlari.
- * ops.alert tablosundaki alert_code degerlerine karsilik gelir.
+ * Supported alert codes.
+ * ops.alert alert_code values are mapped from this enum.
  */
 public enum AlertCode {
 
-    // Instance seviyesi
-    CONNECTION_FAILURE("connection_failure", "critical", "instance"),
-    AUTHENTICATION_FAILURE("authentication_failure", "critical", "instance"),
-    PERMISSION_DENIED("permission_denied", "error", "instance"),
-    EXTENSION_MISSING("extension_missing", "warning", "instance"),
-    HIGH_CONNECTION_USAGE("high_connection_usage", "warning", "instance"),
-    LONG_RUNNING_QUERY("long_running_query", "warning", "instance"),
-    REPLICATION_LAG("replication_lag", "warning", "instance"),
-    HIGH_BLOAT_RATIO("high_bloat_ratio", "info", "instance"),
-    STALE_DATA("stale_data", "warning", "instance"),
-    STATS_RESET_DETECTED("stats_reset_detected", "info", "instance"),
-    PARAMETER_CHANGED("parameter_changed", "info", "instance"),
-    BOOTSTRAP_FAILED("bootstrap_failed", "error", "instance"),
-    SECRET_REF_ERROR("secret_ref_error", "critical", "instance"),
-    LOCK_CONTENTION("lock_contention", "warning", "instance"),
+    SYSTEM_STAT_COLLECTION_FAILED("system_stat_collection_failed", "error", "system"),
+    SYSTEM_PARTITION_MISSING("system_partition_missing", "critical", "system"),
+    SYSTEM_INSTANCE_UNREACHABLE("system_instance_unreachable", "critical", "system"),
+    SYSTEM_COLLECTOR_STALE("system_collector_stale", "warning", "system"),
+    SYSTEM_CLEANUP_FAILED("system_cleanup_failed", "error", "system"),
+    SYSTEM_DISK_FULL("system_disk_full", "critical", "system"),
 
-    // Aksiyon-odakli alert'ler (ActionableAlertEvaluator tarafindan tetiklenir)
-    INDEX_SUSPECT_MISSING("index_suspect_missing", "warning", "instance"),
-    INDEX_UNUSED("index_unused", "info", "instance"),
-    INDEX_INVALID("index_invalid", "warning", "instance"),
-    HIGH_TEMP_FILES("high_temp_files", "warning", "instance"),
-    HIGH_TEMP_FILES_DAILY("high_temp_files_daily", "warning", "instance"),
-    HIGH_TEMP_SQLS_DAILY("high_temp_sqls_daily", "warning", "instance"),
-    IDLE_IN_TX_TIME_HIGH("idle_in_tx_time_high", "warning", "instance"),
-    REPLICATION_SLOT_INACTIVE("replication_slot_inactive", "warning", "instance"),
-
-    // Kullanici tanimli kurallar
-    USER_DEFINED_RULE("user_defined_rule", "warning", "rule"),
-
-    // Job seviyesi
-    JOB_PARTIAL_FAILURE("job_partial_failure", "warning", "job"),
-    JOB_FAILED("job_failed", "error", "job"),
-    ADVISORY_LOCK_SKIP("advisory_lock_skip", "info", "job");
+    USER_DEFINED_RULE("user_defined_rule", "warning", "rule");
 
     private final String code;
     private final String defaultSeverity;

@@ -251,10 +251,7 @@ public class ReportGenerator {
                        i.display_name as instance_name
                 from ops.alert a
                 left join control.instance_inventory i on i.instance_pk = a.instance_pk
-                join control.system_alert_config c
-                  on c.alert_code = a.alert_code and c.instance_pk is null
-                where c.is_event_type = true
-                  and c.include_in_daily_report = true
+                where a.alert_source in ('system', 'adaptive')
                   and (a.first_seen_at > now() - interval '24 hours'
                        or a.last_seen_at > now() - interval '24 hours')
                 order by a.last_seen_at desc

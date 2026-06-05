@@ -1,19 +1,14 @@
 package com.pgstat.collector.collector;
 
-import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.InstanceCapability;
 import com.pgstat.collector.model.InstanceInfo;
-import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.InventoryRepository;
 import com.pgstat.collector.repository.StateRepository;
-import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.SecretResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
-import java.util.Map;
 
 /**
  * Bootstrap state machine — yeni instance'lari ready durumuna getirir.
@@ -35,23 +30,14 @@ public class BootstrapHandler {
 
     private final DiscoveryCollector discoveryCollector;
     private final InventoryRepository inventoryRepo;
-    private final AlertRepository alertRepo;
     private final StateRepository stateRepo;
-    private final AlertMessageRenderer renderer;
-    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
 
     public BootstrapHandler(DiscoveryCollector discoveryCollector,
                             InventoryRepository inventoryRepo,
-                            AlertRepository alertRepo,
-                            StateRepository stateRepo,
-                            AlertMessageRenderer renderer,
-                            com.pgstat.collector.service.SystemAlertConfigCache configCache) {
+                            StateRepository stateRepo) {
         this.discoveryCollector = discoveryCollector;
         this.inventoryRepo = inventoryRepo;
-        this.alertRepo = alertRepo;
         this.stateRepo = stateRepo;
-        this.renderer = renderer;
-        this.configCache = configCache;
     }
 
     /**
@@ -84,11 +70,6 @@ public class BootstrapHandler {
         } catch (SecretResolver.SecretResolveException e) {
             log.error("Bootstrap secret hatasi: {} — {}", instance.instanceId(), e.getMessage());
             String msg = "Secret cozumleme hatasi: " + e.getMessage();
-            Map<String, Object> ctx = baseCtx(instance);
-            ctx.put("error_message", e.getMessage());
-            ctx.put("secret_ref", e.getMessage());
-            raiseAlert(instance, AlertCode.SECRET_REF_ERROR, ctx,
-                    "Secret cozumleme hatasi: " + instance.instanceId(), msg);
             inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             stateRepo.updateLastError(instance.instancePk(), msg);
 
@@ -96,11 +77,6 @@ public class BootstrapHandler {
             log.error("Bootstrap hatasi: {} state={} — {}",
                     instance.instanceId(), state, e.getMessage(), e);
             String msg = state + " adiminda hata: " + e.getMessage();
-            Map<String, Object> ctx = baseCtx(instance);
-            ctx.put("phase", state);
-            ctx.put("error_message", e.getMessage());
-            raiseAlert(instance, AlertCode.BOOTSTRAP_FAILED, ctx,
-                    "Bootstrap basarisiz: " + instance.instanceId(), msg);
             inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             stateRepo.updateLastError(instance.instancePk(), msg);
         }
@@ -128,10 +104,6 @@ public class BootstrapHandler {
         // pg_stat_statements yoksa degraded'a gec (temel ozelligi eksik)
         if (!cap.hasPgStatStatements()) {
             log.warn("pg_stat_statements bulunamadi, degraded: {}", instance.instanceId());
-            Map<String, Object> ctx = baseCtx(instance);
-            raiseAlert(instance, AlertCode.EXTENSION_MISSING, ctx,
-                    "Extension eksik: " + instance.instanceId(),
-                    "pg_stat_statements extension'i bulunamadi");
             inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             return;
         }
@@ -164,55 +136,4 @@ public class BootstrapHandler {
         // Simdilik state gecisini yap.
         inventoryRepo.updateBootstrapState(instance.instancePk(), "ready");
         log.info("Bootstrap tamamlandi, ready: {}", instance.instanceId());
-    }
-
-    // -------------------------------------------------------------------------
-    // Alert yardimcisi
-    // -------------------------------------------------------------------------
-
-    /**
-     * Renderer ile sablon uygular, sonra upsert eder.
-     * Sablon yoksa ya da render hata verirse fallback metinleri kullanir.
-     */
-    private void raiseAlert(InstanceInfo instance, AlertCode code,
-                            Map<String, Object> ctx,
-                            String fallbackTitle, String fallbackMessage) {
-        // Config check: bu instance için bu alert aktif mi?
-        if (!configCache.isEnabled(code.getCode(), instance.instancePk())) return;
-
-        String alertKey = code.getCode() + ":" + code.getSourceComponent()
-                + ":" + instance.instancePk();
-        String title = fallbackTitle;
-        String message = fallbackMessage;
-        try {
-            String[] rendered = renderer.renderForCode(code.getCode(), ctx,
-                    fallbackTitle, fallbackMessage);
-            title = rendered[0];
-            message = rendered[1];
-        } catch (Exception e) {
-            log.debug("Alert template render hatasi code={}: {}", code.getCode(), e.getMessage());
-        }
-
-        // details_json: hata bilgisi ve instance context'i
-        String detailsJson = new com.pgstat.collector.service.AlertDetailsBuilder()
-            .setKind("data_quality")
-            .addContext("instance_id", instance.instanceId())
-            .addContext("host", instance.host() + ":" + instance.port())
-            .addContext("bootstrap_state", instance.bootstrapState())
-            .addContext("error", ctx.get("error_message"))
-            .build();
-
-        alertRepo.upsert(alertKey, code, instance.instancePk(),
-                null, null, title, message, detailsJson);
-    }
-
-    /** Tum alert'ler icin ortak instance context'i. */
-    private Map<String, Object> baseCtx(InstanceInfo instance) {
-        Map<String, Object> ctx = new HashMap<>();
-        ctx.put("instance", instance.instanceId());
-        ctx.put("instance_pk", instance.instancePk());
-        ctx.put("host", instance.host());
-        ctx.put("port", instance.port());
-        return ctx;
-    }
-}
+    }}

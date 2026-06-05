@@ -68,19 +68,14 @@ public class JobOrchestrator {
 
     // Gece snapshot + aksiyon-odakli alert'ler
     private final com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector;
-    private final com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator;
-    private final com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver;
-    private final com.pgstat.collector.service.SystemAlertConfigCache systemAlertConfigCache;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
     private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
 
     // Acute alert dispatch frekansi — son tetikleme zamani.
-    private volatile long lastAcuteEvalMs = 0;
 
     // Rolling alert evaluation — 15 dakikada bir (temp files, idle in tx, inactive slot)
     // Her 5 saniyede calistirmak gereksiz yuk, 15dk yeterli.
-    private volatile long lastRollingEvalMs = 0;
 
     // Saat-bazli job idempotency — saat eslesmesi 1 saat surdugu icin her 5s'de
     // tekrar tetiklenmesin diye gun bazinda guard tutuyoruz. UTC saatleri:
@@ -117,9 +112,6 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.PurgeEvaluator purgeEvaluator,
                            com.pgstat.collector.service.PgssResetTracker resetTracker,
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
-                           com.pgstat.collector.service.ActionableAlertEvaluator actionableAlertEvaluator,
-                           com.pgstat.collector.service.AlertEvidenceResolver alertEvidenceResolver,
-                           com.pgstat.collector.service.SystemAlertConfigCache systemAlertConfigCache,
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
                            com.pgstat.collector.service.WorkloadClassifier workloadClassifier) {
@@ -142,9 +134,6 @@ public class JobOrchestrator {
         this.purgeEvaluator = purgeEvaluator;
         this.resetTracker = resetTracker;
         this.nightlySnapshotCollector = nightlySnapshotCollector;
-        this.actionableAlertEvaluator = actionableAlertEvaluator;
-        this.alertEvidenceResolver = alertEvidenceResolver;
-        this.systemAlertConfigCache = systemAlertConfigCache;
         this.jdbc = jdbc;
         this.reportGenerator = reportGenerator;
         this.workloadClassifier = workloadClassifier;
@@ -225,13 +214,6 @@ public class JobOrchestrator {
         try (AdvisoryLockManager.LockHandle lock = lockManager.tryAcquire(jobType)) {
             if (lock == null) {
                 // Lock alinamadi — baska kopya calisiyor, sessizce atla
-                java.util.Map<String, Object> ctx = new java.util.HashMap<>();
-                ctx.put("job_type", jobType);
-                ctx.put("skipped_at", java.time.Instant.now().toString());
-                ctx.put("severity", "info");
-                alertService.raiseJobAlert(AlertCode.ADVISORY_LOCK_SKIP, ctx,
-                    "Advisory lock alinamadi: " + jobType,
-                    jobType + " job'i icin lock alinamadi, baska kopya calisiyor olabilir");
                 return;
             }
             jobAction.run();
@@ -242,7 +224,7 @@ public class JobOrchestrator {
             ctx.put("error_message", e.getMessage());
             ctx.put("job_run_at", java.time.Instant.now().toString());
             ctx.put("severity", "error");
-            alertService.raiseJobAlert(AlertCode.JOB_FAILED, ctx,
+            alertService.raiseJobAlert(AlertCode.SYSTEM_CLEANUP_FAILED, ctx,
                 jobType + " job basarisiz", e.getMessage());
         }
     }
@@ -519,16 +501,7 @@ public class JobOrchestrator {
                     purgeEvaluator.purgeReportsAndNotifications();
                     // Snapshot raw → hourly rollup (24h+ olanları taşır, raw'ı 24h'a iner)
                     purgeEvaluator.rollupSnapshotsHourly();
-                    // Auto-resolve katmanlari:
-                    // 1) Evidence-based — alert'i tetikleyen sorgu hala temp yaziyor mu?
-                    //    Sadece high_temp_files + temp-related user_defined_rule.
-                    try {
-                        int closedEv = alertEvidenceResolver.resolveByEvidence();
-                        if (closedEv > 0) log.info("Evidence-resolved {} alert (saatlik)", closedEv);
-                    } catch (Exception e) {
-                        log.warn("Evidence resolver hatasi: {}", e.getMessage());
-                    }
-                    // 2) Stale fallback: 2 saatten beri tetiklenmeyen diger transient alert'ler.
+                    // Auto-resolve stale fallback.
                     try {
                         int closed = alertService.autoResolveStale(120);
                         if (closed > 0) log.info("Auto-resolved {} stale alert (>2h)", closed);
@@ -557,15 +530,9 @@ public class JobOrchestrator {
                             if (inst != null) nightlySnapshotCollector.collectHotSettings(inst);
                         } else if ("evaluate_alerts".equals(cmd)) {
                             // Tüm acute + rolling actionable + user-defined rule'ları hemen değerlendir
-                            actionableAlertEvaluator.evaluateAcute();
-                            actionableAlertEvaluator.evaluateFrequent();
                             alertRuleEvaluator.evaluate();
                             // 1) Kanit-bazli auto-resolve (high_temp_files + temp-related user_defined_rule).
                             // "Alert'i tetikleyen sorgu hala temp yaziyor mu?" sorusunu sorar.
-                            try {
-                                int closedEv = alertEvidenceResolver.resolveByEvidence();
-                                if (closedEv > 0) log.info("Manuel evaluate sonrası {} alert evidence-resolved", closedEv);
-                            } catch (Exception ignore) {}
                             // 2) Stale fallback (high_temp_files HARIC diger 11 alert kodu icin).
                             try {
                                 int closed = alertService.autoResolveStale(1);
@@ -645,7 +612,6 @@ public class JobOrchestrator {
 
                     // Snapshot toplandiktan hemen sonra gunluk alert'leri de degerlendir
                     // (INDEX_SUSPECT_MISSING, INDEX_UNUSED — snapshot verisine bagli)
-                    actionableAlertEvaluator.evaluateAll();
                     // Workload uzun-vade (90g) sınıflandırması — UTC 03:00 nightly ile aynı pencerede
                     try {
                         workloadClassifier.classifyLongTerm();
@@ -707,23 +673,12 @@ public class JobOrchestrator {
             // 4. Alert kurallarini degerlendir (user-defined rules — her cycle)
             alertRuleEvaluator.evaluate();
 
-            long now = System.currentTimeMillis();
-
             // 4b. Acute alert'ler — siklik UI'dan ayarlanabilir (default 5s, 5-300s arasi).
             // LONG_RUNNING_QUERY, HIGH_CONNECTION_USAGE, STALE_DATA
-            long acuteIntervalMs = systemAlertConfigCache.getAcuteIntervalSeconds(5) * 1000L;
-            if (now - lastAcuteEvalMs >= acuteIntervalMs) {
-                lastAcuteEvalMs = now;
-                actionableAlertEvaluator.evaluateAcute();
-            }
+            // TODO: SystemHealthEvaluator burada cagirilacak - Asama 2.
 
             // 4c. Frequent (Rolling) alert'ler — UI'dan ayarlanabilir (default 900s = 15dk).
             // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
-            long frequentIntervalMs = systemAlertConfigCache.getFrequentIntervalSeconds(900) * 1000L;
-            if (now - lastRollingEvalMs >= frequentIntervalMs) {
-                lastRollingEvalMs = now;
-                actionableAlertEvaluator.evaluateFrequent();
-            }
 
             // 5. Purge evaluator — retention temizligi
             purgeEvaluator.evaluate();
@@ -740,7 +695,7 @@ public class JobOrchestrator {
             ctx.put("error_message", e.getMessage());
             ctx.put("job_run_at", java.time.Instant.now().toString());
             ctx.put("severity", "error");
-            alertService.raiseJobAlert(AlertCode.JOB_FAILED, ctx,
+            alertService.raiseJobAlert(AlertCode.SYSTEM_CLEANUP_FAILED, ctx,
                 "Rollup job basarisiz", e.getMessage());
         }
 
@@ -786,7 +741,7 @@ public class JobOrchestrator {
         opsRepo.finishJobRun(jobRunId, status, totalRows, succeeded, failed, errorText);
 
         if (failed > 0) {
-            AlertCode code = failed == futures.size() ? AlertCode.JOB_FAILED : AlertCode.JOB_PARTIAL_FAILURE;
+            AlertCode code = AlertCode.SYSTEM_CLEANUP_FAILED;
             java.util.Map<String, Object> ctx = new java.util.HashMap<>();
             ctx.put("job_type", jobType);
             ctx.put("failed_count", failed);
@@ -795,7 +750,7 @@ public class JobOrchestrator {
             ctx.put("error_message", errorText != null ? errorText : "—");
             ctx.put("failed_instances", errorText != null ? errorText : "—");
             ctx.put("job_run_at", java.time.Instant.now().toString());
-            ctx.put("severity", code == AlertCode.JOB_FAILED ? "error" : "warning");
+            ctx.put("severity", failed == futures.size() ? "error" : "warning");
             alertService.raiseJobAlert(code, ctx,
                 jobType + " job: " + failed + "/" + (succeeded + failed) + " basarisiz",
                 errorText);

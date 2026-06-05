@@ -1,14 +1,11 @@
 package com.pgstat.collector.collector;
 
-import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.model.StatementSample;
-import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
 import com.pgstat.collector.repository.FactRepository;
 import com.pgstat.collector.repository.StateRepository;
-import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.EpochManager;
 import com.pgstat.collector.service.PgStatStatementsExtensionResolver;
@@ -55,10 +52,7 @@ public class StatementsCollector {
     private final FactRepository factRepo;
     private final DeltaCalculator deltaCalc;
     private final EpochManager epochManager;
-    private final AlertRepository alertRepo;
     private final PgssResetTracker resetTracker;
-    private final AlertMessageRenderer renderer;
-    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
     private final PgStatStatementsExtensionResolver pgssResolver;
 
     /**
@@ -77,10 +71,7 @@ public class StatementsCollector {
                                FactRepository factRepo,
                                DeltaCalculator deltaCalc,
                                EpochManager epochManager,
-                               AlertRepository alertRepo,
                                PgssResetTracker resetTracker,
-                               AlertMessageRenderer renderer,
-                               com.pgstat.collector.service.SystemAlertConfigCache configCache,
                                PgStatStatementsExtensionResolver pgssResolver) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
@@ -90,10 +81,7 @@ public class StatementsCollector {
         this.factRepo = factRepo;
         this.deltaCalc = deltaCalc;
         this.epochManager = epochManager;
-        this.alertRepo = alertRepo;
         this.resetTracker = resetTracker;
-        this.renderer = renderer;
-        this.configCache = configCache;
         this.pgssResolver = pgssResolver;
     }
 
@@ -206,48 +194,6 @@ public class StatementsCollector {
                             queryCount, totalCalls, totalExecTime, lastCollect);
                     } catch (Exception e) {
                         log.warn("Reset tracker hatasi: {}", e.getMessage());
-                    }
-                    
-                    String alertMessage = String.format(
-                        "pg_stat_statements reset tespit edildi. " +
-                        "Son bilinen: %d sorgu, %d calls, %.0fms exec time. " +
-                        "Olasi veri kaybi penceresi: %s. " +
-                        "Onceki epoch: %s",
-                        queryCount, totalCalls, totalExecTime, lossWindow,
-                        currentEpochKey != null ? currentEpochKey : "ilk");
-                    
-                    java.util.Map<String, Object> ctx = new java.util.HashMap<>();
-                    ctx.put("instance", "instance_pk=" + instancePk);
-                    ctx.put("instance_pk", instancePk);
-                    ctx.put("query_count", queryCount);
-                    ctx.put("total_calls", totalCalls);
-                    ctx.put("loss_window", lossWindow);
-                    ctx.put("reset_at", java.time.Instant.now().toString());
-                    ctx.put("severity", "info");
-                    // Config check: stats_reset_detected aktif mi?
-                    if (configCache.isEnabled("stats_reset_detected", instancePk)) {
-                        String[] rendered = new String[]{"pg_stat_statements Reset", alertMessage};
-                        try {
-                            rendered = renderer.renderForCode(AlertCode.STATS_RESET_DETECTED.getCode(),
-                                    ctx, "pg_stat_statements Reset", alertMessage);
-                        } catch (Exception ignore) {}
-                        // details_json: reset bilgileri
-                        String resetDetails = new com.pgstat.collector.service.AlertDetailsBuilder()
-                            .setKind("data_quality")
-                            .addContext("query_count", queryCount)
-                            .addContext("total_calls", totalCalls)
-                            .addContext("loss_window", lossWindow)
-                            .addContext("previous_epoch", currentEpochKey)
-                            .addContext("new_epoch", newEpochKey)
-                            .build();
-
-                        alertRepo.upsert(
-                            "pgss_reset:instance:" + instancePk,
-                            AlertCode.STATS_RESET_DETECTED,
-                            instancePk, null, systemIdentifier,
-                            rendered[0],
-                            rendered[1], resetDetails
-                        );
                     }
                     
                     log.warn("pg_stat_statements reset: instance={}, {} sorgu, {} calls, kayip penceresi={}",

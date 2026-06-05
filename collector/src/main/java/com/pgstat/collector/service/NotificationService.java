@@ -31,16 +31,14 @@ public class NotificationService {
     private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
 
     private final JdbcTemplate jdbc;
-    private final SystemAlertConfigCache systemAlertConfigCache;
     private final HttpClient httpClient;
 
     /** JavaMailSender opsiyonel — SMTP ayarları yoksa null kalır */
     @Autowired(required = false)
     private JavaMailSender mailSender;
 
-    public NotificationService(JdbcTemplate jdbc, SystemAlertConfigCache systemAlertConfigCache) {
+    public NotificationService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
-        this.systemAlertConfigCache = systemAlertConfigCache;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -566,19 +564,13 @@ public class NotificationService {
 
     /**
      * Cooldown dakikasini cozumler:
-     *   actionable:* alert'ler -> system_alert_config[alert_code]
      *   user_defined_rule -> alert_rule.cooldown_minutes (per-rule)
-     *                     -> system_alert_config['user_defined_rule'] (global default)
-     *                     -> 60 (hard-code fallback)
-     *   diger -> 60 (varsayilan)
+     *   diger -> 15 (temporary default)
      *
      * @return cooldown dakika; 0 -> spam koruma yok
      */
     private int resolveCooldownMinutes(long alertId, String alertKey, String alertCode, Long instancePk) {
         try {
-            if (alertKey != null && alertKey.startsWith("actionable:")) {
-                return Math.max(0, systemAlertConfigCache.getCooldownMinutes(alertCode, instancePk));
-            }
             if ("user_defined_rule".equals(alertCode)) {
                 // Per-rule cooldown (alert.rule_id -> alert_rule.cooldown_minutes)
                 try {
@@ -589,13 +581,11 @@ public class NotificationService {
                         Integer.class, alertId);
                     if (perRule != null && perRule > 0) return perRule;
                 } catch (Exception ignore) {}
-                // Global default user_defined_rule
-                int global = systemAlertConfigCache.getCooldownMinutes("user_defined_rule", null);
-                return global > 0 ? global : 60;
+                return 15;
             }
-            return 60;
+            return 15;
         } catch (Exception e) {
-            return 60;
+            return 15;
         }
     }
 }

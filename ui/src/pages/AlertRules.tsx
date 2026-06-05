@@ -4,7 +4,6 @@ import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '../api/client';
 import { useToast } from '../components/common/Toast';
 import InfoTip from '../components/common/InfoTip';
 import { SkeletonTable } from '../components/common/Skeleton';
-import SystemAlerts from './SystemAlerts';
 
 // =========================================================================
 // Tipler
@@ -271,7 +270,7 @@ const emptyForm = {
 // =========================================================================
 
 export default function AlertRules() {
-  const [tab, setTab] = useState<'smart' | 'custom' | 'templates' | 'system'>('smart');
+  const [tab, setTab] = useState<'smart' | 'custom' | 'templates'>('smart');
   const [showForm, setShowForm] = useState(false);
   const [editRule, setEditRule] = useState<AlertRule | null>(null);
   const [templateForm, setTemplateForm] = useState<AlertRule | null>(null);
@@ -281,7 +280,7 @@ export default function AlertRules() {
     { k: 'custom', l: '⚙ Özel Kurallar', hint: 'Manuel eşik tanımlı kurallar' },
     { k: 'templates', l: '📋 Template Galerisi', hint: 'Hazır şablonlardan oluştur' },
     { k: 'system', l: '🛡️ Sistem Alert\'leri', hint: 'Otomatik çalışan alert\'ler — instance bazlı kapatılabilir' },
-  ];
+  ].filter((t) => t.k !== 'system');
 
   return (
     <div>
@@ -320,10 +319,6 @@ export default function AlertRules() {
       {tab === 'templates' && (
         <TemplateGallery onActivate={(tpl) => setTemplateForm(tpl)} />
       )}
-      {tab === 'system' && (
-        <SystemAlerts />
-      )}
-
       {showForm && (
         <RuleFormModal
           rule={editRule}

@@ -1,12 +1,9 @@
 package com.pgstat.collector.collector;
 
-import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.ClusterMetricSample;
 import com.pgstat.collector.model.InstanceInfo;
-import com.pgstat.collector.repository.AlertRepository;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.FactRepository;
-import com.pgstat.collector.service.AlertMessageRenderer;
 import com.pgstat.collector.service.DeltaCalculator;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
@@ -15,7 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -46,17 +42,11 @@ public class ClusterCollector {
 
     private static final Logger log = LoggerFactory.getLogger(ClusterCollector.class);
 
-    /** Replication lag alert esigi (5 dakika) */
-    private static final long REPLICATION_LAG_THRESHOLD_SECONDS = 300;
-
     private final SourceConnectionFactory connectionFactory;
     private final SqlFamilyResolver familyResolver;
     private final FactRepository factRepo;
     private final CapabilityRepository capabilityRepo;
-    private final AlertRepository alertRepo;
     private final DeltaCalculator deltaCalc;
-    private final AlertMessageRenderer renderer;
-    private final com.pgstat.collector.service.SystemAlertConfigCache configCache;
 
     /** In-memory delta cache: instancePk → onceki cluster metric sample */
     private final ConcurrentHashMap<Long, ClusterMetricSample> previousSamples = new ConcurrentHashMap<>();
@@ -74,49 +64,12 @@ public class ClusterCollector {
                             SqlFamilyResolver familyResolver,
                             FactRepository factRepo,
                             CapabilityRepository capabilityRepo,
-                            AlertRepository alertRepo,
-                            DeltaCalculator deltaCalc,
-                            AlertMessageRenderer renderer,
-                            com.pgstat.collector.service.SystemAlertConfigCache configCache) {
+                            DeltaCalculator deltaCalc) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.factRepo = factRepo;
         this.capabilityRepo = capabilityRepo;
-        this.alertRepo = alertRepo;
         this.deltaCalc = deltaCalc;
-        this.renderer = renderer;
-        this.configCache = configCache;
-    }
-
-    /**
-     * Sablon ile alert raise yardimcisi.
-     * Render hata verirse fallback metinleri kullanilir.
-     */
-    private void raiseTemplated(String alertKey, AlertCode code, long instancePk,
-                                 java.util.Map<String, Object> ctx,
-                                 String fallbackTitle, String fallbackMsg) {
-        // Config check: bu instance için bu alert aktif mi?
-        if (!configCache.isEnabled(code.getCode(), instancePk)) return;
-
-        String title = fallbackTitle, message = fallbackMsg;
-        try {
-            String[] rendered = renderer.renderForCode(code.getCode(), ctx,
-                    fallbackTitle, fallbackMsg);
-            title = rendered[0];
-            message = rendered[1];
-        } catch (Exception ignore) {}
-
-        // details_json: context bilgilerini kaydet (UI'da gösterilir)
-        com.pgstat.collector.service.AlertDetailsBuilder details =
-            new com.pgstat.collector.service.AlertDetailsBuilder()
-                .setKind("usage_summary");
-        if (ctx != null) {
-            ctx.forEach((k, v) -> {
-                if (v != null && !"severity".equals(k)) details.addContext(k, v);
-            });
-        }
-
-        alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, details.build());
     }
 
     /**
@@ -587,47 +540,13 @@ public class ClusterCollector {
                 );
                 rows++;
 
-                // Adim 6: Replication lag alert kontrolu
-                checkReplicationLagAlert(instancePk, replayLagStr, replayLagBytes);
             }
         }
         return rows;
     }
 
-    private void checkReplicationLagAlert(long instancePk, String replayLagStr,
-                                          long replayLagBytes) {
-        // replay_lag null degilse ve interval olarak parse edilebilirse kontrol et
-        // Basit kontrol: replay_lag_bytes > 0 ve lag string'i "00:05" ten buyukse
-        // Gercek uygulamada interval parse yapilir; burada bytes bazli threshold
-        long warningBytes = configCache.getThreshold(
-            "replication_lag", instancePk, new BigDecimal("50")).longValue() * 1_048_576L;
-        long criticalBytes = warningBytes * 10L;
-        if (replayLagBytes > warningBytes) {
-            String alertKey = "replication_lag:instance:" + instancePk;
-            java.util.Map<String, Object> ctx = new java.util.HashMap<>();
-            ctx.put("instance", "instance_pk=" + instancePk);
-            ctx.put("instance_pk", instancePk);
-            ctx.put("lag_bytes", replayLagBytes);
-            ctx.put("lag_human", humanBytes(replayLagBytes));
-            ctx.put("replay_lag_seconds", replayLagStr);
-            ctx.put("warning_threshold", humanBytes(warningBytes));
-            ctx.put("critical_threshold", humanBytes(criticalBytes));
-            ctx.put("severity", replayLagBytes > criticalBytes ? "critical" : "warning");
-            raiseTemplated(alertKey, AlertCode.REPLICATION_LAG, instancePk, ctx,
-                "Yuksek replication lag",
-                "Replay lag: " + replayLagStr + " (" + replayLagBytes + " bytes)");
-        }
-    }
-
-    private static String humanBytes(long bytes) {
-        if (bytes >= 1_000_000_000L) return String.format("%.1f GB", bytes / 1_000_000_000.0);
-        if (bytes >= 1_000_000L) return String.format("%.1f MB", bytes / 1_000_000.0);
-        if (bytes >= 1_000L) return String.format("%.1f KB", bytes / 1_000.0);
-        return bytes + " B";
-    }
-
     // =========================================================================
-    // Adim 7: Lock snapshot + alert
+    // Adim 7: Lock snapshot
     // =========================================================================
 
     private long collectLocks(Connection conn, SourceQueries queries,
@@ -655,30 +574,6 @@ public class ClusterCollector {
                     blockedByPids
                 );
                 rows++;
-
-                // Lock contention alert: 5 dakikadan fazla bekleyen lock
-                if (waitstart != null) {
-                    long waitMs = java.time.Duration.between(waitstart, now).toMillis();
-                    long thresholdMs = configCache.getThreshold(
-                        "lock_contention", instancePk, new BigDecimal("300")).longValue() * 1000L;
-                    if (waitMs > thresholdMs) {
-                        String alertKey = "lock_contention:instance:" + instancePk;
-                        java.util.Map<String, Object> ctx = new java.util.HashMap<>();
-                        ctx.put("instance", "instance_pk=" + instancePk);
-                        ctx.put("instance_pk", instancePk);
-                        ctx.put("waiting_count", blockedByPids != null ? blockedByPids.length : 0);
-                        ctx.put("lock_mode", rs.getString("mode"));
-                        ctx.put("pid", rs.getInt("pid"));
-                        ctx.put("wait_seconds", waitMs / 1000);
-                        ctx.put("relation", rs.getObject("relation_oid") != null
-                                ? "oid=" + rs.getLong("relation_oid") : "—");
-                        ctx.put("severity", "warning");
-                        raiseTemplated(alertKey, AlertCode.LOCK_CONTENTION, instancePk, ctx,
-                            "Uzun sureli lock bekleme",
-                            "PID " + rs.getInt("pid") + " " + (waitMs / 1000)
-                                    + "s suredir bekliyor, mode=" + rs.getString("mode"));
-                    }
-                }
             }
         }
         return rows;
