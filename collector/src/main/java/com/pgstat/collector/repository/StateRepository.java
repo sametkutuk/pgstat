@@ -66,6 +66,8 @@ public class StateRepository {
                 current_pgss_epoch_key = coalesce(?, s.current_pgss_epoch_key),
                 consecutive_failures = 0,
                 backoff_until = null,
+                last_error = null,
+                last_error_at = null,
                 last_success_at = ?
             where s.instance_pk = ?
             """,
