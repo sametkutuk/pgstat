@@ -2595,7 +2595,7 @@ public class AlertRuleEvaluator {
                     updateLastEval(ruleId, instancePk, mx != null ? mx : BigDecimal.ZERO, null);
                 }
             } catch (Exception e) {
-                log.debug("Flatline sorgu hatasi rule_id={} instance={}: {}", ruleId, instancePk, e.getMessage());
+                log.warn("Flatline sorgu hatasi rule_id={} instance={}: {}", ruleId, instancePk, e.getMessage(), e);
             }
         }
     }
