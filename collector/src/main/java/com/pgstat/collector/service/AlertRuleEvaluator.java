@@ -178,13 +178,16 @@ public class AlertRuleEvaluator {
 
     public void evaluate() {
         List<Map<String, Object>> rules = loadActiveRules();
+        log.info("AlertRuleEvaluator evaluate cycle: {} aktif kural", rules.size());
         if (rules.isEmpty()) return;
-        log.debug("Alert kural degerlendirmesi: {} kural", rules.size());
         for (Map<String, Object> rule : rules) {
             try {
+                log.info("Kural degerlendiriliyor rule_id={} type={} metric={}.{}",
+                    rule.get("rule_id"), rule.get("evaluation_type"),
+                    rule.get("metric_type"), rule.get("metric_name"));
                 evaluateRule(rule);
             } catch (Exception e) {
-                log.error("Kural degerlendirme hatasi rule_id={}: {}", rule.get("rule_id"), e.getMessage());
+                log.error("Kural degerlendirme hatasi rule_id={}: {}", rule.get("rule_id"), e.getMessage(), e);
             }
         }
     }
