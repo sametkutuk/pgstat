@@ -71,6 +71,7 @@ function App() {
                 <Route path="/statements" element={<Statements />} />
                 <Route path="/statements/:seriesId" element={<StatementDetail />} />
                 <Route path="/alerts" element={<AlertsHub />} />
+                <Route path="/alerts/system-health" element={<AlertsHub />} />
                 <Route path="/alerts/rules" element={<AlertsHub />} />
                 <Route path="/alerts/adaptive" element={<AlertsHub />} />
                 <Route path="/alerts/templates" element={<AlertsHub />} />

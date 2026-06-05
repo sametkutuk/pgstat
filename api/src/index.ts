@@ -28,6 +28,7 @@ import auditLogRoutes from './routes/auditLog';
 import onboardingRoutes from './routes/onboarding';
 import preferencesRoutes from './routes/preferences';
 import insightsRoutes from './routes/insights';
+import systemHealthRoutes from './routes/systemHealth';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
@@ -178,6 +179,7 @@ app.use('/api/audit-log', requireAuth, auditLogRoutes);
 app.use('/api/onboarding', requireAuth, onboardingRoutes);
 app.use('/api/preferences', requireAuth, preferencesRoutes);
 app.use('/api/insights', requireAuth, insightsRoutes);
+app.use('/api/system-health', requireAuth, systemHealthRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);

@@ -10,6 +10,7 @@ router.get('/', async (req, res, next) => {
     const status = req.query.status as string; // open, acknowledged, resolved veya bos (tumu)
     const severity = req.query.severity as string;
     const instancePk = req.query.instance_pk as string;
+    const source = req.query.source as string;
     const limit = parseLimit(req.query.limit, 100);
 
     let query = `
@@ -34,6 +35,10 @@ router.get('/', async (req, res, next) => {
     if (instancePk) {
       query += ` and a.instance_pk = $${paramIdx++}`;
       params.push(instancePk);
+    }
+    if (source) {
+      query += ` and a.alert_source = $${paramIdx++}`;
+      params.push(source);
     }
 
     query += ` order by a.last_seen_at desc limit $${paramIdx}`;

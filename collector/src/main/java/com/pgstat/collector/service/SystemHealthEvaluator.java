@@ -49,7 +49,7 @@ public class SystemHealthEvaluator {
     @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 30_000L)
     public void evaluate() {
         log.info("SystemHealthEvaluator evaluate cycle started");
-        runCheck("stat_collection_failures", this::checkStatCollectionFailures);
+        runCheck("stat_collection", this::checkStatCollectionFailures);
         runCheck("partition_missing", this::checkPartitionMissing);
         runCheck("instance_unreachable", this::checkInstanceUnreachable);
         runCheck("collector_stale", this::checkCollectorStale);
@@ -63,6 +63,7 @@ public class SystemHealthEvaluator {
             check.run();
         } catch (Exception e) {
             log.warn("System health check failed: {} - {}", name, e.getMessage());
+            recordHealthState(name, "critical", "check failed: " + e.getMessage());
         }
     }
 
@@ -102,6 +103,12 @@ public class SystemHealthEvaluator {
             );
         }
 
+        int failedCount = rows.stream()
+            .mapToInt(row -> toInt(row.get("fail_count")))
+            .sum();
+        String status = failedCount == 0 ? "ok" : (failedCount <= 2 ? "warning" : "critical");
+        recordHealthState("stat_collection", status, "Son 5dk fail count: " + failedCount);
+
         for (Map<String, Object> open : openAlerts(STAT_COLLECTION_FAILED)) {
             Long instancePk = toLong(open.get("instance_pk"));
             if (instancePk != null && hasRecentSuccessfulJob(instancePk)) {
@@ -113,6 +120,8 @@ public class SystemHealthEvaluator {
     private void checkPartitionMissing() {
         ZoneId zone = ZoneId.systemDefault();
         LocalDate today = LocalDate.now(zone);
+        int missingCount = 0;
+        boolean missingToday = false;
         for (String tableName : PARTITION_PARENTS) {
             MissingPartition missing = null;
             for (int offset = 0; offset <= 3; offset++) {
@@ -128,6 +137,8 @@ public class SystemHealthEvaluator {
                 alertService.resolveSystemAlert(key);
                 continue;
             }
+            missingCount++;
+            if (missing.dayOffset == 0) missingToday = true;
 
             String severity = missing.dayOffset == 0 ? "critical" : "warning";
             String details = new AlertDetailsBuilder()
@@ -146,6 +157,9 @@ public class SystemHealthEvaluator {
                 details
             );
         }
+        String status = missingCount == 0 ? "ok" : (missingToday ? "critical" : "warning");
+        recordHealthState("partition_missing", status,
+            "Kontrol edilen tablo: " + PARTITION_PARENTS.size() + ", eksik: " + missingCount);
     }
 
     private boolean partitionExists(String fullTableName, OffsetDateTime target) {
@@ -206,6 +220,10 @@ public class SystemHealthEvaluator {
             );
         }
 
+        int unreachableCount = rows.size();
+        String status = unreachableCount == 0 ? "ok" : (unreachableCount == 1 ? "warning" : "critical");
+        recordHealthState("instance_unreachable", status, "Unreachable instance: " + unreachableCount);
+
         for (Map<String, Object> open : openAlerts(INSTANCE_UNREACHABLE)) {
             Long instancePk = toLong(open.get("instance_pk"));
             if (instancePk != null && getConsecutiveFailures(instancePk) == 0) {
@@ -230,15 +248,17 @@ public class SystemHealthEvaluator {
                 "No collector job_run record found.",
                 new AlertDetailsBuilder().setKind("system_health").build()
             );
+            recordHealthState("collector_stale", "critical", "Son job_run: yok");
             return;
         }
 
         if (lagSeconds <= 300) {
             alertService.resolveSystemAlert(key);
+            recordHealthState("collector_stale", "ok", "Son job_run: " + (lagSeconds / 60) + " dakika once");
             return;
         }
 
-        String severity = lagSeconds >= 900 ? "critical" : "warning";
+        String severity = lagSeconds > 900 ? "critical" : "warning";
         String details = new AlertDetailsBuilder()
             .setKind("system_health")
             .addContext("lag_seconds", lagSeconds)
@@ -252,16 +272,33 @@ public class SystemHealthEvaluator {
             "No collector job_run in last " + lagSeconds + " seconds.",
             details
         );
+        String status = lagSeconds <= 900 ? "warning" : "critical";
+        recordHealthState("collector_stale", status, "Son job_run: " + (lagSeconds / 60) + " dakika once");
     }
 
     private void checkCleanupFailed() {
         // TODO: Implement when cleanup tracking is persisted in backend tables.
+        recordHealthState("cleanup_failed", "stub", "henuz implement edilmedi");
         log.debug("Cleanup failed system check is a stub");
     }
 
     private void checkDiskFull() {
         // Disk full alert is written reactively by DB layer error handling; this check is no-op.
+        recordHealthState("disk_full", "ok", "reactive - DB hatasi yakalandiginda tetiklenir");
         log.debug("Disk full system check is no-op");
+    }
+
+    private void recordHealthState(String checkName, String status, String detail) {
+        jdbc.update("""
+            insert into control.health_check_state
+                (check_name, last_run_at, last_status, detail_message, updated_at)
+            values (?, now(), ?, ?, now())
+            on conflict (check_name) do update set
+                last_run_at = excluded.last_run_at,
+                last_status = excluded.last_status,
+                detail_message = excluded.detail_message,
+                updated_at = excluded.updated_at
+            """, checkName, status, detail);
     }
 
     private boolean hasRecentSuccessfulJob(long instancePk) {
