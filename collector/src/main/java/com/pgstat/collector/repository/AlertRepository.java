@@ -43,6 +43,10 @@ public class AlertRepository {
     public long upsert(String alertKey, AlertCode alertCode, Long instancePk,
                        String serviceGroup, Long systemIdentifier,
                        String title, String message, String detailsJson) {
+        // source_component'a göre alert_source belirle
+        // 'system' (SystemHealth) → 'system', 'rule' (user-defined) → 'user_rule'
+        String alertSource = "system".equals(alertCode.getSourceComponent()) ? "system"
+            : ("rule".equals(alertCode.getSourceComponent()) ? "user_rule" : "system");
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key,
@@ -58,9 +62,10 @@ public class AlertRepository {
               occurrence_count,
               title,
               message,
-              details_json
+              details_json,
+              alert_source
             )
-            values (?, ?, ?, 'open', ?, ?, ?, ?, now(), now(), 1, ?, ?, ?::jsonb)
+            values (?, ?, ?, 'open', ?, ?, ?, ?, now(), now(), 1, ?, ?, ?::jsonb, ?)
             on conflict (alert_key) do update
             set severity = excluded.severity,
                 status = case
@@ -78,6 +83,7 @@ public class AlertRepository {
                 title = excluded.title,
                 message = excluded.message,
                 details_json = excluded.details_json,
+                alert_source = excluded.alert_source,
                 occurrence_count = ops.alert.occurrence_count + 1,
                 resolved_at = null
             returning alert_id
@@ -92,7 +98,8 @@ public class AlertRepository {
             systemIdentifier,
             title,
             message,
-            detailsJson
+            detailsJson,
+            alertSource
         );
 
         // Bildirim gönder
@@ -120,13 +127,14 @@ public class AlertRepository {
     public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
                                    Long instancePk, String serviceGroup,
                                    String title, String message, Long ruleId, String detailsJson) {
+        String alertSource = ruleId != null ? "user_rule" : "system";
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key, alert_code, severity, status, source_component,
               instance_pk, service_group, first_seen_at, last_seen_at,
-              occurrence_count, title, message, rule_id, details_json
+              occurrence_count, title, message, rule_id, details_json, alert_source
             )
-            values (?, ?, ?, 'open', ?, ?, ?, now(), now(), 1, ?, ?, ?, ?::jsonb)
+            values (?, ?, ?, 'open', ?, ?, ?, now(), now(), 1, ?, ?, ?, ?::jsonb, ?)
             on conflict (alert_key) do update
             set severity = excluded.severity,
                 status = case
@@ -144,13 +152,14 @@ public class AlertRepository {
                 message = excluded.message,
                 rule_id = coalesce(excluded.rule_id, ops.alert.rule_id),
                 details_json = excluded.details_json,
+                alert_source = excluded.alert_source,
                 occurrence_count = ops.alert.occurrence_count + 1,
                 resolved_at = null
             returning alert_id
             """,
             Long.class,
             alertKey, alertCode.getCode(), severity, alertCode.getSourceComponent(),
-            instancePk, serviceGroup, title, message, ruleId, detailsJson
+            instancePk, serviceGroup, title, message, ruleId, detailsJson, alertSource
         );
 
         // Bildirim gönder
