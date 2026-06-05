@@ -51,13 +51,21 @@ public class NotificationService {
     public void notifyIfNeeded(long alertId, String alertKey, String alertCode, String severity,
                                 Long instancePk, String title, String message) {
         try {
+            String alertSource = loadAlertSource(alertId);
+            boolean systemAlert = "system".equals(alertSource);
+            boolean systemResolved = systemAlert && title != null && title.startsWith("Resolved:");
+            if (systemAlert) {
+                if (systemResolved && !"critical".equals(severity)) return;
+                if (!systemResolved && !"critical".equals(severity) && !"warning".equals(severity)) return;
+            }
+
             // Spam koruma — TEK MANTIK:
             // "Cooldown icinde, ayni veya daha yuksek severity'de SENT kayit varsa atla."
             // - Severity yukselirse otomatik bypass (daha yuksek kayit yok -> suppress yok)
             // - Cooldown gectikten sonra ayni severity tekrar bildirim alir (periyodik hatirlatma)
             // - Hem actionable hem user_defined_rule ayni yolu kullanir, cooldown kaynagi farkli.
             try {
-                int cooldownMinutes = resolveCooldownMinutes(alertId, alertKey, alertCode, instancePk);
+                int cooldownMinutes = systemResolved ? 0 : resolveCooldownMinutes(alertId, alertKey, alertCode, instancePk);
                 if (cooldownMinutes > 0) {
                     String rank = "(case %s when 'info' then 0 when 'warning' then 1 " +
                         "when 'error' then 2 when 'critical' then 3 " +
@@ -129,6 +137,18 @@ public class NotificationService {
             return ok ? "OK" : "Gonderim basarisiz (collector log'una bakin)";
         } catch (Exception e) {
             return "Hata: " + e.getMessage();
+        }
+    }
+
+    private String loadAlertSource(long alertId) {
+        try {
+            return jdbc.queryForObject(
+                "select coalesce(alert_source, 'legacy') from ops.alert where alert_id = ?",
+                String.class,
+                alertId
+            );
+        } catch (Exception e) {
+            return "legacy";
         }
     }
 

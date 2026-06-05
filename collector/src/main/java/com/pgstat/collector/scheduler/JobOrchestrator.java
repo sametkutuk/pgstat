@@ -71,6 +71,7 @@ public class JobOrchestrator {
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
     private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
+    private final com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator;
 
     // Acute alert dispatch frekansi — son tetikleme zamani.
 
@@ -114,7 +115,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.collector.NightlySnapshotCollector nightlySnapshotCollector,
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
-                           com.pgstat.collector.service.WorkloadClassifier workloadClassifier) {
+                           com.pgstat.collector.service.WorkloadClassifier workloadClassifier,
+                           com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -137,6 +139,7 @@ public class JobOrchestrator {
         this.jdbc = jdbc;
         this.reportGenerator = reportGenerator;
         this.workloadClassifier = workloadClassifier;
+        this.systemHealthEvaluator = systemHealthEvaluator;
     }
 
     /**

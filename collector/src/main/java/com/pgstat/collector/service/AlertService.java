@@ -4,8 +4,11 @@ import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.repository.AlertRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,10 +27,18 @@ public class AlertService {
 
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
+    private final JdbcTemplate jdbc;
+    private NotificationService notificationService;
 
-    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer) {
+    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer, JdbcTemplate jdbc) {
         this.alertRepo = alertRepo;
         this.renderer = renderer;
+        this.jdbc = jdbc;
+    }
+
+    @Autowired(required = false)
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService;
     }
 
     /** Transient alert'leri staleMinutes sonra otomatik kapat (proxy). */
@@ -172,6 +183,93 @@ public class AlertService {
         } catch (Exception e) {
             log.error("Job alert resolve hatasi: {} — {}", alertKey, e.getMessage());
         }
+    }
+
+    // =========================================================================
+    // System alert helper'lari
+    // =========================================================================
+
+    public void upsertSystemAlert(String alertCode, String alertKey, String severity,
+                                  Long instancePk, String title, String message,
+                                  String detailsJson) {
+        List<Map<String, Object>> previousRows = jdbc.queryForList("""
+            select alert_id, severity, status
+            from ops.alert
+            where alert_key = ?
+            """, alertKey);
+        Map<String, Object> previous = previousRows.isEmpty() ? null : previousRows.get(0);
+        String previousSeverity = previous == null ? null : String.valueOf(previous.get("severity"));
+        String previousStatus = previous == null ? null : String.valueOf(previous.get("status"));
+
+        long alertId = jdbc.queryForObject("""
+            insert into ops.alert (
+              alert_key, alert_code, severity, status, source_component, alert_source,
+              instance_pk, first_seen_at, last_seen_at, occurrence_count,
+              title, message, details_json
+            )
+            values (?, ?, ?, 'open', 'system', 'system', ?, now(), now(), 1, ?, ?, ?::jsonb)
+            on conflict (alert_key) do update
+            set severity = excluded.severity,
+                status = 'open',
+                acknowledged_at = null,
+                instance_pk = coalesce(excluded.instance_pk, ops.alert.instance_pk),
+                last_seen_at = now(),
+                title = excluded.title,
+                message = excluded.message,
+                details_json = excluded.details_json,
+                occurrence_count = ops.alert.occurrence_count + 1,
+                resolved_at = null,
+                alert_source = 'system'
+            returning alert_id
+            """,
+            Long.class,
+            alertKey, alertCode, severity, instancePk, title, message, detailsJson
+        );
+
+        if (notificationService != null && shouldNotifySystemOpen(severity, previousSeverity, previousStatus)) {
+            notificationService.notifyIfNeeded(alertId, alertKey, alertCode, severity, instancePk, title, message);
+        }
+    }
+
+    public void resolveSystemAlert(String alertKey) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            select alert_id, alert_code, severity, instance_pk, title
+            from ops.alert
+            where alert_key = ? and status = 'open'
+            """, alertKey);
+        if (rows.isEmpty()) return;
+        Map<String, Object> previous = rows.get(0);
+
+        int updated = jdbc.update("""
+            update ops.alert
+            set status = 'resolved',
+                resolved_at = now(),
+                last_seen_at = now()
+            where alert_key = ? and status = 'open'
+            """, alertKey);
+
+        if (updated > 0 && notificationService != null
+                && "critical".equals(String.valueOf(previous.get("severity")))) {
+            long alertId = ((Number) previous.get("alert_id")).longValue();
+            Long instancePk = previous.get("instance_pk") == null ? null : ((Number) previous.get("instance_pk")).longValue();
+            String alertCode = String.valueOf(previous.get("alert_code"));
+            String title = "Resolved: " + String.valueOf(previous.get("title"));
+            notificationService.notifyIfNeeded(alertId, alertKey, alertCode, "critical", instancePk,
+                title, "System alert resolved");
+        }
+    }
+
+    private boolean shouldNotifySystemOpen(String severity, String previousSeverity, String previousStatus) {
+        if (!"warning".equals(severity) && !"critical".equals(severity)) return false;
+        if (previousStatus == null || !"open".equals(previousStatus)) return true;
+        return severityRank(severity) > severityRank(previousSeverity);
+    }
+
+    private int severityRank(String severity) {
+        if ("critical".equals(severity)) return 3;
+        if ("error".equals(severity)) return 2;
+        if ("warning".equals(severity)) return 1;
+        return 0;
     }
 
     // =========================================================================
