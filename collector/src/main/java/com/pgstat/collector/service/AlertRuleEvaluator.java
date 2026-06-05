@@ -2538,13 +2538,14 @@ public class AlertRuleEvaluator {
 
         String tableSql = getMetricTableAndColumn(metricType, metricName);
         if (tableSql == null) {
-            log.debug("flatline desteklenmiyor metric={}.{}", metricType, metricName);
+            log.warn("flatline desteklenmiyor rule={} metric={}.{}", ruleId, metricType, metricName);
             return;
         }
         String[] parts = tableSql.split("\\|");
         String table = parts[0], col = parts[1], timeCol = parts[2];
 
         List<Map<String, Object>> targets = loadTargetInstances(rule);
+        log.info("Flatline rule={} flatlineMinutes={} targets={}", ruleId, flatlineMinutes, targets.size());
         if (targets.isEmpty()) return;
 
         for (Map<String, Object> target : targets) {
@@ -2564,6 +2565,8 @@ public class AlertRuleEvaluator {
                     : jdbc.queryForMap(sql, instancePk, flatlineMinutes + " minutes");
 
                 long cnt = stats.get("cnt") != null ? ((Number) stats.get("cnt")).longValue() : 0;
+                log.info("Flatline check rule={} instance={} cnt={} mx={} mn={}",
+                    ruleId, instancePk, cnt, stats.get("mx"), stats.get("mn"));
                 if (cnt < 2) continue; // yeterli olcum yok
 
                 BigDecimal mx = toBDSafe(stats.get("mx"));
