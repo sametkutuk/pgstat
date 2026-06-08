@@ -99,6 +99,50 @@ public class Pg14_16Queries extends Pg13Queries {
     }
 
     // =========================================================================
+    // Replication slots — PG14+ pg_stat_replication_slots view'una sahip
+    // Pg13Queries'in eksik override'ini geri al ve SourceQueries default'unu kullan
+    // PG17+ slot health kolonlari (failover, synced, conflicting, invalidation_reason)
+    // to_jsonb safe-lookup ile guvenli sekilde okunur.
+    // =========================================================================
+
+    @Override
+    public String replicationSlotsQuery() {
+        return """
+            with src as (
+              select to_jsonb(s.*) as j, s.* from pg_replication_slots s
+            )
+            select
+              s.slot_name,
+              s.plugin,
+              s.slot_type,
+              s.database,
+              s.active,
+              s.active_pid,
+              s.xmin::text::bigint          as xmin_int,
+              s.catalog_xmin::text::bigint  as catalog_xmin_int,
+              s.restart_lsn::text           as restart_lsn,
+              s.confirmed_flush_lsn::text   as confirmed_flush_lsn,
+              s.wal_status,
+              s.safe_wal_size,
+              case when s.restart_lsn is null then null
+                else (pg_current_wal_lsn() - s.restart_lsn)::bigint end as slot_lag_bytes,
+              sr.spill_txns, sr.spill_count, sr.spill_bytes,
+              sr.stream_txns, sr.stream_count, sr.stream_bytes,
+              sr.total_txns, sr.total_bytes,
+              sr.stats_reset,
+              coalesce((src.j->>'temporary')::boolean, false) as temporary,
+              coalesce((src.j->>'two_phase')::boolean, false) as two_phase,
+              (src.j->>'conflicting')::boolean as conflicting,
+              src.j->>'invalidation_reason' as invalidation_reason,
+              coalesce((src.j->>'failover')::boolean, false) as failover,
+              coalesce((src.j->>'synced')::boolean, false) as synced
+            from pg_replication_slots s
+            join src on src.slot_name = s.slot_name
+            left join pg_stat_replication_slots sr on sr.slot_name = s.slot_name
+            """;
+    }
+
+    // =========================================================================
     // Lock — waitstart eklendi (PG14+)
     // =========================================================================
 

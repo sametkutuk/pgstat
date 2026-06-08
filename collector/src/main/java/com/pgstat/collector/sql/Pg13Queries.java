@@ -254,7 +254,14 @@ public class Pg13Queries extends Pg11_12Queries {
                 else (pg_current_wal_lsn() - s.restart_lsn)::bigint end as slot_lag_bytes,
               null::bigint as spill_txns,  null::bigint as spill_count,  null::bigint as spill_bytes,
               null::bigint as stream_txns, null::bigint as stream_count, null::bigint as stream_bytes,
-              null::bigint as total_txns,  null::bigint as total_bytes
+              null::bigint as total_txns,  null::bigint as total_bytes,
+              null::timestamptz as stats_reset,
+              s.temporary,
+              null::boolean as two_phase,
+              null::boolean as conflicting,
+              null::text as invalidation_reason,
+              null::boolean as failover,
+              null::boolean as synced
             from pg_replication_slots s
             """;
     }
