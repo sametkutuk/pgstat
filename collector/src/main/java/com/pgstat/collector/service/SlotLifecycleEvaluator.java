@@ -218,6 +218,11 @@ public class SlotLifecycleEvaluator {
     }
 
     private Map<String, CurrentSlot> loadCurrentSlots(long instancePk) {
+        // Freshness filter: son 15 dakika icindeki snapshot'lari "current" say.
+        // Slot'un fiziksel olarak silinmesi durumunda fact tablosuna yeni satir
+        // EKLENMEZ (0 satir donen sorgu insert yapmaz) — bu yuzden eski snapshot
+        // sonsuza dek "current" gozukurdu. Filtre olmadan slot silinse bile
+        // evaluator slot'u var sanip inactive_long alert'lerini re-fire eder.
         List<CurrentSlot> rows = jdbc.query("""
             select s.slot_name, s.active, s.wal_status, s.restart_lsn::text as restart_lsn,
                    s.stats_reset, s.sample_ts
@@ -227,6 +232,7 @@ public class SlotLifecycleEvaluator {
                 select max(sample_ts)
                 from fact.pg_replication_slot_snapshot
                 where instance_pk = ?
+                  and sample_ts > now() - interval '15 minutes'
               )
             """, (rs, rowNum) -> new CurrentSlot(
             rs.getString("slot_name"),
