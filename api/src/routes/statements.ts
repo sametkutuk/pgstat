@@ -353,6 +353,12 @@ router.get('/search', async (req, res, next) => {
         coalesce(delta.total_calls, 0) as total_calls,
         coalesce(delta.total_exec_time_ms, 0) as total_exec_time_ms,
         coalesce(delta.avg_exec_time_ms, 0) as avg_exec_time_ms,
+        -- /top ile tutarli kolon adlari: deep search sonuclari da min/max/mean/stddev
+        -- gostersin (yoksa UI bu satirlarda "—" basiyordu).
+        delta.mean_exec_time_ms,
+        delta.min_exec_time_ms,
+        delta.max_exec_time_ms,
+        delta.stddev_exec_time_ms,
         coalesce(delta.total_rows, 0) as total_rows,
         coalesce(delta.total_shared_blks_read, 0) as total_shared_blks_read,
         coalesce(delta.total_temp_blks_written, 0) as total_temp_blks_written,
@@ -369,6 +375,11 @@ router.get('/search', async (req, res, next) => {
           sum(d.rows_delta) as total_rows,
           sum(d.shared_blks_read_delta) as total_shared_blks_read,
           sum(d.temp_blks_written_delta) as total_temp_blks_written,
+          -- min/max/mean/stddev SNAPSHOT degerler (delta degil) — /top ile ayni mantik
+          avg(d.mean_exec_time_ms) as mean_exec_time_ms,
+          min(d.min_exec_time_ms) as min_exec_time_ms,
+          max(d.max_exec_time_ms) as max_exec_time_ms,
+          avg(d.stddev_exec_time_ms) as stddev_exec_time_ms,
           case when sum(d.calls_delta) > 0
             then sum(d.total_exec_time_ms_delta) / sum(d.calls_delta)
             else 0 end as avg_exec_time_ms

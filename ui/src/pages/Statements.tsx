@@ -231,17 +231,13 @@ export default function Statements() {
     const topRows = topData ?? [];
     if (!deepSearchEnabled || !deepData) return topRows;
 
-    // Client-side filtre: top results'ta arama
-    const q = searchTrimmed.toLowerCase();
-    const topFiltered = topRows.filter(r =>
-      (r.query_text_short ?? '').toLowerCase().includes(q)
-    );
-
-    // Deep search'ten gelen ama top'ta olmayan satırları ekle
-    const topIds = new Set(topFiltered.map(r => r.statement_series_id));
-    const extras = deepData.filter(r => !topIds.has(r.statement_series_id));
-
-    return [...topFiltered, ...extras];
+    // Deep search backend'de TAM query_text uzerinde ILIKE ile ariyor —
+    // query_text_short (ilk 80 char) ile client-side filtre, uzun yorum/
+    // prefix'li sorgularda yanlis eliyordu. Bu yuzden eslesme kararini
+    // deep search'e birakiyoruz: top'tan gelen ayni seri varsa onu (metrikleri
+    // /top ile tam) tercih et, deep'te olup top'ta olmayanlari ekle.
+    const topById = new Map(topRows.map(r => [r.statement_series_id, r]));
+    return deepData.map(dr => topById.get(dr.statement_series_id) ?? dr);
   }, [topData, deepData, searchTrimmed, deepSearchEnabled]);
 
   // Client-side filtreler (arama + min avg)
