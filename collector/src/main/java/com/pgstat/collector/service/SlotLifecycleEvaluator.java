@@ -186,6 +186,10 @@ public class SlotLifecycleEvaluator {
 
     private void handleDeletedSlot(Subscription subscription, MutableSlotState state, OffsetDateTime now) {
         if (state.tombstoneAt == null) {
+            // Slot artik yok — varsa eski slot_inactive_long ve slot_lost alert'lerini resolve et
+            alertRepo.resolve(key("slot_inactive_long", subscription.instancePk(), state.slotName));
+            alertRepo.resolve(key("slot_lost", subscription.instancePk(), state.slotName));
+
             if (Boolean.TRUE.equals(state.lastActive) && subscription.notifyOnActiveDeleted()) {
                 upsertDeletedAlert(AlertCode.SLOT_ACTIVE_DELETED, subscription, state,
                     "Aktif slot silindi: " + state.slotName + " — " + subscription.label(),
