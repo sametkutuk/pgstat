@@ -58,12 +58,17 @@ public class SlotLifecycleEvaluator {
     }
 
     private List<Subscription> loadSubscriptions() {
+        // Alert mesajlarinda instance_id + host gostermek icin instance_inventory join.
+        // Birden fazla instance'ta ayni slot_name olabilir; mesajda netlik icin
+        // her alert "instance_id (host)" etiketiyle zenginlestirilir.
         return jdbc.query("""
-            select instance_pk, inactive_minutes, retrigger_minutes,
-                   notify_on_lost, notify_on_active_deleted,
-                   notify_on_inactive_deleted, notify_on_inactive
-            from control.slot_lifecycle_subscription
-            where is_enabled = true
+            select s.instance_pk, s.inactive_minutes, s.retrigger_minutes,
+                   s.notify_on_lost, s.notify_on_active_deleted,
+                   s.notify_on_inactive_deleted, s.notify_on_inactive,
+                   ii.instance_id, ii.host
+            from control.slot_lifecycle_subscription s
+            join control.instance_inventory ii using (instance_pk)
+            where s.is_enabled = true
             """, (rs, rowNum) -> new Subscription(
             rs.getLong("instance_pk"),
             rs.getInt("inactive_minutes"),
@@ -71,7 +76,9 @@ public class SlotLifecycleEvaluator {
             rs.getBoolean("notify_on_lost"),
             rs.getBoolean("notify_on_active_deleted"),
             rs.getBoolean("notify_on_inactive_deleted"),
-            rs.getBoolean("notify_on_inactive")
+            rs.getBoolean("notify_on_inactive"),
+            rs.getString("instance_id"),
+            rs.getString("host")
         ));
     }
 
@@ -92,8 +99,8 @@ public class SlotLifecycleEvaluator {
                     slot,
                     subscription,
                     null,
-                    "Replication slot kayboldu: " + slot.slotName(),
-                    "Slot wal_status=lost durumunda. Slot: " + slot.slotName()
+                    "Replication slot kayboldu: " + slot.slotName() + " — " + subscription.label(),
+                    "Slot wal_status=lost durumunda. Slot: " + slot.slotName() + ". Instance: " + subscription.label() + "."
                 );
             }
 
@@ -107,8 +114,8 @@ public class SlotLifecycleEvaluator {
                     slot,
                     subscription,
                     null,
-                    "Slot tekrar olusturuldu: " + slot.slotName(),
-                    "Tombstone durumundaki slot tekrar goruldu. Slot: " + slot.slotName()
+                    "Slot tekrar olusturuldu: " + slot.slotName() + " — " + subscription.label(),
+                    "Tombstone durumundaki slot tekrar goruldu. Slot: " + slot.slotName() + ". Instance: " + subscription.label() + "."
                 );
                 state.updateFromCurrent(slot, slot.active() ? null : slot.sampleTs(), null, null);
                 recreatedThisCycle.add(slot.slotName());
@@ -128,8 +135,8 @@ public class SlotLifecycleEvaluator {
                     slot,
                     subscription,
                     null,
-                    "Slot tekrar olusturuldu: " + slot.slotName(),
-                    "Slot LSN veya stats_reset sinyaliyle tekrar olusturulmus gorunuyor. Slot: " + slot.slotName()
+                    "Slot tekrar olusturuldu: " + slot.slotName() + " — " + subscription.label(),
+                    "Slot LSN veya stats_reset sinyaliyle tekrar olusturulmus gorunuyor. Slot: " + slot.slotName() + ". Instance: " + subscription.label() + "."
                 );
                 recreatedThisCycle.add(slot.slotName());
             }
@@ -165,8 +172,8 @@ public class SlotLifecycleEvaluator {
                         slot,
                         subscription,
                         inactiveDuration,
-                        "Slot uzun suredir pasif: " + slot.slotName() + " (" + inactiveDuration + " dk)",
-                        "Slot " + inactiveDuration + " dakikadir pasif. Slot: " + slot.slotName()
+                        "Slot uzun suredir pasif: " + slot.slotName() + " (" + inactiveDuration + " dk) — " + subscription.label(),
+                        "Slot " + inactiveDuration + " dakikadir pasif. Slot: " + slot.slotName() + ". Instance: " + subscription.label() + "."
                     );
                 }
             }
@@ -181,13 +188,13 @@ public class SlotLifecycleEvaluator {
         if (state.tombstoneAt == null) {
             if (Boolean.TRUE.equals(state.lastActive) && subscription.notifyOnActiveDeleted()) {
                 upsertDeletedAlert(AlertCode.SLOT_ACTIVE_DELETED, subscription, state,
-                    "Aktif slot silindi: " + state.slotName,
-                    "Son goruldugunde aktif olan slot artik snapshot'ta yok. Slot: " + state.slotName);
+                    "Aktif slot silindi: " + state.slotName + " — " + subscription.label(),
+                    "Son goruldugunde aktif olan slot artik snapshot'ta yok. Slot: " + state.slotName + ". Instance: " + subscription.label() + ".");
                 state.lastRetriggerAt = now;
             } else if (Boolean.FALSE.equals(state.lastActive) && subscription.notifyOnInactiveDeleted()) {
                 upsertDeletedAlert(AlertCode.SLOT_INACTIVE_DELETED, subscription, state,
-                    "Pasif slot silindi: " + state.slotName,
-                    "Son goruldugunde pasif olan slot artik snapshot'ta yok. Slot: " + state.slotName);
+                    "Pasif slot silindi: " + state.slotName + " — " + subscription.label(),
+                    "Son goruldugunde pasif olan slot artik snapshot'ta yok. Slot: " + state.slotName + ". Instance: " + subscription.label() + ".");
                 state.lastRetriggerAt = null;
             }
             state.tombstoneAt = now;
@@ -199,8 +206,8 @@ public class SlotLifecycleEvaluator {
             long minutes = Duration.between(lastRetrigger.toInstant(), now.toInstant()).toMinutes();
             if (minutes >= subscription.retriggerMinutes()) {
                 upsertDeletedAlert(AlertCode.SLOT_ACTIVE_DELETED, subscription, state,
-                    "Aktif slot silindi: " + state.slotName,
-                    "Aktif silinen slot hala geri gelmedi. Slot: " + state.slotName);
+                    "Aktif slot silindi: " + state.slotName + " — " + subscription.label(),
+                    "Aktif silinen slot hala geri gelmedi. Slot: " + state.slotName + ". Instance: " + subscription.label() + ".");
                 state.lastRetriggerAt = now;
             }
         }
@@ -305,6 +312,8 @@ public class SlotLifecycleEvaluator {
             .addContext("wal_status", walStatus)
             .addContext("restart_lsn", restartLsn)
             .addContext("active", active)
+            .addContext("instance_id", subscription.instanceId())
+            .addContext("host", subscription.host())
             .addContext("inactive_minutes_threshold", subscription.inactiveMinutes());
         if (inactiveDurationMinutes != null) {
             builder.addContext("inactive_duration_minutes", inactiveDurationMinutes);
@@ -385,8 +394,21 @@ public class SlotLifecycleEvaluator {
         boolean notifyOnLost,
         boolean notifyOnActiveDeleted,
         boolean notifyOnInactiveDeleted,
-        boolean notifyOnInactive
-    ) {}
+        boolean notifyOnInactive,
+        String instanceId,
+        String host
+    ) {
+        /** Alert title/message'lerinde kullanilan instance etiketi: "instance_id (host)". */
+        String label() {
+            if (instanceId == null || instanceId.isEmpty()) {
+                return host == null ? "instance=" + instancePk : host;
+            }
+            if (host == null || host.isEmpty()) {
+                return instanceId;
+            }
+            return instanceId + " (" + host + ")";
+        }
+    }
 
     private record CurrentSlot(
         String slotName,
