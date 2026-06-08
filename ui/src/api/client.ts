@@ -59,7 +59,12 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (res.status === 401) { handleUnauthorized(); throw new Error('Unauthorized'); }
-  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  if (!res.ok) {
+    // API'nin dondurdugu hata mesajini (ornek: "inactive_minutes en az 5 olmali")
+    // kullaniciya goster — yoksa generic status kodu fallback.
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || `API Error: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -67,7 +72,10 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
 export async function apiDelete(path: string): Promise<void> {
   const res = await fetch(`${BASE_URL}${path}`, { method: 'DELETE', headers: authHeaders() });
   if (res.status === 401) { handleUnauthorized(); throw new Error('Unauthorized'); }
-  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || `API Error: ${res.status}`);
+  }
 }
 
 // Generic PATCH isteği
@@ -78,7 +86,10 @@ export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) { handleUnauthorized(); throw new Error('Unauthorized'); }
-  if (!res.ok) throw new Error(`API Error: ${res.status}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as any).error || `API Error: ${res.status}`);
+  }
   return res.json();
 }
 
