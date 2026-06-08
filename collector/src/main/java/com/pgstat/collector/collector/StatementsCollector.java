@@ -322,9 +322,58 @@ public class StatementsCollector {
                         sample.localBlkReadTime(), sample.localBlkWriteTime()
                     );
                     rowsWritten++;
+                } else if (prevMap != null && sample.calls() > 0) {
+                    // prev == null ama instance cache'i DOLU (prevMap != null):
+                    // Bu instance zaten collect ediliyordu, demek ki bu sorgu YENI gorundu
+                    // (iki cycle arasinda ilk kez calisti). Kumulatif degerin kendisi
+                    // bu sorgunun ilk gozlem delta'sidir — bir kez bile calisan sorgu
+                    // istatistiksiz kalmasin. Sonraki cycle'da normal delta'ya gecilir.
+                    //
+                    // NOT: prevMap == null durumu (collector restart, tum cache bos) bu
+                    // dalin DISINDA kalir — orada kumulatif yazarsak aylardir biriken
+                    // degerler tek dev satira yazilirdi. O durumda baseline aliriz.
+                    factRepo.insertPgssDelta(now, instancePk, seriesId,
+                        sample.calls(),
+                        sample.plans(),
+                        sample.totalPlanTime(),
+                        sample.totalExecTime(),
+                        sample.rows(),
+                        sample.sharedBlksHit(),
+                        sample.sharedBlksRead(),
+                        sample.sharedBlksDirtied(),
+                        sample.sharedBlksWritten(),
+                        sample.localBlksHit(),
+                        sample.localBlksRead(),
+                        sample.localBlksDirtied(),
+                        sample.localBlksWritten(),
+                        sample.tempBlksRead(),
+                        sample.tempBlksWritten(),
+                        sample.blkReadTime(),
+                        sample.blkWriteTime(),
+                        sample.walRecords(),
+                        sample.walFpi(),
+                        sample.walBytes(),
+                        sample.jitGenerationTime(),
+                        sample.jitInliningTime(),
+                        sample.jitOptimizationTime(),
+                        sample.jitEmissionTime(),
+                        sample.minExecTime(), sample.maxExecTime(), sample.stddevExecTime(),
+                        sample.minPlanTime(), sample.maxPlanTime(), sample.stddevPlanTime(),
+                        sample.tempBlkReadTime(), sample.tempBlkWriteTime(),
+                        sample.walBuffersFull(),
+                        sample.jitFunctions(), sample.jitDeformCount(), sample.jitDeformTime(),
+                        sample.statsSince(), sample.minmaxStatsSince(),
+                        sample.parallelWorkersToLaunch(), sample.parallelWorkersLaunched(),
+                        sample.meanExecTime(), sample.meanPlanTime(),
+                        sample.jitInliningCount(), sample.jitOptimizationCount(), sample.jitEmissionCount(),
+                        sample.sharedBlkReadTime(), sample.sharedBlkWriteTime(),
+                        sample.localBlkReadTime(), sample.localBlkWriteTime()
+                    );
+                    rowsWritten++;
                 } else {
-                    // prev == null && !epochChanged: collector restart sonrasi ilk cycle.
-                    // Cache'te onceki deger yok, epoch ayni → baseline al, delta yazma.
+                    // prevMap == null && !epochChanged: collector restart sonrasi ilk cycle.
+                    // Tum instance cache'i bos, epoch ayni → baseline al, delta yazma.
+                    // (Kumulatif yazarsak gecmis tek satira sigardi.)
                     // Bir sonraki cycle'da delta yazilacak.
                     newSeriesCount++;
                 }
