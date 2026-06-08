@@ -45,8 +45,15 @@ public class AlertRepository {
                        String title, String message, String detailsJson) {
         // source_component'a göre alert_source belirle
         // 'system' (SystemHealth) → 'system', 'rule' (user-defined) → 'user_rule'
-        String alertSource = "system".equals(alertCode.getSourceComponent()) ? "system"
-            : ("rule".equals(alertCode.getSourceComponent()) ? "user_rule" : "system");
+        String src = alertCode.getSourceComponent();
+        String alertSource;
+        if ("adaptive".equals(src)) {
+            alertSource = "adaptive";
+        } else if ("rule".equals(src)) {
+            alertSource = "user_rule";
+        } else {
+            alertSource = "system";
+        }
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key,

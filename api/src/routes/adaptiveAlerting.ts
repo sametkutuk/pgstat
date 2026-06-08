@@ -1,7 +1,222 @@
 import { Router } from 'express';
 import { pool } from '../config/database';
+import { parseLimit } from '../middleware/validation';
 
 const router = Router();
+
+const SLOT_LIFECYCLE_ALERT_CODES = [
+    'slot_lost',
+    'slot_active_deleted',
+    'slot_inactive_deleted',
+    'slot_inactive_long',
+    'slot_recreated',
+];
+
+function parseInstancePk(value: string | undefined): number | null {
+    if (!value) return null;
+    if (!/^\d+$/.test(value)) return null;
+    return Number(value);
+}
+
+function requireInstancePk(value: string | undefined): number | null {
+    if (!value || !/^\d+$/.test(value)) return null;
+    return Number(value);
+}
+
+// ============================================================================
+// SLOT LIFECYCLE
+// ============================================================================
+
+router.get('/slot-lifecycle/subscriptions', async (_req, res, next) => {
+    try {
+        const result = await pool.query(`
+            select
+                s.subscription_id,
+                s.instance_pk,
+                i.display_name as instance_name,
+                s.is_enabled,
+                s.inactive_minutes,
+                s.retrigger_minutes,
+                s.notify_on_lost,
+                s.notify_on_active_deleted,
+                s.notify_on_inactive_deleted,
+                s.notify_on_inactive,
+                s.updated_at
+            from control.slot_lifecycle_subscription s
+            join control.instance_inventory i on i.instance_pk = s.instance_pk
+            order by i.display_name, s.instance_pk
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.put('/slot-lifecycle/subscriptions/:instancePk', async (req, res, next) => {
+    try {
+        const instancePk = requireInstancePk(req.params.instancePk);
+        if (instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const inactiveMinutes = Number(req.body?.inactive_minutes ?? 30);
+        const retriggerMinutes = Number(req.body?.retrigger_minutes ?? 30);
+        if (!Number.isFinite(inactiveMinutes) || inactiveMinutes < 5) {
+            res.status(400).json({ error: 'inactive_minutes en az 5 olmali' });
+            return;
+        }
+        if (!Number.isFinite(retriggerMinutes) || retriggerMinutes < 5) {
+            res.status(400).json({ error: 'retrigger_minutes en az 5 olmali' });
+            return;
+        }
+
+        const result = await pool.query(`
+            insert into control.slot_lifecycle_subscription (
+                instance_pk, is_enabled, inactive_minutes, retrigger_minutes,
+                notify_on_lost, notify_on_active_deleted,
+                notify_on_inactive_deleted, notify_on_inactive, updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, $8, now())
+            on conflict (instance_pk) do update
+            set is_enabled = excluded.is_enabled,
+                inactive_minutes = excluded.inactive_minutes,
+                retrigger_minutes = excluded.retrigger_minutes,
+                notify_on_lost = excluded.notify_on_lost,
+                notify_on_active_deleted = excluded.notify_on_active_deleted,
+                notify_on_inactive_deleted = excluded.notify_on_inactive_deleted,
+                notify_on_inactive = excluded.notify_on_inactive,
+                updated_at = now()
+            returning
+                subscription_id, instance_pk, is_enabled, inactive_minutes,
+                retrigger_minutes, notify_on_lost, notify_on_active_deleted,
+                notify_on_inactive_deleted, notify_on_inactive, updated_at
+        `, [
+            instancePk,
+            Boolean(req.body?.is_enabled ?? true),
+            Math.trunc(inactiveMinutes),
+            Math.trunc(retriggerMinutes),
+            Boolean(req.body?.notify_on_lost ?? true),
+            Boolean(req.body?.notify_on_active_deleted ?? true),
+            Boolean(req.body?.notify_on_inactive_deleted ?? true),
+            Boolean(req.body?.notify_on_inactive ?? true),
+        ]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/slot-lifecycle/state', async (req, res, next) => {
+    try {
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+        const params: any[] = [];
+        let whereSql = '';
+        if (instancePk != null) {
+            params.push(instancePk);
+            whereSql = 'where st.instance_pk = $1';
+        }
+        const result = await pool.query(`
+            select
+                st.instance_pk,
+                i.display_name as instance_name,
+                st.slot_name,
+                st.last_seen_at,
+                st.last_restart_lsn::text as last_restart_lsn,
+                st.last_stats_reset,
+                st.last_active,
+                st.last_wal_status,
+                st.inactive_since,
+                st.last_retrigger_at,
+                st.tombstone_at
+            from control.slot_observation_state st
+            join control.instance_inventory i on i.instance_pk = st.instance_pk
+            ${whereSql}
+            order by i.display_name, st.slot_name
+        `, params);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.delete('/slot-lifecycle/state/:instancePk/:slotName', async (req, res, next) => {
+    try {
+        const instancePk = requireInstancePk(req.params.instancePk);
+        if (instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+        const result = await pool.query(`
+            delete from control.slot_observation_state
+            where instance_pk = $1
+              and slot_name = $2
+              and tombstone_at is not null
+            returning instance_pk, slot_name
+        `, [instancePk, req.params.slotName]);
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: 'Tombstone state bulunamadi' });
+            return;
+        }
+        res.json({ message: 'Slot state silindi', slot_name: result.rows[0].slot_name });
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/slot-lifecycle/events', async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 100);
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        const severity = req.query.severity as string | undefined;
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const params: any[] = [SLOT_LIFECYCLE_ALERT_CODES];
+        let paramIdx = 2;
+        let whereSql = 'where a.alert_code = any($1)';
+        if (instancePk != null) {
+            whereSql += ` and a.instance_pk = $${paramIdx++}`;
+            params.push(instancePk);
+        }
+        if (severity) {
+            whereSql += ` and a.severity = $${paramIdx++}`;
+            params.push(severity);
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+            select
+                a.alert_id,
+                a.alert_key,
+                a.alert_code,
+                a.severity,
+                a.status,
+                a.instance_pk,
+                i.display_name as instance_name,
+                a.first_seen_at,
+                a.last_seen_at,
+                a.occurrence_count,
+                a.title,
+                a.message,
+                a.details_json
+            from ops.alert a
+            left join control.instance_inventory i on i.instance_pk = a.instance_pk
+            ${whereSql}
+            order by a.last_seen_at desc
+            limit $${paramIdx}
+        `, params);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
 
 // ============================================================================
 // ALERT SNOOZE

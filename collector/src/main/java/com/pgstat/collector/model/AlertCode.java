@@ -13,6 +13,12 @@ public enum AlertCode {
     SYSTEM_CLEANUP_FAILED("system_cleanup_failed", "error", "system"),
     SYSTEM_DISK_FULL("system_disk_full", "critical", "system"),
 
+    SLOT_LOST("slot_lost", "critical", "adaptive"),
+    SLOT_ACTIVE_DELETED("slot_active_deleted", "critical", "adaptive"),
+    SLOT_INACTIVE_DELETED("slot_inactive_deleted", "info", "adaptive"),
+    SLOT_INACTIVE_LONG("slot_inactive_long", "warning", "adaptive"),
+    SLOT_RECREATED("slot_recreated", "info", "adaptive"),
+
     USER_DEFINED_RULE("user_defined_rule", "warning", "rule");
 
     private final String code;

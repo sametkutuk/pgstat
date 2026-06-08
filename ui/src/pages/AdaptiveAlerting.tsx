@@ -62,12 +62,56 @@ interface AlertRuleLite {
     rule_name: string;
 }
 
+interface SlotLifecycleSubscription {
+    subscription_id: number;
+    instance_pk: number;
+    instance_name: string;
+    is_enabled: boolean;
+    inactive_minutes: number;
+    retrigger_minutes: number;
+    notify_on_lost: boolean;
+    notify_on_active_deleted: boolean;
+    notify_on_inactive_deleted: boolean;
+    notify_on_inactive: boolean;
+    updated_at: string;
+}
+
+interface SlotObservationState {
+    instance_pk: number;
+    instance_name: string;
+    slot_name: string;
+    last_seen_at: string;
+    last_restart_lsn: string | null;
+    last_stats_reset: string | null;
+    last_active: boolean | null;
+    last_wal_status: string | null;
+    inactive_since: string | null;
+    last_retrigger_at: string | null;
+    tombstone_at: string | null;
+}
+
+interface SlotLifecycleEvent {
+    alert_id: number;
+    alert_key: string;
+    alert_code: string;
+    severity: string;
+    status: string;
+    instance_pk: number | null;
+    instance_name: string | null;
+    first_seen_at: string;
+    last_seen_at: string;
+    occurrence_count: number;
+    title: string | null;
+    message: string | null;
+    details_json: any;
+}
+
 // =========================================================================
 // Ana Sayfa
 // =========================================================================
 
 export default function AdaptiveAlerting() {
-    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels'>('overview');
+    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels' | 'slot-lifecycle'>('overview');
 
     const tabs = [
         { k: 'overview', l: '📊 Genel Bakış' },
@@ -76,6 +120,8 @@ export default function AdaptiveAlerting() {
         { k: 'maintenance', l: '🔧 Bakım Pencereleri' },
         { k: 'channels', l: '📢 Bildirim Kanalları' },
     ];
+
+    tabs.push({ k: 'slot-lifecycle', l: 'Slot Lifecycle' });
 
     return (
         <div>
@@ -105,6 +151,7 @@ export default function AdaptiveAlerting() {
             {tab === 'snooze' && <SnoozePanel />}
             {tab === 'maintenance' && <MaintenancePanel />}
             {tab === 'channels' && <ChannelsPanel />}
+            {tab === 'slot-lifecycle' && <SlotLifecyclePanel />}
         </div>
     );
 }
@@ -1071,6 +1118,342 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
             <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
         </Modal>
     );
+}
+
+// =========================================================================
+// Slot Lifecycle
+// =========================================================================
+
+function SlotLifecyclePanel() {
+    const toast = useToast();
+    const qc = useQueryClient();
+    const [editing, setEditing] = useState<SlotLifecycleSubscription | null>(null);
+    const [forgetTarget, setForgetTarget] = useState<SlotObservationState | null>(null);
+    const [instanceFilter, setInstanceFilter] = useState<string>('');
+    const [severityFilter, setSeverityFilter] = useState<string>('');
+
+    const { data: subscriptions = [] } = useQuery<SlotLifecycleSubscription[]>({
+        queryKey: ['slot-lifecycle-subscriptions'],
+        queryFn: () => apiGet('/adaptive-alerting/slot-lifecycle/subscriptions'),
+    });
+
+    const statePath = instanceFilter
+        ? `/adaptive-alerting/slot-lifecycle/state?instancePk=${encodeURIComponent(instanceFilter)}`
+        : '/adaptive-alerting/slot-lifecycle/state';
+    const { data: states = [] } = useQuery<SlotObservationState[]>({
+        queryKey: ['slot-lifecycle-state', instanceFilter],
+        queryFn: () => apiGet(statePath),
+    });
+
+    const eventParams = new URLSearchParams({ limit: '100' });
+    if (instanceFilter) eventParams.set('instancePk', instanceFilter);
+    if (severityFilter) eventParams.set('severity', severityFilter);
+    const { data: events = [] } = useQuery<SlotLifecycleEvent[]>({
+        queryKey: ['slot-lifecycle-events', instanceFilter, severityFilter],
+        queryFn: () => apiGet(`/adaptive-alerting/slot-lifecycle/events?${eventParams.toString()}`),
+    });
+
+    const forgetMut = useMutation({
+        mutationFn: (row: SlotObservationState) =>
+            apiDelete(`/adaptive-alerting/slot-lifecycle/state/${row.instance_pk}/${encodeURIComponent(row.slot_name)}`),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['slot-lifecycle-state'] });
+            toast.success('Slot state silindi');
+            setForgetTarget(null);
+        },
+        onError: (e: any) => toast.error(e?.message || 'Slot state silinemedi'),
+    });
+
+    return (
+        <div className="space-y-6">
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Subscription Ayarlari</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Ayarlar instance bazindadir; instance altindaki tum slotlara uygulanir.</p>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Aktif</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Inactive (dk)</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Re-trigger (dk)</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Bildirimler</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Duzenle</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {subscriptions.map((row) => (
+                                <tr key={row.subscription_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 font-medium text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3">{yesNoBadge(row.is_enabled)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.inactive_minutes}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.retrigger_minutes}</td>
+                                    <td className="py-2 px-3">
+                                        <div className="flex flex-wrap gap-1">
+                                            <MiniToggle label="lost" value={row.notify_on_lost} />
+                                            <MiniToggle label="active del" value={row.notify_on_active_deleted} />
+                                            <MiniToggle label="inactive del" value={row.notify_on_inactive_deleted} />
+                                            <MiniToggle label="inactive" value={row.notify_on_inactive} />
+                                        </div>
+                                    </td>
+                                    <td className="py-2 px-3 text-right">
+                                        <button onClick={() => setEditing(row)}
+                                            className="px-3 py-1 text-xs rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE]">
+                                            Duzenle
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Aktif Slot Listesi</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Tombstone kayitlarinda Unut butonu gorunur.</p>
+                    </div>
+                    <select value={instanceFilter} onChange={e => setInstanceFilter(e.target.value)}
+                        className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                        <option value="">Tum instance'lar</option>
+                        {subscriptions.map(s => (
+                            <option key={s.instance_pk} value={s.instance_pk}>{s.instance_name}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Slot</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Aktif</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">WAL Status</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Inactive Since</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Last Restart LSN</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Last Seen</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Tombstone</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Aksiyon</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {states.length === 0 ? (
+                                <tr><td colSpan={9} className="py-8 text-center text-sm text-[#64748B]">Slot state kaydi yok.</td></tr>
+                            ) : states.map((row) => (
+                                <tr key={`${row.instance_pk}-${row.slot_name}`} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.slot_name}</td>
+                                    <td className="py-2 px-3">{yesNoBadge(Boolean(row.last_active))}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.last_wal_status ?? '-'}</td>
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.inactive_since)}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.last_restart_lsn ?? '-'}</td>
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.last_seen_at)}</td>
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.tombstone_at)}</td>
+                                    <td className="py-2 px-3 text-right">
+                                        {row.tombstone_at ? (
+                                            <button onClick={() => setForgetTarget(row)}
+                                                className="px-3 py-1 text-xs rounded bg-[#FEE2E2] text-[#DC2626] hover:bg-[#FECACA]">
+                                                Unut
+                                            </button>
+                                        ) : <span className="text-xs text-[#94A3B8]">-</span>}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Olay Gecmisi</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Son 100 slot lifecycle alert kaydi.</p>
+                    </div>
+                    <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value)}
+                        className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                        <option value="">Tum severity</option>
+                        <option value="critical">critical</option>
+                        <option value="warning">warning</option>
+                        <option value="info">info</option>
+                    </select>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Last Seen</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Slot</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Code</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Severity</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Status</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Occurrence</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {events.length === 0 ? (
+                                <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Slot lifecycle olayi yok.</td></tr>
+                            ) : events.map((row) => (
+                                <tr key={row.alert_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.last_seen_at)}</td>
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name ?? '-'}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{eventSlotName(row)}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.alert_code}</td>
+                                    <td className="py-2 px-3">{severityBadge(row.severity)}</td>
+                                    <td className="py-2 px-3 text-xs">{row.status}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.occurrence_count}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            {editing && <SlotLifecycleEditModal subscription={editing} onClose={() => setEditing(null)} />}
+            {forgetTarget && (
+                <Modal title="Slot state unut" onClose={() => setForgetTarget(null)}>
+                    <p className="text-sm text-[#475569]">
+                        "{forgetTarget.slot_name}" slot'unun gozlem durumu silinecek. Onayliyor musunuz?
+                    </p>
+                    <div className="px-6 py-4 border-t border-[#E2E8F0] flex justify-end gap-2 -mx-6 -mb-4 mt-4">
+                        <button onClick={() => setForgetTarget(null)}
+                            className="px-4 py-2 text-sm text-[#475569] hover:text-[#1E293B]">Iptal</button>
+                        <button onClick={() => forgetMut.mutate(forgetTarget)} disabled={forgetMut.isPending}
+                            className="px-5 py-2 bg-[#DC2626] text-white text-sm rounded-md hover:bg-[#B91C1C] disabled:opacity-50">
+                            {forgetMut.isPending ? 'Siliniyor...' : 'Unut'}
+                        </button>
+                    </div>
+                </Modal>
+            )}
+        </div>
+    );
+}
+
+function SlotLifecycleEditModal({ subscription, onClose }: { subscription: SlotLifecycleSubscription; onClose: () => void }) {
+    const toast = useToast();
+    const qc = useQueryClient();
+    const [form, setForm] = useState({
+        is_enabled: subscription.is_enabled,
+        inactive_minutes: subscription.inactive_minutes,
+        retrigger_minutes: subscription.retrigger_minutes,
+        notify_on_lost: subscription.notify_on_lost,
+        notify_on_active_deleted: subscription.notify_on_active_deleted,
+        notify_on_inactive_deleted: subscription.notify_on_inactive_deleted,
+        notify_on_inactive: subscription.notify_on_inactive,
+    });
+
+    const set = (key: keyof typeof form, value: boolean | number) => {
+        setForm(prev => ({ ...prev, [key]: value }));
+    };
+
+    const saveMut = useMutation({
+        mutationFn: () => apiPut(`/adaptive-alerting/slot-lifecycle/subscriptions/${subscription.instance_pk}`, form),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['slot-lifecycle-subscriptions'] });
+            toast.success('Slot lifecycle ayarlari kaydedildi');
+            onClose();
+        },
+        onError: (e: any) => toast.error(e?.message || 'Kayit basarisiz'),
+    });
+
+    return (
+        <Modal title={`Slot Lifecycle - ${subscription.instance_name}`} onClose={onClose}>
+            <div className="space-y-4">
+                <label className="flex items-center gap-2 text-sm text-[#334155]">
+                    <input type="checkbox" checked={form.is_enabled} onChange={e => set('is_enabled', e.target.checked)} />
+                    Aktif
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Inactive (dk)</label>
+                        <input type="number" min={5} value={form.inactive_minutes}
+                            onChange={e => set('inactive_minutes', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Re-trigger (dk)</label>
+                        <input type="number" min={5} value={form.retrigger_minutes}
+                            onChange={e => set('retrigger_minutes', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                    <ToggleRow label="Lost bildirimi" value={form.notify_on_lost} onChange={v => set('notify_on_lost', v)} />
+                    <ToggleRow label="Aktif silindi bildirimi" value={form.notify_on_active_deleted} onChange={v => set('notify_on_active_deleted', v)} />
+                    <ToggleRow label="Pasif silindi bildirimi" value={form.notify_on_inactive_deleted} onChange={v => set('notify_on_inactive_deleted', v)} />
+                    <ToggleRow label="Uzun pasif bildirimi" value={form.notify_on_inactive} onChange={v => set('notify_on_inactive', v)} />
+                </div>
+            </div>
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
+        </Modal>
+    );
+}
+
+function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
+    return (
+        <label className="flex items-center justify-between gap-3 rounded border border-[#E2E8F0] px-3 py-2 text-sm">
+            <span className="text-[#334155]">{label}</span>
+            <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} />
+        </label>
+    );
+}
+
+function MiniToggle({ label, value }: { label: string; value: boolean }) {
+    return (
+        <span className={`inline-flex items-center rounded px-2 py-0.5 text-[10px] font-medium ${value ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+            {label}: {value ? 'on' : 'off'}
+        </span>
+    );
+}
+
+function yesNoBadge(value: boolean) {
+    return (
+        <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${value ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            {value ? 'Evet' : 'Hayir'}
+        </span>
+    );
+}
+
+function severityBadge(severity: string) {
+    const cls = severity === 'critical'
+        ? 'bg-red-100 text-red-700'
+        : severity === 'warning'
+            ? 'bg-amber-100 text-amber-700'
+            : 'bg-blue-100 text-blue-700';
+    return <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{severity}</span>;
+}
+
+function formatSlotDate(value: string | null | undefined): string {
+    if (!value) return '-';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleString('tr-TR');
+}
+
+function eventSlotName(row: SlotLifecycleEvent): string {
+    const details = typeof row.details_json === 'string'
+        ? safeJsonParse(row.details_json)
+        : row.details_json;
+    const fromDetails = details?.context?.slot_name;
+    if (typeof fromDetails === 'string' && fromDetails.length > 0) return fromDetails;
+    const marker = ':slot=';
+    const idx = row.alert_key.indexOf(marker);
+    return idx >= 0 ? row.alert_key.slice(idx + marker.length) : '-';
+}
+
+function safeJsonParse(value: string): any {
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
 }
 
 // =========================================================================
