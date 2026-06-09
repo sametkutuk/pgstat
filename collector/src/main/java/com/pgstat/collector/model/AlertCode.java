@@ -19,6 +19,10 @@ public enum AlertCode {
     SLOT_INACTIVE_LONG("slot_inactive_long", "warning", "adaptive"),
     SLOT_RECREATED("slot_recreated", "info", "adaptive"),
 
+    LONG_RUNNING_QUERY("long_running_query", "warning", "adaptive"),
+    IDLE_IN_TRANSACTION_LONG("idle_in_transaction_long", "warning", "adaptive"),
+    IDLE_IN_TRANSACTION_ABORTED("idle_in_transaction_aborted", "warning", "adaptive"),
+
     USER_DEFINED_RULE("user_defined_rule", "warning", "rule");
 
     private final String code;

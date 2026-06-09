@@ -12,6 +12,12 @@ const SLOT_LIFECYCLE_ALERT_CODES = [
     'slot_recreated',
 ];
 
+const LONG_QUERY_ALERT_CODES = [
+    'long_running_query',
+    'idle_in_transaction_long',
+    'idle_in_transaction_aborted',
+];
+
 function parseInstancePk(value: string | undefined): number | null {
     if (!value) return null;
     if (!/^\d+$/.test(value)) return null;
@@ -21,6 +27,16 @@ function parseInstancePk(value: string | undefined): number | null {
 function requireInstancePk(value: string | undefined): number | null {
     if (!value || !/^\d+$/.test(value)) return null;
     return Number(value);
+}
+
+function queryPreview(value: string | null | undefined): string {
+    if (!value) return '';
+    let preview = value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+    preview = preview.replace(/(postgres(?:ql)?:\/\/[^\s:]+:)[^@\s]+@/gi, '$1***@');
+    preview = preview.replace(/(password|passwd|pass|token|secret)\s*=\s*'[^']*'/gi, "$1='***'");
+    preview = preview.replace(/(password|passwd|pass|token|secret)\s*=\s*"[^"]*"/gi, '$1="***"');
+    preview = preview.replace(/(password|passwd|pass|token|secret)\s*=\s*[^\s,;)]+/gi, '$1=***');
+    return preview.length <= 200 ? preview : preview.slice(0, 200);
 }
 
 // ============================================================================
@@ -213,6 +229,207 @@ router.get('/slot-lifecycle/events', async (req, res, next) => {
             limit $${paramIdx}
         `, params);
         res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ============================================================================
+// LONG QUERY
+// ============================================================================
+
+router.get('/long-query/subscriptions', async (_req, res, next) => {
+    try {
+        const result = await pool.query(`
+            select
+                s.subscription_id,
+                s.instance_pk,
+                i.display_name as instance_name,
+                s.is_enabled,
+                s.long_query_minutes,
+                s.idle_tx_minutes,
+                s.notify_on_long_query,
+                s.notify_on_idle_tx,
+                s.notify_on_idle_tx_aborted,
+                s.updated_at
+            from control.long_query_subscription s
+            join control.instance_inventory i on i.instance_pk = s.instance_pk
+            order by i.display_name, s.instance_pk
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.put('/long-query/subscriptions/:instancePk', async (req, res, next) => {
+    try {
+        const instancePk = requireInstancePk(req.params.instancePk);
+        if (instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const longQueryMinutes = Number(req.body?.long_query_minutes ?? 5);
+        const idleTxMinutes = Number(req.body?.idle_tx_minutes ?? 30);
+        if (!Number.isFinite(longQueryMinutes) || longQueryMinutes < 1) {
+            res.status(400).json({ error: 'long_query_minutes en az 1 olmali' });
+            return;
+        }
+        if (!Number.isFinite(idleTxMinutes) || idleTxMinutes < 1) {
+            res.status(400).json({ error: 'idle_tx_minutes en az 1 olmali' });
+            return;
+        }
+
+        const result = await pool.query(`
+            insert into control.long_query_subscription (
+                instance_pk, is_enabled, long_query_minutes, idle_tx_minutes,
+                notify_on_long_query, notify_on_idle_tx, notify_on_idle_tx_aborted, updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, $7, now())
+            on conflict (instance_pk) do update
+            set is_enabled = excluded.is_enabled,
+                long_query_minutes = excluded.long_query_minutes,
+                idle_tx_minutes = excluded.idle_tx_minutes,
+                notify_on_long_query = excluded.notify_on_long_query,
+                notify_on_idle_tx = excluded.notify_on_idle_tx,
+                notify_on_idle_tx_aborted = excluded.notify_on_idle_tx_aborted,
+                updated_at = now()
+            returning
+                subscription_id, instance_pk, is_enabled, long_query_minutes,
+                idle_tx_minutes, notify_on_long_query, notify_on_idle_tx,
+                notify_on_idle_tx_aborted, updated_at
+        `, [
+            instancePk,
+            Boolean(req.body?.is_enabled ?? true),
+            Math.trunc(longQueryMinutes),
+            Math.trunc(idleTxMinutes),
+            Boolean(req.body?.notify_on_long_query ?? true),
+            Boolean(req.body?.notify_on_idle_tx ?? true),
+            Boolean(req.body?.notify_on_idle_tx_aborted ?? true),
+        ]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/long-query/events', async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 100);
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        const severity = req.query.severity as string | undefined;
+        const status = req.query.status as string | undefined;
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const params: any[] = [LONG_QUERY_ALERT_CODES];
+        let paramIdx = 2;
+        let whereSql = 'where a.alert_code = any($1)';
+        if (instancePk != null) {
+            whereSql += ` and a.instance_pk = $${paramIdx++}`;
+            params.push(instancePk);
+        }
+        if (severity) {
+            whereSql += ` and a.severity = $${paramIdx++}`;
+            params.push(severity);
+        }
+        if (status) {
+            whereSql += ` and a.status = $${paramIdx++}`;
+            params.push(status);
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+            select
+                a.alert_id,
+                a.alert_key,
+                a.alert_code,
+                a.severity,
+                a.status,
+                a.occurrence_count,
+                a.instance_pk,
+                i.display_name as instance_name,
+                a.title,
+                a.message,
+                a.first_seen_at,
+                a.last_seen_at,
+                a.resolved_at,
+                a.details_json
+            from ops.alert a
+            left join control.instance_inventory i on i.instance_pk = a.instance_pk
+            ${whereSql}
+            order by a.last_seen_at desc
+            limit $${paramIdx}
+        `, params);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/long-query/live', async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 100);
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const params: any[] = [];
+        let paramIdx = 1;
+        let instanceFilterSql = '';
+        if (instancePk != null) {
+            instanceFilterSql = `and a.instance_pk = $${paramIdx++}`;
+            params.push(instancePk);
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+            with latest as (
+                select instance_pk, max(snapshot_ts) as snapshot_ts
+                from fact.pg_activity_snapshot
+                where snapshot_ts > now() - interval '5 minutes'
+                group by instance_pk
+            )
+            select
+                i.display_name as instance_name,
+                a.pid,
+                a.datname,
+                a.usename,
+                a.state,
+                floor(extract(epoch from (
+                    now() - case
+                        when a.state = 'active' then a.query_start
+                        else a.xact_start
+                    end
+                )) / 60)::int as duration_minutes,
+                a.query as query_text
+            from fact.pg_activity_snapshot a
+            join latest l on l.instance_pk = a.instance_pk and l.snapshot_ts = a.snapshot_ts
+            join control.instance_inventory i on i.instance_pk = a.instance_pk
+            where a.backend_type = 'client backend'
+              and nullif(btrim(coalesce(a.query, '')), '') is not null
+              and (
+                (a.state = 'active' and a.query_start is not null)
+                or (a.state in ('idle in transaction', 'idle in transaction (aborted)') and a.xact_start is not null)
+              )
+              ${instanceFilterSql}
+            order by duration_minutes desc, i.display_name, a.pid
+            limit $${paramIdx}
+        `, params);
+        res.json(result.rows.map((row) => ({
+            instance_name: row.instance_name,
+            pid: row.pid,
+            datname: row.datname,
+            usename: row.usename,
+            state: row.state,
+            duration_minutes: row.duration_minutes,
+            query_preview: queryPreview(row.query_text),
+        })));
     } catch (err) {
         next(err);
     }

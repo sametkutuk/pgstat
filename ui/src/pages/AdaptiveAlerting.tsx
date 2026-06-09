@@ -106,12 +106,52 @@ interface SlotLifecycleEvent {
     details_json: any;
 }
 
+interface LongQuerySubscription {
+    subscription_id: number;
+    instance_pk: number;
+    instance_name: string;
+    is_enabled: boolean;
+    long_query_minutes: number;
+    idle_tx_minutes: number;
+    notify_on_long_query: boolean;
+    notify_on_idle_tx: boolean;
+    notify_on_idle_tx_aborted: boolean;
+    updated_at: string;
+}
+
+interface LongQueryLiveRow {
+    instance_name: string;
+    pid: number;
+    datname: string | null;
+    usename: string | null;
+    state: string | null;
+    duration_minutes: number;
+    query_preview: string;
+}
+
+interface LongQueryEvent {
+    alert_id: number;
+    alert_key: string;
+    alert_code: string;
+    severity: string;
+    status: string;
+    occurrence_count: number;
+    instance_pk: number | null;
+    instance_name: string | null;
+    title: string | null;
+    message: string | null;
+    first_seen_at: string;
+    last_seen_at: string;
+    resolved_at: string | null;
+    details_json: any;
+}
+
 // =========================================================================
 // Ana Sayfa
 // =========================================================================
 
 export default function AdaptiveAlerting() {
-    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels' | 'slot-lifecycle'>('overview');
+    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels' | 'slot-lifecycle' | 'long-query'>('overview');
 
     const tabs = [
         { k: 'overview', l: '📊 Genel Bakış' },
@@ -122,6 +162,7 @@ export default function AdaptiveAlerting() {
     ];
 
     tabs.push({ k: 'slot-lifecycle', l: 'Slot Lifecycle' });
+    tabs.push({ k: 'long-query', l: 'Uzun Sorgu' });
 
     return (
         <div>
@@ -152,6 +193,7 @@ export default function AdaptiveAlerting() {
             {tab === 'maintenance' && <MaintenancePanel />}
             {tab === 'channels' && <ChannelsPanel />}
             {tab === 'slot-lifecycle' && <SlotLifecyclePanel />}
+            {tab === 'long-query' && <LongQueryPanel />}
         </div>
     );
 }
@@ -1396,6 +1438,252 @@ function SlotLifecycleEditModal({ subscription, onClose }: { subscription: SlotL
     );
 }
 
+// =========================================================================
+// Long Query
+// =========================================================================
+
+function LongQueryPanel() {
+    const [editing, setEditing] = useState<LongQuerySubscription | null>(null);
+    const [instanceFilter, setInstanceFilter] = useState<string>('');
+    const [severityFilter, setSeverityFilter] = useState<string>('');
+    const [statusFilter, setStatusFilter] = useState<string>('');
+
+    const { data: subscriptions = [] } = useQuery<LongQuerySubscription[]>({
+        queryKey: ['long-query-subscriptions'],
+        queryFn: () => apiGet('/adaptive-alerting/long-query/subscriptions'),
+    });
+
+    const liveParams = new URLSearchParams({ limit: '100' });
+    if (instanceFilter) liveParams.set('instancePk', instanceFilter);
+    const { data: liveRows = [] } = useQuery<LongQueryLiveRow[]>({
+        queryKey: ['long-query-live', instanceFilter],
+        queryFn: () => apiGet(`/adaptive-alerting/long-query/live?${liveParams.toString()}`),
+        refetchInterval: 30_000,
+    });
+
+    const eventParams = new URLSearchParams({ limit: '100' });
+    if (instanceFilter) eventParams.set('instancePk', instanceFilter);
+    if (severityFilter) eventParams.set('severity', severityFilter);
+    if (statusFilter) eventParams.set('status', statusFilter);
+    const { data: events = [] } = useQuery<LongQueryEvent[]>({
+        queryKey: ['long-query-events', instanceFilter, severityFilter, statusFilter],
+        queryFn: () => apiGet(`/adaptive-alerting/long-query/events?${eventParams.toString()}`),
+    });
+
+    return (
+        <div className="space-y-6">
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Subscription Ayarlari</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Ayarlar instance bazindadir; uzun sorgu ve idle transaction alertlerini yonetir.</p>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Aktif</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Uzun Sorgu (dk)</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Idle Tx (dk)</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Bildirimler</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Duzenle</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {subscriptions.length === 0 ? (
+                                <tr><td colSpan={6} className="py-8 text-center text-sm text-[#64748B]">Subscription kaydi yok.</td></tr>
+                            ) : subscriptions.map((row) => (
+                                <tr key={row.subscription_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 font-medium text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3">{yesNoBadge(row.is_enabled)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.long_query_minutes}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.idle_tx_minutes}</td>
+                                    <td className="py-2 px-3">
+                                        <div className="flex flex-wrap gap-1">
+                                            <MiniToggle label="long" value={row.notify_on_long_query} />
+                                            <MiniToggle label="idle" value={row.notify_on_idle_tx} />
+                                            <MiniToggle label="aborted" value={row.notify_on_idle_tx_aborted} />
+                                        </div>
+                                    </td>
+                                    <td className="py-2 px-3 text-right">
+                                        <button onClick={() => setEditing(row)}
+                                            className="px-3 py-1 text-xs rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE]">
+                                            Duzenle
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Canli Uzun Calisanlar</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Son snapshot'taki aktif/idle-tx sorgular. Esik asilmasa bile gosterilir.</p>
+                    </div>
+                    <select value={instanceFilter} onChange={e => setInstanceFilter(e.target.value)}
+                        className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                        <option value="">Tum instance'lar</option>
+                        {subscriptions.map(s => (
+                            <option key={s.instance_pk} value={s.instance_pk}>{s.instance_name}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">PID</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">DB</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">User</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">State</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Sure (dk)</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Sorgu</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {liveRows.length === 0 ? (
+                                <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Canli uzun calisan sorgu yok.</td></tr>
+                            ) : liveRows.map((row) => (
+                                <tr key={`${row.instance_name}-${row.pid}-${row.state}`} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.pid}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.datname ?? '-'}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.usename ?? '-'}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.state ?? '-'}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.duration_minutes}</td>
+                                    <td className="py-2 px-3 font-mono text-xs max-w-[520px] truncate" title={row.query_preview}>{row.query_preview || '-'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Olay Gecmisi</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Son 100 uzun sorgu ve idle transaction alert kaydi.</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value)}
+                            className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                            <option value="">Tum severity</option>
+                            <option value="warning">warning</option>
+                        </select>
+                        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+                            className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                            <option value="">Tum status</option>
+                            <option value="open">open</option>
+                            <option value="resolved">resolved</option>
+                            <option value="acknowledged">acknowledged</option>
+                        </select>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Last Seen</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Code</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Severity</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Status</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">PID</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Sure</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Occurrence</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {events.length === 0 ? (
+                                <tr><td colSpan={8} className="py-8 text-center text-sm text-[#64748B]">Uzun sorgu olayi yok.</td></tr>
+                            ) : events.map((row) => (
+                                <tr key={row.alert_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.last_seen_at)}</td>
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name ?? '-'}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.alert_code}</td>
+                                    <td className="py-2 px-3">{severityBadge(row.severity)}</td>
+                                    <td className="py-2 px-3">{statusBadge(row.status)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{eventPid(row)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{eventDuration(row)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.occurrence_count}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            {editing && <LongQueryEditModal subscription={editing} onClose={() => setEditing(null)} />}
+        </div>
+    );
+}
+
+function LongQueryEditModal({ subscription, onClose }: { subscription: LongQuerySubscription; onClose: () => void }) {
+    const toast = useToast();
+    const qc = useQueryClient();
+    const [form, setForm] = useState({
+        is_enabled: subscription.is_enabled,
+        long_query_minutes: subscription.long_query_minutes,
+        idle_tx_minutes: subscription.idle_tx_minutes,
+        notify_on_long_query: subscription.notify_on_long_query,
+        notify_on_idle_tx: subscription.notify_on_idle_tx,
+        notify_on_idle_tx_aborted: subscription.notify_on_idle_tx_aborted,
+    });
+
+    const set = (key: keyof typeof form, value: boolean | number) => {
+        setForm(prev => ({ ...prev, [key]: value }));
+    };
+
+    const saveMut = useMutation({
+        mutationFn: () => apiPut(`/adaptive-alerting/long-query/subscriptions/${subscription.instance_pk}`, form),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['long-query-subscriptions'] });
+            toast.success('Uzun sorgu ayarlari kaydedildi');
+            onClose();
+        },
+        onError: (e: any) => toast.error(e?.message || 'Kayit basarisiz'),
+    });
+
+    return (
+        <Modal title={`Uzun Sorgu - ${subscription.instance_name}`} onClose={onClose}>
+            <div className="space-y-4">
+                <label className="flex items-center gap-2 text-sm text-[#334155]">
+                    <input type="checkbox" checked={form.is_enabled} onChange={e => set('is_enabled', e.target.checked)} />
+                    Aktif
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Uzun Sorgu (dk)</label>
+                        <input type="number" min={1} value={form.long_query_minutes}
+                            onChange={e => set('long_query_minutes', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Idle Tx (dk)</label>
+                        <input type="number" min={1} value={form.idle_tx_minutes}
+                            onChange={e => set('idle_tx_minutes', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                    <ToggleRow label="Uzun sorgu bildirimi" value={form.notify_on_long_query} onChange={v => set('notify_on_long_query', v)} />
+                    <ToggleRow label="Idle tx bildirimi" value={form.notify_on_idle_tx} onChange={v => set('notify_on_idle_tx', v)} />
+                    <ToggleRow label="Aborted idle tx bildirimi" value={form.notify_on_idle_tx_aborted} onChange={v => set('notify_on_idle_tx_aborted', v)} />
+                </div>
+            </div>
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
+        </Modal>
+    );
+}
+
 function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
     return (
         <label className="flex items-center justify-between gap-3 rounded border border-[#E2E8F0] px-3 py-2 text-sm">
@@ -1430,6 +1718,15 @@ function severityBadge(severity: string) {
     return <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{severity}</span>;
 }
 
+function statusBadge(status: string) {
+    const cls = status === 'open'
+        ? 'bg-emerald-100 text-emerald-700'
+        : status === 'resolved'
+            ? 'bg-slate-100 text-slate-600'
+            : 'bg-blue-100 text-blue-700';
+    return <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{status}</span>;
+}
+
 function formatSlotDate(value: string | null | undefined): string {
     if (!value) return '-';
     const d = new Date(value);
@@ -1446,6 +1743,24 @@ function eventSlotName(row: SlotLifecycleEvent): string {
     const marker = ':slot=';
     const idx = row.alert_key.indexOf(marker);
     return idx >= 0 ? row.alert_key.slice(idx + marker.length) : '-';
+}
+
+function longQueryDetails(row: LongQueryEvent): any {
+    return typeof row.details_json === 'string'
+        ? safeJsonParse(row.details_json)
+        : row.details_json;
+}
+
+function eventPid(row: LongQueryEvent): string {
+    const pid = longQueryDetails(row)?.context?.pid;
+    if (pid != null) return String(pid);
+    const match = row.alert_key.match(/:pid=(\d+)/);
+    return match ? match[1] : '-';
+}
+
+function eventDuration(row: LongQueryEvent): string {
+    const duration = longQueryDetails(row)?.context?.duration_minutes;
+    return duration != null ? `${duration} dk` : '-';
 }
 
 function safeJsonParse(value: string): any {
