@@ -93,6 +93,8 @@ public class JobOrchestrator {
     private volatile java.time.LocalDate lastWeeklyReportDate = null;
     // Hot settings refresh: 3 saatte bir, en son tetikleme saati izlenir
     private volatile int lastHotSettingsHourUtc = -1;
+    // Freeze/settings snapshot: 6 saatte bir (XID freeze izleme gun ici resolve icin)
+    private volatile int lastFreezeSnapshotHourUtc = -1;
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -639,6 +641,33 @@ public class JobOrchestrator {
             // 3e. Aksiyon-odakli gunluk alert'ler (INDEX_SUSPECT, INDEX_UNUSED)
             // Artik snapshot tamamlandiktan hemen sonra calisir (yukarida).
             // UTC 04:00 ayri tetik kaldirildi — snapshot yoksa zaten anlamsiz.
+
+            // 3e-2. Freeze/settings snapshot — 6 saatte bir (XID freeze gun ici takip).
+            // Nightly full snapshot zaten freeze topluyor; bu hafif varyant gun ici
+            // age guncellemesi saglar ki XidFreezeEvaluator resolve'lari gece beklemesin.
+            // Saat 3 haric (nightly zaten topladi). collectFreezeAndSettings agir
+            // per-DB tarama yapmaz — sadece pg_settings + pg_database freeze age.
+            if (currentUtcHour % 6 == 0 && currentUtcHour != lastFreezeSnapshotHourUtc
+                    && currentUtcHour != 3) {
+                lastFreezeSnapshotHourUtc = currentUtcHour;
+                try {
+                    List<com.pgstat.collector.model.InstanceInfo> ready = inventoryRepo.findAllReady();
+                    long rows = 0;
+                    for (com.pgstat.collector.model.InstanceInfo inst : ready) {
+                        try {
+                            rows += nightlySnapshotCollector.collectFreezeAndSettings(inst);
+                        } catch (Exception e) {
+                            log.debug("Freeze/settings snapshot hatasi {}: {}", inst.instanceId(), e.getMessage());
+                        }
+                    }
+                    if (rows > 0) {
+                        log.info("Freeze/settings 6-saatlik snapshot: {} instance, {} satir", ready.size(), rows);
+                    }
+                } catch (Exception e) {
+                    log.warn("Freeze/settings snapshot genel hatasi: {}", e.getMessage());
+                    lastFreezeSnapshotHourUtc = -1;
+                }
+            }
 
             // 3f. Gunluk/haftalik rapor — saat config'den alinir (UI'da duzenlenebilir).
             // Idempotency: gun bazinda tek tetik (saat 1 saat surdugu icin yuzlerce

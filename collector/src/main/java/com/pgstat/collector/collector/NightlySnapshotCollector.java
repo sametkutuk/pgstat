@@ -145,6 +145,27 @@ public class NightlySnapshotCollector {
      * Tek instance icin tum gece snapshot'larini toplar.
      * Admin DB'ye baglanir (settings + freeze), sonra her aktif DB'ye (relation size + sequences).
      */
+    /**
+     * Sadece pg_settings + database freeze age toplar — XID freeze izleme icin
+     * gun ici (ornek 6 saatte bir) calistirilan HAFIF varyant. Relation size /
+     * sequence state gibi agir per-DB taramalari YAPMAZ; sadece admin baglantisi
+     * uzerinden iki sorgu calistirir. collectAll ise nightly'de full snapshot alir.
+     */
+    public long collectFreezeAndSettings(InstanceInfo instance) {
+        long instancePk = instance.instancePk();
+        OffsetDateTime now = OffsetDateTime.now(java.time.ZoneOffset.UTC);
+        long totalRows = 0;
+        try (Connection adminConn = connFactory.connect(instance)) {
+            totalRows += collectSettings(adminConn, instancePk, now);
+            totalRows += collectFreezeAge(adminConn, instancePk, now);
+        } catch (Exception e) {
+            log.warn("Freeze/settings snapshot hatasi {}: {}", instance.instanceId(), e.getMessage());
+            return 0;
+        }
+        log.debug("Freeze/settings snapshot: {} — {} satir", instance.instanceId(), totalRows);
+        return totalRows;
+    }
+
     public long collectAll(InstanceInfo instance) {
         long instancePk = instance.instancePk();
         OffsetDateTime now = OffsetDateTime.now(java.time.ZoneOffset.UTC);
