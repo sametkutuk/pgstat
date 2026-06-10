@@ -22,6 +22,10 @@ public enum AlertCode {
     LONG_RUNNING_QUERY("long_running_query", "warning", "adaptive"),
     IDLE_IN_TRANSACTION_LONG("idle_in_transaction_long", "warning", "adaptive"),
     IDLE_IN_TRANSACTION_ABORTED("idle_in_transaction_aborted", "warning", "adaptive"),
+    XID_FREEZE_WARNING("xid_freeze_warning", "warning", "adaptive"),
+    XID_FREEZE_CRITICAL("xid_freeze_critical", "critical", "adaptive"),
+    MXID_FREEZE_WARNING("mxid_freeze_warning", "warning", "adaptive"),
+    MXID_FREEZE_CRITICAL("mxid_freeze_critical", "critical", "adaptive"),
 
     USER_DEFINED_RULE("user_defined_rule", "warning", "rule");
 

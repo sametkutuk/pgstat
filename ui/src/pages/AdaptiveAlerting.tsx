@@ -146,12 +146,54 @@ interface LongQueryEvent {
     details_json: any;
 }
 
+interface XidFreezeSubscription {
+    subscription_id: number;
+    instance_pk: number;
+    instance_name: string;
+    is_enabled: boolean;
+    warning_pct: number;
+    critical_pct: number;
+    notify_on_xid: boolean;
+    notify_on_mxid: boolean;
+    updated_at: string;
+}
+
+interface XidFreezeStateRow {
+    instance_name: string;
+    datname: string | null;
+    dbid: number;
+    datfrozenxid_age: number | null;
+    datminmxid_age: number | null;
+    xid_max_age: number;
+    mxid_max_age: number;
+    xid_pct: number | null;
+    mxid_pct: number | null;
+    snapshot_ts: string;
+}
+
+interface XidFreezeEvent {
+    alert_id: number;
+    alert_key: string;
+    alert_code: string;
+    severity: string;
+    status: string;
+    occurrence_count: number;
+    instance_pk: number | null;
+    instance_name: string | null;
+    title: string | null;
+    message: string | null;
+    first_seen_at: string;
+    last_seen_at: string;
+    resolved_at: string | null;
+    details_json: any;
+}
+
 // =========================================================================
 // Ana Sayfa
 // =========================================================================
 
 export default function AdaptiveAlerting() {
-    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels' | 'slot-lifecycle' | 'long-query'>('overview');
+    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'channels' | 'slot-lifecycle' | 'long-query' | 'xid-freeze'>('overview');
 
     const tabs = [
         { k: 'overview', l: '📊 Genel Bakış' },
@@ -163,6 +205,7 @@ export default function AdaptiveAlerting() {
 
     tabs.push({ k: 'slot-lifecycle', l: 'Slot Lifecycle' });
     tabs.push({ k: 'long-query', l: 'Uzun Sorgu' });
+    tabs.push({ k: 'xid-freeze', l: 'XID Freeze' });
 
     return (
         <div>
@@ -194,6 +237,7 @@ export default function AdaptiveAlerting() {
             {tab === 'channels' && <ChannelsPanel />}
             {tab === 'slot-lifecycle' && <SlotLifecyclePanel />}
             {tab === 'long-query' && <LongQueryPanel />}
+            {tab === 'xid-freeze' && <XidFreezePanel />}
         </div>
     );
 }
@@ -1684,6 +1728,257 @@ function LongQueryEditModal({ subscription, onClose }: { subscription: LongQuery
     );
 }
 
+// =========================================================================
+// XID Freeze
+// =========================================================================
+
+function XidFreezePanel() {
+    const [editing, setEditing] = useState<XidFreezeSubscription | null>(null);
+    const [instanceFilter, setInstanceFilter] = useState<string>('');
+    const [severityFilter, setSeverityFilter] = useState<string>('');
+    const [statusFilter, setStatusFilter] = useState<string>('');
+
+    const { data: subscriptions = [] } = useQuery<XidFreezeSubscription[]>({
+        queryKey: ['xid-freeze-subscriptions'],
+        queryFn: () => apiGet('/adaptive-alerting/xid-freeze/subscriptions'),
+    });
+
+    const stateParams = new URLSearchParams();
+    if (instanceFilter) stateParams.set('instancePk', instanceFilter);
+    const stateUrl = stateParams.toString()
+        ? `/adaptive-alerting/xid-freeze/current-state?${stateParams.toString()}`
+        : '/adaptive-alerting/xid-freeze/current-state';
+    const { data: stateRows = [], refetch: refetchState, isFetching: stateFetching } = useQuery<XidFreezeStateRow[]>({
+        queryKey: ['xid-freeze-current-state', instanceFilter],
+        queryFn: () => apiGet(stateUrl),
+        refetchInterval: 5 * 60 * 1000,
+    });
+
+    const eventParams = new URLSearchParams({ limit: '100' });
+    if (instanceFilter) eventParams.set('instancePk', instanceFilter);
+    if (severityFilter) eventParams.set('severity', severityFilter);
+    if (statusFilter) eventParams.set('status', statusFilter);
+    const { data: events = [] } = useQuery<XidFreezeEvent[]>({
+        queryKey: ['xid-freeze-events', instanceFilter, severityFilter, statusFilter],
+        queryFn: () => apiGet(`/adaptive-alerting/xid-freeze/events?${eventParams.toString()}`),
+    });
+
+    return (
+        <div className="space-y-6">
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Subscription Ayarlari</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Ayarlar instance bazindadir; instance altindaki tum database'lere uygulanir.</p>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Aktif</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Warning %</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Critical %</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Bildirimler</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Duzenle</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {subscriptions.length === 0 ? (
+                                <tr><td colSpan={6} className="py-8 text-center text-sm text-[#64748B]">Subscription kaydi yok.</td></tr>
+                            ) : subscriptions.map((row) => (
+                                <tr key={row.subscription_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 font-medium text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3">{yesNoBadge(row.is_enabled)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.warning_pct}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.critical_pct}</td>
+                                    <td className="py-2 px-3">
+                                        <div className="flex flex-wrap gap-1">
+                                            <MiniToggle label="XID" value={row.notify_on_xid} />
+                                            <MiniToggle label="MXID" value={row.notify_on_mxid} />
+                                        </div>
+                                    </td>
+                                    <td className="py-2 px-3 text-right">
+                                        <button onClick={() => setEditing(row)}
+                                            className="px-3 py-1 text-xs rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE]">
+                                            Duzenle
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Mevcut Durum</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Son gece snapshot. Wraparound 2.1B XID'de. Yuzde = age / autovacuum_freeze_max_age.</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <select value={instanceFilter} onChange={e => setInstanceFilter(e.target.value)}
+                            className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                            <option value="">Tum instance'lar</option>
+                            {subscriptions.map(s => (
+                                <option key={s.instance_pk} value={s.instance_pk}>{s.instance_name}</option>
+                            ))}
+                        </select>
+                        <button onClick={() => refetchState()} disabled={stateFetching}
+                            className="px-3 py-2 text-sm rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE] disabled:opacity-50">
+                            Yenile
+                        </button>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">DB</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">XID Age</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">XID %</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">MXID Age</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">MXID %</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Son Snapshot</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {stateRows.length === 0 ? (
+                                <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Son 36 saat icinde freeze snapshot yok.</td></tr>
+                            ) : stateRows.map((row) => (
+                                <tr key={`${row.instance_name}-${row.dbid}`} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.datname ?? '-'}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{formatNumber(row.datfrozenxid_age)}</td>
+                                    <td className="py-2 px-3">{pctBadge(row.xid_pct)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{formatNumber(row.datminmxid_age)}</td>
+                                    <td className="py-2 px-3">{pctBadge(row.mxid_pct)}</td>
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.snapshot_ts)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-semibold text-[#1E293B]">Olay Gecmisi</h2>
+                        <p className="text-xs text-[#64748B] mt-0.5">Son 100 XID ve MXID freeze alert kaydi.</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value)}
+                            className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                            <option value="">Tum severity</option>
+                            <option value="warning">warning</option>
+                            <option value="critical">critical</option>
+                        </select>
+                        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+                            className="px-3 py-2 border border-[#CBD5E1] rounded-md text-sm">
+                            <option value="">Tum status</option>
+                            <option value="open">open</option>
+                            <option value="resolved">resolved</option>
+                            <option value="acknowledged">acknowledged</option>
+                        </select>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Last Seen</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Code</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Severity</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Status</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">DB</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Occurrence</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {events.length === 0 ? (
+                                <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Freeze olayi yok.</td></tr>
+                            ) : events.map((row) => (
+                                <tr key={row.alert_id} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 text-xs text-[#64748B] whitespace-nowrap">{formatSlotDate(row.last_seen_at)}</td>
+                                    <td className="py-2 px-3 text-[#1E293B]">{row.instance_name ?? '-'}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{row.alert_code}</td>
+                                    <td className="py-2 px-3">{severityBadge(row.severity)}</td>
+                                    <td className="py-2 px-3">{statusBadge(row.status)}</td>
+                                    <td className="py-2 px-3 font-mono text-xs">{eventFreezeDb(row)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.occurrence_count}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            {editing && <XidFreezeEditModal subscription={editing} onClose={() => setEditing(null)} />}
+        </div>
+    );
+}
+
+function XidFreezeEditModal({ subscription, onClose }: { subscription: XidFreezeSubscription; onClose: () => void }) {
+    const toast = useToast();
+    const qc = useQueryClient();
+    const [form, setForm] = useState({
+        is_enabled: subscription.is_enabled,
+        warning_pct: subscription.warning_pct,
+        critical_pct: subscription.critical_pct,
+        notify_on_xid: subscription.notify_on_xid,
+        notify_on_mxid: subscription.notify_on_mxid,
+    });
+
+    const set = (key: keyof typeof form, value: boolean | number) => {
+        setForm(prev => ({ ...prev, [key]: value }));
+    };
+
+    const saveMut = useMutation({
+        mutationFn: () => apiPut(`/adaptive-alerting/xid-freeze/subscriptions/${subscription.instance_pk}`, form),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['xid-freeze-subscriptions'] });
+            toast.success('XID freeze ayarlari kaydedildi');
+            onClose();
+        },
+        onError: (e: any) => toast.error(e?.message || 'Kayit basarisiz'),
+    });
+
+    return (
+        <Modal title={`XID Freeze - ${subscription.instance_name}`} onClose={onClose}>
+            <div className="space-y-4">
+                <label className="flex items-center gap-2 text-sm text-[#334155]">
+                    <input type="checkbox" checked={form.is_enabled} onChange={e => set('is_enabled', e.target.checked)} />
+                    Aktif
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Warning %</label>
+                        <input type="number" min={1} max={100} value={form.warning_pct}
+                            onChange={e => set('warning_pct', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-medium text-[#475569] mb-1">Critical %</label>
+                        <input type="number" min={1} max={100} value={form.critical_pct}
+                            onChange={e => set('critical_pct', Number(e.target.value))}
+                            className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                    <ToggleRow label="XID bildirimi" value={form.notify_on_xid} onChange={v => set('notify_on_xid', v)} />
+                    <ToggleRow label="MXID bildirimi" value={form.notify_on_mxid} onChange={v => set('notify_on_mxid', v)} />
+                </div>
+            </div>
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
+        </Modal>
+    );
+}
+
 function ToggleRow({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
     return (
         <label className="flex items-center justify-between gap-3 rounded border border-[#E2E8F0] px-3 py-2 text-sm">
@@ -1727,6 +2022,23 @@ function statusBadge(status: string) {
     return <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{status}</span>;
 }
 
+function pctBadge(value: number | null | undefined) {
+    if (value == null) {
+        return <span className="text-xs text-[#94A3B8]">-</span>;
+    }
+    const cls = value >= 95
+        ? 'bg-red-100 text-red-700'
+        : value >= 80
+            ? 'bg-amber-100 text-amber-700'
+            : 'bg-emerald-100 text-emerald-700';
+    return <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{value}%</span>;
+}
+
+function formatNumber(value: number | null | undefined): string {
+    if (value == null) return '-';
+    return Number(value).toLocaleString('tr-TR');
+}
+
 function formatSlotDate(value: string | null | undefined): string {
     if (!value) return '-';
     const d = new Date(value);
@@ -1761,6 +2073,18 @@ function eventPid(row: LongQueryEvent): string {
 function eventDuration(row: LongQueryEvent): string {
     const duration = longQueryDetails(row)?.context?.duration_minutes;
     return duration != null ? `${duration} dk` : '-';
+}
+
+function eventFreezeDb(row: XidFreezeEvent): string {
+    const details = typeof row.details_json === 'string'
+        ? safeJsonParse(row.details_json)
+        : row.details_json;
+    const datname = details?.context?.datname;
+    if (typeof datname === 'string' && datname.length > 0) return datname;
+    const dbid = details?.context?.dbid;
+    if (dbid != null) return `dbid=${dbid}`;
+    const match = row.alert_key.match(/:dbid=(\d+)/);
+    return match ? `dbid=${match[1]}` : '-';
 }
 
 function safeJsonParse(value: string): any {

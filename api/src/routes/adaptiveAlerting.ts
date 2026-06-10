@@ -18,6 +18,13 @@ const LONG_QUERY_ALERT_CODES = [
     'idle_in_transaction_aborted',
 ];
 
+const XID_FREEZE_ALERT_CODES = [
+    'xid_freeze_warning',
+    'xid_freeze_critical',
+    'mxid_freeze_warning',
+    'mxid_freeze_critical',
+];
+
 function parseInstancePk(value: string | undefined): number | null {
     if (!value) return null;
     if (!/^\d+$/.test(value)) return null;
@@ -436,6 +443,218 @@ router.get('/long-query/live', async (req, res, next) => {
 });
 
 // ============================================================================
+// XID FREEZE
+// ============================================================================
+
+router.get('/xid-freeze/subscriptions', async (_req, res, next) => {
+    try {
+        const result = await pool.query(`
+            select
+                s.subscription_id,
+                s.instance_pk,
+                i.display_name as instance_name,
+                s.is_enabled,
+                s.warning_pct,
+                s.critical_pct,
+                s.notify_on_xid,
+                s.notify_on_mxid,
+                s.updated_at
+            from control.xid_freeze_subscription s
+            join control.instance_inventory i on i.instance_pk = s.instance_pk
+            order by i.display_name, s.instance_pk
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.put('/xid-freeze/subscriptions/:instancePk', async (req, res, next) => {
+    try {
+        const instancePk = requireInstancePk(req.params.instancePk);
+        if (instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const warningPct = Number(req.body?.warning_pct ?? 80);
+        const criticalPct = Number(req.body?.critical_pct ?? 95);
+        if (!Number.isFinite(warningPct) || warningPct < 1 || warningPct > 100) {
+            res.status(400).json({ error: 'warning_pct 1-100 arasinda olmali' });
+            return;
+        }
+        if (!Number.isFinite(criticalPct) || criticalPct < 1 || criticalPct > 100) {
+            res.status(400).json({ error: 'critical_pct 1-100 arasinda olmali' });
+            return;
+        }
+        if (criticalPct <= warningPct) {
+            res.status(400).json({ error: "critical_pct warning_pct'den buyuk olmali" });
+            return;
+        }
+
+        const result = await pool.query(`
+            insert into control.xid_freeze_subscription (
+                instance_pk, is_enabled, warning_pct, critical_pct,
+                notify_on_xid, notify_on_mxid, updated_at
+            )
+            values ($1, $2, $3, $4, $5, $6, now())
+            on conflict (instance_pk) do update
+            set is_enabled = excluded.is_enabled,
+                warning_pct = excluded.warning_pct,
+                critical_pct = excluded.critical_pct,
+                notify_on_xid = excluded.notify_on_xid,
+                notify_on_mxid = excluded.notify_on_mxid,
+                updated_at = now()
+            returning
+                subscription_id, instance_pk, is_enabled, warning_pct, critical_pct,
+                notify_on_xid, notify_on_mxid, updated_at
+        `, [
+            instancePk,
+            Boolean(req.body?.is_enabled ?? true),
+            Math.trunc(warningPct),
+            Math.trunc(criticalPct),
+            Boolean(req.body?.notify_on_xid ?? true),
+            Boolean(req.body?.notify_on_mxid ?? true),
+        ]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/xid-freeze/current-state', async (req, res, next) => {
+    try {
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const params: any[] = [];
+        const freezeFilterSql = instancePk != null ? 'and fs.instance_pk = $1' : '';
+        const settingsFilterSql = instancePk != null ? 'and ps.instance_pk = $1' : '';
+        if (instancePk != null) params.push(instancePk);
+
+        const result = await pool.query(`
+            with latest_freeze as (
+                select fs.instance_pk, max(fs.snapshot_ts) as snapshot_ts
+                from fact.pg_database_freeze_snapshot fs
+                where fs.snapshot_ts > now() - interval '36 hours'
+                  ${freezeFilterSql}
+                group by fs.instance_pk
+            ),
+            latest_settings as (
+                select ps.instance_pk, max(ps.snapshot_ts) as snapshot_ts
+                from fact.pg_settings_snapshot ps
+                where ps.snapshot_ts > now() - interval '36 hours'
+                  ${settingsFilterSql}
+                group by ps.instance_pk
+            ),
+            settings as (
+                select
+                    ls.instance_pk,
+                    coalesce(
+                        max(nullif(regexp_replace(ps.setting_value, '[^0-9]', '', 'g'), '')::bigint)
+                            filter (where ps.setting_name = 'autovacuum_freeze_max_age'),
+                        200000000::bigint
+                    ) as xid_max_age,
+                    coalesce(
+                        max(nullif(regexp_replace(ps.setting_value, '[^0-9]', '', 'g'), '')::bigint)
+                            filter (where ps.setting_name = 'autovacuum_multixact_freeze_max_age'),
+                        400000000::bigint
+                    ) as mxid_max_age
+                from latest_settings ls
+                join fact.pg_settings_snapshot ps
+                  on ps.instance_pk = ls.instance_pk
+                 and ps.snapshot_ts = ls.snapshot_ts
+                 and ps.setting_name in (
+                    'autovacuum_freeze_max_age',
+                    'autovacuum_multixact_freeze_max_age'
+                 )
+                group by ls.instance_pk
+            )
+            select
+                i.display_name as instance_name,
+                f.datname,
+                f.dbid,
+                f.datfrozenxid_age,
+                f.datminmxid_age,
+                coalesce(s.xid_max_age, 200000000::bigint) as xid_max_age,
+                coalesce(s.mxid_max_age, 400000000::bigint) as mxid_max_age,
+                round(f.datfrozenxid_age * 100.0 / nullif(coalesce(s.xid_max_age, 200000000::bigint), 0))::int as xid_pct,
+                round(f.datminmxid_age * 100.0 / nullif(coalesce(s.mxid_max_age, 400000000::bigint), 0))::int as mxid_pct,
+                f.snapshot_ts
+            from latest_freeze lf
+            join fact.pg_database_freeze_snapshot f
+              on f.instance_pk = lf.instance_pk
+             and f.snapshot_ts = lf.snapshot_ts
+            join control.instance_inventory i on i.instance_pk = f.instance_pk
+            left join settings s on s.instance_pk = f.instance_pk
+            order by xid_pct desc nulls last, i.display_name, f.datname
+        `, params);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+router.get('/xid-freeze/events', async (req, res, next) => {
+    try {
+        const limit = parseLimit(req.query.limit, 100);
+        const instancePk = parseInstancePk(req.query.instancePk as string | undefined);
+        const severity = req.query.severity as string | undefined;
+        const status = req.query.status as string | undefined;
+        if (req.query.instancePk && instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const params: any[] = [XID_FREEZE_ALERT_CODES];
+        let paramIdx = 2;
+        let whereSql = 'where a.alert_code = any($1)';
+        if (instancePk != null) {
+            whereSql += ` and a.instance_pk = $${paramIdx++}`;
+            params.push(instancePk);
+        }
+        if (severity) {
+            whereSql += ` and a.severity = $${paramIdx++}`;
+            params.push(severity);
+        }
+        if (status) {
+            whereSql += ` and a.status = $${paramIdx++}`;
+            params.push(status);
+        }
+        params.push(limit);
+
+        const result = await pool.query(`
+            select
+                a.alert_id,
+                a.alert_key,
+                a.alert_code,
+                a.severity,
+                a.status,
+                a.occurrence_count,
+                a.instance_pk,
+                i.display_name as instance_name,
+                a.title,
+                a.message,
+                a.first_seen_at,
+                a.last_seen_at,
+                a.resolved_at,
+                a.details_json
+            from ops.alert a
+            left join control.instance_inventory i on i.instance_pk = a.instance_pk
+            ${whereSql}
+            order by a.last_seen_at desc
+            limit $${paramIdx}
+        `, params);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ============================================================================
 // ALERT SNOOZE
 // ============================================================================
 
@@ -539,7 +758,11 @@ router.post('/maintenance-windows', async (req, res, next) => {
 router.get('/maintenance-windows', async (_req, res, next) => {
     try {
         const result = await pool.query(
-            `select * from control.maintenance_window order by window_name`
+            `select window_id, window_name, description, instance_pks, day_of_week,
+                    start_time, end_time, timezone, suppress_all_alerts,
+                    suppress_severity, is_enabled, created_at
+             from control.maintenance_window
+             order by window_name`
         );
         res.json(result.rows);
     } catch (err) {
@@ -654,7 +877,10 @@ router.post('/notification-channels', async (req, res, next) => {
 router.get('/notification-channels', async (_req, res, next) => {
     try {
         const result = await pool.query(
-            `select * from control.notification_channel order by channel_name`
+            `select channel_id, channel_name, channel_type, config, min_severity,
+                    instance_pks, metric_categories, is_enabled, created_at
+             from control.notification_channel
+             order by channel_name`
         );
         res.json(result.rows);
     } catch (err) {
@@ -666,7 +892,10 @@ router.get('/notification-channels', async (_req, res, next) => {
 router.post('/notification-channels/:channel_id/test', async (req, res, next) => {
     try {
         const result = await pool.query(
-            'select * from control.notification_channel where channel_id = $1',
+            `select channel_id, channel_name, channel_type, config, min_severity,
+                    instance_pks, metric_categories, is_enabled, created_at
+             from control.notification_channel
+             where channel_id = $1`,
             [req.params.channel_id]
         );
 
@@ -972,7 +1201,11 @@ router.post('/nightly-snapshot/trigger', async (_req, res, next) => {
 router.get('/nightly-snapshot/triggers', async (_req, res, next) => {
     try {
         const result = await pool.query(
-            `select * from control.nightly_snapshot_trigger order by requested_at desc limit 10`
+            `select trigger_id, status, requested_by, requested_at, started_at,
+                    finished_at, rows_written
+             from control.nightly_snapshot_trigger
+             order by requested_at desc
+             limit 10`
         );
         res.json(result.rows);
     } catch (err) {
@@ -1029,9 +1262,12 @@ router.get('/instances/:instance_pk/baseline/versions', async (req, res, next) =
         const { instance_pk } = req.params;
 
         const result = await pool.query(
-            `select * from control.baseline_version
-       where instance_pk = $1
-       order by version_number desc`,
+            `select version_id, instance_pk, version_number, pg_version,
+                    invalidation_reason, invalidated_at, invalidated_by,
+                    baseline_start, baseline_end, is_active, created_at
+             from control.baseline_version
+             where instance_pk = $1
+             order by version_number desc`,
             [instance_pk]
         );
 
