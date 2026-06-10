@@ -396,9 +396,28 @@ public class PurgeEvaluator {
             if (totalRunDeleted > 0 || totalInstDeleted > 0) {
                 log.info("Job run cleanup: {} job_run + {} job_run_instance silindi (>{} gün)",
                     totalRunDeleted, totalInstDeleted, retentionDays);
+
+                // DELETE sonrasi VACUUM: dead tuple'lari temizler (bloat onlenir) ve
+                // freeze yapar (XID age birikmesini engeller). Snapshot fact'leri partition
+                // drop ile temizlendigi icin vacuum gerektirmez; ops.job_run* ise DELETE
+                // aldigindan bu iki tablo zamanla siser ve datfrozenxid_age artardi.
+                // FREEZE + ANALYZE birlikte: hem XID wraparound riskini dusurur hem
+                // planner istatistigini tazeler. VACUUM transaction blogu disinda calismali,
+                // jdbc.execute autocommit modda calistirir.
+                vacuumQuietly("vacuum (freeze, analyze) ops.job_run_instance");
+                vacuumQuietly("vacuum (freeze, analyze) ops.job_run");
             }
         } catch (Exception e) {
             log.warn("Job run cleanup hatasi: {}", e.getMessage());
+        }
+    }
+
+    /** VACUUM calistirir; hata olursa cleanup akisini bozmaz (sadece loglar). */
+    private void vacuumQuietly(String sql) {
+        try {
+            jdbc.execute(sql);
+        } catch (Exception e) {
+            log.warn("Job run vacuum hatasi ({}): {}", sql, e.getMessage());
         }
     }
 
