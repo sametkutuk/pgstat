@@ -12,6 +12,15 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class AlertRepository {
 
+    /**
+     * Bildirim modu — ayni alert_key tekrar upsert edildiginde bildirim atilsin mi?
+     *   ALWAYS     : her upsert'te bildir (mevcut davranis; spam korumasi NotificationService'te).
+     *   FIRST_ONLY : sadece yeni alert, reopen (resolved/acknowledged -> open) veya severity
+     *                degisiminde bildir. Ayni severity'de acik kalan alert sessiz kalir.
+     *                (XID warning gibi: ilk kez + critical'e yukselince bildir, arada sus.)
+     */
+    public enum NotifyMode { ALWAYS, FIRST_ONLY }
+
     private final JdbcTemplate jdbc;
     private NotificationService notificationService;
 
@@ -43,6 +52,24 @@ public class AlertRepository {
     public long upsert(String alertKey, AlertCode alertCode, Long instancePk,
                        String serviceGroup, Long systemIdentifier,
                        String title, String message, String detailsJson) {
+        return upsert(alertKey, alertCode, instancePk, serviceGroup, systemIdentifier,
+            title, message, detailsJson, NotifyMode.ALWAYS);
+    }
+
+    /**
+     * upsert + bildirim modu. FIRST_ONLY ile ayni severity'de acik kalan alert sessiz kalir;
+     * yeni/reopen/severity-degisimi durumunda bildirilir.
+     */
+    public long upsert(String alertKey, AlertCode alertCode, Long instancePk,
+                       String serviceGroup, Long systemIdentifier,
+                       String title, String message, String detailsJson, NotifyMode notifyMode) {
+        // FIRST_ONLY icin: upsert'ten ONCE mevcut alert'in durumunu oku.
+        // Yeni satir / reopen / severity-degisimi -> bildir, aksi -> sus.
+        boolean shouldNotify = true;
+        if (notifyMode == NotifyMode.FIRST_ONLY) {
+            shouldNotify = decideFirstOnlyNotify(alertKey, alertCode.getDefaultSeverity());
+        }
+
         // source_component'a göre alert_source belirle
         // 'system' (SystemHealth) → 'system', 'rule' (user-defined) → 'user_rule'
         String src = alertCode.getSourceComponent();
@@ -109,10 +136,40 @@ public class AlertRepository {
             alertSource
         );
 
-        // Bildirim gönder
-        fireNotification(alertId, alertKey, alertCode.getCode(), alertCode.getDefaultSeverity(), instancePk, title, message);
+        // Bildirim gönder (FIRST_ONLY modunda sadece yeni/reopen/severity-degisiminde)
+        if (shouldNotify) {
+            fireNotification(alertId, alertKey, alertCode.getCode(), alertCode.getDefaultSeverity(), instancePk, title, message);
+        }
 
         return alertId;
+    }
+
+    /**
+     * FIRST_ONLY modu icin bildirim karari: upsert'ten ONCE mevcut alert durumuna bak.
+     *   - Alert yoksa (yeni)                       -> bildir
+     *   - Mevcut status 'resolved'/'acknowledged'  -> reopen olacak, bildir
+     *   - Mevcut severity yeni severity'den farkli  -> severity degisti, bildir
+     *   - Aksi (zaten 'open', ayni severity)        -> sus
+     */
+    private boolean decideFirstOnlyNotify(String alertKey, String newSeverity) {
+        try {
+            var rows = jdbc.query(
+                "select status, severity from ops.alert where alert_key = ?",
+                (rs, n) -> new String[]{ rs.getString("status"), rs.getString("severity") },
+                alertKey
+            );
+            if (rows.isEmpty()) {
+                return true; // yeni alert
+            }
+            String status = rows.get(0)[0];
+            String severity = rows.get(0)[1];
+            if ("resolved".equals(status) || "acknowledged".equals(status)) {
+                return true; // reopen
+            }
+            return !java.util.Objects.equals(severity, newSeverity); // severity degisti mi?
+        } catch (Exception e) {
+            return true; // emin degilsek bildir (sessiz kalmaktansa)
+        }
     }
 
     /**
@@ -187,6 +244,39 @@ public class AlertRepository {
             """,
             alertKey
         );
+    }
+
+    /**
+     * Alert'i resolved yapar VE gercekten open->resolved gecisi olduysa "risk gecti"
+     * bildirimi gonderir. Zaten resolved ise hicbir sey yapmaz (tekrar bildirmez).
+     * Title onune "Resolved: " eklenir ki bildirim kanali bunu cozulme olarak gostersin.
+     */
+    public void resolveAndNotify(String alertKey, String title, String message) {
+        // Once severity'yi al (bildirim icin) ve resolve et — tek transaction'da
+        // RETURNING ile gercekten guncellenen satiri yakala.
+        var rows = jdbc.query("""
+            update ops.alert
+            set status = 'resolved',
+                resolved_at = now(),
+                last_seen_at = now()
+            where alert_key = ?
+              and status <> 'resolved'
+            returning alert_id, severity, instance_pk
+            """,
+            (rs, n) -> new Object[]{ rs.getLong("alert_id"), rs.getString("severity"),
+                                     (Long) rs.getObject("instance_pk") },
+            alertKey
+        );
+        if (rows.isEmpty()) {
+            return; // zaten resolved'di, bildirim yok
+        }
+        long alertId = (Long) rows.get(0)[0];
+        String severity = (String) rows.get(0)[1];
+        Long instancePk = (Long) rows.get(0)[2];
+        // alert_code'u resolve bildiriminde cooldown'i bypass etmek icin "Resolved:" prefix
+        // NotificationService systemResolved mantigi title "Resolved:" ile baslayinca devreye girer.
+        String resolvedTitle = "Resolved: " + title;
+        fireNotification(alertId, alertKey, "adaptive_resolved", severity, instancePk, resolvedTitle, message);
     }
 
     /**

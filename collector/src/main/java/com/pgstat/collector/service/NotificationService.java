@@ -53,7 +53,10 @@ public class NotificationService {
         try {
             String alertSource = loadAlertSource(alertId);
             boolean systemAlert = "system".equals(alertSource);
-            boolean systemResolved = systemAlert && title != null && title.startsWith("Resolved:");
+            // "Resolved: " prefix'li title -> cozulme bildirimi (source fark etmez).
+            // Cozulme bildirimleri cooldown'dan muaf (asagida cooldownMinutes=0).
+            boolean isResolvedNotice = title != null && title.startsWith("Resolved:");
+            boolean systemResolved = systemAlert && isResolvedNotice;
             if (systemAlert) {
                 if (systemResolved && !"critical".equals(severity)) return;
                 if (!systemResolved && !"critical".equals(severity) && !"warning".equals(severity)) return;
@@ -65,7 +68,7 @@ public class NotificationService {
             // - Cooldown gectikten sonra ayni severity tekrar bildirim alir (periyodik hatirlatma)
             // - Hem actionable hem user_defined_rule ayni yolu kullanir, cooldown kaynagi farkli.
             try {
-                int cooldownMinutes = systemResolved ? 0 : resolveCooldownMinutes(alertId, alertKey, alertCode, instancePk);
+                int cooldownMinutes = isResolvedNotice ? 0 : resolveCooldownMinutes(alertId, alertKey, alertCode, instancePk);
                 if (cooldownMinutes > 0) {
                     String rank = "(case %s when 'info' then 0 when 'warning' then 1 " +
                         "when 'error' then 2 when 'critical' then 3 " +

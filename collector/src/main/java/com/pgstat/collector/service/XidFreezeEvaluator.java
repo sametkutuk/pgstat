@@ -88,7 +88,7 @@ public class XidFreezeEvaluator {
             evaluateXid(subscription, row, settings.xidMaxAge(), activeAlertKeys);
             evaluateMxid(subscription, row, settings.mxidMaxAge(), activeAlertKeys);
         }
-        resolveRecoveredAlerts(subscription.instancePk(), activeAlertKeys);
+        resolveRecoveredAlerts(subscription, activeAlertKeys);
     }
 
     private FreezeSettings loadSettings(long instancePk) {
@@ -177,7 +177,11 @@ public class XidFreezeEvaluator {
             .addContext("instance_id", subscription.instanceId())
             .addContext("host", subscription.host())
             .build();
-        alertRepo.upsert(alertKey, code, subscription.instancePk(), null, null, title, message, details);
+        // critical -> her cycle hatirlat (ALWAYS); warning -> ilk kez/reopen/severity-degisimi (FIRST_ONLY)
+        AlertRepository.NotifyMode notifyMode = (code == AlertCode.XID_FREEZE_CRITICAL)
+            ? AlertRepository.NotifyMode.ALWAYS
+            : AlertRepository.NotifyMode.FIRST_ONLY;
+        alertRepo.upsert(alertKey, code, subscription.instancePk(), null, null, title, message, details, notifyMode);
     }
 
     private void evaluateMxid(Subscription subscription, FreezeRow row, long mxidMaxAge, Set<String> activeAlertKeys) {
@@ -206,7 +210,10 @@ public class XidFreezeEvaluator {
             .addContext("instance_id", subscription.instanceId())
             .addContext("host", subscription.host())
             .build();
-        alertRepo.upsert(alertKey, code, subscription.instancePk(), null, null, title, message, details);
+        AlertRepository.NotifyMode notifyMode = (code == AlertCode.MXID_FREEZE_CRITICAL)
+            ? AlertRepository.NotifyMode.ALWAYS
+            : AlertRepository.NotifyMode.FIRST_ONLY;
+        alertRepo.upsert(alertKey, code, subscription.instancePk(), null, null, title, message, details, notifyMode);
     }
 
     private AlertCode freezeCode(double pct, Subscription subscription, AlertCode warningCode, AlertCode criticalCode) {
@@ -219,9 +226,10 @@ public class XidFreezeEvaluator {
         return null;
     }
 
-    private void resolveRecoveredAlerts(long instancePk, Set<String> activeAlertKeys) {
-        List<String> openKeys = jdbc.query("""
-            select alert_key
+    private void resolveRecoveredAlerts(Subscription subscription, Set<String> activeAlertKeys) {
+        long instancePk = subscription.instancePk();
+        List<OpenAlert> openAlerts = jdbc.query("""
+            select alert_key, title
             from ops.alert
             where instance_pk = ?
               and status = 'open'
@@ -231,10 +239,12 @@ public class XidFreezeEvaluator {
                 'mxid_freeze_warning',
                 'mxid_freeze_critical'
               )
-            """, (rs, rowNum) -> rs.getString("alert_key"), instancePk);
-        for (String alertKey : openKeys) {
-            if (!activeAlertKeys.contains(alertKey)) {
-                alertRepo.resolve(alertKey);
+            """, (rs, rowNum) -> new OpenAlert(rs.getString("alert_key"), rs.getString("title")), instancePk);
+        for (OpenAlert open : openAlerts) {
+            if (!activeAlertKeys.contains(open.alertKey())) {
+                // Risk gecti -> resolve + "Resolved:" bildirimi (warning ve critical ikisi de)
+                String message = "Freeze riski gecti. Age esigin altina dustu. " + subscription.label();
+                alertRepo.resolveAndNotify(open.alertKey(), open.title(), message);
             }
         }
     }
@@ -307,4 +317,6 @@ public class XidFreezeEvaluator {
     private record SettingRow(String settingName, String settingValue) {}
 
     private record FreezeRow(long dbid, String datname, Long datfrozenxidAge, Long datminmxidAge) {}
+
+    private record OpenAlert(String alertKey, String title) {}
 }
