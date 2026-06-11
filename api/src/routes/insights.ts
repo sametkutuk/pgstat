@@ -9,9 +9,9 @@ type DataSource = 'pgss_delta' | 'pgss_hourly' | 'pgss_daily';
 type TableStatSource = 'pg_table_stat_delta' | 'pg_table_stat_hourly';
 
 interface InstanceRetention {
-    raw_days: number;
-    hourly_days: number;
-    daily_days: number;
+  raw_days: number;
+  hourly_days: number;
+  daily_days: number;
 }
 
 const DEFAULT_RETENTION: InstanceRetention = { raw_days: 7, hourly_days: 30, daily_days: 365 };
@@ -19,28 +19,28 @@ const retentionCache = new Map<string, { value: InstanceRetention; expiresAt: nu
 const RETENTION_CACHE_TTL_MS = 60_000;
 
 const COMPARE_OFFSETS: Record<CompareKey, { seconds: number; intervalSql: string }> = {
-    '1h': { seconds: 3_600, intervalSql: `interval '1 hour'` },
-    '1d': { seconds: 86_400, intervalSql: `interval '1 day'` },
-    '1w': { seconds: 604_800, intervalSql: `interval '7 days'` },
-    '1m': { seconds: 2_592_000, intervalSql: `interval '30 days'` },
+  '1h': { seconds: 3_600, intervalSql: `interval '1 hour'` },
+  '1d': { seconds: 86_400, intervalSql: `interval '1 day'` },
+  '1w': { seconds: 604_800, intervalSql: `interval '7 days'` },
+  '1m': { seconds: 2_592_000, intervalSql: `interval '30 days'` },
 };
 
 function parseCompareParam(value: unknown): CompareKey | null {
-    const raw = String(value || '').trim();
-    if (!raw) return null;
-    if (raw === '1h' || raw === '1d' || raw === '1w' || raw === '1m') return raw;
-    throw new Error('Invalid compare');
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (raw === '1h' || raw === '1d' || raw === '1w' || raw === '1m') return raw;
+  throw new Error('Invalid compare');
 }
 
 function shiftedIso(iso: string, offsetSeconds: number): string {
-    return new Date(new Date(iso).getTime() - offsetSeconds * 1000).toISOString();
+  return new Date(new Date(iso).getTime() - offsetSeconds * 1000).toISOString();
 }
 
 async function getInstanceRetention(instancePk: string): Promise<InstanceRetention> {
-    const cached = retentionCache.get(instancePk);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const cached = retentionCache.get(instancePk);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-    const result = await pool.query(`
+  const result = await pool.query(`
         select
           coalesce(rp.raw_retention_days, $2)::int as raw_days,
           coalesce(rp.hourly_retention_days, $3)::int as hourly_days,
@@ -51,128 +51,128 @@ async function getInstanceRetention(instancePk: string): Promise<InstanceRetenti
         limit 1
     `, [instancePk, DEFAULT_RETENTION.raw_days, DEFAULT_RETENTION.hourly_days, DEFAULT_RETENTION.daily_days]);
 
-    const row = result.rows[0] ?? DEFAULT_RETENTION;
-    const value: InstanceRetention = {
-        raw_days: Number(row.raw_days ?? DEFAULT_RETENTION.raw_days),
-        hourly_days: Number(row.hourly_days ?? DEFAULT_RETENTION.hourly_days),
-        daily_days: Number(row.daily_days ?? DEFAULT_RETENTION.daily_days),
-    };
-    retentionCache.set(instancePk, { value, expiresAt: Date.now() + RETENTION_CACHE_TTL_MS });
-    return value;
+  const row = result.rows[0] ?? DEFAULT_RETENTION;
+  const value: InstanceRetention = {
+    raw_days: Number(row.raw_days ?? DEFAULT_RETENTION.raw_days),
+    hourly_days: Number(row.hourly_days ?? DEFAULT_RETENTION.hourly_days),
+    daily_days: Number(row.daily_days ?? DEFAULT_RETENTION.daily_days),
+  };
+  retentionCache.set(instancePk, { value, expiresAt: Date.now() + RETENTION_CACHE_TTL_MS });
+  return value;
 }
 
 function bucketExprForTs(windowHours: number, tsExpr: string, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (windowHours <= 6) {
-        return `date_trunc('hour', ${tsExpr}) + make_interval(mins => (extract(minute from ${tsExpr})::int / 5) * 5)`;
-    }
-    if (windowHours <= rawDays * 24) {
-        return `date_trunc('hour', ${tsExpr})`;
-    }
-    if (windowHours <= 30 * 24) {
-        return `date_trunc('day', ${tsExpr}) + make_interval(hours => (extract(hour from ${tsExpr})::int / 6) * 6)`;
-    }
-    return `date_trunc('day', ${tsExpr})`;
+  if (windowHours <= 6) {
+    return `date_trunc('hour', ${tsExpr}) + make_interval(mins => (extract(minute from ${tsExpr})::int / 5) * 5)`;
+  }
+  if (windowHours <= rawDays * 24) {
+    return `date_trunc('hour', ${tsExpr})`;
+  }
+  if (windowHours <= 30 * 24) {
+    return `date_trunc('day', ${tsExpr}) + make_interval(hours => (extract(hour from ${tsExpr})::int / 6) * 6)`;
+  }
+  return `date_trunc('day', ${tsExpr})`;
 }
 
 function pgssBucketExpr(windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    return bucketExprForTs(windowHours, 'd.sample_ts', rawDays);
+  return bucketExprForTs(windowHours, 'd.sample_ts', rawDays);
 }
 
 function pickPgssSource(windowHours: number, rawDays: number): DataSource {
-    if (windowHours <= rawDays * 24) return 'pgss_delta';
-    // pgss_daily is reserved for a later retention-aware pass; raw overflow uses hourly here.
-    return 'pgss_hourly';
+  if (windowHours <= rawDays * 24) return 'pgss_delta';
+  // pgss_daily is reserved for a later retention-aware pass; raw overflow uses hourly here.
+  return 'pgss_hourly';
 }
 
 function pickTableStatSource(windowHours: number, rawDays: number): TableStatSource {
-    return windowHours <= rawDays * 24 ? 'pg_table_stat_delta' : 'pg_table_stat_hourly';
+  return windowHours <= rawDays * 24 ? 'pg_table_stat_delta' : 'pg_table_stat_hourly';
 }
 
 function pgssStepSql(source: DataSource, windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (source === 'pgss_delta' && windowHours <= 6) return `interval '5 minutes'`;
-    if (source === 'pgss_daily') return `interval '1 day'`;
-    return `interval '1 hour'`;
+  if (source === 'pgss_delta' && windowHours <= 6) return `interval '5 minutes'`;
+  if (source === 'pgss_daily') return `interval '1 day'`;
+  return `interval '1 hour'`;
 }
 
 function pgssGridStartSql(source: DataSource, windowHours: number, paramIndex: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (source === 'pgss_delta') return pgssBucketAlignSql(windowHours, paramIndex, rawDays);
-    if (source === 'pgss_daily') return `date_trunc('day', $${paramIndex}::timestamptz)`;
-    return `date_trunc('hour', $${paramIndex}::timestamptz)`;
+  if (source === 'pgss_delta') return pgssBucketAlignSql(windowHours, paramIndex, rawDays);
+  if (source === 'pgss_daily') return `date_trunc('day', $${paramIndex}::timestamptz)`;
+  return `date_trunc('hour', $${paramIndex}::timestamptz)`;
 }
 
 function pgssSourceTable(source: DataSource): string {
-    if (source === 'pgss_hourly') return 'agg.pgss_hourly';
-    if (source === 'pgss_daily') return 'agg.pgss_daily';
-    return 'fact.pgss_delta';
+  if (source === 'pgss_hourly') return 'agg.pgss_hourly';
+  if (source === 'pgss_daily') return 'agg.pgss_daily';
+  return 'fact.pgss_delta';
 }
 
 function pgssBucketForSource(source: DataSource, windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (source === 'pgss_delta') return pgssBucketExpr(windowHours, rawDays);
-    if (source === 'pgss_daily') return 'd.bucket_start::timestamptz';
-    return 'd.bucket_start';
+  if (source === 'pgss_delta') return pgssBucketExpr(windowHours, rawDays);
+  if (source === 'pgss_daily') return 'd.bucket_start::timestamptz';
+  return 'd.bucket_start';
 }
 
 function pgssTimeWhere(source: DataSource, fromParam: number, toParam: number): string {
-    if (source === 'pgss_delta') return `d.sample_ts between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
-    if (source === 'pgss_daily') return `d.bucket_start::timestamptz between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
-    return `d.bucket_start between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+  if (source === 'pgss_delta') return `d.sample_ts between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+  if (source === 'pgss_daily') return `d.bucket_start::timestamptz between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
+  return `d.bucket_start between $${fromParam}::timestamptz and $${toParam}::timestamptz`;
 }
 
 function pgssMetric(source: DataSource, deltaCol: string, sumCol: string, fallback = '0'): string {
-    return source === 'pgss_delta' ? deltaCol : (sumCol || fallback);
+  return source === 'pgss_delta' ? deltaCol : (sumCol || fallback);
 }
 
 // pgssBucketExpr'e karsilik gelen bucket adimi. generate_series icin
 // kullanilir — boylece pencerede veri olmayan bucket'lar 0 ile doldurulur.
 function pgssBucketStepSql(windowHours: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (windowHours <= 6) return `interval '5 minutes'`;
-    if (windowHours <= rawDays * 24) return `interval '1 hour'`;
-    if (windowHours <= 30 * 24) return `interval '6 hours'`;
-    return `interval '1 day'`;
+  if (windowHours <= 6) return `interval '5 minutes'`;
+  if (windowHours <= rawDays * 24) return `interval '1 hour'`;
+  if (windowHours <= 30 * 24) return `interval '6 hours'`;
+  return `interval '1 day'`;
 }
 
 // Pencere baslangicini bucket sinirina hizala (generate_series'in ilk
 // noktasi grid ile uyumlu olsun).
 function pgssBucketAlignSql(windowHours: number, paramIndex: number, rawDays = DEFAULT_RETENTION.raw_days): string {
-    if (windowHours <= 6) {
-        return `(date_trunc('hour', $${paramIndex}::timestamptz)
+  if (windowHours <= 6) {
+    return `(date_trunc('hour', $${paramIndex}::timestamptz)
                  + make_interval(mins => (extract(minute from $${paramIndex}::timestamptz)::int / 5) * 5))`;
-    }
-    if (windowHours <= rawDays * 24) {
-        return `date_trunc('hour', $${paramIndex}::timestamptz)`;
-    }
-    if (windowHours <= 30 * 24) {
-        return `(date_trunc('day', $${paramIndex}::timestamptz)
+  }
+  if (windowHours <= rawDays * 24) {
+    return `date_trunc('hour', $${paramIndex}::timestamptz)`;
+  }
+  if (windowHours <= 30 * 24) {
+    return `(date_trunc('day', $${paramIndex}::timestamptz)
                  + make_interval(hours => (extract(hour from $${paramIndex}::timestamptz)::int / 6) * 6))`;
-    }
-    return `date_trunc('day', $${paramIndex}::timestamptz)`;
+  }
+  return `date_trunc('day', $${paramIndex}::timestamptz)`;
 }
 
 async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const params: any[] = [id, fromIso, toIso];
-    let dbWhere = '';
-    if (searchRaw) {
-        if (/^-?\d+$/.test(searchRaw)) {
-            params.push(searchRaw);
-            dbWhere += ` and ss.queryid::text = $${params.length}`;
-        } else {
-            params.push(searchRaw);
-            dbWhere += ` and qt.query_text ilike $${params.length}`;
-        }
+  const params: any[] = [id, fromIso, toIso];
+  let dbWhere = '';
+  if (searchRaw) {
+    if (/^-?\d+$/.test(searchRaw)) {
+      params.push(searchRaw);
+      dbWhere += ` and ss.queryid::text = $${params.length}`;
+    } else {
+      params.push(searchRaw);
+      dbWhere += ` and qt.query_text ilike $${params.length}`;
     }
-    if (datname) {
-        params.push(datname);
-        dbWhere += ` and dbr.datname = $${params.length}`;
-    }
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 2, 3);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  }
+  if (datname) {
+    params.push(datname);
+    dbWhere += ` and dbr.datname = $${params.length}`;
+  }
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 2, 3);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -202,18 +202,18 @@ async function fetchDbTimeTrend(id: string, fromIso: string, toIso: string, datn
 }
 
 async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 3, 4);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
-    const minExpr = source === 'pgss_delta' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
-    const avgExpr = source === 'pgss_delta' ? 'avg(d.mean_exec_time_ms)::double precision' : 'null::double precision';
-    const maxExpr = source === 'pgss_delta' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 3, 4);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
+  const minExpr = source === 'pgss_delta' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
+  const avgExpr = source === 'pgss_delta' ? 'avg(d.mean_exec_time_ms)::double precision' : 'null::double precision';
+  const maxExpr = source === 'pgss_delta' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -246,16 +246,16 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
 }
 
 async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 3, 4);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
-    const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 3, 4);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
+  const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -284,11 +284,11 @@ async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string
 }
 
 async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const stepSql = pgssBucketStepSql(windowHours, rawDays);
-    // $3 ve $4 from/to (1: id, 2: seriesId).
-    const gridStart = pgssBucketAlignSql(windowHours, 3, rawDays);
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  const stepSql = pgssBucketStepSql(windowHours, rawDays);
+  // $3 ve $4 from/to (1: id, 2: seriesId).
+  const gridStart = pgssBucketAlignSql(windowHours, 3, rawDays);
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -319,17 +319,17 @@ async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string,
 }
 
 async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 3, 4);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
-    const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
-    const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 3, 4);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
+  const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
+  const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -361,237 +361,237 @@ async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: st
 
 // GET /api/insights/:id/db-time-trend?from=...&to=...[&datname=...]
 router.get('/:id/db-time-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        // Baseline = ayni pencere + datname filtresi var ama search YOK. Yani
-        // kullanici '%select%hotel%' yazdiginda foreground o sorgular,
-        // background DB'nin (veya tum instance'in) toplam yuku — karsilastirma
-        // baglami. Search uygulanmamissa baseline current ile ozdes oldugundan
-        // ekstra sorgu calistirma.
-        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
-        const baselineNeeded = includeBaseline && searchRaw !== '';
-
-        const [current, baselineRes] = await Promise.all([
-            fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
-            baselineNeeded
-                ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
-                : Promise.resolve(null),
-        ]);
-
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchDbTimeTrend(
-                id,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                datname,
-                searchRaw,
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    // Baseline = ayni pencere + datname filtresi var ama search YOK. Yani
+    // kullanici '%select%hotel%' yazdiginda foreground o sorgular,
+    // background DB'nin (veya tum instance'in) toplam yuku — karsilastirma
+    // baglami. Search uygulanmamissa baseline current ile ozdes oldugundan
+    // ekstra sorgu calistirma.
+    const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+    const baselineNeeded = includeBaseline && searchRaw !== '';
+
+    const [current, baselineRes] = await Promise.all([
+      fetchDbTimeTrend(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
+      baselineNeeded
+        ? fetchDbTimeTrend(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
+        : Promise.resolve(null),
+    ]);
+
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchDbTimeTrend(
+        id,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        datname,
+        searchRaw,
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    const baseline = baselineRes ? baselineRes.rows : null;
+    res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/query-trend?series_id=N&from=...&to=...
 router.get('/:id/query-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const seriesIdRaw = String(req.query.series_id || '');
-        if (!/^\d+$/.test(seriesIdRaw)) {
-            res.status(400).json({ error: 'Invalid series_id' });
-            return;
-        }
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchQueryTrend(
-                id,
-                seriesIdRaw,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const seriesIdRaw = String(req.query.series_id || '');
+    if (!/^\d+$/.test(seriesIdRaw)) {
+      res.status(400).json({ error: 'Invalid series_id' });
+      return;
+    }
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    const current = await fetchQueryTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchQueryTrend(
+        id,
+        seriesIdRaw,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/query-temp-trend?series_id=N&from=...&to=...
 router.get('/:id/query-temp-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const seriesIdRaw = String(req.query.series_id || '');
-        if (!/^\d+$/.test(seriesIdRaw)) {
-            res.status(400).json({ error: 'Invalid series_id' });
-            return;
-        }
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchQueryTempTrend(
-                id,
-                seriesIdRaw,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const seriesIdRaw = String(req.query.series_id || '');
+    if (!/^\d+$/.test(seriesIdRaw)) {
+      res.status(400).json({ error: 'Invalid series_id' });
+      return;
+    }
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    const current = await fetchQueryTempTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchQueryTempTrend(
+        id,
+        seriesIdRaw,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/query-wal-trend?series_id=N&from=...&to=...
 router.get('/:id/query-wal-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const seriesIdRaw = String(req.query.series_id || '');
-        if (!/^\d+$/.test(seriesIdRaw)) {
-            res.status(400).json({ error: 'Invalid series_id' });
-            return;
-        }
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
-
-        const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchQueryWalTrend(
-                id,
-                seriesIdRaw,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                bucketExpr,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        res.json({
-            current: current.rows,
-            previous,
-            compare,
-            raw_retention_days: retention.raw_days,
-            hourly_retention_days: retention.hourly_days,
-            raw_retention_limited: windowHours > retention.raw_days * 24,
-        });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const seriesIdRaw = String(req.query.series_id || '');
+    if (!/^\d+$/.test(seriesIdRaw)) {
+      res.status(400).json({ error: 'Invalid series_id' });
+      return;
+    }
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+
+    const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchQueryWalTrend(
+        id,
+        seriesIdRaw,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        bucketExpr,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    res.json({
+      current: current.rows,
+      previous,
+      compare,
+      raw_retention_days: retention.raw_days,
+      hourly_retention_days: retention.hourly_days,
+      raw_retention_limited: windowHours > retention.raw_days * 24,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/query-cache-hit-trend?series_id=N&from=...&to=...
 router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const seriesIdRaw = String(req.query.series_id || '');
-        if (!/^\d+$/.test(seriesIdRaw)) {
-            res.status(400).json({ error: 'Invalid series_id' });
-            return;
-        }
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchQueryCacheHitTrend(
-                id,
-                seriesIdRaw,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const seriesIdRaw = String(req.query.series_id || '');
+    if (!/^\d+$/.test(seriesIdRaw)) {
+      res.status(400).json({ error: 'Invalid series_id' });
+      return;
+    }
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    const current = await fetchQueryCacheHitTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchQueryCacheHitTrend(
+        id,
+        seriesIdRaw,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    res.json({ current: current.rows, previous, compare, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/top-queries?sort=time|calls|slow&from=...&to=...&limit=20
@@ -600,47 +600,47 @@ router.get('/:id/query-cache-hit-trend', async (req, res, next) => {
 //   calls → toplam çağrı sayısı (en sık çalışan)
 //   slow  → ortalama exec time (en yavaş, min 10 çağrı şartı — tek-spike eleme)
 router.get('/:id/top-queries', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const limit = parseLimit(req.query.limit, 20);
-        const sort = String(req.query.sort || 'time').toLowerCase();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 20);
+    const sort = String(req.query.sort || 'time').toLowerCase();
 
-        // Sıralama whitelist
-        let orderBy: string;
-        if (sort === 'calls') {
-            orderBy = 'sum(d.calls_delta) desc nulls last';
-        } else if (sort === 'slow') {
-            orderBy = 'avg(d.mean_exec_time_ms) desc nulls last';
-        } else {
-            // default: time
-            orderBy = 'sum(d.total_exec_time_ms_delta) desc nulls last';
-        }
+    // Sıralama whitelist
+    let orderBy: string;
+    if (sort === 'calls') {
+      orderBy = 'sum(d.calls_delta) desc nulls last';
+    } else if (sort === 'slow') {
+      orderBy = 'avg(d.mean_exec_time_ms) desc nulls last';
+    } else {
+      // default: time
+      orderBy = 'sum(d.total_exec_time_ms_delta) desc nulls last';
+    }
 
-        // Arama: query text icin ILIKE pattern veya queryid tam eslesme
-        // Kullanici '%select%hotel%' yazarsa SQL text'i, sadece sayi yazarsa
-        // queryid olarak yorumlanir.
-        const searchRaw = (req.query.search as string || '').trim();
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let searchWhere = '';
-        if (searchRaw) {
-            // Sadece rakam ve - ise queryid olarak dene (bigint signed)
-            if (/^-?\d+$/.test(searchRaw)) {
-                params.push(searchRaw);
-                searchWhere += ` and ss.queryid::text = $${params.length}`;
-            } else {
-                params.push(searchRaw);
-                searchWhere += ` and qt.query_text ilike $${params.length}`;
-            }
-        }
-        if (datname) {
-            params.push(datname);
-            searchWhere += ` and dbr.datname = $${params.length}`;
-        }
-        params.push(limit);
+    // Arama: query text icin ILIKE pattern veya queryid tam eslesme
+    // Kullanici '%select%hotel%' yazarsa SQL text'i, sadece sayi yazarsa
+    // queryid olarak yorumlanir.
+    const searchRaw = (req.query.search as string || '').trim();
+    const datname = (req.query.datname as string || '').trim();
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+      // Sadece rakam ve - ise queryid olarak dene (bigint signed)
+      if (/^-?\d+$/.test(searchRaw)) {
+        params.push(searchRaw);
+        searchWhere += ` and ss.queryid::text = $${params.length}`;
+      } else {
+        params.push(searchRaw);
+        searchWhere += ` and qt.query_text ilike $${params.length}`;
+      }
+    }
+    if (datname) {
+      params.push(datname);
+      searchWhere += ` and dbr.datname = $${params.length}`;
+    }
+    params.push(limit);
 
-        const result = await pool.query(`
+    const result = await pool.query(`
       with toplam as (
         select sum(d.total_exec_time_ms_delta) as total_ms
         from fact.pgss_delta d
@@ -693,10 +693,10 @@ router.get('/:id/top-queries', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        res.json(result.rows);
-    } catch (err) {
-        next(err);
-    }
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // =========================================================================
@@ -704,32 +704,32 @@ router.get('/:id/top-queries', async (req, res, next) => {
 // =========================================================================
 
 async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const params: any[] = [id, fromIso, toIso];
-    let dbWhere = '';
-    if (searchRaw) {
-        if (/^-?\d+$/.test(searchRaw)) {
-            params.push(searchRaw);
-            dbWhere += ` and ss.queryid::text = $${params.length}`;
-        } else {
-            params.push(searchRaw);
-            dbWhere += ` and qt.query_text ilike $${params.length}`;
-        }
+  const params: any[] = [id, fromIso, toIso];
+  let dbWhere = '';
+  if (searchRaw) {
+    if (/^-?\d+$/.test(searchRaw)) {
+      params.push(searchRaw);
+      dbWhere += ` and ss.queryid::text = $${params.length}`;
+    } else {
+      params.push(searchRaw);
+      dbWhere += ` and qt.query_text ilike $${params.length}`;
     }
-    if (datname) {
-        params.push(datname);
-        dbWhere += ` and dbr.datname = $${params.length}`;
-    }
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 2, 3);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
-    const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
-    const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  }
+  if (datname) {
+    params.push(datname);
+    dbWhere += ` and dbr.datname = $${params.length}`;
+  }
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 2, 3);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const hitExpr = pgssMetric(source, 'coalesce(d.shared_blks_hit_delta, 0)', 'coalesce(d.shared_blks_hit_sum, 0)');
+  const readExpr = pgssMetric(source, 'coalesce(d.shared_blks_read_delta, 0)', 'coalesce(d.shared_blks_read_sum, 0)');
+  const readTimeExpr = pgssMetric(source, 'coalesce(d.shared_blk_read_time_ms_delta, 0)', '');
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -764,57 +764,57 @@ async function fetchCacheHitTrendData(id: string, fromIso: string, toIso: string
 
 // GET /api/insights/:id/cache-hit?sort=cache_miss|disk_read|read_time|low_hit_pct&from=&to=&limit=20
 router.get('/:id/cache-hit', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const limit = parseLimit(req.query.limit, 20);
-        const sort = String(req.query.sort || 'cache_miss').toLowerCase();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 20);
+    const sort = String(req.query.sort || 'cache_miss').toLowerCase();
 
-        let orderBy: string;
-        let extraHaving = '';
-        if (sort === 'read_time') {
-            orderBy = 'sum(coalesce(d.shared_blk_read_time_ms_delta, 0)) desc nulls last';
-        } else if (sort === 'low_hit_pct') {
-            orderBy = '(100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)) asc nulls last';
-            extraHaving = ' and sum(d.calls_delta) > 100';
-        } else {
-            orderBy = 'sum(coalesce(d.shared_blks_read_delta, 0)) desc nulls last';
-            if (sort !== 'disk_read') {
-                extraHaving = ' and sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 100';
-            }
-        }
+    let orderBy: string;
+    let extraHaving = '';
+    if (sort === 'read_time') {
+      orderBy = 'sum(coalesce(d.shared_blk_read_time_ms_delta, 0)) desc nulls last';
+    } else if (sort === 'low_hit_pct') {
+      orderBy = '(100.0 * sum(coalesce(d.shared_blks_hit_delta, 0)) / nullif(sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)), 0)) asc nulls last';
+      extraHaving = ' and sum(d.calls_delta) > 100';
+    } else {
+      orderBy = 'sum(coalesce(d.shared_blks_read_delta, 0)) desc nulls last';
+      if (sort !== 'disk_read') {
+        extraHaving = ' and sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 100';
+      }
+    }
 
-        const searchRaw = (req.query.search as string || '').trim();
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let searchWhere = '';
-        if (searchRaw) {
-            if (/^-?\d+$/.test(searchRaw)) {
-                params.push(searchRaw);
-                searchWhere += ` and ss.queryid::text = $${params.length}`;
-            } else {
-                params.push(searchRaw);
-                searchWhere += ` and qt.query_text ilike $${params.length}`;
-            }
-        }
-        if (datname) {
-            params.push(datname);
-            searchWhere += ` and dbr.datname = $${params.length}`;
-        }
-        const totalsParams = [...params];
-        const dbCacheParams: any[] = [id, fromIso, toIso];
-        let dbCacheWhere = '';
-        if (datname) {
-            dbCacheParams.push(datname);
-            dbCacheWhere = ` and d.datname = $${dbCacheParams.length}`;
-        }
-        params.push(limit);
+    const searchRaw = (req.query.search as string || '').trim();
+    const datname = (req.query.datname as string || '').trim();
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+      if (/^-?\d+$/.test(searchRaw)) {
+        params.push(searchRaw);
+        searchWhere += ` and ss.queryid::text = $${params.length}`;
+      } else {
+        params.push(searchRaw);
+        searchWhere += ` and qt.query_text ilike $${params.length}`;
+      }
+    }
+    if (datname) {
+      params.push(datname);
+      searchWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const totalsParams = [...params];
+    const dbCacheParams: any[] = [id, fromIso, toIso];
+    let dbCacheWhere = '';
+    if (datname) {
+      dbCacheParams.push(datname);
+      dbCacheWhere = ` and d.datname = $${dbCacheParams.length}`;
+    }
+    params.push(limit);
 
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
-        const rowsPromise = pool.query(`
+    const rowsPromise = pool.query(`
       with toplam_disk_read as (
         select sum(coalesce(d.shared_blks_read_delta, 0)) as total_read_blks
         from fact.pgss_delta d
@@ -869,9 +869,9 @@ router.get('/:id/cache-hit', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [rowsResult, instanceHitResult, worstDbResult, peakResult, settingsResult, heavyReaderResult, hitP95Result] = await Promise.all([
-            rowsPromise,
-            pool.query(`
+    const [rowsResult, instanceHitResult, worstDbResult, peakResult, settingsResult, heavyReaderResult, hitP95Result] = await Promise.all([
+      rowsPromise,
+      pool.query(`
       select
         case when sum(coalesce(d.blks_hit_delta, 0) + coalesce(d.blks_read_delta, 0)) > 0
           then round((100.0 * sum(coalesce(d.blks_hit_delta, 0))
@@ -883,7 +883,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${dbCacheWhere}
     `, dbCacheParams),
-            pool.query(`
+      pool.query(`
       select
         dbr.datname,
         case when sum(coalesce(d.shared_blks_hit_delta, 0) + coalesce(d.shared_blks_read_delta, 0)) > 0
@@ -902,7 +902,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
       order by hit_pct asc nulls last, disk_read_mb desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select
         ${bucketExpr} as bucket_start,
         (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0)::double precision as mb
@@ -918,7 +918,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
       order by mb desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select distinct on (setting_name)
         setting_name,
         setting_value,
@@ -934,7 +934,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         and setting_name in ('shared_buffers', 'effective_cache_size')
       order by setting_name, snapshot_ts desc
     `, [id]),
-            pool.query(`
+      pool.query(`
       select count(*)::int as count
       from (
         select ss.statement_series_id
@@ -949,7 +949,7 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         having (sum(coalesce(d.shared_blks_read_delta, 0)) * 8.0 / 1024.0) >= 100
       ) heavy
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select percentile_cont(0.05) within group (order by cache_hit_pct)::double precision as hit_p95_pct
       from (
         select
@@ -968,84 +968,84 @@ router.get('/:id/cache-hit', async (req, res, next) => {
         having sum(coalesce(d.shared_blks_read_delta, 0)) > 0
       ) x
     `, totalsParams),
-        ]);
+    ]);
 
-        const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
-        const settingKb = (name: string): number | null => {
-            const row = settingByName.get(name) as any;
-            return row?.kb == null ? null : Number(row.kb);
-        };
-        const worstDb = worstDbResult.rows[0] ?? null;
-        const peak = peakResult.rows[0] ?? null;
-        res.json({
-            rows: rowsResult.rows,
-            totals: {
-                instance_hit_pct: instanceHitResult.rows[0]?.instance_hit_pct == null ? null : Number(instanceHitResult.rows[0].instance_hit_pct),
-                total_disk_read_mb: Number(instanceHitResult.rows[0]?.total_disk_read_mb ?? 0),
-                worst_datname: worstDb ? { datname: worstDb.datname, hit_pct: Number(worstDb.hit_pct), disk_read_mb: Number(worstDb.disk_read_mb) } : null,
-                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
-                shared_buffers_kb: settingKb('shared_buffers'),
-                effective_cache_size_kb: settingKb('effective_cache_size'),
-                heavy_reader_count: Number(heavyReaderResult.rows[0]?.count ?? 0),
-                hit_p95_pct: hitP95Result.rows[0]?.hit_p95_pct == null ? null : Number(hitP95Result.rows[0].hit_p95_pct),
-                raw_retention_days: retention.raw_days,
-                hourly_retention_days: retention.hourly_days,
-            },
-        });
-    } catch (err) {
-        next(err);
-    }
+    const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+    const settingKb = (name: string): number | null => {
+      const row = settingByName.get(name) as any;
+      return row?.kb == null ? null : Number(row.kb);
+    };
+    const worstDb = worstDbResult.rows[0] ?? null;
+    const peak = peakResult.rows[0] ?? null;
+    res.json({
+      rows: rowsResult.rows,
+      totals: {
+        instance_hit_pct: instanceHitResult.rows[0]?.instance_hit_pct == null ? null : Number(instanceHitResult.rows[0].instance_hit_pct),
+        total_disk_read_mb: Number(instanceHitResult.rows[0]?.total_disk_read_mb ?? 0),
+        worst_datname: worstDb ? { datname: worstDb.datname, hit_pct: Number(worstDb.hit_pct), disk_read_mb: Number(worstDb.disk_read_mb) } : null,
+        peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+        shared_buffers_kb: settingKb('shared_buffers'),
+        effective_cache_size_kb: settingKb('effective_cache_size'),
+        heavy_reader_count: Number(heavyReaderResult.rows[0]?.count ?? 0),
+        hit_p95_pct: hitP95Result.rows[0]?.hit_p95_pct == null ? null : Number(hitP95Result.rows[0].hit_p95_pct),
+        raw_retention_days: retention.raw_days,
+        hourly_retention_days: retention.hourly_days,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/cache-hit-trend?from=&to=&datname=&search=&compare=&include_baseline=1
 router.get('/:id/cache-hit-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
-        const baselineNeeded = includeBaseline && searchRaw !== '';
-
-        const [current, baselineRes] = await Promise.all([
-            fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
-            baselineNeeded
-                ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
-                : Promise.resolve(null),
-        ]);
-
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchCacheHitTrendData(
-                id,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                datname,
-                searchRaw,
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+    const baselineNeeded = includeBaseline && searchRaw !== '';
+
+    const [current, baselineRes] = await Promise.all([
+      fetchCacheHitTrendData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
+      baselineNeeded
+        ? fetchCacheHitTrendData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
+        : Promise.resolve(null),
+    ]);
+
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchCacheHitTrendData(
+        id,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        datname,
+        searchRaw,
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    const baseline = baselineRes ? baselineRes.rows : null;
+    res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // =========================================================================
@@ -1053,24 +1053,24 @@ router.get('/:id/cache-hit-trend', async (req, res, next) => {
 // =========================================================================
 
 async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: TableStatSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const params: any[] = [id, fromIso, toIso];
-    let searchWhere = '';
-    if (searchRaw) {
-        params.push(`%${searchRaw}%`);
-        searchWhere += source === 'pg_table_stat_hourly'
-            ? ` and h.relname ilike $${params.length}`
-            : ` and d.relname ilike $${params.length}`;
-    }
-    if (datname) {
-        params.push(datname);
-        searchWhere += ` and dbr.datname = $${params.length}`;
-    }
+  const params: any[] = [id, fromIso, toIso];
+  let searchWhere = '';
+  if (searchRaw) {
+    params.push(`%${searchRaw}%`);
+    searchWhere += source === 'pg_table_stat_hourly'
+      ? ` and h.relname ilike $${params.length}`
+      : ` and d.relname ilike $${params.length}`;
+  }
+  if (datname) {
+    params.push(datname);
+    searchWhere += ` and dbr.datname = $${params.length}`;
+  }
 
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    if (source === 'pg_table_stat_hourly') {
-        const stepSql = `interval '1 hour'`;
-        const gridStart = `date_trunc('hour', $2::timestamptz)`;
-        return pool.query(`
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  if (source === 'pg_table_stat_hourly') {
+    const stepSql = `interval '1 hour'`;
+    const gridStart = `date_trunc('hour', $2::timestamptz)`;
+    return pool.query(`
         with buckets as (
           select
             h.bucket_start,
@@ -1101,14 +1101,14 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
         left join buckets b on b.bucket_start = g.bucket_start
         order by g.bucket_start
     `, params);
-    }
+  }
 
-    const stepSql = pgssBucketStepSql(windowHours, rawDays);
-    const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
-    const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts', rawDays);
-    const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts', rawDays);
+  const stepSql = pgssBucketStepSql(windowHours, rawDays);
+  const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
+  const filteredBucketExpr = bucketExprForTs(windowHours, 'f.sample_ts', rawDays);
+  const snapshotBucketExpr = bucketExprForTs(windowHours, 's.sample_ts', rawDays);
 
-    return pool.query(`
+  return pool.query(`
         with filtered_data as (
           select
             d.sample_ts,
@@ -1166,11 +1166,11 @@ async function fetchVacuumLagTrendData(id: string, fromIso: string, toIso: strin
 }
 
 async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fromIso: string, toIso: string, source: TableStatSource, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    if (source === 'pg_table_stat_hourly') {
-        const stepSql = `interval '1 hour'`;
-        const gridStart = `date_trunc('hour', $4::timestamptz)`;
-        return pool.query(`
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  if (source === 'pg_table_stat_hourly') {
+    const stepSql = `interval '1 hour'`;
+    const gridStart = `date_trunc('hour', $4::timestamptz)`;
+    return pool.query(`
         with snapshot_data as (
           select
             h.bucket_start,
@@ -1209,12 +1209,12 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
         left join snapshot_data s on s.bucket_start = g.bucket_start
         order by g.bucket_start
     `, [id, dbid, relid, fromIso, toIso]);
-    }
+  }
 
-    const stepSql = pgssBucketStepSql(windowHours, rawDays);
-    // $4 ve $5 from/to (1: id, 2: dbid, 3: relid).
-    const gridStart = pgssBucketAlignSql(windowHours, 4, rawDays);
-    return pool.query(`
+  const stepSql = pgssBucketStepSql(windowHours, rawDays);
+  // $4 ve $5 from/to (1: id, 2: dbid, 3: relid).
+  const gridStart = pgssBucketAlignSql(windowHours, 4, rawDays);
+  return pool.query(`
         with snapshot_data as (
           select
             ${bucketExpr} as bucket_start,
@@ -1257,42 +1257,42 @@ async function fetchTableVacuumTrend(id: string, dbid: string, relid: string, fr
 
 // GET /api/insights/:id/vacuum-lag?sort=dead_tup|dead_pct|stale_vacuum|update_rate|mod_since_analyze&from=&to=&limit=20&datname=&search=
 router.get('/:id/vacuum-lag', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const limit = parseLimit(req.query.limit, 20);
-        const sort = String(req.query.sort || 'dead_tup').toLowerCase();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 20);
+    const sort = String(req.query.sort || 'dead_tup').toLowerCase();
 
-        let orderBy = 'n_dead_tup desc nulls last, dead_pct desc nulls last';
-        if (sort === 'dead_pct') {
-            orderBy = 'case when (n_live_tup + n_dead_tup) > 1000 then dead_pct else null end desc nulls last, n_dead_tup desc nulls last';
-        } else if (sort === 'bloat_size') {
-            orderBy = 'dead_bytes_estimate desc nulls last, n_dead_tup desc nulls last';
-        } else if (sort === 'stale_vacuum') {
-            orderBy = 'case when n_dead_tup > 100 then days_since_vacuum else null end desc nulls last, n_dead_tup desc nulls last';
-        } else if (sort === 'update_rate') {
-            orderBy = 'update_per_sec desc nulls last, n_tup_upd desc nulls last';
-        } else if (sort === 'mod_since_analyze') {
-            orderBy = 'n_mod_since_analyze desc nulls last, dead_pct desc nulls last';
-        }
+    let orderBy = 'n_dead_tup desc nulls last, dead_pct desc nulls last';
+    if (sort === 'dead_pct') {
+      orderBy = 'case when (n_live_tup + n_dead_tup) > 1000 then dead_pct else null end desc nulls last, n_dead_tup desc nulls last';
+    } else if (sort === 'bloat_size') {
+      orderBy = 'dead_bytes_estimate desc nulls last, n_dead_tup desc nulls last';
+    } else if (sort === 'stale_vacuum') {
+      orderBy = 'case when n_dead_tup > 100 then days_since_vacuum else null end desc nulls last, n_dead_tup desc nulls last';
+    } else if (sort === 'update_rate') {
+      orderBy = 'update_per_sec desc nulls last, n_tup_upd desc nulls last';
+    } else if (sort === 'mod_since_analyze') {
+      orderBy = 'n_mod_since_analyze desc nulls last, dead_pct desc nulls last';
+    }
 
-        const searchRaw = (req.query.search as string || '').trim();
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let searchWhere = '';
-        if (searchRaw) {
-            params.push(`%${searchRaw}%`);
-            searchWhere += ` and d.relname ilike $${params.length}`;
-        }
-        if (datname) {
-            params.push(datname);
-            searchWhere += ` and dbr.datname = $${params.length}`;
-        }
+    const searchRaw = (req.query.search as string || '').trim();
+    const datname = (req.query.datname as string || '').trim();
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+      params.push(`%${searchRaw}%`);
+      searchWhere += ` and d.relname ilike $${params.length}`;
+    }
+    if (datname) {
+      params.push(datname);
+      searchWhere += ` and dbr.datname = $${params.length}`;
+    }
 
-        const baseParams = [...params];
-        params.push(limit);
+    const baseParams = [...params];
+    params.push(limit);
 
-        const baseCtes = `
+    const baseCtes = `
       with filtered_data as (
         select
           d.instance_pk,
@@ -1410,7 +1410,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       )
     `;
 
-        const rowsPromise = pool.query(`
+    const rowsPromise = pool.query(`
       ${baseCtes}
       select
         dbid,
@@ -1441,7 +1441,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const totalsPromise = pool.query(`
+    const totalsPromise = pool.query(`
       ${baseCtes}
       select
         coalesce(sum(n_dead_tup), 0)::bigint as total_dead_tup,
@@ -1481,7 +1481,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       from ranked
     `, baseParams);
 
-        const settingsPromise = pool.query(`
+    const settingsPromise = pool.query(`
       select distinct on (setting_name)
         setting_name,
         setting_value,
@@ -1500,161 +1500,161 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       order by setting_name, snapshot_ts desc
     `, [id]);
 
-        const [rowsResult, totalsResult, settingsResult, retention] = await Promise.all([
-            rowsPromise,
-            totalsPromise,
-            settingsPromise,
-            getInstanceRetention(id),
-        ]);
+    const [rowsResult, totalsResult, settingsResult, retention] = await Promise.all([
+      rowsPromise,
+      totalsPromise,
+      settingsPromise,
+      getInstanceRetention(id),
+    ]);
 
-        const settingsByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
-        const settingText = (name: string): string | null => {
-            const row = settingsByName.get(name) as any;
-            return row?.setting_value == null ? null : String(row.setting_value);
-        };
-        const settingNumber = (name: string): number | null => {
-            const row = settingsByName.get(name) as any;
-            if (row?.setting_value == null) return null;
-            const value = Number(row.setting_value);
-            if (!Number.isFinite(value)) return null;
-            const unit = String(row.unit || '').toLowerCase();
-            if (unit === 'ms') return value / 1000;
-            if (unit === 'min') return value * 60;
-            if (unit === 'h') return value * 3600;
-            return value;
-        };
+    const settingsByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+    const settingText = (name: string): string | null => {
+      const row = settingsByName.get(name) as any;
+      return row?.setting_value == null ? null : String(row.setting_value);
+    };
+    const settingNumber = (name: string): number | null => {
+      const row = settingsByName.get(name) as any;
+      if (row?.setting_value == null) return null;
+      const value = Number(row.setting_value);
+      if (!Number.isFinite(value)) return null;
+      const unit = String(row.unit || '').toLowerCase();
+      if (unit === 'ms') return value / 1000;
+      if (unit === 'min') return value * 60;
+      if (unit === 'h') return value * 3600;
+      return value;
+    };
 
-        const totalsRow = totalsResult.rows[0] ?? {};
-        const worstDead = totalsRow.worst_dead_pct as any;
-        const oldestVacuum = totalsRow.oldest_vacuum as any;
+    const totalsRow = totalsResult.rows[0] ?? {};
+    const worstDead = totalsRow.worst_dead_pct as any;
+    const oldestVacuum = totalsRow.oldest_vacuum as any;
 
-        res.json({
-            rows: rowsResult.rows,
-            totals: {
-                total_dead_tup: Number(totalsRow.total_dead_tup ?? 0),
-                total_bloat_bytes: Number(totalsRow.total_bloat_bytes ?? 0),
-                worst_dead_pct: worstDead ? {
-                    schemaname: worstDead.schemaname,
-                    relname: worstDead.relname,
-                    datname: worstDead.datname,
-                    dead_pct: Number(worstDead.dead_pct),
-                    n_dead_tup: Number(worstDead.n_dead_tup),
-                } : null,
-                oldest_vacuum: oldestVacuum ? {
-                    schemaname: oldestVacuum.schemaname,
-                    relname: oldestVacuum.relname,
-                    datname: oldestVacuum.datname,
-                    days_since_vacuum: Number(oldestVacuum.days_since_vacuum),
-                } : null,
-                bloated_count: Number(totalsRow.bloated_count ?? 0),
-                stale_count: Number(totalsRow.stale_count ?? 0),
-                dead_p95_pct: totalsRow.dead_p95_pct == null ? null : Number(totalsRow.dead_p95_pct),
-                autovacuum_settings: {
-                    autovacuum: settingText('autovacuum'),
-                    autovacuum_max_workers: settingNumber('autovacuum_max_workers'),
-                    autovacuum_naptime_sec: settingNumber('autovacuum_naptime'),
-                    autovacuum_vacuum_scale_factor: settingNumber('autovacuum_vacuum_scale_factor'),
-                    autovacuum_vacuum_threshold: settingNumber('autovacuum_vacuum_threshold'),
-                    autovacuum_analyze_scale_factor: settingNumber('autovacuum_analyze_scale_factor'),
-                    autovacuum_analyze_threshold: settingNumber('autovacuum_analyze_threshold'),
-                },
-                raw_retention_days: retention.raw_days,
-            },
-        });
-    } catch (err) {
-        next(err);
-    }
+    res.json({
+      rows: rowsResult.rows,
+      totals: {
+        total_dead_tup: Number(totalsRow.total_dead_tup ?? 0),
+        total_bloat_bytes: Number(totalsRow.total_bloat_bytes ?? 0),
+        worst_dead_pct: worstDead ? {
+          schemaname: worstDead.schemaname,
+          relname: worstDead.relname,
+          datname: worstDead.datname,
+          dead_pct: Number(worstDead.dead_pct),
+          n_dead_tup: Number(worstDead.n_dead_tup),
+        } : null,
+        oldest_vacuum: oldestVacuum ? {
+          schemaname: oldestVacuum.schemaname,
+          relname: oldestVacuum.relname,
+          datname: oldestVacuum.datname,
+          days_since_vacuum: Number(oldestVacuum.days_since_vacuum),
+        } : null,
+        bloated_count: Number(totalsRow.bloated_count ?? 0),
+        stale_count: Number(totalsRow.stale_count ?? 0),
+        dead_p95_pct: totalsRow.dead_p95_pct == null ? null : Number(totalsRow.dead_p95_pct),
+        autovacuum_settings: {
+          autovacuum: settingText('autovacuum'),
+          autovacuum_max_workers: settingNumber('autovacuum_max_workers'),
+          autovacuum_naptime_sec: settingNumber('autovacuum_naptime'),
+          autovacuum_vacuum_scale_factor: settingNumber('autovacuum_vacuum_scale_factor'),
+          autovacuum_vacuum_threshold: settingNumber('autovacuum_vacuum_threshold'),
+          autovacuum_analyze_scale_factor: settingNumber('autovacuum_analyze_scale_factor'),
+          autovacuum_analyze_threshold: settingNumber('autovacuum_analyze_threshold'),
+        },
+        raw_retention_days: retention.raw_days,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/vacuum-lag-trend?from=&to=&datname=&search=&compare=
 router.get('/:id/vacuum-lag-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const dataSource = pickTableStatSource(windowHours, retention.raw_days);
-
-        const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, dataSource, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchVacuumLagTrendData(
-                id,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                datname,
-                searchRaw,
-                dataSource,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-
-        res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const dataSource = pickTableStatSource(windowHours, retention.raw_days);
+
+    const current = await fetchVacuumLagTrendData(id, fromIso, toIso, datname, searchRaw, dataSource, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchVacuumLagTrendData(
+        id,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        datname,
+        searchRaw,
+        dataSource,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+
+    res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/table-vacuum-trend?dbid=N&relid=M&from=&to=&compare=
 router.get('/:id/table-vacuum-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare' });
-            return;
-        }
-
-        const dbidRaw = String(req.query.dbid || '');
-        const relidRaw = String(req.query.relid || '');
-        if (!/^\d+$/.test(dbidRaw) || !/^\d+$/.test(relidRaw)) {
-            res.status(400).json({ error: 'Invalid dbid or relid' });
-            return;
-        }
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const dataSource = pickTableStatSource(windowHours, retention.raw_days);
-        const bucketExpr = dataSource === 'pg_table_stat_hourly' ? 'h.bucket_start' : pgssBucketExpr(windowHours, retention.raw_days);
-
-        const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, dataSource, bucketExpr, windowHours, retention.raw_days);
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchTableVacuumTrend(
-                id,
-                dbidRaw,
-                relidRaw,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                dataSource,
-                bucketExpr,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-
-        res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare' });
+      return;
     }
+
+    const dbidRaw = String(req.query.dbid || '');
+    const relidRaw = String(req.query.relid || '');
+    if (!/^\d+$/.test(dbidRaw) || !/^\d+$/.test(relidRaw)) {
+      res.status(400).json({ error: 'Invalid dbid or relid' });
+      return;
+    }
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const dataSource = pickTableStatSource(windowHours, retention.raw_days);
+    const bucketExpr = dataSource === 'pg_table_stat_hourly' ? 'h.bucket_start' : pgssBucketExpr(windowHours, retention.raw_days);
+
+    const current = await fetchTableVacuumTrend(id, dbidRaw, relidRaw, fromIso, toIso, dataSource, bucketExpr, windowHours, retention.raw_days);
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchTableVacuumTrend(
+        id,
+        dbidRaw,
+        relidRaw,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        dataSource,
+        bucketExpr,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+
+    res.json({ current: current.rows, previous, compare, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // =========================================================================
@@ -1662,18 +1662,18 @@ router.get('/:id/table-vacuum-trend', async (req, res, next) => {
 // =========================================================================
 
 async function fetchWalTrendData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    if (!datname && !searchRaw && windowHours > rawDays * 24) {
-        const params: any[] = [id, fromIso, toIso];
-        const stepSql = windowHours <= 30 * 24 ? `interval '6 hours'` : `interval '1 day'`;
-        const gridStart = windowHours <= 30 * 24
-            ? `date_trunc('day', $2::timestamptz) + make_interval(hours => (extract(hour from $2::timestamptz)::int / 6) * 6)`
-            : `date_trunc('day', $2::timestamptz)`;
-        const aggBucketExpr = windowHours <= 30 * 24
-            ? `date_trunc('day', d.hour_ts) + make_interval(hours => (extract(hour from d.hour_ts)::int / 6) * 6)`
-            : `date_trunc('day', d.hour_ts)`;
-        const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  if (!datname && !searchRaw && windowHours > rawDays * 24) {
+    const params: any[] = [id, fromIso, toIso];
+    const stepSql = windowHours <= 30 * 24 ? `interval '6 hours'` : `interval '1 day'`;
+    const gridStart = windowHours <= 30 * 24
+      ? `date_trunc('day', $2::timestamptz) + make_interval(hours => (extract(hour from $2::timestamptz)::int / 6) * 6)`
+      : `date_trunc('day', $2::timestamptz)`;
+    const aggBucketExpr = windowHours <= 30 * 24
+      ? `date_trunc('day', d.hour_ts) + make_interval(hours => (extract(hour from d.hour_ts)::int / 6) * 6)`
+      : `date_trunc('day', d.hour_ts)`;
+    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
 
-        return pool.query(`
+    return pool.query(`
         with buckets as (
           select
             ${aggBucketExpr} as bucket_start,
@@ -1700,27 +1700,27 @@ async function fetchWalTrendData(id: string, fromIso: string, toIso: string, dat
         left join buckets b on b.bucket_start = g.bucket_start
         order by g.bucket_start
     `, params);
-    }
+  }
 
-    const params: any[] = [id, fromIso, toIso];
-    let dbWhere = '';
-    if (searchRaw) {
-        if (/^-?\d+$/.test(searchRaw)) {
-            params.push(searchRaw);
-            dbWhere += ` and ss.queryid::text = $${params.length}`;
-        } else {
-            params.push(searchRaw);
-            dbWhere += ` and qt.query_text ilike $${params.length}`;
-        }
+  const params: any[] = [id, fromIso, toIso];
+  let dbWhere = '';
+  if (searchRaw) {
+    if (/^-?\d+$/.test(searchRaw)) {
+      params.push(searchRaw);
+      dbWhere += ` and ss.queryid::text = $${params.length}`;
+    } else {
+      params.push(searchRaw);
+      dbWhere += ` and qt.query_text ilike $${params.length}`;
     }
-    if (datname) {
-        params.push(datname);
-        dbWhere += ` and dbr.datname = $${params.length}`;
-    }
-    const stepSql = pgssBucketStepSql(windowHours, rawDays);
-    const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  }
+  if (datname) {
+    params.push(datname);
+    dbWhere += ` and dbr.datname = $${params.length}`;
+  }
+  const stepSql = pgssBucketStepSql(windowHours, rawDays);
+  const gridStart = pgssBucketAlignSql(windowHours, 2, rawDays);
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -1755,48 +1755,48 @@ async function fetchWalTrendData(id: string, fromIso: string, toIso: string, dat
 
 // GET /api/insights/:id/wal-spike?sort=wal|wal_per_call|fpi_ratio|wal_per_row&from=&to=&limit=20
 router.get('/:id/wal-spike', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const limit = parseLimit(req.query.limit, 20);
-        const sort = String(req.query.sort || 'wal').toLowerCase();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 20);
+    const sort = String(req.query.sort || 'wal').toLowerCase();
 
-        let orderBy: string;
-        if (sort === 'wal_per_call') {
-            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(d.calls_delta), 0) desc nulls last';
-        } else if (sort === 'fpi_ratio') {
-            orderBy = 'case when sum(coalesce(d.wal_records_delta, 0)) > 100 then sum(coalesce(d.wal_fpi_delta, 0))::numeric / nullif(sum(coalesce(d.wal_records_delta, 0)), 0) else null end desc nulls last';
-        } else if (sort === 'wal_per_row') {
-            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(coalesce(d.rows_delta, 0)), 0) desc nulls last';
-        } else {
-            orderBy = 'sum(coalesce(d.wal_bytes_delta, 0)) desc nulls last';
-        }
+    let orderBy: string;
+    if (sort === 'wal_per_call') {
+      orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(d.calls_delta), 0) desc nulls last';
+    } else if (sort === 'fpi_ratio') {
+      orderBy = 'case when sum(coalesce(d.wal_records_delta, 0)) > 100 then sum(coalesce(d.wal_fpi_delta, 0))::numeric / nullif(sum(coalesce(d.wal_records_delta, 0)), 0) else null end desc nulls last';
+    } else if (sort === 'wal_per_row') {
+      orderBy = 'sum(coalesce(d.wal_bytes_delta, 0))::numeric / nullif(sum(coalesce(d.rows_delta, 0)), 0) desc nulls last';
+    } else {
+      orderBy = 'sum(coalesce(d.wal_bytes_delta, 0)) desc nulls last';
+    }
 
-        const searchRaw = (req.query.search as string || '').trim();
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let searchWhere = '';
-        if (searchRaw) {
-            if (/^-?\d+$/.test(searchRaw)) {
-                params.push(searchRaw);
-                searchWhere += ` and ss.queryid::text = $${params.length}`;
-            } else {
-                params.push(searchRaw);
-                searchWhere += ` and qt.query_text ilike $${params.length}`;
-            }
-        }
-        if (datname) {
-            params.push(datname);
-            searchWhere += ` and dbr.datname = $${params.length}`;
-        }
-        const totalsParams = [...params];
-        params.push(limit);
+    const searchRaw = (req.query.search as string || '').trim();
+    const datname = (req.query.datname as string || '').trim();
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+      if (/^-?\d+$/.test(searchRaw)) {
+        params.push(searchRaw);
+        searchWhere += ` and ss.queryid::text = $${params.length}`;
+      } else {
+        params.push(searchRaw);
+        searchWhere += ` and qt.query_text ilike $${params.length}`;
+      }
+    }
+    if (datname) {
+      params.push(datname);
+      searchWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const totalsParams = [...params];
+    params.push(limit);
 
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
-        const resultPromise = pool.query(`
+    const resultPromise = pool.query(`
       with toplam_wal as (
         select sum(coalesce(d.wal_bytes_delta, 0)) as total_bytes
         from fact.pgss_delta d
@@ -1851,16 +1851,16 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const tpsParams: any[] = [id, fromIso, toIso];
-        let tpsDatnameWhere = '';
-        if (datname) {
-            tpsParams.push(datname);
-            tpsDatnameWhere = ` and dbr.datname = $${tpsParams.length}`;
-        }
+    const tpsParams: any[] = [id, fromIso, toIso];
+    let tpsDatnameWhere = '';
+    if (datname) {
+      tpsParams.push(datname);
+      tpsDatnameWhere = ` and dbr.datname = $${tpsParams.length}`;
+    }
 
-        const [result, totalWalResult, topDbResult, peakResult, settingsResult, replicationLagResult, spillBytesResult, tpsResult, archiverResult, walP95Result] = await Promise.all([
-            resultPromise,
-            pool.query(`
+    const [result, totalWalResult, topDbResult, peakResult, settingsResult, replicationLagResult, spillBytesResult, tpsResult, archiverResult, walP95Result] = await Promise.all([
+      resultPromise,
+      pool.query(`
       select coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as total_wal_bytes
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
@@ -1870,7 +1870,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${searchWhere}
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       with per_db as (
         select
           dbr.datname,
@@ -1896,7 +1896,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       order by per_db.wal_bytes desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select
         ${bucketExpr} as bucket_start,
         (sum(coalesce(d.wal_bytes_delta, 0)) / 1048576.0)::double precision as mb
@@ -1912,7 +1912,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       order by mb desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select distinct on (setting_name)
         setting_name,
         setting_value,
@@ -1937,7 +1937,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         )
       order by setting_name, snapshot_ts desc
     `, [id]),
-            pool.query(`
+      pool.query(`
       select
         slot_name,
         slot_lag_bytes as lag_bytes,
@@ -1954,7 +1954,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       order by coalesce(slot_lag_bytes, 0) desc
       limit 1
     `, [id, fromIso, toIso]),
-            pool.query(`
+      pool.query(`
       select coalesce(sum(coalesce(spill_bytes, 0)), 0)::double precision as total
       from fact.pg_replication_slot_snapshot s
       where s.instance_pk = $1
@@ -1966,7 +1966,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
             and sample_ts between $2::timestamptz and $3::timestamptz
         )
     `, [id, fromIso, toIso]),
-            pool.query(`
+      pool.query(`
       select
         (sum(coalesce(d.xact_commit_delta, 0))::double precision / nullif(extract(epoch from ($3::timestamptz - $2::timestamptz)), 0)) as commit_per_sec,
         (sum(coalesce(d.xact_rollback_delta, 0))::double precision / nullif(extract(epoch from ($3::timestamptz - $2::timestamptz)), 0)) as rollback_per_sec
@@ -1976,7 +1976,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${tpsDatnameWhere}
     `, tpsParams),
-            pool.query(`
+      pool.query(`
       select
         archived_count,
         last_archived_time,
@@ -1988,7 +1988,7 @@ router.get('/:id/wal-spike', async (req, res, next) => {
       order by sample_ts desc
       limit 1
     `, [id]),
-            pool.query(`
+      pool.query(`
       select percentile_cont(0.95) within group (order by mb_per_call)::double precision as wal_p95_mb_per_call
       from (
         select
@@ -2006,150 +2006,150 @@ router.get('/:id/wal-spike', async (req, res, next) => {
         having sum(coalesce(d.wal_bytes_delta, 0)) > 0
       ) x
     `, totalsParams),
-        ]);
+    ]);
 
-        const topDb = topDbResult.rows[0] ?? null;
-        const peak = peakResult.rows[0] ?? null;
-        const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
-        const sizeKb = (name: string): number | null => {
-            const row = settingByName.get(name) as any;
-            if (!row?.setting_value) return null;
-            const value = Number(row.setting_value);
-            if (!Number.isFinite(value)) return null;
-            const unit = String(row.unit ?? '');
-            if (unit === 'GB') return value * 1024 * 1024;
-            if (unit === 'MB') return value * 1024;
-            return value;
-        };
-        const durationSec = (name: string): number | null => {
-            const row = settingByName.get(name) as any;
-            if (!row?.setting_value) return null;
-            const value = Number(row.setting_value);
-            if (!Number.isFinite(value)) return null;
-            const unit = String(row.unit ?? '');
-            if (unit === 'min') return value * 60;
-            if (unit === 'ms') return value / 1000;
-            return value;
-        };
-        const textSetting = (name: string): string | null => {
-            const row = settingByName.get(name) as any;
-            return row?.setting_value == null ? null : String(row.setting_value);
-        };
-        const numberSetting = (name: string): number | null => {
-            const row = settingByName.get(name) as any;
-            if (row?.setting_value == null) return null;
-            const value = Number(row.setting_value);
-            return Number.isFinite(value) ? value : null;
-        };
-        const maxWalSizeKb = sizeKb('max_wal_size');
-        const walCompression = textSetting('wal_compression');
-        const totalWalBytes = Number(totalWalResult.rows[0]?.total_wal_bytes ?? 0);
-        const windowSeconds = Math.max(0, (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000);
-        const tpsRow = tpsResult.rows[0] ?? null;
-        const commitPerSec = Number(tpsRow?.commit_per_sec ?? 0);
-        const rollbackPerSec = Number(tpsRow?.rollback_per_sec ?? 0);
-        const totalTps = commitPerSec + rollbackPerSec;
-        const archiverRow = archiverResult.rows[0] ?? null;
-        const walSettings = {
-            max_wal_size_kb: maxWalSizeKb,
-            min_wal_size_kb: sizeKb('min_wal_size'),
-            checkpoint_timeout_sec: durationSec('checkpoint_timeout'),
-            checkpoint_completion_target: numberSetting('checkpoint_completion_target'),
-            wal_compression: walCompression,
-            wal_level: textSetting('wal_level'),
-            wal_buffers_kb: sizeKb('wal_buffers'),
-        };
+    const topDb = topDbResult.rows[0] ?? null;
+    const peak = peakResult.rows[0] ?? null;
+    const settingByName = new Map(settingsResult.rows.map((r: any) => [String(r.setting_name), r]));
+    const sizeKb = (name: string): number | null => {
+      const row = settingByName.get(name) as any;
+      if (!row?.setting_value) return null;
+      const value = Number(row.setting_value);
+      if (!Number.isFinite(value)) return null;
+      const unit = String(row.unit ?? '');
+      if (unit === 'GB') return value * 1024 * 1024;
+      if (unit === 'MB') return value * 1024;
+      return value;
+    };
+    const durationSec = (name: string): number | null => {
+      const row = settingByName.get(name) as any;
+      if (!row?.setting_value) return null;
+      const value = Number(row.setting_value);
+      if (!Number.isFinite(value)) return null;
+      const unit = String(row.unit ?? '');
+      if (unit === 'min') return value * 60;
+      if (unit === 'ms') return value / 1000;
+      return value;
+    };
+    const textSetting = (name: string): string | null => {
+      const row = settingByName.get(name) as any;
+      return row?.setting_value == null ? null : String(row.setting_value);
+    };
+    const numberSetting = (name: string): number | null => {
+      const row = settingByName.get(name) as any;
+      if (row?.setting_value == null) return null;
+      const value = Number(row.setting_value);
+      return Number.isFinite(value) ? value : null;
+    };
+    const maxWalSizeKb = sizeKb('max_wal_size');
+    const walCompression = textSetting('wal_compression');
+    const totalWalBytes = Number(totalWalResult.rows[0]?.total_wal_bytes ?? 0);
+    const windowSeconds = Math.max(0, (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000);
+    const tpsRow = tpsResult.rows[0] ?? null;
+    const commitPerSec = Number(tpsRow?.commit_per_sec ?? 0);
+    const rollbackPerSec = Number(tpsRow?.rollback_per_sec ?? 0);
+    const totalTps = commitPerSec + rollbackPerSec;
+    const archiverRow = archiverResult.rows[0] ?? null;
+    const walSettings = {
+      max_wal_size_kb: maxWalSizeKb,
+      min_wal_size_kb: sizeKb('min_wal_size'),
+      checkpoint_timeout_sec: durationSec('checkpoint_timeout'),
+      checkpoint_completion_target: numberSetting('checkpoint_completion_target'),
+      wal_compression: walCompression,
+      wal_level: textSetting('wal_level'),
+      wal_buffers_kb: sizeKb('wal_buffers'),
+    };
 
-        res.json({
-            rows: result.rows,
-            totals: {
-                total_wal_bytes: totalWalBytes,
-                top_datname: topDb ? { datname: topDb.datname, wal_mb: Number(topDb.wal_mb), pct: Number(topDb.pct) } : null,
-                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
-                max_wal_size_kb: maxWalSizeKb,
-                wal_compression: walCompression,
-                fpi_heavy_count: result.rows.filter((r: any) => Number(r.fpi_ratio ?? 0) > 0.5).length,
-                wal_throughput_mb_per_sec: windowSeconds > 0 ? totalWalBytes / 1048576.0 / windowSeconds : 0,
-                replication_lag: replicationLagResult.rows[0] ? {
-                    slot_name: replicationLagResult.rows[0].slot_name,
-                    lag_bytes: Number(replicationLagResult.rows[0].lag_bytes ?? 0),
-                    wal_status: replicationLagResult.rows[0].wal_status,
-                    active: replicationLagResult.rows[0].active,
-                } : null,
-                spill_bytes_total: Number(spillBytesResult.rows[0]?.total ?? 0),
-                tps: totalTps > 0 ? {
-                    commit_per_sec: commitPerSec,
-                    rollback_per_sec: rollbackPerSec,
-                    total_per_sec: totalTps,
-                } : null,
-                archiver: archiverRow ? {
-                    archived_count: Number(archiverRow.archived_count ?? 0),
-                    last_archived_time: archiverRow.last_archived_time ?? null,
-                    failed_count: Number(archiverRow.failed_count ?? 0),
-                    last_failed_time: archiverRow.last_failed_time ?? null,
-                    lag_seconds: archiverRow.lag_seconds == null ? null : Number(archiverRow.lag_seconds),
-                } : null,
-                wal_settings: walSettings,
-                wal_p95_mb_per_call: walP95Result.rows[0]?.wal_p95_mb_per_call == null ? null : Number(walP95Result.rows[0].wal_p95_mb_per_call),
-                raw_retention_days: retention.raw_days,
-                hourly_retention_days: retention.hourly_days,
-            },
-        });
-    } catch (err) {
-        next(err);
-    }
+    res.json({
+      rows: result.rows,
+      totals: {
+        total_wal_bytes: totalWalBytes,
+        top_datname: topDb ? { datname: topDb.datname, wal_mb: Number(topDb.wal_mb), pct: Number(topDb.pct) } : null,
+        peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+        max_wal_size_kb: maxWalSizeKb,
+        wal_compression: walCompression,
+        fpi_heavy_count: result.rows.filter((r: any) => Number(r.fpi_ratio ?? 0) > 0.5).length,
+        wal_throughput_mb_per_sec: windowSeconds > 0 ? totalWalBytes / 1048576.0 / windowSeconds : 0,
+        replication_lag: replicationLagResult.rows[0] ? {
+          slot_name: replicationLagResult.rows[0].slot_name,
+          lag_bytes: Number(replicationLagResult.rows[0].lag_bytes ?? 0),
+          wal_status: replicationLagResult.rows[0].wal_status,
+          active: replicationLagResult.rows[0].active,
+        } : null,
+        spill_bytes_total: Number(spillBytesResult.rows[0]?.total ?? 0),
+        tps: totalTps > 0 ? {
+          commit_per_sec: commitPerSec,
+          rollback_per_sec: rollbackPerSec,
+          total_per_sec: totalTps,
+        } : null,
+        archiver: archiverRow ? {
+          archived_count: Number(archiverRow.archived_count ?? 0),
+          last_archived_time: archiverRow.last_archived_time ?? null,
+          failed_count: Number(archiverRow.failed_count ?? 0),
+          last_failed_time: archiverRow.last_failed_time ?? null,
+          lag_seconds: archiverRow.lag_seconds == null ? null : Number(archiverRow.lag_seconds),
+        } : null,
+        wal_settings: walSettings,
+        wal_p95_mb_per_call: walP95Result.rows[0]?.wal_p95_mb_per_call == null ? null : Number(walP95Result.rows[0].wal_p95_mb_per_call),
+        raw_retention_days: retention.raw_days,
+        hourly_retention_days: retention.hourly_days,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/wal-trend?from=&to=&datname=&search=&compare=&include_baseline=1
 router.get('/:id/wal-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
-        const dataSource = !datname && !searchRaw && windowHours > retention.raw_days * 24 ? 'pg_wal_hourly' : 'pgss_delta';
-
-        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
-        const baselineNeeded = includeBaseline && searchRaw !== '';
-
-        const [current, baselineRes] = await Promise.all([
-            fetchWalTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours, retention.raw_days),
-            baselineNeeded
-                ? fetchWalTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours, retention.raw_days)
-                : Promise.resolve(null),
-        ]);
-
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchWalTrendData(
-                id,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                datname,
-                searchRaw,
-                bucketExpr,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+    const dataSource = !datname && !searchRaw && windowHours > retention.raw_days * 24 ? 'pg_wal_hourly' : 'pgss_delta';
+
+    const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+    const baselineNeeded = includeBaseline && searchRaw !== '';
+
+    const [current, baselineRes] = await Promise.all([
+      fetchWalTrendData(id, fromIso, toIso, datname, searchRaw, bucketExpr, windowHours, retention.raw_days),
+      baselineNeeded
+        ? fetchWalTrendData(id, fromIso, toIso, datname, '', bucketExpr, windowHours, retention.raw_days)
+        : Promise.resolve(null),
+    ]);
+
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchWalTrendData(
+        id,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        datname,
+        searchRaw,
+        bucketExpr,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    const baseline = baselineRes ? baselineRes.rows : null;
+    res.json({ current: current.rows, previous, compare, baseline, data_source: dataSource, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // =========================================================================
@@ -2159,31 +2159,31 @@ router.get('/:id/wal-trend', async (req, res, next) => {
 // Top temp-spill sorgular — temp_blks_written desc, HAVING > 0.
 // Sadece geçici dosya yazan sorgulari listeler. 1 blok = 8KB.
 async function fetchTempSpillData(id: string, fromIso: string, toIso: string, datname: string, searchRaw: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-    const params: any[] = [id, fromIso, toIso];
-    let dbWhere = '';
-    if (searchRaw) {
-        if (/^-?\d+$/.test(searchRaw)) {
-            params.push(searchRaw);
-            dbWhere += ` and ss.queryid::text = $${params.length}`;
-        } else {
-            params.push(searchRaw);
-            dbWhere += ` and qt.query_text ilike $${params.length}`;
-        }
+  const params: any[] = [id, fromIso, toIso];
+  let dbWhere = '';
+  if (searchRaw) {
+    if (/^-?\d+$/.test(searchRaw)) {
+      params.push(searchRaw);
+      dbWhere += ` and ss.queryid::text = $${params.length}`;
+    } else {
+      params.push(searchRaw);
+      dbWhere += ` and qt.query_text ilike $${params.length}`;
     }
-    if (datname) {
-        params.push(datname);
-        dbWhere += ` and dbr.datname = $${params.length}`;
-    }
-    const stepSql = pgssStepSql(source, windowHours, rawDays);
-    const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
-    const sourceTable = pgssSourceTable(source);
-    const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
-    const timeWhere = pgssTimeWhere(source, 2, 3);
-    const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
-    const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
-    const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
-    const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
-    return pool.query(`
+  }
+  if (datname) {
+    params.push(datname);
+    dbWhere += ` and dbr.datname = $${params.length}`;
+  }
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 2, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 2, 3);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const tempWrittenExpr = pgssMetric(source, 'coalesce(d.temp_blks_written_delta, 0)', 'coalesce(d.temp_blks_written_sum, 0)');
+  const tempReadExpr = pgssMetric(source, 'coalesce(d.temp_blks_read_delta, 0)', '');
+  const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
+  return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
@@ -2216,44 +2216,44 @@ async function fetchTempSpillData(id: string, fromIso: string, toIso: string, da
 
 // GET /api/insights/:id/temp-spill?sort=temp_written|temp_read&from=&to=&limit=20
 router.get('/:id/temp-spill', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        const limit = parseLimit(req.query.limit, 20);
-        const sort = String(req.query.sort || 'temp_written').toLowerCase();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    const limit = parseLimit(req.query.limit, 20);
+    const sort = String(req.query.sort || 'temp_written').toLowerCase();
 
-        let orderBy: string;
-        if (sort === 'temp_read') {
-            orderBy = 'sum(coalesce(d.temp_blks_read_delta, 0)) desc nulls last';
-        } else {
-            orderBy = 'sum(coalesce(d.temp_blks_written_delta, 0)) desc nulls last';
-        }
+    let orderBy: string;
+    if (sort === 'temp_read') {
+      orderBy = 'sum(coalesce(d.temp_blks_read_delta, 0)) desc nulls last';
+    } else {
+      orderBy = 'sum(coalesce(d.temp_blks_written_delta, 0)) desc nulls last';
+    }
 
-        const searchRaw = (req.query.search as string || '').trim();
-        const datname = (req.query.datname as string || '').trim();
-        const params: any[] = [id, fromIso, toIso];
-        let searchWhere = '';
-        if (searchRaw) {
-            if (/^-?\d+$/.test(searchRaw)) {
-                params.push(searchRaw);
-                searchWhere += ` and ss.queryid::text = $${params.length}`;
-            } else {
-                params.push(searchRaw);
-                searchWhere += ` and qt.query_text ilike $${params.length}`;
-            }
-        }
-        if (datname) {
-            params.push(datname);
-            searchWhere += ` and dbr.datname = $${params.length}`;
-        }
-        const totalsParams = [...params];
-        params.push(limit);
+    const searchRaw = (req.query.search as string || '').trim();
+    const datname = (req.query.datname as string || '').trim();
+    const params: any[] = [id, fromIso, toIso];
+    let searchWhere = '';
+    if (searchRaw) {
+      if (/^-?\d+$/.test(searchRaw)) {
+        params.push(searchRaw);
+        searchWhere += ` and ss.queryid::text = $${params.length}`;
+      } else {
+        params.push(searchRaw);
+        searchWhere += ` and qt.query_text ilike $${params.length}`;
+      }
+    }
+    if (datname) {
+      params.push(datname);
+      searchWhere += ` and dbr.datname = $${params.length}`;
+    }
+    const totalsParams = [...params];
+    params.push(limit);
 
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
 
-        const result = await pool.query(`
+    const result = await pool.query(`
       with toplam_temp as (
         select sum(coalesce(d.temp_blks_written_delta, 0)) as total_blks
         from fact.pgss_delta d
@@ -2331,8 +2331,8 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const [totalIoResult, topDbResult, peakResult, workMemResult, tempP95Result] = await Promise.all([
-            pool.query(`
+    const [totalIoResult, topDbResult, peakResult, workMemResult, tempP95Result] = await Promise.all([
+      pool.query(`
       select coalesce((
         sum(coalesce(d.temp_blk_write_time_ms_delta, 0))
         + sum(coalesce(d.temp_blk_read_time_ms_delta, 0))
@@ -2345,7 +2345,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
         and d.sample_ts between $2::timestamptz and $3::timestamptz
         ${searchWhere}
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       with per_db as (
         select
           dbr.datname,
@@ -2371,7 +2371,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       order by per_db.temp_blks desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select
         ${bucketExpr} as bucket_start,
         (sum(coalesce(d.temp_blks_written_delta, 0)) / 128.0)::double precision as mb
@@ -2387,7 +2387,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       order by mb desc
       limit 1
     `, totalsParams),
-            pool.query(`
+      pool.query(`
       select setting_value::bigint as kb
       from fact.pg_settings_snapshot
       where instance_pk = $1
@@ -2395,7 +2395,7 @@ router.get('/:id/temp-spill', async (req, res, next) => {
       order by snapshot_ts desc
       limit 1
     `, [id]),
-            pool.query(`
+      pool.query(`
       select percentile_cont(0.95) within group (order by mb_per_call)::double precision as temp_p95_mb_per_call
       from (
         select
@@ -2413,106 +2413,106 @@ router.get('/:id/temp-spill', async (req, res, next) => {
         having sum(coalesce(d.temp_blks_written_delta, 0)) > 0
       ) x
     `, totalsParams),
-        ]);
+    ]);
 
-        const topDb = topDbResult.rows[0] ?? null;
-        const peak = peakResult.rows[0] ?? null;
-        const workMem = workMemResult.rows[0] ?? null;
-        res.json({
-            rows: result.rows,
-            totals: {
-                total_temp_write_time_sec: Number(totalIoResult.rows[0]?.total_temp_write_time_sec ?? 0),
-                top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
-                peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
-                work_mem_kb: workMem?.kb == null ? null : Number(workMem.kb),
-                temp_p95_mb_per_call: tempP95Result.rows[0]?.temp_p95_mb_per_call == null ? null : Number(tempP95Result.rows[0].temp_p95_mb_per_call),
-                raw_retention_days: retention.raw_days,
-                hourly_retention_days: retention.hourly_days,
-            },
-        });
-    } catch (err) {
-        next(err);
-    }
+    const topDb = topDbResult.rows[0] ?? null;
+    const peak = peakResult.rows[0] ?? null;
+    const workMem = workMemResult.rows[0] ?? null;
+    res.json({
+      rows: result.rows,
+      totals: {
+        total_temp_write_time_sec: Number(totalIoResult.rows[0]?.total_temp_write_time_sec ?? 0),
+        top_datname: topDb ? { datname: topDb.datname, mb: Number(topDb.mb), pct: Number(topDb.pct) } : null,
+        peak: peak ? { bucket_start: peak.bucket_start, mb: Number(peak.mb) } : null,
+        work_mem_kb: workMem?.kb == null ? null : Number(workMem.kb),
+        temp_p95_mb_per_call: tempP95Result.rows[0]?.temp_p95_mb_per_call == null ? null : Number(tempP95Result.rows[0].temp_p95_mb_per_call),
+        raw_retention_days: retention.raw_days,
+        hourly_retention_days: retention.hourly_days,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/temp-trend?from=&to=&datname=&search=&compare=&include_baseline=1
 router.get('/:id/temp-trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 1);
+    let compare: CompareKey | null = null;
     try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 1);
-        let compare: CompareKey | null = null;
-        try {
-            compare = parseCompareParam(req.query.compare);
-        } catch {
-            res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
-            return;
-        }
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
-
-        const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
-        const retention = await getInstanceRetention(id);
-        const source = pickPgssSource(windowHours, retention.raw_days);
-
-        const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
-        const baselineNeeded = includeBaseline && searchRaw !== '';
-
-        const [current, baselineRes] = await Promise.all([
-            fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
-            baselineNeeded
-                ? fetchTempSpillData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
-                : Promise.resolve(null),
-        ]);
-
-        let previous: any[] = [];
-        if (compare) {
-            const offset = COMPARE_OFFSETS[compare];
-            previous = (await fetchTempSpillData(
-                id,
-                shiftedIso(fromIso, offset.seconds),
-                shiftedIso(toIso, offset.seconds),
-                datname,
-                searchRaw,
-                source,
-                windowHours,
-                retention.raw_days,
-                offset.intervalSql,
-            )).rows;
-        }
-        const baseline = baselineRes ? baselineRes.rows : null;
-        res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
-    } catch (err) {
-        next(err);
+      compare = parseCompareParam(req.query.compare);
+    } catch {
+      res.status(400).json({ error: 'Invalid compare. Allowed values: 1h, 1d, 1w, 1m' });
+      return;
     }
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
+
+    const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
+    const retention = await getInstanceRetention(id);
+    const source = pickPgssSource(windowHours, retention.raw_days);
+
+    const includeBaseline = String(req.query.include_baseline || '').trim() === '1';
+    const baselineNeeded = includeBaseline && searchRaw !== '';
+
+    const [current, baselineRes] = await Promise.all([
+      fetchTempSpillData(id, fromIso, toIso, datname, searchRaw, source, windowHours, retention.raw_days),
+      baselineNeeded
+        ? fetchTempSpillData(id, fromIso, toIso, datname, '', source, windowHours, retention.raw_days)
+        : Promise.resolve(null),
+    ]);
+
+    let previous: any[] = [];
+    if (compare) {
+      const offset = COMPARE_OFFSETS[compare];
+      previous = (await fetchTempSpillData(
+        id,
+        shiftedIso(fromIso, offset.seconds),
+        shiftedIso(toIso, offset.seconds),
+        datname,
+        searchRaw,
+        source,
+        windowHours,
+        retention.raw_days,
+        offset.intervalSql,
+      )).rows;
+    }
+    const baseline = baselineRes ? baselineRes.rows : null;
+    res.json({ current: current.rows, previous, compare, baseline, data_source: source, raw_retention_days: retention.raw_days, hourly_retention_days: retention.hourly_days });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/long-operations?from=&to=&datname=&search=&limit=50
 router.get('/:id/long-operations', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const { fromIso, toIso } = parseTimeRange(req.query, 24);
-        const limit = parseLimit(req.query.limit, 50);
-        const datname = (req.query.datname as string || '').trim();
-        const searchRaw = (req.query.search as string || '').trim();
+  try {
+    const { id } = req.params;
+    const { fromIso, toIso } = parseTimeRange(req.query, 24);
+    const limit = parseLimit(req.query.limit, 50);
+    const datname = (req.query.datname as string || '').trim();
+    const searchRaw = (req.query.search as string || '').trim();
 
-        const params: any[] = [id, fromIso, toIso];
-        let filterWhere = '';
-        if (datname) {
-            params.push(datname);
-            filterWhere += ` and p.datname = $${params.length}`;
-        }
-        if (searchRaw) {
-            if (/^\d+$/.test(searchRaw)) {
-                params.push(searchRaw);
-                filterWhere += ` and p.pid::text = $${params.length}`;
-            } else {
-                params.push(`%${searchRaw}%`);
-                filterWhere += ` and (coalesce(rr.schemaname, '') ilike $${params.length} or coalesce(rr.relname, '') ilike $${params.length})`;
-            }
-        }
-        params.push(limit);
+    const params: any[] = [id, fromIso, toIso];
+    let filterWhere = '';
+    if (datname) {
+      params.push(datname);
+      filterWhere += ` and p.datname = $${params.length}`;
+    }
+    if (searchRaw) {
+      if (/^\d+$/.test(searchRaw)) {
+        params.push(searchRaw);
+        filterWhere += ` and p.pid::text = $${params.length}`;
+      } else {
+        params.push(`%${searchRaw}%`);
+        filterWhere += ` and (coalesce(rr.schemaname, '') ilike $${params.length} or coalesce(rr.relname, '') ilike $${params.length})`;
+      }
+    }
+    params.push(limit);
 
-        const result = await pool.query(`
+    const result = await pool.query(`
       with events as (
         select
           case when max(p.command) ilike '%cluster%' then 'CLUSTER' else 'VACUUM FULL' end as operation_type,
@@ -2639,37 +2639,157 @@ router.get('/:id/long-operations', async (req, res, next) => {
       limit $${params.length}
     `, params);
 
-        const totals = {
-            total: result.rows.length,
-            vacuum_full: result.rows.filter((r: any) => r.operation_type === 'VACUUM FULL').length,
-            cluster: result.rows.filter((r: any) => r.operation_type === 'CLUSTER').length,
-            reindex: result.rows.filter((r: any) => r.operation_type === 'REINDEX').length,
-            create_index: result.rows.filter((r: any) => r.operation_type === 'CREATE INDEX').length,
-            copy: result.rows.filter((r: any) => r.operation_type === 'COPY').length,
-            long_vacuum: result.rows.filter((r: any) => r.operation_type === 'VACUUM').length,
-        };
+    const totals = {
+      total: result.rows.length,
+      vacuum_full: result.rows.filter((r: any) => r.operation_type === 'VACUUM FULL').length,
+      cluster: result.rows.filter((r: any) => r.operation_type === 'CLUSTER').length,
+      reindex: result.rows.filter((r: any) => r.operation_type === 'REINDEX').length,
+      create_index: result.rows.filter((r: any) => r.operation_type === 'CREATE INDEX').length,
+      copy: result.rows.filter((r: any) => r.operation_type === 'COPY').length,
+      long_vacuum: result.rows.filter((r: any) => r.operation_type === 'VACUUM').length,
+    };
 
-        res.json({ rows: result.rows, totals });
-    } catch (err) {
-        next(err);
-    }
+    res.json({ rows: result.rows, totals });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/insights/:id/databases — instance'a ait DB listesi (filtre dropdown'u icin)
 router.get('/:id/databases', async (req, res, next) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query(`
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
             select distinct dbr.datname
             from dim.database_ref dbr
             where dbr.instance_pk = $1
               and dbr.datname is not null
             order by dbr.datname
         `, [id]);
-        res.json(result.rows.map((r: any) => r.datname));
-    } catch (err) {
-        next(err);
+    res.json(result.rows.map((r: any) => r.datname));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// =========================================================================
+// FREEZE sekmesi — per-DB + per-table XID/MXID freeze age
+// =========================================================================
+
+// GET /api/insights/freeze/databases?instancePk=N
+router.get('/freeze/databases', async (req, res, next) => {
+  try {
+    const instancePkRaw = String(req.query.instancePk || '').trim();
+    const params: any[] = [];
+    let instanceWhere = '';
+    if (instancePkRaw && /^\d+$/.test(instancePkRaw)) {
+      params.push(instancePkRaw);
+      instanceWhere = `and f.instance_pk = $${params.length}`;
     }
+
+    const result = await pool.query(`
+            with latest as (
+              select f.instance_pk, f.dbid, f.datname,
+                     f.datfrozenxid_age, f.datminmxid_age, f.snapshot_ts,
+                     row_number() over (partition by f.instance_pk, f.dbid order by f.snapshot_ts desc) as rn
+              from fact.pg_database_freeze_snapshot f
+              where f.snapshot_ts >= now() - interval '7 days'
+                ${instanceWhere}
+            ),
+            settings as (
+              select s.instance_pk,
+                     max(case when s.setting_name = 'autovacuum_freeze_max_age'
+                              then s.setting_value::bigint end) as xid_max_age,
+                     max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
+                              then s.setting_value::bigint end) as mxid_max_age
+              from fact.pg_settings_snapshot s
+              where s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
+                and s.snapshot_ts = (
+                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
+                  where s2.instance_pk = s.instance_pk and s2.setting_name = s.setting_name
+                )
+              group by s.instance_pk
+            )
+            select
+              l.instance_pk,
+              ii.display_name as instance_name,
+              l.dbid,
+              l.datname,
+              l.datfrozenxid_age,
+              l.datminmxid_age,
+              coalesce(st.xid_max_age, 200000000) as xid_max_age,
+              coalesce(st.mxid_max_age, 400000000) as mxid_max_age,
+              round(l.datfrozenxid_age * 100.0 / coalesce(st.xid_max_age, 200000000))::int as xid_pct,
+              round(l.datminmxid_age * 100.0 / coalesce(st.mxid_max_age, 400000000))::int as mxid_pct,
+              l.snapshot_ts
+            from latest l
+            join control.instance_inventory ii on ii.instance_pk = l.instance_pk
+            left join settings st on st.instance_pk = l.instance_pk
+            where l.rn = 1
+            order by xid_pct desc nulls last, mxid_pct desc nulls last
+        `, params);
+
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/insights/freeze/tables?instancePk=N&dbid=M&limit=50
+router.get('/freeze/tables', async (req, res, next) => {
+  try {
+    const instancePkRaw = String(req.query.instancePk || '').trim();
+    const dbidRaw = String(req.query.dbid || '').trim();
+    if (!/^\d+$/.test(instancePkRaw) || !/^\d+$/.test(dbidRaw)) {
+      res.status(400).json({ error: 'instancePk ve dbid zorunlu (sayisal)' });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 200);
+
+    const result = await pool.query(`
+            with latest_ts as (
+              select max(snapshot_ts) as ts
+              from fact.pg_table_freeze_snapshot
+              where instance_pk = $1 and dbid = $2
+            ),
+            settings as (
+              select
+                max(case when s.setting_name = 'autovacuum_freeze_max_age'
+                         then s.setting_value::bigint end) as xid_max_age,
+                max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
+                         then s.setting_value::bigint end) as mxid_max_age
+              from fact.pg_settings_snapshot s
+              where s.instance_pk = $1
+                and s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
+                and s.snapshot_ts = (
+                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
+                  where s2.instance_pk = $1 and s2.setting_name = s.setting_name
+                )
+            )
+            select
+              t.schemaname,
+              t.relname,
+              t.relkind,
+              t.relfrozenxid_age,
+              t.relminmxid_age,
+              t.relpages,
+              (t.relpages * 8192)::bigint as size_bytes,
+              round(t.relfrozenxid_age * 100.0 / coalesce((select xid_max_age from settings), 200000000))::int as xid_pct,
+              round(t.relminmxid_age * 100.0 / coalesce((select mxid_max_age from settings), 400000000))::int as mxid_pct,
+              t.snapshot_ts,
+              'vacuum (freeze, analyze, verbose) ' || quote_ident(t.schemaname) || '.' || quote_ident(t.relname) || ';' as vacuum_sql
+            from fact.pg_table_freeze_snapshot t
+            where t.instance_pk = $1
+              and t.dbid = $2
+              and t.snapshot_ts = (select ts from latest_ts)
+            order by t.relfrozenxid_age desc nulls last
+            limit $3
+        `, [instancePkRaw, dbidRaw, limit]);
+
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

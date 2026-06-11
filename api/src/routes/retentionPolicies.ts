@@ -30,10 +30,10 @@ router.post('/', async (req, res, next) => {
       raw_retention_months, hourly_retention_months, daily_retention_months,
     } = req.body;
 
-    const rawDays    = raw_retention_days    ?? (raw_retention_months    ? raw_retention_months    * 30 : 14);
+    const rawDays = raw_retention_days ?? (raw_retention_months ? raw_retention_months * 30 : 14);
     const hourlyDays = hourly_retention_days ?? (hourly_retention_months ? hourly_retention_months * 30 : 60);
-    const dailyDays  = daily_retention_days  ?? (daily_retention_months  ? daily_retention_months  * 30 : 730);
-    const snapHours  = snapshot_retention_hours ?? 48;
+    const dailyDays = daily_retention_days ?? (daily_retention_months ? daily_retention_months * 30 : 730);
+    const snapHours = snapshot_retention_hours ?? 48;
 
     const result = await pool.query(`
       insert into control.retention_policy (
@@ -64,14 +64,14 @@ router.put('/:id', async (req, res, next) => {
     const { id } = req.params;
     const {
       raw_retention_days, hourly_retention_days, daily_retention_days,
-      snapshot_retention_hours,
+      snapshot_retention_hours, table_freeze_retention_days,
       raw_retention_months, hourly_retention_months, daily_retention_months,
     } = req.body;
 
     // day veya months'tan biri gelsin
-    const rawDays    = raw_retention_days    ?? (raw_retention_months    ? raw_retention_months    * 30 : null);
+    const rawDays = raw_retention_days ?? (raw_retention_months ? raw_retention_months * 30 : null);
     const hourlyDays = hourly_retention_days ?? (hourly_retention_months ? hourly_retention_months * 30 : null);
-    const dailyDays  = daily_retention_days  ?? (daily_retention_months  ? daily_retention_months  * 30 : null);
+    const dailyDays = daily_retention_days ?? (daily_retention_months ? daily_retention_months * 30 : null);
 
     if (rawDays == null || hourlyDays == null || dailyDays == null) {
       res.status(400).json({ error: 'raw/hourly/daily retention süresi zorunlu' });
@@ -84,12 +84,13 @@ router.put('/:id', async (req, res, next) => {
           hourly_retention_days    = $3,
           daily_retention_days     = $4,
           snapshot_retention_hours = coalesce($5, snapshot_retention_hours),
+          table_freeze_retention_days = coalesce($6, table_freeze_retention_days),
           raw_retention_months     = greatest(1, ceil($2::numeric / 30)::int),
           hourly_retention_months  = greatest(1, ceil($3::numeric / 30)::int),
           daily_retention_months   = greatest(1, ceil($4::numeric / 30)::int)
       where retention_policy_id = $1
       returning *
-    `, [id, rawDays, hourlyDays, dailyDays, snapshot_retention_hours ?? null]);
+    `, [id, rawDays, hourlyDays, dailyDays, snapshot_retention_hours ?? null, table_freeze_retention_days ?? null]);
 
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Retention policy not found' });

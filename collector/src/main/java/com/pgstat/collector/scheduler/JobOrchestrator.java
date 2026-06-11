@@ -96,6 +96,9 @@ public class JobOrchestrator {
     private volatile int lastHotSettingsHourUtc = -1;
     // Freeze/settings snapshot: 6 saatte bir (XID freeze izleme gun ici resolve icin)
     private volatile int lastFreezeSnapshotHourUtc = -1;
+    // Per-table freeze: instance bazli son toplama zamani
+    private final java.util.Map<Long, Long> lastTableFreezeMillisByInstance =
+        new java.util.concurrent.ConcurrentHashMap<>();
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -685,6 +688,31 @@ public class JobOrchestrator {
                     log.warn("Freeze/settings snapshot genel hatasi: {}", e.getMessage());
                     lastFreezeSnapshotHourUtc = -1;
                 }
+            }
+
+            // 3e-3. Per-table freeze snapshot — instance bazli interval (schedule_profile).
+            try {
+                List<com.pgstat.collector.model.InstanceInfo> ready = inventoryRepo.findAllReady();
+                long nowMs = System.currentTimeMillis();
+                long collected = 0;
+                for (com.pgstat.collector.model.InstanceInfo inst : ready) {
+                    int intervalSec = inst.tableFreezeIntervalSeconds() > 0
+                        ? inst.tableFreezeIntervalSeconds() : 21600;
+                    long last = lastTableFreezeMillisByInstance.getOrDefault(inst.instancePk(), 0L);
+                    if (nowMs - last >= intervalSec * 1000L) {
+                        lastTableFreezeMillisByInstance.put(inst.instancePk(), nowMs);
+                        try {
+                            collected += nightlySnapshotCollector.collectTableFreezeOnly(inst);
+                        } catch (Exception e) {
+                            log.debug("Table freeze toplama hatasi {}: {}", inst.instanceId(), e.getMessage());
+                        }
+                    }
+                }
+                if (collected > 0) {
+                    log.info("Table freeze snapshot: {} tablo toplandi", collected);
+                }
+            } catch (Exception e) {
+                log.warn("Table freeze snapshot genel hatasi: {}", e.getMessage());
             }
 
             // 3f. Gunluk/haftalik rapor — saat config'den alinir (UI'da duzenlenebilir).

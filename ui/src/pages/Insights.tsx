@@ -16,7 +16,7 @@ interface Instance {
     is_active: boolean;
 }
 
-type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag' | 'long-ops';
+type InsightTab = 'top-exec' | 'temp-spill' | 'wal-spike' | 'cache-hit' | 'vacuum-lag' | 'long-ops' | 'freeze';
 type QueryCrossLinkTarget = Extract<InsightTab, 'temp-spill' | 'wal-spike' | 'cache-hit'>;
 type TopCrossLinkHandler = (targetTab: QueryCrossLinkTarget, queryid: string) => void;
 
@@ -30,6 +30,7 @@ const TABS: { key: InsightTab; label: string; icon: string }[] = [
     { key: 'cache-hit', label: 'Cache Hit', icon: '🎯' },
     { key: 'vacuum-lag', label: 'Vacuum Lag', icon: '🧹' },
     { key: 'long-ops', label: 'Long Operations', icon: 'OPS' },
+    { key: 'freeze', label: 'Freeze', icon: '🧊' },
 ];
 
 void PlaceholderTab;
@@ -315,6 +316,7 @@ export default function Insights() {
             {tab === 'cache-hit' && <CacheHitCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'vacuum-lag' && <VacuumLagCard instancePk={instancePk} range={range} onRangeChange={setRange} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
             {tab === 'long-ops' && <LongOperationsCard instancePk={instancePk} range={range} autoRefresh={autoRefresh} instanceName={activeInstances.find(i => i.instance_pk === instancePk)?.display_name} />}
+            {tab === 'freeze' && <FreezeCard instancePk={instancePk} />}
         </div>
     );
 }
@@ -1072,136 +1074,136 @@ function TopExecTimeCardInner({ instancePk, range, autoRefresh, instanceName, on
                 </div>
             )}
 
-        <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
-            <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
-                <div className="flex-1 min-w-[200px]">
-                    <h3 className="font-semibold text-[#1E293B]">Top Sorgular</h3>
-                    <p className="text-xs text-[#64748B]">Bu DB'nin zamanı nereye gidiyor? Sıralamayı değiştirerek farklı açılardan bak.</p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                    <select
-                        value={datname}
-                        onChange={e => setDatname(e.target.value)}
-                        title="Bu database'deki sorgulara filtre uygula (boş = tüm DB'ler)"
-                        className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]"
-                    >
-                        <option value="">Tüm Database'ler</option>
-                        {(databases ?? []).map(d => (
-                            <option key={d} value={d}>{d}</option>
-                        ))}
-                    </select>
-                    <input
-                        type="text"
-                        value={searchInput}
-                        onChange={e => setSearchInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
-                        placeholder="queryid veya %select%hotel%"
-                        title="QueryID (sayı) veya SQL text için ILIKE pattern (% wildcard). Enter ile uygula."
-                        className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]"
-                    />
-                    <button onClick={applySearch}
-                        className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">
-                        Ara
-                    </button>
-                    {search && (
-                        <button onClick={clearSearch} title="Aramayı temizle"
-                            className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                            ✕
-                        </button>
-                    )}
-                </div>
-                <div className="flex gap-1">
-                    {sortButtons.map(b => (
-                        <button
-                            key={b.key}
-                            onClick={() => setSort(b.key)}
-                            title={b.tip}
-                            className={`px-3 py-1.5 text-xs rounded border transition-colors ${sort === b.key
-                                ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]'
-                                : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
-                                }`}
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0]">
+                <div className="px-4 py-3 border-b border-[#E2E8F0] flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[200px]">
+                        <h3 className="font-semibold text-[#1E293B]">Top Sorgular</h3>
+                        <p className="text-xs text-[#64748B]">Bu DB'nin zamanı nereye gidiyor? Sıralamayı değiştirerek farklı açılardan bak.</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <select
+                            value={datname}
+                            onChange={e => setDatname(e.target.value)}
+                            title="Bu database'deki sorgulara filtre uygula (boş = tüm DB'ler)"
+                            className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[160px]"
                         >
-                            {b.label}
-                        </button>
-                    ))}
-                </div>
-                {sort === 'slow' && search && (
-                    <span className="text-[10px] text-[#94A3B8] italic" title="Arama aktif — tek-spike sorgular da gösteriliyor. Üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştırın.">
-                        ℹ tek-spike sorgular dahil
-                    </span>
-                )}
-                <button onClick={() => setColumnsModalOpen(true)}
-                    className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                    ⚙️ Sütun ({selectedCols.length})
-                </button>
-                <button onClick={() => refetch()}
-                    className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
-                    {isFetching ? '...' : 'Yenile'}
-                </button>
-            </div>
-
-            {isLoading ? (
-                <div className="p-4"><SkeletonTable rows={8} cols={selectedCols.length + 2} /></div>
-            ) : !data || data.length === 0 ? (
-                <EmptyState
-                    icon="📭"
-                    title="Veri yok"
-                    description={
-                        data && data.length === 0 && search
-                            ? `'${search}' filtresine uyan sorgu yok. Aramayi temizleyin veya pencereyi genisletin.`
-                            : "Bu pencerede sorgu kaydi yok. Tarih araligini genisletin (orn. 24sa veya daha uzun) ya da daha yogun workload'li bir instance secin."
-                    }
-                />
-            ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                        <thead>
-                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
-                                {selectedCols.map(col => {
-                                    const meta = TOP_QUERIES_COLUMNS_META.available.find(c => c.key === col);
-                                    const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir', 'cache_hit_pct', 'ort_plan_ms', 'wal_mb', 'satir_per_cagri'].includes(col);
-                                    const title = TOP_QUERIES_HEADER_TITLES[col];
-                                    const label = meta?.label ?? col;
-                                    return (
-                                        <th key={col} className={`py-2 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${isRight ? 'text-right' : 'text-left'}`}>
-                                            {title ? <HeaderHelp title={title} label={label} /> : label}
-                                        </th>
-                                    );
-                                })}
-                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {data.map((row, i) => (
-                                <TopQueryRow
-                                    key={`${row.statement_series_id}-${i}`}
-                                    row={row}
-                                    rank={i + 1}
-                                    selectedCols={selectedCols}
-                                    instancePk={instancePk}
-                                    range={range}
-                                    autoRefresh={autoRefresh}
-                                    compareKey={compareKey}
-                                    expanded={expandedSeriesId === row.statement_series_id}
-                                    onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
-                                    onCrossLinkClick={onCrossLinkClick}
-                                />
+                            <option value="">Tüm Database'ler</option>
+                            {(databases ?? []).map(d => (
+                                <option key={d} value={d}>{d}</option>
                             ))}
-                        </tbody>
-                    </table>
+                        </select>
+                        <input
+                            type="text"
+                            value={searchInput}
+                            onChange={e => setSearchInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
+                            placeholder="queryid veya %select%hotel%"
+                            title="QueryID (sayı) veya SQL text için ILIKE pattern (% wildcard). Enter ile uygula."
+                            className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-56 focus:outline-none focus:border-[#3B82F6]"
+                        />
+                        <button onClick={applySearch}
+                            className="px-3 py-1.5 text-xs text-white bg-[#3B82F6] rounded hover:bg-[#2563EB]">
+                            Ara
+                        </button>
+                        {search && (
+                            <button onClick={clearSearch} title="Aramayı temizle"
+                                className="px-2 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                                ✕
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-1">
+                        {sortButtons.map(b => (
+                            <button
+                                key={b.key}
+                                onClick={() => setSort(b.key)}
+                                title={b.tip}
+                                className={`px-3 py-1.5 text-xs rounded border transition-colors ${sort === b.key
+                                    ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]'
+                                    : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'
+                                    }`}
+                            >
+                                {b.label}
+                            </button>
+                        ))}
+                    </div>
+                    {sort === 'slow' && search && (
+                        <span className="text-[10px] text-[#94A3B8] italic" title="Arama aktif — tek-spike sorgular da gösteriliyor. Üretim hot path için 'Çağrı Sayısı' sıralamasıyla karşılaştırın.">
+                            ℹ tek-spike sorgular dahil
+                        </span>
+                    )}
+                    <button onClick={() => setColumnsModalOpen(true)}
+                        className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        ⚙️ Sütun ({selectedCols.length})
+                    </button>
+                    <button onClick={() => refetch()}
+                        className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
+                        {isFetching ? '...' : 'Yenile'}
+                    </button>
                 </div>
-            )}
 
-            <DataColumnsModal
-                open={columnsModalOpen}
-                onClose={() => setColumnsModalOpen(false)}
-                selected={selectedCols}
-                onChange={setSelectedCols}
-                meta={TOP_QUERIES_COLUMNS_META}
-                title="⚙️ Top Sorgular Sütunları"
-            />
-        </div>
+                {isLoading ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={selectedCols.length + 2} /></div>
+                ) : !data || data.length === 0 ? (
+                    <EmptyState
+                        icon="📭"
+                        title="Veri yok"
+                        description={
+                            data && data.length === 0 && search
+                                ? `'${search}' filtresine uyan sorgu yok. Aramayi temizleyin veya pencereyi genisletin.`
+                                : "Bu pencerede sorgu kaydi yok. Tarih araligini genisletin (orn. 24sa veya daha uzun) ya da daha yogun workload'li bir instance secin."
+                        }
+                    />
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
+                                    {selectedCols.map(col => {
+                                        const meta = TOP_QUERIES_COLUMNS_META.available.find(c => c.key === col);
+                                        const isRight = ['toplam_cagri', 'toplam_dk', 'pct', 'min_ms', 'ort_ms', 'max_ms', 'toplam_satir', 'cache_hit_pct', 'ort_plan_ms', 'wal_mb', 'satir_per_cagri'].includes(col);
+                                        const title = TOP_QUERIES_HEADER_TITLES[col];
+                                        const label = meta?.label ?? col;
+                                        return (
+                                            <th key={col} className={`py-2 px-3 text-xs font-semibold text-[#64748B] uppercase tracking-wide ${isRight ? 'text-right' : 'text-left'}`}>
+                                                {title ? <HeaderHelp title={title} label={label} /> : label}
+                                            </th>
+                                        );
+                                    })}
+                                    <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {data.map((row, i) => (
+                                    <TopQueryRow
+                                        key={`${row.statement_series_id}-${i}`}
+                                        row={row}
+                                        rank={i + 1}
+                                        selectedCols={selectedCols}
+                                        instancePk={instancePk}
+                                        range={range}
+                                        autoRefresh={autoRefresh}
+                                        compareKey={compareKey}
+                                        expanded={expandedSeriesId === row.statement_series_id}
+                                        onToggle={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                        onCrossLinkClick={onCrossLinkClick}
+                                    />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+
+                <DataColumnsModal
+                    open={columnsModalOpen}
+                    onClose={() => setColumnsModalOpen(false)}
+                    selected={selectedCols}
+                    onChange={setSelectedCols}
+                    meta={TOP_QUERIES_COLUMNS_META}
+                    title="⚙️ Top Sorgular Sütunları"
+                />
+            </div>
         </div>
     );
 }
@@ -1317,21 +1319,21 @@ function TopQueryRow({ row, rank, selectedCols, instancePk, range, autoRefresh, 
 
     return (
         <>
-        <tr onClick={onToggle} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors cursor-pointer">
-            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
-            {selectedCols.map(col => renderCell(col))}
-            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri aç'}>{expanded ? '-' : '+'}</button>
-                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
-            </td>
-        </tr>
-        {expanded && (
-            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                <td colSpan={selectedCols.length + 2} className="p-4">
-                    <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+            <tr onClick={onToggle} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] transition-colors cursor-pointer">
+                <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{rank}</td>
+                {selectedCols.map(col => renderCell(col))}
+                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                    <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri aç'}>{expanded ? '-' : '+'}</button>
+                    <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                 </td>
             </tr>
-        )}
+            {expanded && (
+                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                    <td colSpan={selectedCols.length + 2} className="p-4">
+                        <QueryTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                    </td>
+                </tr>
+            )}
         </>
     );
 }
@@ -2333,86 +2335,86 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
-                                        <tr
-                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
-                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
-                                        >
-                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
-                                            <td className="py-2 px-3 max-w-md">
-                                                <div className="flex items-start gap-2">
-                                                    <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
-                                                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                            <tr
+                                                onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                            >
+                                                <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                                <td className="py-2 px-3 max-w-md">
+                                                    <div className="flex items-start gap-2">
+                                                        <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
+                                                            {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                                        </div>
+                                                        <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
-                                                </div>
-                                                {tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {tags.map(tag => (
-                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
-                                                                <span>{tag.icon}</span>{tag.label}
+                                                    {tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                            {tags.map(tag => (
+                                                                <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                    <span>{tag.icon}</span>{tag.label}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${writtenClass}`}>
+                                                        {Number(row.temp_written_mb).toLocaleString('tr-TR')}
+                                                    </span>
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
+                                                    {mbPerCall > 0 ? mbPerCall.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
+                                                    {row.max_temp_mb_per_call == null
+                                                        ? '\u2014'
+                                                        : Number(row.max_temp_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
+                                                    {row.recommended_work_mem_mb_min == null
+                                                        ? '\u2014'
+                                                        : (
+                                                            <span title={`Hesap: max temp/cagri (${Number(row.temp_written_mb_per_call ?? 0).toFixed(2)} MB) / ortalama paralel worker (${row.avg_parallel_workers}). Paralel yoksa bolucu=1.`}>
+                                                                {Number(row.recommended_work_mem_mb_min).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
                                                             </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${writtenClass}`}>
-                                                    {Number(row.temp_written_mb).toLocaleString('tr-TR')}
-                                                </span>
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
-                                                {mbPerCall > 0 ? mbPerCall.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
-                                                {row.max_temp_mb_per_call == null
-                                                    ? '\u2014'
-                                                    : Number(row.max_temp_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">
-                                                {row.recommended_work_mem_mb_min == null
-                                                    ? '\u2014'
-                                                    : (
-                                                        <span title={`Hesap: max temp/cagri (${Number(row.temp_written_mb_per_call ?? 0).toFixed(2)} MB) / ortalama paralel worker (${row.avg_parallel_workers}). Paralel yoksa bolucu=1.`}>
-                                                            {Number(row.recommended_work_mem_mb_min).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}
+                                                        )}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    {pctTemp == null ? '\u2014' : (
+                                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>
+                                                            %{pctTemp.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}
                                                         </span>
                                                     )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                {pctTemp == null ? '\u2014' : (
-                                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>
-                                                        %{pctTemp.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
+                                                    {tempWriteSec > 0 ? tempWriteSec.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
+                                                </td>
+                                                <td className={`py-2 px-3 text-xs text-right font-mono whitespace-nowrap ${rowsPerTempClass}`}>
+                                                    {rowsPerTempMb == null ? '\u2014' : rowsPerTempMb.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.temp_read_mb).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <span className="font-mono text-[#64748B]">{row.queryid || '—'}</span>
+                                                        <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
                                                     </span>
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">
-                                                {tempWriteSec > 0 ? tempWriteSec.toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '\u2014'}
-                                            </td>
-                                            <td className={`py-2 px-3 text-xs text-right font-mono whitespace-nowrap ${rowsPerTempClass}`}>
-                                                {rowsPerTempMb == null ? '\u2014' : rowsPerTempMb.toLocaleString('tr-TR', { maximumFractionDigits: 0 })}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.temp_read_mb).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <span className="inline-flex items-center gap-1">
-                                                    <span className="font-mono text-[#64748B]">{row.queryid || '—'}</span>
-                                                    <CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} />
-                                                </span>
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
-                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
-                                            </td>
-                                        </tr>
-                                        {expanded && (
-                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                                <td colSpan={16} className="p-4">
-                                                    <QueryTempTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                    <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                                                 </td>
                                             </tr>
-                                        )}
+                                            {expanded && (
+                                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                    <td colSpan={16} className="p-4">
+                                                        <QueryTempTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </Fragment>
                                     );
                                 })}
@@ -2786,52 +2788,52 @@ function CacheHitCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
-                                        <tr
-                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
-                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
-                                        >
-                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
-                                            <td className="py-2 px-3 max-w-md">
-                                                <div className="flex items-start gap-2">
-                                                    <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
-                                                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                            <tr
+                                                onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                            >
+                                                <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                                <td className="py-2 px-3 max-w-md">
+                                                    <div className="flex items-start gap-2">
+                                                        <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
+                                                            {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                                        </div>
+                                                        <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
-                                                </div>
-                                                {tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {tags.map(tag => (
-                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
-                                                                <span>{tag.icon}</span>{tag.label}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${diskReadClass(diskReadMb)}`}>{diskReadMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.disk_read_mb_per_call == null ? '—' : Number(row.disk_read_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.read_blks_per_call == null ? '—' : Number(row.read_blks_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctDiskRead == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctDiskClass}`}>%{pctDiskRead.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{ioBoundPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${ioClass}`}>%{ioBoundPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{toNum(row.disk_read_time_sec) > 0 ? toNum(row.disk_read_time_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '—'}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
-                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
-                                            </td>
-                                        </tr>
-                                        {expanded && (
-                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                                <td colSpan={15} className="p-4">
-                                                    <QueryCacheHitTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                    {tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                            {tags.map(tag => (
+                                                                <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                    <span>{tag.icon}</span>{tag.label}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{hitPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${cacheHitClass(hitPct)}`}>%{hitPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${diskReadClass(diskReadMb)}`}>{diskReadMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.disk_read_mb_per_call == null ? '—' : Number(row.disk_read_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.read_blks_per_call == null ? '—' : Number(row.read_blks_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctDiskRead == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctDiskClass}`}>%{pctDiskRead.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{ioBoundPct == null ? '—' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${ioClass}`}>%{ioBoundPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{toNum(row.disk_read_time_sec) > 0 ? toNum(row.disk_read_time_sec).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) : '—'}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                    <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                                                 </td>
                                             </tr>
-                                        )}
+                                            {expanded && (
+                                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                    <td colSpan={15} className="p-4">
+                                                        <QueryCacheHitTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </Fragment>
                                     );
                                 })}
@@ -3066,7 +3068,7 @@ function TableVacuumTrendPanel({ instancePk, dbid, relid, schemaname, relname, r
                     </LineChart>
                 </InsightChart>
                 <p className="text-[10px] text-[#94A3B8] italic mt-1 lg:col-span-3"
-                   title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz. vacuumdb -f veya VACUUM FULL kullaniminda Manuel Vacuum line'i artmayabilir.">
+                    title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz. vacuumdb -f veya VACUUM FULL kullaniminda Manuel Vacuum line'i artmayabilir.">
                     * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
                 </p>
             </div>
@@ -3318,41 +3320,45 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
 
             {hasTrendData && (
                 <div>
-                <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={320}>
-                    <ComposedChart data={chartData} margin={{ top: 8, right: 50, left: 25, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                        <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#0891B2' }} tickFormatter={compactNumber}
-                               label={{ value: 'Dead tuple', angle: -90, position: 'insideLeft',
-                                        style: { fontSize: 12, fill: '#0891B2', fontWeight: 600, textAnchor: 'middle' },
-                                        offset: 10 }} />
-                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#7C3AED' }} allowDecimals={false}
-                               label={{ value: 'Tablo sayisi', angle: 90, position: 'insideRight',
-                                        style: { fontSize: 12, fill: '#7C3AED', fontWeight: 600, textAnchor: 'middle' },
-                                        offset: 10 }} />
-                        <Tooltip content={trendTooltip} />
-                        <Legend wrapperStyle={{ fontSize: 11 }} />
-                        {daySeparatorLabels.map(lbl => (
-                            <ReferenceLine key={`vacuum-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
-                        ))}
-                        {compareKey && <Line yAxisId="left" type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey) + ' dead'} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
-                        {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam aktivite'} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
-                        <Area yAxisId="left" type="monotone" dataKey="current_dead_tup" name="Dead tuple" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
-                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum*" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
-                        <Line yAxisId="right" type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
-                        <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
-                        <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
-                    </ComposedChart>
-                </InsightChart>
-                <p className="text-[10px] text-[#94A3B8] italic px-4 pb-2">
-                    Sol Y: instance toplam dead tuple sayisi (anlik snapshot).
-                    Sag Y: bucket icinde vacuum/analyze ALAN TABLO sayisi
-                    (saatte ornek 200 = o saatte 200 farkli tablo autovacuum aldi).
-                    <span title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz."
-                          className="block cursor-help">
-                        * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
-                    </span>
-                </p>
+                    <InsightChart title="Dead Tuple & Vacuum Aktivitesi" height={320}>
+                        <ComposedChart data={chartData} margin={{ top: 8, right: 50, left: 25, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                            <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#0891B2' }} tickFormatter={compactNumber}
+                                label={{
+                                    value: 'Dead tuple', angle: -90, position: 'insideLeft',
+                                    style: { fontSize: 12, fill: '#0891B2', fontWeight: 600, textAnchor: 'middle' },
+                                    offset: 10
+                                }} />
+                            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#7C3AED' }} allowDecimals={false}
+                                label={{
+                                    value: 'Tablo sayisi', angle: 90, position: 'insideRight',
+                                    style: { fontSize: 12, fill: '#7C3AED', fontWeight: 600, textAnchor: 'middle' },
+                                    offset: 10
+                                }} />
+                            <Tooltip content={trendTooltip} />
+                            <Legend wrapperStyle={{ fontSize: 11 }} />
+                            {daySeparatorLabels.map(lbl => (
+                                <ReferenceLine key={`vacuum-${lbl}`} x={lbl} stroke="#CBD5E1" strokeDasharray="2 4" />
+                            ))}
+                            {compareKey && <Line yAxisId="left" type="monotone" dataKey="previous_dead_tup" name={compareLabel(compareKey) + ' dead'} stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 3" dot={false} connectNulls />}
+                            {compareKey && <Line yAxisId="right" type="monotone" dataKey="previous_activity_total" name={compareLabel(compareKey) + ' toplam aktivite'} stroke="#CBD5E1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls />}
+                            <Area yAxisId="left" type="monotone" dataKey="current_dead_tup" name="Dead tuple" stroke="#0891B2" fill="#A5F3FC" fillOpacity={0.75} strokeWidth={2} connectNulls />
+                            <Line yAxisId="right" type="monotone" dataKey="current_vacuum_manual" name="Manuel Vacuum*" stroke="#059669" strokeWidth={1.5} dot={false} connectNulls />
+                            <Line yAxisId="right" type="monotone" dataKey="current_vacuum_auto" name="Autovacuum" stroke="#7C3AED" strokeWidth={1.5} dot={false} connectNulls />
+                            <Line yAxisId="right" type="monotone" dataKey="current_analyze_manual" name="Manuel Analyze" stroke="#D97706" strokeWidth={1.5} dot={false} connectNulls />
+                            <Line yAxisId="right" type="monotone" dataKey="current_analyze_auto" name="Auto Analyze" stroke="#2563EB" strokeWidth={1.5} dot={false} connectNulls />
+                        </ComposedChart>
+                    </InsightChart>
+                    <p className="text-[10px] text-[#94A3B8] italic px-4 pb-2">
+                        Sol Y: instance toplam dead tuple sayisi (anlik snapshot).
+                        Sag Y: bucket icinde vacuum/analyze ALAN TABLO sayisi
+                        (saatte ornek 200 = o saatte 200 farkli tablo autovacuum aldi).
+                        <span title="PostgreSQL pg_stat_user_tables.vacuum_count, VACUUM FULL operasyonlarini saymaz."
+                            className="block cursor-help">
+                            * Manuel Vacuum sayaci VACUUM FULL operasyonlarini icermez (PostgreSQL davranisi).
+                        </span>
+                    </p>
                 </div>
             )}
 
@@ -3906,7 +3912,7 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                             ? `Bu pencerede WAL ureten sorgu yok. Mevcut max_wal_size: ${formatBytes(totals.wal_settings.max_wal_size_kb * 1024)}.`
                             : totals?.max_wal_size_kb != null
                                 ? `Bu pencerede WAL ureten sorgu yok. Mevcut max_wal_size: ${formatBytes(totals.max_wal_size_kb * 1024)}.`
-                            : "Bu pencerede WAL ureten sorgu yok."} />
+                                : "Bu pencerede WAL ureten sorgu yok."} />
                 ) : (
                     <div className="overflow-x-auto" key={`${sort}-${rows[0]?.statement_series_id ?? ''}`}>
                         <table className="w-full text-sm">
@@ -3940,51 +3946,51 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                                     const expanded = expandedSeriesId === row.statement_series_id;
                                     return (
                                         <Fragment key={`${row.statement_series_id}-${i}`}>
-                                        <tr
-                                            onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
-                                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
-                                        >
-                                            <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
-                                            <td className="py-2 px-3 max-w-md">
-                                                <div className="flex items-start gap-2">
-                                                    <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
-                                                        {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                            <tr
+                                                onClick={() => setExpandedSeriesId(prev => prev === row.statement_series_id ? null : row.statement_series_id)}
+                                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC] cursor-pointer"
+                                            >
+                                                <td className="py-2 px-3 text-xs text-[#94A3B8] font-semibold">#{i + 1}</td>
+                                                <td className="py-2 px-3 max-w-md">
+                                                    <div className="flex items-start gap-2">
+                                                        <div className="font-mono text-xs text-[#1E293B] truncate flex-1" title={row.query_short ?? ''}>
+                                                            {row.query_short || <span className="italic text-[#94A3B8]">metin yok</span>}
+                                                        </div>
+                                                        <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
                                                     </div>
-                                                    <CopyButton value={row.query_full ?? ''} message="SQL kopyalandı" disabled={!row.query_full} />
-                                                </div>
-                                                {tags.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {tags.map(tag => (
-                                                            <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
-                                                                <span>{tag.icon}</span>{tag.label}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </td>
-                                            <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${walClass}`}>{walMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb_per_call == null ? '\u2014' : Number(row.wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{row.max_wal_mb_per_call == null ? '\u2014' : Number(row.max_wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctWal == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>%{pctWal.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{fpiRatio == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${fpiClass}`}>{fpiRatio.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span>}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_bytes_per_row == null ? '\u2014' : Number(row.wal_bytes_per_row).toLocaleString('tr-TR', { maximumFractionDigits: 0 })}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
-                                            <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
-                                            <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
-                                                <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
-                                                <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
-                                            </td>
-                                        </tr>
-                                        {expanded && (
-                                            <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                                <td colSpan={14} className="p-4">
-                                                    <QueryWalTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                    {tags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                            {tags.map(tag => (
+                                                                <span key={tag.key} title={tag.title} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${tag.className}`}>
+                                                                    <span>{tag.icon}</span>{tag.label}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td className="py-2 px-3 text-xs text-[#1E293B] whitespace-nowrap">{row.datname || '—'}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${walClass}`}>{walMb.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span></td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_mb_per_call == null ? '\u2014' : Number(row.wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{row.max_wal_mb_per_call == null ? '\u2014' : Number(row.max_wal_mb_per_call).toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{pctWal == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${pctClass}`}>%{pctWal.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{fpiRatio == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${fpiClass}`}>{fpiRatio.toLocaleString('tr-TR', { maximumFractionDigits: 2 })}</span>}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{row.wal_bytes_per_row == null ? '\u2014' : Number(row.wal_bytes_per_row).toLocaleString('tr-TR', { maximumFractionDigits: 0 })}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.toplam_cagri).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono font-semibold text-[#1E293B] whitespace-nowrap">{Number(row.toplam_dk).toLocaleString('tr-TR')} dk</td>
+                                                <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.ort_ms).toLocaleString('tr-TR')}</td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap"><span className="inline-flex items-center gap-1"><span className="font-mono text-[#64748B]">{row.queryid || '—'}</span><CopyButton value={row.queryid ?? ''} message="Query ID kopyalandı" disabled={!row.queryid} /></span></td>
+                                                <td className="py-2 px-3 text-xs text-right whitespace-nowrap">
+                                                    <button type="button" className="text-[#94A3B8] mr-3" title={expanded ? 'Grafikleri kapat' : 'Grafikleri ac'}>{expanded ? '-' : '+'}</button>
+                                                    <Link to={`/statements/${row.statement_series_id}`} onClick={e => e.stopPropagation()} className="text-[#2563EB] hover:underline">Detay</Link>
                                                 </td>
                                             </tr>
-                                        )}
+                                            {expanded && (
+                                                <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                                                    <td colSpan={14} className="p-4">
+                                                        <QueryWalTrendPanel instancePk={instancePk} seriesId={row.statement_series_id} range={range} autoRefresh={autoRefresh} compareKey={compareKey} />
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </Fragment>
                                     );
                                 })}
@@ -3993,6 +3999,169 @@ function WALSpikeCardInner({ instancePk, range, onRangeChange, autoRefresh, inst
                     </div>
                 )}
             </div>
+        </div>
+    );
+}
+
+
+// =========================================================================
+// Freeze Card — per-DB + per-table XID/MXID freeze age
+// =========================================================================
+
+interface FreezeDbRow {
+    instance_pk: number;
+    instance_name: string;
+    dbid: number;
+    datname: string;
+    datfrozenxid_age: string | number;
+    datminmxid_age: string | number;
+    xid_max_age: string | number;
+    mxid_max_age: string | number;
+    xid_pct: string | number;
+    mxid_pct: string | number;
+    snapshot_ts: string;
+}
+
+interface FreezeTableRow {
+    schemaname: string;
+    relname: string;
+    relkind: string;
+    relfrozenxid_age: string | number;
+    relminmxid_age: string | number;
+    relpages: string | number;
+    size_bytes: string | number;
+    xid_pct: string | number;
+    mxid_pct: string | number;
+    snapshot_ts: string;
+    vacuum_sql: string;
+}
+
+function pctBadge(pct: number): string {
+    if (pct >= 95) return 'bg-red-100 text-red-700';
+    if (pct >= 80) return 'bg-amber-100 text-amber-700';
+    return 'bg-emerald-50 text-emerald-700';
+}
+
+function FreezeCard({ instancePk }: { instancePk: number | null }) {
+    const [selectedDb, setSelectedDb] = useState<{ instancePk: number; dbid: number; datname: string } | null>(null);
+
+    if (instancePk == null) {
+        return <EmptyState icon="🖥️" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
+    }
+
+    return (
+        <div className="space-y-4">
+            <div className="text-xs text-[#64748B] mb-2">
+                Per-database ve per-table XID/MXID freeze yasi. Wraparound 2.1B'de. Yuzde = age / autovacuum_freeze_max_age.
+            </div>
+            <FreezeDbTable instancePk={instancePk} onSelect={setSelectedDb} />
+            {selectedDb && (
+                <FreezeTablePanel instancePk={selectedDb.instancePk} dbid={selectedDb.dbid} datname={selectedDb.datname} />
+            )}
+        </div>
+    );
+}
+
+function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect: (db: { instancePk: number; dbid: number; datname: string }) => void }) {
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-freeze-databases', instancePk],
+        queryFn: () => apiGet<FreezeDbRow[]>(`/insights/freeze/databases?instancePk=${instancePk}`),
+        staleTime: 30_000,
+    });
+
+    if (isLoading) return <SkeletonTable rows={5} cols={7} />;
+    if (!data || data.length === 0) return <EmptyState icon="📭" title="Freeze verisi yok" description="Bu instance icin henuz freeze snapshot toplanmamis." />;
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
+            <table className="w-full text-sm">
+                <thead>
+                    <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Database</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">MXID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">MXID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">Snapshot</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {data.map((row) => {
+                        const xidPct = toNum(row.xid_pct);
+                        const mxidPct = toNum(row.mxid_pct);
+                        return (
+                            <tr key={`${row.instance_pk}-${row.dbid}`}
+                                onClick={() => onSelect({ instancePk: row.instance_pk, dbid: row.dbid, datname: row.datname })}
+                                className="border-b border-[#E2E8F0] hover:bg-[#F8FAFC] cursor-pointer">
+                                <td className="py-2 px-3 font-medium text-[#1E293B]">{row.datname}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{compactNumber(row.datfrozenxid_age)}</td>
+                                <td className="py-2 px-3 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${pctBadge(xidPct)}`}>{xidPct}%</span>
+                                </td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{compactNumber(row.datminmxid_age)}</td>
+                                <td className="py-2 px-3 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${pctBadge(mxidPct)}`}>{mxidPct}%</span>
+                                </td>
+                                <td className="py-2 px-3 text-right text-xs text-[#64748B]">
+                                    {new Date(row.snapshot_ts).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+function FreezeTablePanel({ instancePk, dbid, datname }: { instancePk: number; dbid: number; datname: string }) {
+    const { data, isLoading } = useQuery({
+        queryKey: ['insights-freeze-tables', instancePk, dbid],
+        queryFn: () => apiGet<FreezeTableRow[]>(`/insights/freeze/tables?instancePk=${instancePk}&dbid=${dbid}&limit=50`),
+        enabled: !!instancePk && !!dbid,
+        staleTime: 30_000,
+    });
+
+    if (isLoading) return <SkeletonTable rows={8} cols={6} />;
+    if (!data || data.length === 0) return <EmptyState icon="📭" title="Per-table veri yok" description={`${datname} icin tablo freeze verisi bulunamadi.`} />;
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
+            <div className="px-4 py-3 border-b border-[#E2E8F0]">
+                <h3 className="font-semibold text-[#1E293B] text-sm">{datname} — Per-table Freeze</h3>
+            </div>
+            <table className="w-full text-sm">
+                <thead>
+                    <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Sema.Tablo</th>
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Tip</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">Boyut</th>
+                        <th className="py-2 px-3 text-center text-xs font-semibold text-[#64748B]">VACUUM</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {data.map((row) => {
+                        const xidPct = toNum(row.xid_pct);
+                        const sizeBytes = toNum(row.size_bytes);
+                        return (
+                            <tr key={`${row.schemaname}-${row.relname}`} className="border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                                <td className="py-2 px-3 font-mono text-xs text-[#1E293B]">{row.schemaname}.{row.relname}</td>
+                                <td className="py-2 px-3 text-xs text-[#64748B]">{row.relkind === 'r' ? 'table' : 'matview'}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{compactNumber(row.relfrozenxid_age)}</td>
+                                <td className="py-2 px-3 text-right">
+                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${pctBadge(xidPct)}`}>{xidPct}%</span>
+                                </td>
+                                <td className="py-2 px-3 text-right text-xs text-[#64748B]">{formatBytes(sizeBytes)}</td>
+                                <td className="py-2 px-3 text-center">
+                                    <CopyButton value={row.vacuum_sql} message="VACUUM komutu kopyalandi" />
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
         </div>
     );
 }

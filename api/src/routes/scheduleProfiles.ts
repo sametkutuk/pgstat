@@ -59,7 +59,8 @@ router.put('/:id', async (req, res, next) => {
     const {
       cluster_interval_seconds, statements_interval_seconds,
       db_objects_interval_seconds, statement_timeout_ms,
-      lock_timeout_ms, connect_timeout_seconds, max_host_concurrency
+      lock_timeout_ms, connect_timeout_seconds, max_host_concurrency,
+      table_freeze_interval_seconds
     } = req.body;
 
     const result = await pool.query(`
@@ -67,13 +68,15 @@ router.put('/:id', async (req, res, next) => {
         cluster_interval_seconds = $2, statements_interval_seconds = $3,
         db_objects_interval_seconds = $4, statement_timeout_ms = $5,
         lock_timeout_ms = $6, connect_timeout_seconds = $7,
-        max_host_concurrency = $8
+        max_host_concurrency = $8,
+        table_freeze_interval_seconds = coalesce($9, table_freeze_interval_seconds)
       where schedule_profile_id = $1
       returning *
     `, [
       id, cluster_interval_seconds, statements_interval_seconds,
       db_objects_interval_seconds, statement_timeout_ms,
-      lock_timeout_ms, connect_timeout_seconds, max_host_concurrency
+      lock_timeout_ms, connect_timeout_seconds, max_host_concurrency,
+      table_freeze_interval_seconds ?? null
     ]);
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Schedule profile not found' });

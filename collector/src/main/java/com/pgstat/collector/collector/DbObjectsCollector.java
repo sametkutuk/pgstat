@@ -92,7 +92,7 @@ public class DbObjectsCollector {
             target.secretRef(), target.sslMode(), "ready",
             target.collectorUsername(),
             target.connectTimeoutSeconds(), target.statementTimeoutMs(),
-            target.lockTimeoutMs(), 0, 60, 300, null, null
+            target.lockTimeoutMs(), 0, 60, 300, 21600, null, null
         );
 
         try (Connection conn = connectionFactory.connect(instanceForDb)) {

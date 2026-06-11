@@ -95,6 +95,23 @@ public class NightlySnapshotCollector {
         where datallowconn and not datistemplate
         """;
 
+    // Per-table freeze age (V078)
+    private static final String TABLE_FREEZE_QUERY = """
+        select
+          n.nspname as schemaname,
+          c.relname,
+          c.relkind::text as relkind,
+          age(c.relfrozenxid)::bigint as relfrozenxid_age,
+          mxid_age(c.relminmxid)::bigint as relminmxid_age,
+          c.relpages::bigint as relpages
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind in ('r', 'm')
+          and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
+          and n.nspname not like 'pg_temp_%'
+          and n.nspname not like 'pg_toast_temp_%'
+        """;
+
     // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 11 parametre.
     // 3 saatte bir yenilenir → ALTER SYSTEM sonrası alert eski değer görmesin.
     private static final String HOT_SETTINGS_QUERY = """
@@ -181,12 +198,13 @@ public class NightlySnapshotCollector {
             // 3. Aktif DB listesini al
             List<String> databases = getActiveDatabases(adminConn);
 
-            // 4. Her DB icin relation size + sequence state
+            // 4. Her DB icin relation size + sequence state + table freeze
             for (String dbname : databases) {
                 try (Connection dbConn = connFactory.connect(instance, dbname)) {
                     long dbid = getDbOid(dbConn, dbname);
                     totalRows += collectRelationSizes(dbConn, instancePk, dbid, now);
                     totalRows += collectSequenceStates(dbConn, instancePk, dbid, now);
+                    totalRows += collectTableFreeze(dbConn, instancePk, dbid, now);
                 } catch (Exception e) {
                     log.debug("Nightly snapshot DB baglanti hatasi {}/{}: {}",
                         instance.instanceId(), dbname, e.getMessage());
@@ -324,6 +342,66 @@ public class NightlySnapshotCollector {
             batch.stream().map(row -> (Object[]) row).toList()
         );
         return batch.size();
+    }
+
+    // =========================================================================
+    // Per-table freeze (per-DB, V078)
+    // =========================================================================
+
+    private long collectTableFreeze(Connection dbConn, long instancePk, long dbid,
+            OffsetDateTime now) throws SQLException {
+        List<Object[]> batch = new ArrayList<>();
+        try (Statement stmt = dbConn.createStatement();
+             ResultSet rs = stmt.executeQuery(TABLE_FREEZE_QUERY)) {
+            while (rs.next()) {
+                batch.add(new Object[]{
+                    now, instancePk, dbid,
+                    rs.getString("schemaname"),
+                    rs.getString("relname"),
+                    rs.getString("relkind"),
+                    rs.getObject("relfrozenxid_age") != null ? rs.getLong("relfrozenxid_age") : null,
+                    rs.getObject("relminmxid_age") != null ? rs.getLong("relminmxid_age") : null,
+                    rs.getObject("relpages") != null ? rs.getLong("relpages") : null,
+                    null  // last_autovacuum_at — simdilik null
+                });
+            }
+        }
+        if (batch.isEmpty()) return 0;
+
+        jdbc.batchUpdate(
+            "insert into fact.pg_table_freeze_snapshot " +
+            "(snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, " +
+            "relfrozenxid_age, relminmxid_age, relpages, last_autovacuum_at) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            batch.stream().map(row -> (Object[]) row).toList()
+        );
+        return batch.size();
+    }
+
+    /**
+     * Sadece per-table freeze toplar — schedule'dan tetiklenir (6 saatte bir vb.)
+     */
+    public long collectTableFreezeOnly(InstanceInfo instance) {
+        long instancePk = instance.instancePk();
+        OffsetDateTime now = OffsetDateTime.now(java.time.ZoneOffset.UTC);
+        long total = 0;
+        try (Connection adminConn = connFactory.connect(instance)) {
+            List<String> databases = getActiveDatabases(adminConn);
+            for (String dbname : databases) {
+                try (Connection dbConn = connFactory.connect(instance, dbname)) {
+                    long dbid = getDbOid(dbConn, dbname);
+                    total += collectTableFreeze(dbConn, instancePk, dbid, now);
+                } catch (Exception e) {
+                    log.debug("Table freeze snapshot DB hatasi {}/{}: {}",
+                        instance.instanceId(), dbname, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Table freeze snapshot hatasi {}: {}", instance.instanceId(), e.getMessage());
+            return 0;
+        }
+        log.debug("Table freeze snapshot: {} - {} tablo", instance.instanceId(), total);
+        return total;
     }
 
     // =========================================================================

@@ -228,6 +228,7 @@ const emptyRetention = {
     hourly_retention_days: 60,
     daily_retention_days: 730,
     snapshot_retention_hours: 48,
+    table_freeze_retention_days: 90,
     purge_enabled: true,
     is_active: true,
 };
@@ -267,6 +268,7 @@ function RetentionTab() {
             hourly_retention_days: r.hourly_retention_days ?? (r.hourly_retention_months ?? 6) * 30,
             daily_retention_days: r.daily_retention_days ?? (r.daily_retention_months ?? 24) * 30,
             snapshot_retention_hours: r.snapshot_retention_hours ?? 48,
+            table_freeze_retention_days: r.table_freeze_retention_days ?? 90,
             purge_enabled: r.purge_enabled,
             is_active: r.is_active,
         });
@@ -380,6 +382,7 @@ function RetentionTab() {
                         {numField('Hourly (gün)', 'hourly_retention_days')}
                         {numField('Daily (gün)', 'daily_retention_days')}
                         {numField('Snapshot (saat)', 'snapshot_retention_hours')}
+                        {numField('Table Freeze (gun)', 'table_freeze_retention_days')}
                         <div className="flex items-center gap-2">
                             <label className="text-xs text-[#64748B]">Purge Aktif</label>
                             <input type="checkbox" checked={form.purge_enabled as boolean} onChange={(e) => setForm({ ...form, purge_enabled: e.target.checked })} />
@@ -419,7 +422,8 @@ const emptySchedule = {
     db_objects_interval_seconds: 1800, hourly_rollup_interval_seconds: 3600,
     daily_rollup_hour_utc: 1, bootstrap_sql_text_batch: 100,
     max_databases_per_run: 5, statement_timeout_ms: 5000,
-    lock_timeout_ms: 250, connect_timeout_seconds: 5, max_host_concurrency: 1, is_active: true,
+    lock_timeout_ms: 250, connect_timeout_seconds: 5, max_host_concurrency: 1,
+    table_freeze_interval_seconds: 21600, is_active: true,
 };
 
 function ScheduleTab() {
@@ -463,7 +467,7 @@ function ScheduleTab() {
     });
 
     const openEdit = (r: any) => {
-        setForm({ profile_code: r.profile_code, cluster_interval_seconds: r.cluster_interval_seconds, statements_interval_seconds: r.statements_interval_seconds, db_objects_interval_seconds: r.db_objects_interval_seconds, hourly_rollup_interval_seconds: r.hourly_rollup_interval_seconds, daily_rollup_hour_utc: r.daily_rollup_hour_utc, bootstrap_sql_text_batch: r.bootstrap_sql_text_batch, max_databases_per_run: r.max_databases_per_run, statement_timeout_ms: r.statement_timeout_ms, lock_timeout_ms: r.lock_timeout_ms, connect_timeout_seconds: r.connect_timeout_seconds, max_host_concurrency: r.max_host_concurrency, is_active: r.is_active });
+        setForm({ profile_code: r.profile_code, cluster_interval_seconds: r.cluster_interval_seconds, statements_interval_seconds: r.statements_interval_seconds, db_objects_interval_seconds: r.db_objects_interval_seconds, hourly_rollup_interval_seconds: r.hourly_rollup_interval_seconds, daily_rollup_hour_utc: r.daily_rollup_hour_utc, bootstrap_sql_text_batch: r.bootstrap_sql_text_batch, max_databases_per_run: r.max_databases_per_run, statement_timeout_ms: r.statement_timeout_ms, lock_timeout_ms: r.lock_timeout_ms, connect_timeout_seconds: r.connect_timeout_seconds, max_host_concurrency: r.max_host_concurrency, table_freeze_interval_seconds: r.table_freeze_interval_seconds ?? 21600, is_active: r.is_active });
         setEditId(r.schedule_profile_id);
         setOriginalConcurrency(r.max_host_concurrency);
         setFormMode('edit');
@@ -548,6 +552,7 @@ function ScheduleTab() {
                         {nf('Cluster (s)', 'cluster_interval_seconds')}
                         {nf('Statements (s)', 'statements_interval_seconds')}
                         {nf('DbObjects (s)', 'db_objects_interval_seconds')}
+                        {nf('Table Freeze (s)', 'table_freeze_interval_seconds')}
                         {nf('Stmt Timeout (ms)', 'statement_timeout_ms')}
                         {nf('Lock Timeout (ms)', 'lock_timeout_ms')}
                         {nf('Connect Timeout (s)', 'connect_timeout_seconds')}

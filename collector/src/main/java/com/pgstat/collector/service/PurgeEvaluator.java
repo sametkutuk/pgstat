@@ -71,6 +71,7 @@ public class PurgeEvaluator {
     public void evaluate() {
         purgeRawDeltaFacts();
         purgeSnapshotFacts();
+        purgeTableFreezeFacts();
         purgeHourlyAgg();
         purgeDailyAgg();
         purgeOps();
@@ -175,6 +176,48 @@ public class PurgeEvaluator {
                     ? "snapshot_ts" : "sample_ts";
                 batchedDeleteByTimestamp(table, tsCol, instancePk, keepFrom);
             }
+        }
+    }
+
+    // =========================================================================
+    // Per-table freeze facts (day-bazli retention, V078)
+    // =========================================================================
+
+    private void purgeTableFreezeFacts() {
+        try {
+            LocalDate hardDropBefore = jdbc.queryForObject("""
+                select (current_date - max(coalesce(p.table_freeze_retention_days, 90)))::date
+                from control.retention_policy p
+                where p.is_active and p.purge_enabled
+                """,
+                LocalDate.class
+            );
+            if (hardDropBefore == null) return;
+
+            log.info("Table freeze fact purge: hard drop siniri = {}", hardDropBefore);
+            dropPartitionsBefore("fact.pg_table_freeze_snapshot", hardDropBefore);
+
+            // Instance bazli batched delete
+            List<Map<String, Object>> instanceCutoffs = jdbc.queryForList("""
+                select
+                  i.instance_pk,
+                  (current_date - coalesce(p.table_freeze_retention_days, 90))::date as keep_from
+                from control.instance_inventory i
+                join control.retention_policy p on p.retention_policy_id = i.retention_policy_id
+                where i.is_active and p.is_active and p.purge_enabled
+                """);
+
+            for (Map<String, Object> row : instanceCutoffs) {
+                long instancePk = ((Number) row.get("instance_pk")).longValue();
+                java.sql.Date keepFromSql = (java.sql.Date) row.get("keep_from");
+                LocalDate instanceKeepFrom = keepFromSql.toLocalDate();
+                if (instanceKeepFrom.isAfter(hardDropBefore)) {
+                    batchedDeleteForInstance("fact.pg_table_freeze_snapshot", "snapshot_ts",
+                        instancePk, hardDropBefore, instanceKeepFrom);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Table freeze fact purge hatasi: {}", e.getMessage());
         }
     }
 

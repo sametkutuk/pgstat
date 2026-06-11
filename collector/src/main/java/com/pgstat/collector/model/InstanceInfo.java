@@ -23,6 +23,7 @@ public record InstanceInfo(
     int bootstrapSqlTextBatch,
     int clusterIntervalSeconds,
     int statementsIntervalSeconds,
+    int tableFreezeIntervalSeconds,
     // instance_state degerleri (null olabilir — bootstrap oncesi)
     OffsetDateTime nextClusterCollectAt,
     OffsetDateTime nextStatementsCollectAt

@@ -73,6 +73,7 @@ public class InventoryRepository {
                 rs.getInt("bootstrap_sql_text_batch"),
                 rs.getInt("cluster_interval_seconds"),
                 rs.getInt("statements_interval_seconds"),
+                21600, // tableFreezeIntervalSeconds — bootstrap'ta schedule_profile join yok
                 null, // nextClusterCollectAt — bootstrap'ta yok
                 null  // nextStatementsCollectAt — bootstrap'ta yok
             ),
@@ -93,6 +94,7 @@ public class InventoryRepository {
               p.cluster_interval_seconds, p.statements_interval_seconds,
               p.bootstrap_sql_text_batch, p.statement_timeout_ms,
               p.lock_timeout_ms, p.connect_timeout_seconds,
+              p.table_freeze_interval_seconds,
               s.next_cluster_collect_at, s.next_statements_collect_at
             from control.instance_inventory i
             join control.instance_state s on s.instance_pk = i.instance_pk
@@ -115,6 +117,7 @@ public class InventoryRepository {
                 rs.getInt("bootstrap_sql_text_batch"),
                 rs.getInt("cluster_interval_seconds"),
                 rs.getInt("statements_interval_seconds"),
+                rs.getInt("table_freeze_interval_seconds"),
                 rs.getObject("next_cluster_collect_at", OffsetDateTime.class),
                 rs.getObject("next_statements_collect_at", OffsetDateTime.class)
             ),
@@ -143,7 +146,8 @@ public class InventoryRepository {
               p.bootstrap_sql_text_batch,
               p.statement_timeout_ms,
               p.lock_timeout_ms,
-              p.connect_timeout_seconds
+              p.connect_timeout_seconds,
+              p.table_freeze_interval_seconds
             from control.instance_inventory i
             join control.instance_state s on s.instance_pk = i.instance_pk
             join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
@@ -177,6 +181,7 @@ public class InventoryRepository {
                 rs.getInt("bootstrap_sql_text_batch"),
                 rs.getInt("cluster_interval_seconds"),
                 rs.getInt("statements_interval_seconds"),
+                rs.getInt("table_freeze_interval_seconds"),
                 rs.getObject("next_cluster_collect_at", OffsetDateTime.class),
                 rs.getObject("next_statements_collect_at", OffsetDateTime.class)
             ),
@@ -259,7 +264,8 @@ public class InventoryRepository {
               i.admin_dbname, i.secret_ref, i.ssl_mode, i.bootstrap_state,
               i.collector_username,
               p.connect_timeout_seconds, p.statement_timeout_ms, p.lock_timeout_ms,
-              p.bootstrap_sql_text_batch, p.cluster_interval_seconds, p.statements_interval_seconds
+              p.bootstrap_sql_text_batch, p.cluster_interval_seconds, p.statements_interval_seconds,
+              p.table_freeze_interval_seconds
             from control.instance_inventory i
             join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
             where i.is_active and i.bootstrap_state = 'ready'
@@ -281,6 +287,7 @@ public class InventoryRepository {
                 rs.getInt("bootstrap_sql_text_batch"),
                 rs.getInt("cluster_interval_seconds"),
                 rs.getInt("statements_interval_seconds"),
+                rs.getInt("table_freeze_interval_seconds"),
                 null, null
             )
         );

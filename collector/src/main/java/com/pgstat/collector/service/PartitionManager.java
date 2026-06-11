@@ -55,7 +55,9 @@ public class PartitionManager {
         "fact.pg_settings_snapshot",
         "fact.pg_relation_size_snapshot",
         "fact.pg_sequence_state_snapshot",
-        "fact.pg_database_freeze_snapshot"
+        "fact.pg_database_freeze_snapshot",
+        // V078: Per-table freeze snapshot
+        "fact.pg_table_freeze_snapshot"
     };
 
     /** Aylik partition gerektiren hourly aggregate tablolari */
