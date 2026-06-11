@@ -1733,6 +1733,7 @@ function LongQueryEditModal({ subscription, onClose }: { subscription: LongQuery
 // =========================================================================
 
 function XidFreezePanel() {
+    const toast = useToast();
     const [editing, setEditing] = useState<XidFreezeSubscription | null>(null);
     const [instanceFilter, setInstanceFilter] = useState<string>('');
     const [severityFilter, setSeverityFilter] = useState<string>('');
@@ -1741,6 +1742,14 @@ function XidFreezePanel() {
     const { data: subscriptions = [] } = useQuery<XidFreezeSubscription[]>({
         queryKey: ['xid-freeze-subscriptions'],
         queryFn: () => apiGet('/adaptive-alerting/xid-freeze/subscriptions'),
+    });
+
+    // Freeze snapshot'i manuel tetikle — gece (veya 6 saatlik) toplama beklemeden
+    // mevcut freeze age'leri yeniden topla. Vacuum sonrasi resolve'lari hizlandirir.
+    const snapshotMut = useMutation({
+        mutationFn: () => apiPost('/adaptive-alerting/nightly-snapshot/trigger', {}),
+        onSuccess: () => toast.success('Snapshot toplama baslatildi. ~10-30 sn icinde tamamlanir, sonra Yenile.'),
+        onError: (e: any) => toast.error(e?.message || 'Snapshot tetikleme basarisiz'),
     });
 
     const stateParams = new URLSearchParams();
@@ -1816,7 +1825,7 @@ function XidFreezePanel() {
                 <div className="px-4 py-3 border-b border-[#E2E8F0] flex items-center justify-between gap-3">
                     <div>
                         <h2 className="text-sm font-semibold text-[#1E293B]">Mevcut Durum</h2>
-                        <p className="text-xs text-[#64748B] mt-0.5">Son gece snapshot. Wraparound 2.1B XID'de. Yuzde = age / autovacuum_freeze_max_age.</p>
+                        <p className="text-xs text-[#64748B] mt-0.5">Freeze snapshot 6 saatte bir toplanir (00/06/12/18 UTC). Wraparound 2.1B XID'de. Yuzde = age / autovacuum_freeze_max_age. Vacuum sonrasi "Snapshot Topla" ile hemen guncelleyebilirsin.</p>
                     </div>
                     <div className="flex gap-2">
                         <select value={instanceFilter} onChange={e => setInstanceFilter(e.target.value)}
@@ -1826,6 +1835,11 @@ function XidFreezePanel() {
                                 <option key={s.instance_pk} value={s.instance_pk}>{s.instance_name}</option>
                             ))}
                         </select>
+                        <button onClick={() => snapshotMut.mutate()} disabled={snapshotMut.isPending}
+                            className="px-3 py-2 text-sm rounded bg-[#ECFDF5] text-[#059669] hover:bg-[#D1FAE5] disabled:opacity-50"
+                            title="Freeze age'leri hemen yeniden topla (gece beklemeden)">
+                            {snapshotMut.isPending ? 'Toplaniyor...' : 'Snapshot Topla'}
+                        </button>
                         <button onClick={() => refetchState()} disabled={stateFetching}
                             className="px-3 py-2 text-sm rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE] disabled:opacity-50">
                             Yenile
