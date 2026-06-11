@@ -72,6 +72,7 @@ public class JobOrchestrator {
     private final com.pgstat.collector.service.ReportGenerator reportGenerator;
     private final com.pgstat.collector.service.WorkloadClassifier workloadClassifier;
     private final com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator;
+    private final com.pgstat.collector.service.XidFreezeEvaluator xidFreezeEvaluator;
 
     // Acute alert dispatch frekansi — son tetikleme zamani.
 
@@ -118,7 +119,8 @@ public class JobOrchestrator {
                            org.springframework.jdbc.core.JdbcTemplate jdbc,
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
                            com.pgstat.collector.service.WorkloadClassifier workloadClassifier,
-                           com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator) {
+                           com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator,
+                           com.pgstat.collector.service.XidFreezeEvaluator xidFreezeEvaluator) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -142,6 +144,7 @@ public class JobOrchestrator {
         this.reportGenerator = reportGenerator;
         this.workloadClassifier = workloadClassifier;
         this.systemHealthEvaluator = systemHealthEvaluator;
+        this.xidFreezeEvaluator = xidFreezeEvaluator;
     }
 
     /**
@@ -624,6 +627,15 @@ public class JobOrchestrator {
                         log.warn("Workload uzun-vade sınıflandırma hatası: {}", e.getMessage());
                     }
 
+                    // Snapshot tazelendi — XID/MXID freeze'i hemen yeniden degerlendir.
+                    // Manuel "Snapshot Topla" sonrasi vacuum'lanan DB'lerin alert'leri
+                    // 1 saatlik cycle'i beklemeden resolve olur (+ Resolved bildirimi).
+                    try {
+                        xidFreezeEvaluator.evaluate();
+                    } catch (Exception e) {
+                        log.warn("XID freeze degerlendirme hatasi (nightly sonrasi): {}", e.getMessage());
+                    }
+
                     if (nightlyTriggered) {
                         jdbc.update("update control.nightly_snapshot_trigger set status = 'done', finished_at = now(), rows_written = ? where status = 'running'", snapshotRows);
                     }
@@ -662,6 +674,12 @@ public class JobOrchestrator {
                     }
                     if (rows > 0) {
                         log.info("Freeze/settings 6-saatlik snapshot: {} instance, {} satir", ready.size(), rows);
+                    }
+                    // Taze freeze age ile XID/MXID degerlendir — gun ici resolve/alert.
+                    try {
+                        xidFreezeEvaluator.evaluate();
+                    } catch (Exception e) {
+                        log.warn("XID freeze degerlendirme hatasi (6-saatlik sonrasi): {}", e.getMessage());
                     }
                 } catch (Exception e) {
                     log.warn("Freeze/settings snapshot genel hatasi: {}", e.getMessage());
