@@ -359,6 +359,129 @@ async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: st
     `, [id, seriesId, fromIso, toIso]);
 }
 
+// =========================================================================
+// FREEZE sekmesi — per-DB + per-table XID/MXID freeze age
+// ONEMLI: Bu route'lar /:id/* parametreli route'lardan ONCE tanimlanmali.
+// Aksi halde "/freeze/databases" cagrisi "/:id/databases" route'una dusup
+// :id="freeze"'i bigint'e cevirmeye calisir (invalid input syntax hatasi).
+// =========================================================================
+
+// GET /api/insights/freeze/databases?instancePk=N
+router.get('/freeze/databases', async (req, res, next) => {
+  try {
+    const instancePkRaw = String(req.query.instancePk || '').trim();
+    const params: any[] = [];
+    let instanceWhere = '';
+    if (instancePkRaw && /^\d+$/.test(instancePkRaw)) {
+      params.push(instancePkRaw);
+      instanceWhere = `and f.instance_pk = $${params.length}`;
+    }
+
+    const result = await pool.query(`
+            with latest as (
+              select f.instance_pk, f.dbid, f.datname,
+                     f.datfrozenxid_age, f.datminmxid_age, f.snapshot_ts,
+                     row_number() over (partition by f.instance_pk, f.dbid order by f.snapshot_ts desc) as rn
+              from fact.pg_database_freeze_snapshot f
+              where f.snapshot_ts >= now() - interval '7 days'
+                ${instanceWhere}
+            ),
+            settings as (
+              select s.instance_pk,
+                     max(case when s.setting_name = 'autovacuum_freeze_max_age'
+                              then s.setting_value::bigint end) as xid_max_age,
+                     max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
+                              then s.setting_value::bigint end) as mxid_max_age
+              from fact.pg_settings_snapshot s
+              where s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
+                and s.snapshot_ts = (
+                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
+                  where s2.instance_pk = s.instance_pk and s2.setting_name = s.setting_name
+                )
+              group by s.instance_pk
+            )
+            select
+              l.instance_pk,
+              ii.display_name as instance_name,
+              l.dbid,
+              l.datname,
+              l.datfrozenxid_age,
+              l.datminmxid_age,
+              coalesce(st.xid_max_age, 200000000) as xid_max_age,
+              coalesce(st.mxid_max_age, 400000000) as mxid_max_age,
+              round(l.datfrozenxid_age * 100.0 / coalesce(st.xid_max_age, 200000000))::int as xid_pct,
+              round(l.datminmxid_age * 100.0 / coalesce(st.mxid_max_age, 400000000))::int as mxid_pct,
+              l.snapshot_ts
+            from latest l
+            join control.instance_inventory ii on ii.instance_pk = l.instance_pk
+            left join settings st on st.instance_pk = l.instance_pk
+            where l.rn = 1
+            order by xid_pct desc nulls last, mxid_pct desc nulls last
+        `, params);
+
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/insights/freeze/tables?instancePk=N&dbid=M&limit=50
+router.get('/freeze/tables', async (req, res, next) => {
+  try {
+    const instancePkRaw = String(req.query.instancePk || '').trim();
+    const dbidRaw = String(req.query.dbid || '').trim();
+    if (!/^\d+$/.test(instancePkRaw) || !/^\d+$/.test(dbidRaw)) {
+      res.status(400).json({ error: 'instancePk ve dbid zorunlu (sayisal)' });
+      return;
+    }
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 200);
+
+    const result = await pool.query(`
+            with latest_ts as (
+              select max(snapshot_ts) as ts
+              from fact.pg_table_freeze_snapshot
+              where instance_pk = $1 and dbid = $2
+            ),
+            settings as (
+              select
+                max(case when s.setting_name = 'autovacuum_freeze_max_age'
+                         then s.setting_value::bigint end) as xid_max_age,
+                max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
+                         then s.setting_value::bigint end) as mxid_max_age
+              from fact.pg_settings_snapshot s
+              where s.instance_pk = $1
+                and s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
+                and s.snapshot_ts = (
+                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
+                  where s2.instance_pk = $1 and s2.setting_name = s.setting_name
+                )
+            )
+            select
+              t.schemaname,
+              t.relname,
+              t.relkind,
+              t.relfrozenxid_age,
+              t.relminmxid_age,
+              t.relpages,
+              (t.relpages * 8192)::bigint as size_bytes,
+              round(t.relfrozenxid_age * 100.0 / coalesce((select xid_max_age from settings), 200000000))::int as xid_pct,
+              round(t.relminmxid_age * 100.0 / coalesce((select mxid_max_age from settings), 400000000))::int as mxid_pct,
+              t.snapshot_ts,
+              'vacuum (freeze, analyze, verbose) ' || quote_ident(t.schemaname) || '.' || quote_ident(t.relname) || ';' as vacuum_sql
+            from fact.pg_table_freeze_snapshot t
+            where t.instance_pk = $1
+              and t.dbid = $2
+              and t.snapshot_ts = (select ts from latest_ts)
+            order by t.relfrozenxid_age desc nulls last
+            limit $3
+        `, [instancePkRaw, dbidRaw, limit]);
+
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/insights/:id/db-time-trend?from=...&to=...[&datname=...]
 router.get('/:id/db-time-trend', async (req, res, next) => {
   try {
@@ -2667,126 +2790,6 @@ router.get('/:id/databases', async (req, res, next) => {
             order by dbr.datname
         `, [id]);
     res.json(result.rows.map((r: any) => r.datname));
-  } catch (err) {
-    next(err);
-  }
-});
-
-// =========================================================================
-// FREEZE sekmesi — per-DB + per-table XID/MXID freeze age
-// =========================================================================
-
-// GET /api/insights/freeze/databases?instancePk=N
-router.get('/freeze/databases', async (req, res, next) => {
-  try {
-    const instancePkRaw = String(req.query.instancePk || '').trim();
-    const params: any[] = [];
-    let instanceWhere = '';
-    if (instancePkRaw && /^\d+$/.test(instancePkRaw)) {
-      params.push(instancePkRaw);
-      instanceWhere = `and f.instance_pk = $${params.length}`;
-    }
-
-    const result = await pool.query(`
-            with latest as (
-              select f.instance_pk, f.dbid, f.datname,
-                     f.datfrozenxid_age, f.datminmxid_age, f.snapshot_ts,
-                     row_number() over (partition by f.instance_pk, f.dbid order by f.snapshot_ts desc) as rn
-              from fact.pg_database_freeze_snapshot f
-              where f.snapshot_ts >= now() - interval '7 days'
-                ${instanceWhere}
-            ),
-            settings as (
-              select s.instance_pk,
-                     max(case when s.setting_name = 'autovacuum_freeze_max_age'
-                              then s.setting_value::bigint end) as xid_max_age,
-                     max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
-                              then s.setting_value::bigint end) as mxid_max_age
-              from fact.pg_settings_snapshot s
-              where s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
-                and s.snapshot_ts = (
-                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
-                  where s2.instance_pk = s.instance_pk and s2.setting_name = s.setting_name
-                )
-              group by s.instance_pk
-            )
-            select
-              l.instance_pk,
-              ii.display_name as instance_name,
-              l.dbid,
-              l.datname,
-              l.datfrozenxid_age,
-              l.datminmxid_age,
-              coalesce(st.xid_max_age, 200000000) as xid_max_age,
-              coalesce(st.mxid_max_age, 400000000) as mxid_max_age,
-              round(l.datfrozenxid_age * 100.0 / coalesce(st.xid_max_age, 200000000))::int as xid_pct,
-              round(l.datminmxid_age * 100.0 / coalesce(st.mxid_max_age, 400000000))::int as mxid_pct,
-              l.snapshot_ts
-            from latest l
-            join control.instance_inventory ii on ii.instance_pk = l.instance_pk
-            left join settings st on st.instance_pk = l.instance_pk
-            where l.rn = 1
-            order by xid_pct desc nulls last, mxid_pct desc nulls last
-        `, params);
-
-    res.json(result.rows);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/insights/freeze/tables?instancePk=N&dbid=M&limit=50
-router.get('/freeze/tables', async (req, res, next) => {
-  try {
-    const instancePkRaw = String(req.query.instancePk || '').trim();
-    const dbidRaw = String(req.query.dbid || '').trim();
-    if (!/^\d+$/.test(instancePkRaw) || !/^\d+$/.test(dbidRaw)) {
-      res.status(400).json({ error: 'instancePk ve dbid zorunlu (sayisal)' });
-      return;
-    }
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 200);
-
-    const result = await pool.query(`
-            with latest_ts as (
-              select max(snapshot_ts) as ts
-              from fact.pg_table_freeze_snapshot
-              where instance_pk = $1 and dbid = $2
-            ),
-            settings as (
-              select
-                max(case when s.setting_name = 'autovacuum_freeze_max_age'
-                         then s.setting_value::bigint end) as xid_max_age,
-                max(case when s.setting_name = 'autovacuum_multixact_freeze_max_age'
-                         then s.setting_value::bigint end) as mxid_max_age
-              from fact.pg_settings_snapshot s
-              where s.instance_pk = $1
-                and s.setting_name in ('autovacuum_freeze_max_age', 'autovacuum_multixact_freeze_max_age')
-                and s.snapshot_ts = (
-                  select max(s2.snapshot_ts) from fact.pg_settings_snapshot s2
-                  where s2.instance_pk = $1 and s2.setting_name = s.setting_name
-                )
-            )
-            select
-              t.schemaname,
-              t.relname,
-              t.relkind,
-              t.relfrozenxid_age,
-              t.relminmxid_age,
-              t.relpages,
-              (t.relpages * 8192)::bigint as size_bytes,
-              round(t.relfrozenxid_age * 100.0 / coalesce((select xid_max_age from settings), 200000000))::int as xid_pct,
-              round(t.relminmxid_age * 100.0 / coalesce((select mxid_max_age from settings), 400000000))::int as mxid_pct,
-              t.snapshot_ts,
-              'vacuum (freeze, analyze, verbose) ' || quote_ident(t.schemaname) || '.' || quote_ident(t.relname) || ';' as vacuum_sql
-            from fact.pg_table_freeze_snapshot t
-            where t.instance_pk = $1
-              and t.dbid = $2
-              and t.snapshot_ts = (select ts from latest_ts)
-            order by t.relfrozenxid_age desc nulls last
-            limit $3
-        `, [instancePkRaw, dbidRaw, limit]);
-
-    res.json(result.rows);
   } catch (err) {
     next(err);
   }
