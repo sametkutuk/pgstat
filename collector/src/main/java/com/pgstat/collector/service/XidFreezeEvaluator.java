@@ -84,11 +84,14 @@ public class XidFreezeEvaluator {
 
         FreezeSettings settings = loadSettings(subscription.instancePk());
         Set<String> activeAlertKeys = new HashSet<>();
+        // dbid -> guncel freeze satiri: resolve mesajinda "su an %X'e dustu" demek icin.
+        java.util.Map<Long, FreezeRow> rowsByDbid = new java.util.HashMap<>();
         for (FreezeRow row : loadFreezeRows(subscription.instancePk(), snapshotTs)) {
+            rowsByDbid.put(row.dbid(), row);
             evaluateXid(subscription, row, settings.xidMaxAge(), activeAlertKeys);
             evaluateMxid(subscription, row, settings.mxidMaxAge(), activeAlertKeys);
         }
-        resolveRecoveredAlerts(subscription, activeAlertKeys);
+        resolveRecoveredAlerts(subscription, activeAlertKeys, rowsByDbid, settings);
     }
 
     private FreezeSettings loadSettings(long instancePk) {
@@ -226,7 +229,8 @@ public class XidFreezeEvaluator {
         return null;
     }
 
-    private void resolveRecoveredAlerts(Subscription subscription, Set<String> activeAlertKeys) {
+    private void resolveRecoveredAlerts(Subscription subscription, Set<String> activeAlertKeys,
+                                        java.util.Map<Long, FreezeRow> rowsByDbid, FreezeSettings settings) {
         long instancePk = subscription.instancePk();
         List<OpenAlert> openAlerts = jdbc.query("""
             select alert_key, title
@@ -242,10 +246,51 @@ public class XidFreezeEvaluator {
             """, (rs, rowNum) -> new OpenAlert(rs.getString("alert_key"), rs.getString("title")), instancePk);
         for (OpenAlert open : openAlerts) {
             if (!activeAlertKeys.contains(open.alertKey())) {
-                // Risk gecti -> resolve + "Resolved:" bildirimi (warning ve critical ikisi de)
-                String message = "Freeze riski gecti. Age esigin altina dustu. " + subscription.label();
+                // Risk gecti -> resolve + "Resolved:" bildirimi (warning ve critical ikisi de).
+                // Mesaja su anki age/yuzde'yi ekle ki "neye dustu" gorunsun.
+                String message = buildResolveMessage(subscription, open.alertKey(), rowsByDbid, settings);
                 alertRepo.resolveAndNotify(open.alertKey(), open.title(), message);
             }
+        }
+    }
+
+    /**
+     * Resolve mesaji: alert_key'den dbid + tip (xid/mxid) cozulur, guncel snapshot'taki
+     * age ve yuzde mesaja eklenir. Snapshot'ta o DB yoksa (silinmis olabilir) genel mesaj.
+     */
+    private String buildResolveMessage(Subscription subscription, String alertKey,
+                                       java.util.Map<Long, FreezeRow> rowsByDbid, FreezeSettings settings) {
+        boolean isMxid = alertKey.contains(".mxid_freeze:");
+        Long dbid = parseDbid(alertKey);
+        FreezeRow row = dbid == null ? null : rowsByDbid.get(dbid);
+        if (row != null) {
+            if (isMxid && row.datminmxidAge() != null) {
+                int pct = (int) Math.round((double) row.datminmxidAge() * 100.0 / settings.mxidMaxAge());
+                return "MXID freeze riski gecti. datname=" + safe(row.datname())
+                    + ", datminmxid_age=" + row.datminmxidAge() + " / max=" + settings.mxidMaxAge()
+                    + " (%" + pct + "). " + subscription.label();
+            }
+            if (!isMxid && row.datfrozenxidAge() != null) {
+                int pct = (int) Math.round((double) row.datfrozenxidAge() * 100.0 / settings.xidMaxAge());
+                return "XID freeze riski gecti. datname=" + safe(row.datname())
+                    + ", datfrozenxid_age=" + row.datfrozenxidAge() + " / max=" + settings.xidMaxAge()
+                    + " (%" + pct + "). " + subscription.label();
+            }
+        }
+        // DB artik snapshot'ta yok (drop edilmis) veya age null
+        return "Freeze riski gecti (DB artik izlenmiyor veya age okunamadi). " + subscription.label();
+    }
+
+    /** alert_key'den dbid degerini parse eder: "...:dbid=12345" -> 12345 */
+    private static Long parseDbid(String alertKey) {
+        int idx = alertKey.lastIndexOf(":dbid=");
+        if (idx < 0) {
+            return null;
+        }
+        try {
+            return Long.parseLong(alertKey.substring(idx + ":dbid=".length()));
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
