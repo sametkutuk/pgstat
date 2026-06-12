@@ -2882,6 +2882,24 @@ interface VacuumLagRow {
     update_per_sec: string | null;
     av_status: VacuumAvStatus;
     av_reason: string;
+    av_metrics?: VacuumAvMetrics;
+}
+
+interface VacuumAvMetrics {
+    dead_tuple: number;
+    live_tuple: number;
+    dead_pct: number | null;
+    vacuum_trigger_threshold: number;
+    vacuum_threshold_guc: number;
+    vacuum_scale_factor_guc: number;
+    autovacuum_runs_window: number;
+    days_since_vacuum: number | null;
+    mod_since_analyze: number;
+    analyze_trigger_threshold: number;
+    update_per_sec: number;
+    autovacuum_enabled: boolean;
+    over_vacuum_threshold: boolean;
+    over_analyze_threshold: boolean;
 }
 
 interface VacuumLagTotals {
@@ -2984,13 +3002,68 @@ function vacuumAvStatusMeta(status: VacuumAvStatus | string): { label: string; c
 
 function VacuumAvStatusBadge({ row }: { row: VacuumLagRow }) {
     const meta = vacuumAvStatusMeta(row.av_status);
+    const m = row.av_metrics;
+    const [open, setOpen] = useState(false);
+
     return (
-        <span
-            title={row.av_reason || 'Autovacuum saglik tespitinde sorun gorulmedi.'}
-            className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap cursor-help ${meta.className}`}
-        >
-            {meta.label}
+        <span className="relative inline-block"
+            onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+            <span
+                className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap cursor-help ${meta.className}`}
+            >
+                {meta.label}
+            </span>
+            {open && m && (
+                <div className="absolute z-30 left-0 top-full mt-1 w-80 bg-white border border-[#E2E8F0] rounded-lg shadow-lg p-3 text-left cursor-default"
+                    onClick={e => e.stopPropagation()}>
+                    <div className="text-xs font-semibold text-[#1E293B] mb-2">
+                        Autovacuum saglik tespiti — bakilan metrikler
+                    </div>
+                    <table className="w-full text-[11px] mb-2">
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            <AvMetricRow label="Dead tuple" value={m.dead_tuple.toLocaleString('tr-TR')} />
+                            <AvMetricRow label="Live tuple" value={m.live_tuple.toLocaleString('tr-TR')} />
+                            <AvMetricRow label="Dead %" value={m.dead_pct == null ? '—' : `%${Math.round(m.dead_pct)}`} />
+                            <AvMetricRow
+                                label="Tetikleme esigi"
+                                value={m.vacuum_trigger_threshold.toLocaleString('tr-TR')}
+                                hint={`threshold ${m.vacuum_threshold_guc} + live ${m.live_tuple.toLocaleString('tr-TR')} x scale ${m.vacuum_scale_factor_guc}`}
+                            />
+                            <AvMetricRow
+                                label="Esik asildi mi"
+                                value={m.over_vacuum_threshold ? 'Evet' : 'Hayir'}
+                                danger={m.over_vacuum_threshold}
+                            />
+                            <AvMetricRow label="Pencerede autovacuum" value={String(m.autovacuum_runs_window)} />
+                            <AvMetricRow label="Son vacuum (gun)" value={m.days_since_vacuum == null ? '—' : `${Math.round(m.days_since_vacuum)} gun once`} />
+                            <AvMetricRow label="Analyze'siz degisim" value={m.mod_since_analyze.toLocaleString('tr-TR')} hint={`esik ${m.analyze_trigger_threshold.toLocaleString('tr-TR')}`} />
+                            <AvMetricRow label="Update/sn" value={m.update_per_sec.toLocaleString('tr-TR', { maximumFractionDigits: 2 })} />
+                            <AvMetricRow label="Autovacuum acik" value={m.autovacuum_enabled ? 'Evet' : 'Hayir'} danger={!m.autovacuum_enabled} />
+                        </tbody>
+                    </table>
+                    {row.av_reason && (
+                        <div className="text-[11px] text-[#475569] border-t border-[#E2E8F0] pt-2">
+                            <span className="font-semibold text-[#334155]">Sonuc: </span>{row.av_reason}
+                        </div>
+                    )}
+                    <div className="text-[10px] text-[#94A3B8] mt-2">
+                        Tespit + gerekce — parametre onerisi degildir. Karar DBA'ya aittir.
+                    </div>
+                </div>
+            )}
         </span>
+    );
+}
+
+function AvMetricRow({ label, value, hint, danger }: { label: string; value: string; hint?: string; danger?: boolean }) {
+    return (
+        <tr>
+            <td className="py-1 pr-2 text-[#64748B] align-top">{label}</td>
+            <td className={`py-1 text-right font-mono ${danger ? 'text-[#DC2626] font-semibold' : 'text-[#1E293B]'}`}>
+                {value}
+                {hint && <div className="text-[9px] text-[#94A3B8] font-sans font-normal">{hint}</div>}
+            </td>
+        </tr>
     );
 }
 

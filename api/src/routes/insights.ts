@@ -1691,10 +1691,32 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
         avReason = `Son pencerede ${autovacRuns} autovacuum, dead tuple dusuk (%${deadPct == null ? 0 : Math.round(deadPct)}). Autovacuum saglikli calisiyor; tablo yogun yaziliyor. Sorun yok.`;
       }
 
+      // Popover icin: hesapta kullanilan ham metrikler + tetikleme esigi formulu.
+      // "Neye bakildi" seffaf olsun diye UI bunu tablo halinde gosterir.
+      const avMetrics = {
+        dead_tuple: deadTup,
+        live_tuple: liveTup,
+        dead_pct: deadPct,
+        // PostgreSQL gercek autovacuum tetikleme esigi
+        vacuum_trigger_threshold: Math.round(vacuumTriggerThreshold),
+        vacuum_threshold_guc: vacThreshold,
+        vacuum_scale_factor_guc: scaleFactor,
+        autovacuum_runs_window: autovacRuns,
+        days_since_vacuum: daysSinceVacuum,
+        mod_since_analyze: modSinceAnalyze,
+        analyze_trigger_threshold: Math.round(analyzeTriggerThreshold),
+        update_per_sec: Number.isFinite(updatePerSec) ? updatePerSec : 0,
+        autovacuum_enabled: avEnabled,
+        // esik asildi mi (not_triggering/cant_keep_up degerlendirmesinin temeli)
+        over_vacuum_threshold: deadTup > vacuumTriggerThreshold,
+        over_analyze_threshold: modSinceAnalyze > analyzeTriggerThreshold,
+      };
+
       return {
         ...row,
         av_status: avStatus,
         av_reason: avReason,
+        av_metrics: avMetrics,
       };
     });
 
