@@ -1502,22 +1502,31 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
           and d.sample_ts between $2::timestamptz and $3::timestamptz
           ${searchWhere}
       ),
+      -- ONEMLI: latest_snapshot ZAMAN ARALIGINDAN BAGIMSIZ — "su anki durum"
+      -- (dead_tup, last_vacuum, durum) her zaman EN SON snapshot'tan gelir.
+      -- Aksi halde kullanici eski tarih araligi secince yeni vacuum sonucu
+      -- (aralik disinda kalan snapshot) gorunmezdi. Delta (vacuum_count,
+      -- update_rate) ise filtered_data uzerinden pencere'ye bagli kalir.
       latest_snapshot as (
-        select distinct on (instance_pk, dbid, relid)
-          dbid,
-          relid,
-          schemaname,
-          relname,
-          datname,
-          n_live_tup_estimate,
-          n_dead_tup_estimate,
-          n_mod_since_analyze,
-          last_vacuum,
-          last_autovacuum,
-          last_analyze,
-          last_autoanalyze
-        from filtered_data
-        order by instance_pk, dbid, relid, sample_ts desc
+        select distinct on (d.instance_pk, d.dbid, d.relid)
+          d.dbid::int as dbid,
+          d.relid::int as relid,
+          d.schemaname,
+          d.relname,
+          dbr.datname,
+          d.n_live_tup_estimate,
+          d.n_dead_tup_estimate,
+          d.n_mod_since_analyze,
+          d.last_vacuum,
+          d.last_autovacuum,
+          d.last_analyze,
+          d.last_autoanalyze
+        from fact.pg_table_stat_delta d
+        left join dim.database_ref dbr on dbr.instance_pk = d.instance_pk and dbr.dbid = d.dbid
+        where d.instance_pk = $1
+          and d.sample_ts > now() - interval '7 days'
+          ${searchWhere}
+        order by d.instance_pk, d.dbid, d.relid, d.sample_ts desc
       ),
       size_snapshot as (
         select distinct on (instance_pk, dbid, schemaname, relname)
