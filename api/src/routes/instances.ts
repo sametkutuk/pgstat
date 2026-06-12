@@ -171,10 +171,13 @@ router.get('/footprint-summary', async (req, res, next) => {
     // pgstat zarar vermez. ASIL onemli olan pgstat'in MUTLAK yuku. Bir DB ancak
     // hem yuksek oran HEM yuksek mutlak yuk varsa "incelenecek".
     //
-    // Esikler (her instance'in KENDI 24sa pgstat exec ms'i):
-    //   mutlak yuksek esigi: pgstat exec > 60000 ms/24sa (~ort 42ms/dk surekli)
-    //   oran yuksek esigi: exec_pct > 50
-    const ABS_HIGH_MS = 60000;
+    // Esikler (her instance'in KENDI pencere icindeki pgstat yuku):
+    //   mutlak yuksek esigi: pgstat ort. >= 500 ms/dakika (surekli ~%0.8 islem
+    //     zamani). Bunun ALTI gercek yuk degil. Ornek: 24sa'te 273000 ms =
+    //     ~3 ms/dk = ihmal edilebilir; 'Incele' DEMEZ.
+    //   oran yuksek esigi: exec_pct >= 50
+    // ABS esigi ms/dk -> pencere ms'ine cevrilir (hours * 60 * 500).
+    const ABS_HIGH_MS = hours * 60 * 500;
     const PCT_HIGH = 50;
     const rows = result.rows;
     let saglikli = 0;       // dusuk oran VEYA dusuk mutlak — pgstat sorun degil
