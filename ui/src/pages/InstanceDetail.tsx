@@ -18,7 +18,7 @@ import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey
 import DataKindBanner from '../components/common/DataKindBanner';
 import ViewModeToggle, { type ViewMode } from '../components/common/ViewModeToggle';
 
-type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings' | 'settings_diff';
+type Tab = 'overview' | 'storage' | 'statements' | 'databases' | 'tables' | 'indexes' | 'activity' | 'replication' | 'replication_slots' | 'subscriptions' | 'wal_receiver' | 'conflicts' | 'recovery_prefetch' | 'progress' | 'alerts' | 'jobruns' | 'functions' | 'sequences' | 'wal' | 'slru' | 'tps' | 'io_stats' | 'checkpointer' | 'bgwriter' | 'archiver' | 'settings' | 'settings_diff' | 'collector_footprint';
 
 export default function InstanceDetail() {
     const { id } = useParams();
@@ -107,6 +107,7 @@ export default function InstanceDetail() {
         { key: 'settings', label: 'Parametreler', tip: 'En son snapshot\'taki tüm pg_settings parametreleri. Manuel yenileme butonu ile ALTER SYSTEM sonrası hemen güncellenir. Parametre değiştiğinde otomatik PARAMETER_CHANGED INFO alert tetiklenir (bildirim kanallarına da gönderilir).' },
         { key: 'alerts', label: 'Alertler' },
         { key: 'jobruns', label: 'Son Job Run' },
+        { key: 'collector_footprint', label: 'Collector Ayak Izi', tip: 'pgstat collector\'un bu instance\'ta calistirdigi sorgular ve sureleri. Veri zaten pg_stat_statements\'ten toplaniyor; collector kullanicisinin sorgulari filtrelenir. Collector gelistikce yeni/degisen sorgular otomatik gorunur.' },
     ];
 
     return (
@@ -194,7 +195,82 @@ Seçim localStorage'da hatırlanır.`} />
             {tab === 'settings_diff' && <SettingsDiffTab data={settingsDiff.data} loading={settingsDiff.isLoading} days={settingsDiffDays} onDaysChange={setSettingsDiffDays} />}
             {tab === 'alerts' && <AlertsTab data={alerts.data} loading={alerts.isLoading} />}
             {tab === 'jobruns' && <JobRunsTab data={jobruns.data} loading={jobruns.isLoading} />}
+            {tab === 'collector_footprint' && <CollectorFootprintTab instancePk={id!} />}
         </div >
+    );
+}
+
+interface FootprintRow {
+    queryid: string;
+    datname: string | null;
+    query_text: string | null;
+    total_calls: string;
+    total_exec_ms: string;
+    mean_exec_ms: string | null;
+    max_exec_ms: string | null;
+    total_rows: string;
+    shared_blks_read: string;
+}
+
+function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
+    const [hours, setHours] = useState(24);
+    const { data, isLoading } = useQuery({
+        queryKey: ['collector-footprint', instancePk, hours],
+        queryFn: () => apiGet<{ collector_username: string; rows: FootprintRow[] }>(
+            `/instances/${instancePk}/collector-footprint?hours=${hours}&limit=50`),
+        enabled: !!instancePk,
+    });
+
+    if (isLoading) return <SkeletonTable rows={8} cols={7} />;
+    const rows = data?.rows ?? [];
+
+    return (
+        <div className="space-y-4">
+            <div className="rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3 text-xs text-[#1D4ED8]">
+                pgstat collector'un bu instance'ta ({data?.collector_username ?? '...'}) calistirdigi sorgular.
+                Veri zaten pg_stat_statements'ten toplaniyor — ek yuk yok. Collector gelistikce yeni/degisen
+                sorgular otomatik yansir. Sure artisi gorursen collector tarafinda bir sorgu agirlasmis olabilir.
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="text-xs text-[#64748B]">Pencere:</span>
+                {[6, 24, 168, 720].map(h => (
+                    <button key={h} onClick={() => setHours(h)}
+                        className={`px-3 py-1 text-xs rounded border ${hours === h ? 'border-[#3B82F6] text-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC]'}`}>
+                        {h === 6 ? '6sa' : h === 24 ? '24sa' : h === 168 ? '7g' : '30g'}
+                    </button>
+                ))}
+            </div>
+            <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
+                <table className="w-full text-sm">
+                    <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                        <tr>
+                            <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Sorgu</th>
+                            <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">DB</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Cagri</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Pencere boyunca toplam execution suresi">Toplam (ms)</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Cagri basina ortalama">Ort (ms)</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Max (ms)</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Satir</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#F1F5F9]">
+                        {rows.length === 0 ? (
+                            <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Bu pencerede collector sorgusu yok.</td></tr>
+                        ) : rows.map((r) => (
+                            <tr key={r.queryid} className="hover:bg-[#F8FAFC]">
+                                <td className="py-2 px-3 font-mono text-xs text-[#1E293B] max-w-md truncate" title={r.query_text ?? ''}>{r.query_text ?? '—'}</td>
+                                <td className="py-2 px-3 text-xs text-[#64748B]">{r.datname ?? '—'}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_calls).toLocaleString('tr-TR')}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_exec_ms).toLocaleString('tr-TR')}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{r.mean_exec_ms ?? '—'}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{r.max_exec_ms ?? '—'}</td>
+                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_rows).toLocaleString('tr-TR')}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     );
 }
 

@@ -2984,6 +2984,94 @@ router.get('/:id/recovery-prefetch', async (req, res, next) => {
 });
 
 // ============================================================================
+// COLLECTOR AYAK IZI — pgstat collector'un bu instance'ta calistirdigi sorgular
+// Veri zaten fact.pgss_delta'da (her sorgu userid ile toplaniyor). Collector'un
+// kendi sorgulari rolname = collector_username ile filtrelenir. Ek toplama YOK.
+// ============================================================================
+
+// GET /api/instances/:id/collector-footprint?hours=24&limit=50
+// Collector'un kendi sorgulari: sorgu bazli toplam sure/cagri (son N saat).
+router.get('/:id/collector-footprint', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 24);
+    const limit = parseLimit(req.query.limit, 50);
+
+    // Bu instance'in collector kullanici adi
+    const inst = await pool.query(
+      'select collector_username from control.instance_inventory where instance_pk = $1',
+      [id]
+    );
+    if (inst.rows.length === 0) {
+      res.status(404).json({ error: 'instance bulunamadi' });
+      return;
+    }
+    const collectorUser = inst.rows[0].collector_username || 'pgstats_collector';
+
+    const result = await pool.query(`
+      select
+        ss.queryid,
+        max(dbr.datname) as datname,
+        left(max(qt.query_text), 200) as query_text,
+        sum(d.calls_delta)::bigint as total_calls,
+        round(sum(d.total_exec_time_ms_delta)::numeric, 1) as total_exec_ms,
+        round((sum(d.total_exec_time_ms_delta) / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_exec_ms,
+        round(max(d.max_exec_time_ms)::numeric, 1) as max_exec_ms,
+        sum(d.rows_delta)::bigint as total_rows,
+        sum(d.shared_blks_read_delta)::bigint as shared_blks_read
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+      left join dim.query_text qt on qt.query_text_id = ss.query_text_id
+      left join dim.database_ref dbr on dbr.instance_pk = ss.instance_pk and dbr.dbid = ss.dbid
+      where d.instance_pk = $1
+        and d.sample_ts >= now() - make_interval(hours => $2)
+        and rr.rolname = $3
+      group by ss.queryid
+      having sum(d.calls_delta) > 0
+      order by total_exec_ms desc nulls last
+      limit $4
+    `, [id, hours, collectorUser, limit]);
+
+    res.json({ collector_username: collectorUser, rows: result.rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instances/:id/collector-footprint/trend?queryid=N&hours=168
+// Tek bir collector sorgusunun zaman icindeki sure/cagri trendi
+// (sorgu yavasladi/degisti mi gormek icin).
+router.get('/:id/collector-footprint/trend', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const queryid = (req.query.queryid as string) || null;
+    const hours = parseHours(req.query.hours, 168);
+    if (!queryid || !/^-?\d+$/.test(queryid)) {
+      res.status(400).json({ error: 'queryid zorunlu (sayisal)' });
+      return;
+    }
+    const result = await pool.query(`
+      select
+        date_trunc('hour', d.sample_ts) as bucket,
+        sum(d.calls_delta)::bigint as calls,
+        round(sum(d.total_exec_time_ms_delta)::numeric, 1) as total_exec_ms,
+        round((sum(d.total_exec_time_ms_delta) / nullif(sum(d.calls_delta), 0))::numeric, 2) as mean_exec_ms
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      where d.instance_pk = $1
+        and ss.queryid = $2::bigint
+        and d.sample_ts >= now() - make_interval(hours => $3)
+      group by date_trunc('hour', d.sample_ts)
+      order by bucket
+    `, [id, queryid, hours]);
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================================
 export default router;
 
 /** secret_ref'i UI'da göstermek için maskeler */
