@@ -4049,7 +4049,7 @@ function pctBadge(pct: number): string {
 }
 
 function FreezeCard({ instancePk }: { instancePk: number | null }) {
-    const [selectedDb, setSelectedDb] = useState<{ instancePk: number; dbid: number; datname: string } | null>(null);
+    const [selectedDb, setSelectedDb] = useState<{ instancePk: number; dbid: number; datname: string; xidPct: number } | null>(null);
 
     if (instancePk == null) {
         return <EmptyState icon="🖥️" title="Instance secin" description="Yukaridan bir aktif instance secin." />;
@@ -4062,13 +4062,14 @@ function FreezeCard({ instancePk }: { instancePk: number | null }) {
             </div>
             <FreezeDbTable instancePk={instancePk} onSelect={setSelectedDb} />
             {selectedDb && (
-                <FreezeTablePanel instancePk={selectedDb.instancePk} dbid={selectedDb.dbid} datname={selectedDb.datname} />
+                <FreezeTablePanel instancePk={selectedDb.instancePk} dbid={selectedDb.dbid}
+                    datname={selectedDb.datname} xidPct={selectedDb.xidPct} />
             )}
         </div>
     );
 }
 
-function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect: (db: { instancePk: number; dbid: number; datname: string }) => void }) {
+function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect: (db: { instancePk: number; dbid: number; datname: string; xidPct: number }) => void }) {
     const { data, isLoading } = useQuery({
         queryKey: ['insights-freeze-databases', instancePk],
         queryFn: () => apiGet<FreezeDbRow[]>(`/insights/freeze/databases?instancePk=${instancePk}`),
@@ -4103,7 +4104,7 @@ function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect:
                         const mxidPct = toNum(row.mxid_pct);
                         return (
                             <tr key={`${row.instance_pk}-${row.dbid}`}
-                                onClick={() => onSelect({ instancePk: row.instance_pk, dbid: row.dbid, datname: row.datname })}
+                                onClick={() => onSelect({ instancePk: row.instance_pk, dbid: row.dbid, datname: row.datname, xidPct })}
                                 className="border-b border-[#E2E8F0] hover:bg-[#F8FAFC] cursor-pointer">
                                 <td className="py-2 px-3 font-medium text-[#1E293B]">{row.datname}</td>
                                 <td className="py-2 px-3 text-right font-mono text-xs">{compactNumber(row.datfrozenxid_age)}</td>
@@ -4126,7 +4127,7 @@ function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect:
     );
 }
 
-function FreezeTablePanel({ instancePk, dbid, datname }: { instancePk: number; dbid: number; datname: string }) {
+function FreezeTablePanel({ instancePk, dbid, datname, xidPct }: { instancePk: number; dbid: number; datname: string; xidPct: number }) {
     const { data, isLoading } = useQuery({
         queryKey: ['insights-freeze-tables', instancePk, dbid],
         queryFn: () => apiGet<FreezeTableRow[]>(`/insights/freeze/tables?instancePk=${instancePk}&dbid=${dbid}&limit=50`),
@@ -4134,14 +4135,48 @@ function FreezeTablePanel({ instancePk, dbid, datname }: { instancePk: number; d
         staleTime: 30_000,
     });
 
+    // DB seviyesi yuzde yuksekse: catalog/sistem tablolari da yaslanmis olabilir.
+    // Per-table listesi sadece kullanici tablolarini gosterir (pg_catalog haric).
+    // DB age'i catalog'a takiliysa kullanici tablolari temiz gozukse de DB %'si
+    // yuksek kalir — bu durumda tum DB'yi (catalog dahil) freeze etmek gerekir.
+    const showCatalogWarning = xidPct >= 80;
+    const psqlCmd = 'vacuum (freeze);';
+    const shellCmd = `vacuumdb -F -z -d ${datname}`;
+
     if (isLoading) return <SkeletonTable rows={8} cols={6} />;
-    if (!data || data.length === 0) return <EmptyState icon="📭" title="Per-table veri yok" description={`${datname} icin tablo freeze verisi bulunamadi.`} />;
 
     return (
         <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
             <div className="px-4 py-3 border-b border-[#E2E8F0]">
                 <h3 className="font-semibold text-[#1E293B] text-sm">{datname} — Per-table Freeze</h3>
             </div>
+            {showCatalogWarning && (
+                <div className="px-4 py-3 border-b border-[#FDE68A] bg-[#FFFBEB] text-xs text-[#92400E] space-y-2">
+                    <div>
+                        <strong>DB seviyesi XID %{xidPct}.</strong> Asagidaki kullanici tablolari temiz gozukse bile
+                        DB yasi yuksek kalabilir — cunku <code>pg_catalog</code> sistem tablolari (pg_class, pg_attribute,
+                        pg_authid vb.) trafikten bagimsiz yaslanir ve listede gosterilmez. Bu tablolar da freeze
+                        edilmezse autovacuum zorla aggressive freeze tetikler veya wraparound riski olusur.
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                            <span className="text-[#78716C] w-32 shrink-0">psql (DB'ye bagli):</span>
+                            <code className="bg-white px-2 py-0.5 rounded border border-[#FDE68A]">{psqlCmd}</code>
+                            <CopyButton value={psqlCmd} message="Komut kopyalandi" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-[#78716C] w-32 shrink-0">shell (sunucuda):</span>
+                            <code className="bg-white px-2 py-0.5 rounded border border-[#FDE68A]">{shellCmd}</code>
+                            <CopyButton value={shellCmd} message="Komut kopyalandi" />
+                        </div>
+                    </div>
+                </div>
+            )}
+            {(!data || data.length === 0) ? (
+                <div className="px-4 py-8 text-center text-sm text-[#64748B]">
+                    Kullanici tablosu freeze verisi yok. {showCatalogWarning ? 'DB yasi catalog kaynakli olabilir (yukaridaki komut).' : ''}
+                </div>
+            ) : (
             <table className="w-full text-sm">
                 <thead>
                     <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
@@ -4180,6 +4215,7 @@ function FreezeTablePanel({ instancePk, dbid, datname }: { instancePk: number; d
                     })}
                 </tbody>
             </table>
+            )}
         </div>
     );
 }
