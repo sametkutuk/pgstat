@@ -4083,12 +4083,18 @@ function FreezeDbTable({ instancePk, onSelect }: { instancePk: number; onSelect:
             <table className="w-full text-sm">
                 <thead>
                     <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Database</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID Age</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID %</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">MXID Age</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">MXID %</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">Snapshot</th>
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]"
+                            title="DB'deki en eski donmamis transaction'a sahip tablonun yasi. Trafiksiz DB'ler de pg_catalog sistem tablolari nedeniyle yaslanir; freeze gerekir.">Database</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="age(datfrozenxid): DB'nin en eski donmamis transaction'i kac islem geride. Wraparound 2.1 milyarda olur. Bu DB'nin en kotu tablosunu temsil eder.">XID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="XID Age / autovacuum_freeze_max_age (default 200M). %100'u gectiginde PostgreSQL zorla aggressive autovacuum baslatir. %80+ sari, %95+ kirmizi.">XID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="mxid_age(datminmxid): en eski donmamis multixact'in yasi. Multixact wraparound da DB'yi durdurur.">MXID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="MXID Age / autovacuum_multixact_freeze_max_age (default 400M).">MXID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="Bu freeze degerlerinin toplandigi son snapshot zamani.">Snapshot</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -4139,12 +4145,18 @@ function FreezeTablePanel({ instancePk, dbid, datname }: { instancePk: number; d
             <table className="w-full text-sm">
                 <thead>
                     <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Sema.Tablo</th>
-                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]">Tip</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID Age</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">XID %</th>
-                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]">Boyut</th>
-                        <th className="py-2 px-3 text-center text-xs font-semibold text-[#64748B]">VACUUM</th>
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]"
+                            title="Sema ve tablo adi. DB seviyesi age bu tablolardan en yuksek olanina esittir.">Sema.Tablo</th>
+                        <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B]"
+                            title="table = normal tablo (r), matview = materialized view (m).">Tip</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="age(relfrozenxid): bu tablonun en eski donmamis transaction'i kac islem geride.">XID Age</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="XID Age / autovacuum_freeze_max_age (default 200M). %80+ sari, %95+ kirmizi.">XID %</th>
+                        <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B]"
+                            title="Tablonun yaklasik boyutu (relpages * 8KB).">Boyut</th>
+                        <th className="py-2 px-3 text-center text-xs font-semibold text-[#64748B]"
+                            title="Bu tabloyu manuel freeze etmek icin hazir VACUUM komutu. Tikla, kopyala, kaynak DB'de calistir.">VACUUM</th>
                     </tr>
                 </thead>
                 <tbody>
