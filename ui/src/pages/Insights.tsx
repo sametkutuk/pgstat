@@ -2872,6 +2872,7 @@ interface VacuumLagRow {
     days_since_vacuum: string | null;
     days_since_analyze: string | null;
     vacuum_count: string;
+    autovacuum_count: string;
     analyze_count: string;
     n_tup_ins: string;
     n_tup_upd: string;
@@ -2879,6 +2880,8 @@ interface VacuumLagRow {
     n_tup_hot_upd: string;
     hot_upd_pct: string | null;
     update_per_sec: string | null;
+    av_status: VacuumAvStatus;
+    av_reason: string;
 }
 
 interface VacuumLagTotals {
@@ -2931,6 +2934,7 @@ interface TableVacuumTrendPoint {
 }
 
 type VacuumSortMode = 'dead_tup' | 'dead_pct' | 'bloat_size' | 'stale_vacuum' | 'update_rate' | 'mod_since_analyze';
+type VacuumAvStatus = 'ok' | 'av_disabled' | 'not_triggering' | 'cant_keep_up' | 'analyze_lag' | 'high_write';
 
 function deadTuplePctClass(deadPct: number | null): string {
     if (deadPct == null) return 'bg-slate-100 text-slate-600';
@@ -2959,6 +2963,35 @@ function hotUpdateClass(hotPct: number | null): string {
     if (hotPct > 80) return 'bg-emerald-100 text-emerald-700';
     if (hotPct > 50) return 'bg-amber-100 text-amber-700';
     return 'bg-red-100 text-red-700';
+}
+
+function vacuumAvStatusMeta(status: VacuumAvStatus | string): { label: string; className: string } {
+    switch (status) {
+        case 'av_disabled':
+            return { label: 'Autovacuum Kapali', className: 'bg-red-100 text-red-700' };
+        case 'not_triggering':
+            return { label: 'Tetiklenmiyor', className: 'bg-red-100 text-red-700' };
+        case 'cant_keep_up':
+            return { label: 'Yetisemiyor', className: 'bg-amber-100 text-amber-700' };
+        case 'analyze_lag':
+            return { label: 'Analyze Gecikmis', className: 'bg-amber-100 text-amber-700' };
+        case 'high_write':
+            return { label: 'Yogun Yazma', className: 'bg-slate-100 text-slate-600' };
+        default:
+            return { label: 'OK', className: 'bg-emerald-100 text-emerald-700' };
+    }
+}
+
+function VacuumAvStatusBadge({ row }: { row: VacuumLagRow }) {
+    const meta = vacuumAvStatusMeta(row.av_status);
+    return (
+        <span
+            title={row.av_reason || 'Autovacuum saglik tespitinde sorun gorulmedi.'}
+            className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap cursor-help ${meta.className}`}
+        >
+            {meta.label}
+        </span>
+    );
 }
 
 function formatDaysAgo(days: number | null | undefined): string {
@@ -3094,6 +3127,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const [searchInput, setSearchInput] = useState<string>('');
     const [search, setSearch] = useState<string>('');
     const [datname, setDatname] = useState<string>('');
+    const [avStatusFilter, setAvStatusFilter] = useState<string>('');
     const [expandedKey, setExpandedKey] = useState<string | null>(null);
     // Vacuum Lag icin compare default 'off' — tablo bazli veri retention
     // sinirindan dolayi gecmis donem genelde bos donuyor. Ayri localStorage
@@ -3129,6 +3163,10 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
         staleTime: 0,
     });
     const rows = data?.rows ?? [];
+    const visibleRows = useMemo(
+        () => avStatusFilter ? rows.filter(row => row.av_status === avStatusFilter) : rows,
+        [rows, avStatusFilter],
+    );
     const totals = data?.totals;
 
     const { data: trendData } = useQuery({
@@ -3232,6 +3270,9 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     return (
         <div className="space-y-4">
             <TabIntro {...TAB_INTROS.vacuumLag} />
+            <div className="rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-3 text-xs text-[#1D4ED8]">
+                Durum kolonu autovacuum saglik tespitidir; parametre onerisi degildir. Gerekce icin durum rozetine gelin. Karar ve ayar degisikligi DBA'ya aittir.
+            </div>
             {totals && (
                 <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-4">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -3380,6 +3421,16 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                             <option value="">Tum Database'ler</option>
                             {(databases ?? []).map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
+                        <select value={avStatusFilter} onChange={e => setAvStatusFilter(e.target.value)}
+                            title="Autovacuum durum filtresi" className="border border-[#E2E8F0] rounded px-2 py-1.5 text-xs bg-white max-w-[170px]">
+                            <option value="">Tum durumlar</option>
+                            <option value="av_disabled">Autovacuum Kapali</option>
+                            <option value="not_triggering">Tetiklenmiyor</option>
+                            <option value="cant_keep_up">Yetisemiyor</option>
+                            <option value="analyze_lag">Analyze Gecikmis</option>
+                            <option value="high_write">Yogun Yazma</option>
+                            <option value="ok">OK</option>
+                        </select>
                         <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') applySearch(); }}
                             placeholder="relname ara" className="border border-[#E2E8F0] rounded px-3 py-1.5 text-xs bg-white w-48 focus:outline-none focus:border-[#3B82F6]" />
@@ -3402,17 +3453,18 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                 </div>
 
                 {isLoading ? (
-                    <div className="p-4"><SkeletonTable rows={8} cols={12} /></div>
-                ) : rows.length === 0 ? (
+                    <div className="p-4"><SkeletonTable rows={8} cols={13} /></div>
+                ) : visibleRows.length === 0 ? (
                     <EmptyState icon="📭" title="Vacuum lag yok" description={emptyDescription} />
                 ) : (
-                    <div className="overflow-x-auto" key={`${sort}-${rows[0]?.dbid ?? ''}-${rows[0]?.relid ?? ''}`}>
+                    <div className="overflow-x-auto" key={`${sort}-${visibleRows[0]?.dbid ?? ''}-${visibleRows[0]?.relid ?? ''}`}>
                         <table className="w-full text-sm">
                             <thead>
                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide w-10">#</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">Tablo</th>
                                     <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide">DB</th>
+                                    <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Autovacuum saglik tespiti. Parametre onerisi degildir; hover gerekceyi gosterir." label="Durum" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="Tabloda update/delete'ten kalan dead tuple. Vacuum bunu temizler." label="Dead Tuple" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="n_live_tup_estimate (latest snapshot)." label="Live Tuple" /></th>
                                     <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase tracking-wide"><HeaderHelp title="dead / (live + dead). >%20 = bloat baslangici." label="Dead %" /></th>
@@ -3426,7 +3478,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                 </tr>
                             </thead>
                             <tbody>
-                                {rows.map((row, i) => {
+                                {visibleRows.map((row, i) => {
                                     const rowKey = `${row.dbid}-${row.relid}`;
                                     const expanded = expandedKey === rowKey;
                                     const deadPct = row.dead_pct == null ? null : toNum(row.dead_pct);
@@ -3458,6 +3510,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                                 <td className="py-2 px-3 text-xs whitespace-nowrap">
                                                     <span className="inline-block px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{row.datname || '\u2014'}</span>
                                                 </td>
+                                                <td className="py-2 px-3 text-xs whitespace-nowrap"><VacuumAvStatusBadge row={row} /></td>
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#1E293B] whitespace-nowrap">{Number(row.n_dead_tup).toLocaleString('tr-TR')}</td>
                                                 <td className="py-2 px-3 text-xs text-right font-mono text-[#64748B] whitespace-nowrap">{Number(row.n_live_tup).toLocaleString('tr-TR')}</td>
                                                 <td className="py-2 px-3 text-xs text-right whitespace-nowrap">{deadPct == null ? '\u2014' : <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${deadTuplePctClass(deadPct)}`}>%{deadPct.toLocaleString('tr-TR', { maximumFractionDigits: 1 })}</span>}</td>
@@ -3473,7 +3526,7 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                                             </tr>
                                             {expanded && (
                                                 <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
-                                                    <td colSpan={13} className="p-4">
+                                                    <td colSpan={14} className="p-4">
                                                         <TableVacuumTrendPanel
                                                             instancePk={instancePk}
                                                             dbid={row.dbid}

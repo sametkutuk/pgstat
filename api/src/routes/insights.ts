@@ -1479,6 +1479,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
           dbid,
           relid,
           sum(vacuum_count_delta + autovacuum_count_delta)::bigint as vacuum_count,
+          sum(autovacuum_count_delta)::bigint as autovacuum_count,
           sum(analyze_count_delta + autoanalyze_count_delta)::bigint as analyze_count,
           sum(n_tup_ins_delta)::bigint as n_tup_ins,
           sum(n_tup_upd_delta)::bigint as n_tup_upd,
@@ -1516,6 +1517,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
             then round((extract(epoch from (now() - greatest(ls.last_analyze, ls.last_autoanalyze))) / 86400.0)::numeric, 1)
             else null end as days_since_analyze,
           coalesce(dd.vacuum_count, 0)::bigint as vacuum_count,
+          coalesce(dd.autovacuum_count, 0)::bigint as autovacuum_count,
           coalesce(dd.analyze_count, 0)::bigint as analyze_count,
           coalesce(dd.n_tup_ins, 0)::bigint as n_tup_ins,
           coalesce(dd.n_tup_upd, 0)::bigint as n_tup_upd,
@@ -1552,6 +1554,7 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
         days_since_vacuum,
         days_since_analyze,
         vacuum_count,
+        autovacuum_count,
         analyze_count,
         n_tup_ins,
         n_tup_upd,
@@ -1647,12 +1650,60 @@ router.get('/:id/vacuum-lag', async (req, res, next) => {
       return value;
     };
 
+    const scaleFactor = settingNumber('autovacuum_vacuum_scale_factor') ?? 0.2;
+    const vacThreshold = settingNumber('autovacuum_vacuum_threshold') ?? 50;
+    const anScaleFactor = settingNumber('autovacuum_analyze_scale_factor') ?? 0.1;
+    const anThreshold = settingNumber('autovacuum_analyze_threshold') ?? 50;
+    const avEnabled = (settingText('autovacuum') ?? 'on') !== 'off';
+    const rowsWithAutovacuumHealth = rowsResult.rows.map((row: any) => {
+      const liveTup = Number(row.n_live_tup ?? 0);
+      const deadTup = Number(row.n_dead_tup ?? 0);
+      const deadPct = row.dead_pct == null ? null : Number(row.dead_pct);
+      const modSinceAnalyze = Number(row.n_mod_since_analyze ?? 0);
+      const daysSinceVacuum = row.days_since_vacuum == null ? null : Number(row.days_since_vacuum);
+      const autovacRuns = Number(row.autovacuum_count ?? 0);
+      const updatePerSec = row.update_per_sec == null ? 0 : Number(row.update_per_sec);
+      const totalTuples = liveTup + deadTup;
+      const vacuumTriggerThreshold = vacThreshold + liveTup * scaleFactor;
+      const analyzeTriggerThreshold = anThreshold + liveTup * anScaleFactor;
+
+      let avStatus = 'ok';
+      let avReason = '';
+      if (totalTuples < 1000) {
+        avStatus = 'ok';
+        avReason = '';
+      } else if (!avEnabled) {
+        avStatus = 'av_disabled';
+        avReason = "autovacuum parametresi 'off'. Bu tablo otomatik vacuum/freeze almiyor.";
+      } else if (deadTup > vacuumTriggerThreshold && autovacRuns === 0
+        && daysSinceVacuum != null && daysSinceVacuum > 7
+      ) {
+        avStatus = 'not_triggering';
+        avReason = `Dead tuple ${deadTup}, PostgreSQL tetikleme esigi ${Math.round(vacuumTriggerThreshold)} (threshold ${vacThreshold} + ${liveTup} canli x scale_factor ${scaleFactor}). Esik asilmis ama son ${Math.round(daysSinceVacuum)} gundur autovacuum calismadi. Tablonun autovacuum override'i, kosan worker yetersizligi veya cost gecikmesi olabilir.`;
+      } else if (deadPct != null && deadPct >= 20 && autovacRuns > 0) {
+        avStatus = 'cant_keep_up';
+        avReason = `Son pencerede ${autovacRuns} autovacuum calisti ama dead tuple hala %${Math.round(deadPct)}. Vacuum tetikleniyor fakat yazma hizina yetisemiyor (update_per_sec ${Number.isFinite(updatePerSec) ? updatePerSec : 0}). Tablo cok yogun yaziliyor.`;
+      } else if (modSinceAnalyze > analyzeTriggerThreshold) {
+        avStatus = 'analyze_lag';
+        avReason = `${modSinceAnalyze} satir analyze'siz degisti, tetikleme esigi ${Math.round(analyzeTriggerThreshold)}. Planner istatistigi bayat olabilir.`;
+      } else if (autovacRuns >= 10 && (deadPct == null || deadPct < 10)) {
+        avStatus = 'high_write';
+        avReason = `Son pencerede ${autovacRuns} autovacuum, dead tuple dusuk (%${deadPct == null ? 0 : Math.round(deadPct)}). Autovacuum saglikli calisiyor; tablo yogun yaziliyor. Sorun yok.`;
+      }
+
+      return {
+        ...row,
+        av_status: avStatus,
+        av_reason: avReason,
+      };
+    });
+
     const totalsRow = totalsResult.rows[0] ?? {};
     const worstDead = totalsRow.worst_dead_pct as any;
     const oldestVacuum = totalsRow.oldest_vacuum as any;
 
     res.json({
-      rows: rowsResult.rows,
+      rows: rowsWithAutovacuumHealth,
       totals: {
         total_dead_tup: Number(totalsRow.total_dead_tup ?? 0),
         total_bloat_bytes: Number(totalsRow.total_bloat_bytes ?? 0),
