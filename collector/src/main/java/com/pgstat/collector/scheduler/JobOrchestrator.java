@@ -476,7 +476,7 @@ public class JobOrchestrator {
                             instancePk, target.datname(), e.getMessage());
                     }
                 }
-                opsRepo.finishJobRun(jobRunId, "done", totalRows, succeeded, failed, null);
+                opsRepo.finishJobRun(jobRunId, failed > 0 ? "partial" : "success", totalRows, succeeded, failed, null);
                 jdbc.update("update control.db_objects_trigger set status = 'done', finished_at = now(), rows_written = ? where trigger_id = ?",
                     totalRows, triggerId);
                 log.info("Manuel db_objects toplama tamamlandi: instance_pk={}, {} db, {} satir",
