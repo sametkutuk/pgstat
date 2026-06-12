@@ -270,18 +270,21 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
                 return (
                     <div>
                         <div className="rounded-lg border border-[#E2E8F0] bg-[#FAFAFA] px-4 py-2 mb-2 text-xs text-[#334155]">
-                            Bu DB'deki toplam yukun <b className="text-[#2563EB]">%{execShare.toFixed(1)}</b>'i pgstat collector
+                            Bu DB'deki toplam SORGU yukunun <b className="text-[#2563EB]">%{execShare.toFixed(1)}</b>'i pgstat collector
                             (exec time), <b>%{callShare.toFixed(1)}</b>'i cagri, <b>%{bufShare.toFixed(1)}</b>'i buffer/IO.
-                            Kalan uygulama/diger trafik.
-                            {execShare >= 20 && <span className="text-[#B91C1C]"> pgstat yuku yuksek — toplama sikligini (schedule profil) gozden gecirebilirsin.</span>}
+                            Kalan uygulama/diger trafik. Her grafigin altinda ne anlama geldigi aciklanir.
+                            <span className="text-[#94A3B8]"> (Not: bu DB sorgu yuku payi — makine CPU/RAM degil. OS metrigi pgstat tarafindan toplanmaz.)</span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <FootprintPie title="pgstat vs Uygulama (exec time)" colors={['#3B82F6', '#CBD5E1']} unit="ms"
-                                data={[{ name: 'pgstat collector', value: pe }, { name: 'Uygulama/diger', value: de }]} />
+                                data={[{ name: 'pgstat collector', value: pe }, { name: 'Uygulama/diger', value: de }]}
+                                caption={execComment(execShare)} />
                             <FootprintPie title="pgstat vs Uygulama (cagri)" colors={['#10B981', '#CBD5E1']} unit="cagri"
-                                data={[{ name: 'pgstat collector', value: pc }, { name: 'Uygulama/diger', value: dc }]} />
+                                data={[{ name: 'pgstat collector', value: pc }, { name: 'Uygulama/diger', value: dc }]}
+                                caption={callComment(callShare)} />
                             <FootprintPie title="pgstat vs Uygulama (buffer/IO)" colors={['#F59E0B', '#CBD5E1']} unit="buffer"
-                                data={[{ name: 'pgstat collector', value: pb }, { name: 'Uygulama/diger', value: db }]} />
+                                data={[{ name: 'pgstat collector', value: pb }, { name: 'Uygulama/diger', value: db }]}
+                                caption={bufComment(bufShare)} />
                         </div>
                         <div className="rounded-lg border border-[#D1FAE5] bg-[#ECFDF5] px-4 py-2 mt-2 text-xs text-[#047857]">
                             <b>Blocking guvencesi:</b> Collector yalnizca SELECT calistirir (AccessShareLock alir),
@@ -340,15 +343,19 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
     );
 }
 
-function FootprintPie({ title, data, colors, unit }: {
+function FootprintPie({ title, data, colors, unit, caption }: {
     title: string; data: { name: string; value: number }[]; colors: string[]; unit: string;
+    caption?: { text: string; tone: 'good' | 'ok' | 'warn' };
 }) {
+    const toneClass = caption?.tone === 'warn' ? 'text-[#B91C1C] bg-[#FEF2F2] border-[#FECACA]'
+        : caption?.tone === 'ok' ? 'text-[#92400E] bg-[#FFFBEB] border-[#FDE68A]'
+            : 'text-[#047857] bg-[#ECFDF5] border-[#D1FAE5]';
     return (
         <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-3">
             <h3 className="text-xs font-semibold text-[#1E293B] mb-2">{title}</h3>
-            <ResponsiveContainer width="100%" height={260}>
+            <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
-                    <Pie data={data} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={90}
+                    <Pie data={data} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={80}
                         label={(e: any) => `%${((e.percent ?? 0) * 100).toFixed(0)}`} labelLine={false}>
                         {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
                     </Pie>
@@ -357,8 +364,31 @@ function FootprintPie({ title, data, colors, unit }: {
                         wrapperStyle={{ fontSize: 10, maxWidth: '45%' }} />
                 </PieChart>
             </ResponsiveContainer>
+            {caption && (
+                <div className={`mt-1 text-[11px] rounded border px-2 py-1.5 ${toneClass}`}>
+                    {caption.text}
+                </div>
+            )}
         </div>
     );
+}
+
+// Dinamik yorumlar — gercek veri (DB sorgu yuku payi), makine CPU/RAM DEGIL.
+function execComment(pct: number): { text: string; tone: 'good' | 'ok' | 'warn' } {
+    if (pct < 5) return { tone: 'good', text: `Collector bu DB'nin sorgu islem suresinin yalnizca %${pct.toFixed(1)}'ini kullaniyor — ihmal edilebilir, saglikli. Uygulama trafigine etkisi yok denecek kadar az.` };
+    if (pct < 20) return { tone: 'ok', text: `Collector sorgu islem suresinin %${pct.toFixed(1)}'ini kullaniyor — kabul edilebilir. Bu DB az kullaniliyorsa normaldir.` };
+    return { tone: 'warn', text: `Collector sorgu islem suresinin %${pct.toFixed(1)}'ini kullaniyor — yuksek. Bu DB cok az uygulama trafigi aliyor olabilir; toplama sikligini (schedule profil) seyrekleterek pgstat payini dusurebilirsin.` };
+}
+function callComment(pct: number): { text: string; tone: 'good' | 'ok' | 'warn' } {
+    // Cagri payinin yuksek olmasi normal — pgstat cok sayida hafif sorgu yapar.
+    if (pct < 30) return { tone: 'good', text: `Toplam sorgu cagrilarinin %${pct.toFixed(1)}'i collector. Collector sik ama hafif sorgu yapar; bu oran exec time'a gore yuksek cikabilir, sorun degil.` };
+    if (pct < 60) return { tone: 'ok', text: `Cagrilarin %${pct.toFixed(1)}'i collector. Bu DB'de uygulama az sorgu calistiriyor; collector'un periyodik sorgulari oransal olarak one cikiyor. Exec/buffer paylari dusukse sorun yok.` };
+    return { tone: 'ok', text: `Cagrilarin %${pct.toFixed(1)}'i collector — bu DB neredeyse bos (cok az uygulama sorgusu). Collector'un sabit periyodik sorgulari baskin gozukuyor; gercek yuk icin exec time/buffer paylarina bak.` };
+}
+function bufComment(pct: number): { text: string; tone: 'good' | 'ok' | 'warn' } {
+    if (pct < 5) return { tone: 'good', text: `Collector DB buffer/cache erisiminin %${pct.toFixed(1)}'ini kullaniyor — cok dusuk. Disk/bellek IO etkisi ihmal edilebilir.` };
+    if (pct < 20) return { tone: 'ok', text: `Collector buffer/cache erisiminin %${pct.toFixed(1)}'ini kullaniyor — kabul edilebilir seviye.` };
+    return { tone: 'warn', text: `Collector buffer/cache erisiminin %${pct.toFixed(1)}'ini kullaniyor — yuksek. Buyuk catalog/tablo taramalari (orn. nightly boyut, per-table freeze) cache'i mesgul ediyor olabilir.` };
 }
 
 function InfoCard({ label, value }: { label: string; value: string }) {
