@@ -3055,7 +3055,8 @@ router.get('/:id/collector-footprint/summary', async (req, res, next) => {
       select
         case when rr.rolname = $3 then 'pgstat' else 'diger' end as grup,
         sum(d.calls_delta)::bigint as calls,
-        round(sum(d.total_exec_time_ms_delta)::numeric, 1) as exec_ms
+        round(sum(d.total_exec_time_ms_delta)::numeric, 1) as exec_ms,
+        sum(d.shared_blks_hit_delta + d.shared_blks_read_delta)::bigint as buffers
       from fact.pgss_delta d
       join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
       left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
@@ -3064,15 +3065,15 @@ router.get('/:id/collector-footprint/summary', async (req, res, next) => {
       group by case when rr.rolname = $3 then 'pgstat' else 'diger' end
     `, [id, hours, collectorUser]);
 
-    let pgstatExec = 0, pgstatCalls = 0, digerExec = 0, digerCalls = 0;
+    let pgstatExec = 0, pgstatCalls = 0, pgstatBuf = 0, digerExec = 0, digerCalls = 0, digerBuf = 0;
     for (const r of result.rows) {
-      if (r.grup === 'pgstat') { pgstatExec = Number(r.exec_ms); pgstatCalls = Number(r.calls); }
-      else { digerExec = Number(r.exec_ms); digerCalls = Number(r.calls); }
+      if (r.grup === 'pgstat') { pgstatExec = Number(r.exec_ms); pgstatCalls = Number(r.calls); pgstatBuf = Number(r.buffers); }
+      else { digerExec = Number(r.exec_ms); digerCalls = Number(r.calls); digerBuf = Number(r.buffers); }
     }
     res.json({
       collector_username: collectorUser,
-      pgstat: { exec_ms: pgstatExec, calls: pgstatCalls },
-      diger: { exec_ms: digerExec, calls: digerCalls },
+      pgstat: { exec_ms: pgstatExec, calls: pgstatCalls, buffers: pgstatBuf },
+      diger: { exec_ms: digerExec, calls: digerCalls, buffers: digerBuf },
     });
   } catch (err) {
     next(err);

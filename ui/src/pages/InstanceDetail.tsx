@@ -224,7 +224,7 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
 
     const { data: summary } = useQuery({
         queryKey: ['collector-footprint-summary', instancePk, hours],
-        queryFn: () => apiGet<{ collector_username: string; pgstat: { exec_ms: number; calls: number }; diger: { exec_ms: number; calls: number } }>(
+        queryFn: () => apiGet<{ collector_username: string; pgstat: { exec_ms: number; calls: number; buffers: number }; diger: { exec_ms: number; calls: number; buffers: number } }>(
             `/instances/${instancePk}/collector-footprint/summary?hours=${hours}`),
         enabled: !!instancePk,
     });
@@ -263,20 +263,31 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
             {summary && (summary.pgstat.exec_ms + summary.diger.exec_ms > 0) && (() => {
                 const pe = summary.pgstat.exec_ms, de = summary.diger.exec_ms;
                 const pc = summary.pgstat.calls, dc = summary.diger.calls;
+                const pb = summary.pgstat.buffers, db = summary.diger.buffers;
                 const execShare = pe + de > 0 ? (pe * 100 / (pe + de)) : 0;
                 const callShare = pc + dc > 0 ? (pc * 100 / (pc + dc)) : 0;
+                const bufShare = pb + db > 0 ? (pb * 100 / (pb + db)) : 0;
                 return (
                     <div>
                         <div className="rounded-lg border border-[#E2E8F0] bg-[#FAFAFA] px-4 py-2 mb-2 text-xs text-[#334155]">
                             Bu DB'deki toplam yukun <b className="text-[#2563EB]">%{execShare.toFixed(1)}</b>'i pgstat collector
-                            (exec time), <b>%{callShare.toFixed(1)}</b>'i pgstat (cagri). Kalan uygulama/diger trafik.
+                            (exec time), <b>%{callShare.toFixed(1)}</b>'i cagri, <b>%{bufShare.toFixed(1)}</b>'i buffer/IO.
+                            Kalan uygulama/diger trafik.
                             {execShare >= 20 && <span className="text-[#B91C1C]"> pgstat yuku yuksek — toplama sikligini (schedule profil) gozden gecirebilirsin.</span>}
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <FootprintPie title="pgstat vs Uygulama (exec time)" colors={['#3B82F6', '#CBD5E1']} unit="ms"
                                 data={[{ name: 'pgstat collector', value: pe }, { name: 'Uygulama/diger', value: de }]} />
                             <FootprintPie title="pgstat vs Uygulama (cagri)" colors={['#10B981', '#CBD5E1']} unit="cagri"
                                 data={[{ name: 'pgstat collector', value: pc }, { name: 'Uygulama/diger', value: dc }]} />
+                            <FootprintPie title="pgstat vs Uygulama (buffer/IO)" colors={['#F59E0B', '#CBD5E1']} unit="buffer"
+                                data={[{ name: 'pgstat collector', value: pb }, { name: 'Uygulama/diger', value: db }]} />
+                        </div>
+                        <div className="rounded-lg border border-[#D1FAE5] bg-[#ECFDF5] px-4 py-2 mt-2 text-xs text-[#047857]">
+                            <b>Blocking guvencesi:</b> Collector yalnizca SELECT calistirir (AccessShareLock alir),
+                            DDL/yazma yapmaz. Bu yuzden normal sorgulari (okuma/yazma) bekletmez — yalnizca biri o tabloda
+                            ACCESS EXCLUSIVE (DDL) tutuyorsa kisa sure etkilesim olabilir. Ayrica lock_timeout korumasi
+                            var: collector kilidi alamazsa bekledigi sorguyu serbest birakir, kaynak DB'yi kilitlemez.
                         </div>
                     </div>
                 );
