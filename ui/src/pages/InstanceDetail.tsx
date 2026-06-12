@@ -222,6 +222,13 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
         enabled: !!instancePk,
     });
 
+    const { data: summary } = useQuery({
+        queryKey: ['collector-footprint-summary', instancePk, hours],
+        queryFn: () => apiGet<{ collector_username: string; pgstat: { exec_ms: number; calls: number }; diger: { exec_ms: number; calls: number } }>(
+            `/instances/${instancePk}/collector-footprint/summary?hours=${hours}`),
+        enabled: !!instancePk,
+    });
+
     if (isLoading) return <SkeletonTable rows={8} cols={8} />;
     const rows = data?.rows ?? [];
     const windowMinutes = hours * 60;
@@ -266,11 +273,37 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
                 </span>
             </div>
 
-            {/* Iki pasta: yuk dagilimi (exec time) + cagri dagilimi */}
+            {/* pgstat vs uygulama/diger — DB'nin toplam yukunun ne kadari pgstat */}
+            {summary && (summary.pgstat.exec_ms + summary.diger.exec_ms > 0) && (() => {
+                const pe = summary.pgstat.exec_ms, de = summary.diger.exec_ms;
+                const pc = summary.pgstat.calls, dc = summary.diger.calls;
+                const execShare = pe + de > 0 ? (pe * 100 / (pe + de)) : 0;
+                const callShare = pc + dc > 0 ? (pc * 100 / (pc + dc)) : 0;
+                return (
+                    <div>
+                        <div className="rounded-lg border border-[#E2E8F0] bg-[#FAFAFA] px-4 py-2 mb-2 text-xs text-[#334155]">
+                            Bu DB'deki toplam yukun <b className="text-[#2563EB]">%{execShare.toFixed(1)}</b>'i pgstat collector
+                            (exec time), <b>%{callShare.toFixed(1)}</b>'i pgstat (cagri). Kalan uygulama/diger trafik.
+                            {execShare >= 20 && <span className="text-[#B91C1C]"> pgstat yuku yuksek — toplama sikligini (schedule profil) gozden gecirebilirsin.</span>}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <FootprintPie title="pgstat vs Uygulama (exec time)" colors={['#3B82F6', '#CBD5E1']} unit="ms"
+                                data={[{ name: 'pgstat collector', value: pe }, { name: 'Uygulama/diger', value: de }]} />
+                            <FootprintPie title="pgstat vs Uygulama (cagri)" colors={['#10B981', '#CBD5E1']} unit="cagri"
+                                data={[{ name: 'pgstat collector', value: pc }, { name: 'Uygulama/diger', value: dc }]} />
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* Collector ic kirilim: hangi collector sorgusu yukun yuzde kaci */}
             {rows.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <FootprintPie title="Yuk dagilimi (exec time)" data={execPie} colors={PIE_COLORS} unit="ms" />
-                    <FootprintPie title="Cagri dagilimi" data={callsPie} colors={PIE_COLORS} unit="cagri" />
+                <div>
+                    <div className="text-xs font-semibold text-[#64748B] mb-2">Collector sorgulari ic kirilim</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <FootprintPie title="Yuk dagilimi (exec time)" data={execPie} colors={PIE_COLORS} unit="ms" />
+                        <FootprintPie title="Cagri dagilimi" data={callsPie} colors={PIE_COLORS} unit="cagri" />
+                    </div>
                 </div>
             )}
 

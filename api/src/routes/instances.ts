@@ -3039,6 +3039,46 @@ router.get('/:id/collector-footprint', async (req, res, next) => {
   }
 });
 
+// GET /api/instances/:id/collector-footprint/summary?hours=24
+// DB'nin TOPLAM yukunun pgstat collector vs uygulama/diger dagilimi.
+// "pgstat bu DB'yi ne kadar mesgul ediyor" — exec time + cagri bazli.
+router.get('/:id/collector-footprint/summary', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const hours = parseHours(req.query.hours, 24);
+    const inst = await pool.query(
+      'select collector_username from control.instance_inventory where instance_pk = $1', [id]);
+    if (inst.rows.length === 0) { res.status(404).json({ error: 'instance bulunamadi' }); return; }
+    const collectorUser = inst.rows[0].collector_username || 'pgstats_collector';
+
+    const result = await pool.query(`
+      select
+        case when rr.rolname = $3 then 'pgstat' else 'diger' end as grup,
+        sum(d.calls_delta)::bigint as calls,
+        round(sum(d.total_exec_time_ms_delta)::numeric, 1) as exec_ms
+      from fact.pgss_delta d
+      join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+      left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+      where d.instance_pk = $1
+        and d.sample_ts >= now() - make_interval(hours => $2)
+      group by case when rr.rolname = $3 then 'pgstat' else 'diger' end
+    `, [id, hours, collectorUser]);
+
+    let pgstatExec = 0, pgstatCalls = 0, digerExec = 0, digerCalls = 0;
+    for (const r of result.rows) {
+      if (r.grup === 'pgstat') { pgstatExec = Number(r.exec_ms); pgstatCalls = Number(r.calls); }
+      else { digerExec = Number(r.exec_ms); digerCalls = Number(r.calls); }
+    }
+    res.json({
+      collector_username: collectorUser,
+      pgstat: { exec_ms: pgstatExec, calls: pgstatCalls },
+      diger: { exec_ms: digerExec, calls: digerCalls },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/:id/collector-footprint/trend?queryid=N&hours=168
 // Tek bir collector sorgusunun zaman icindeki sure/cagri trendi
 // (sorgu yavasladi/degisti mi gormek icin).
