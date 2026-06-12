@@ -530,11 +530,8 @@ function fmtBytes(value: any): string {
 interface FootprintSummary {
     hours: number;
     instance_count: number;
-    avg_exec_pct: number;
-    max_exec_pct: number;
-    avg_buf_pct: number;
-    max_buf_pct: number;
-    rows: { instance_pk: number; instance_name: string; exec_pct: number | null; buf_pct: number | null; pgstat_calls: string; pgstat_exec_ms: string }[];
+    counts: { healthy: number; idle_db: number; review: number };
+    rows: { instance_pk: number; instance_name: string; exec_pct: number | null; buf_pct: number | null; pgstat_calls: string; pgstat_exec_ms: string; category: 'healthy' | 'idle_db' | 'review' }[];
 }
 
 function LoadAssuranceCard() {
@@ -545,29 +542,30 @@ function LoadAssuranceCard() {
     });
     if (!data || data.instance_count === 0) return null;
 
-    const avgExec = data.avg_exec_pct ?? 0;
-    const maxExec = data.max_exec_pct ?? 0;
-    // Genel ton: ortalama exec payi dusukse yesil
-    const tone = avgExec < 5 ? 'green' : avgExec < 15 ? 'amber' : 'red';
-    const toneBg = tone === 'green' ? 'bg-[#ECFDF5] border-[#A7F3D0]'
-        : tone === 'amber' ? 'bg-[#FFFBEB] border-[#FDE68A]' : 'bg-[#FEF2F2] border-[#FECACA]';
-    const toneText = tone === 'green' ? 'text-[#047857]' : tone === 'amber' ? 'text-[#92400E]' : 'text-[#B91C1C]';
+    // Her instance KENDI ICINDE siniflandirildi:
+    //  healthy = pgstat orani dusuk (DB aktif, pgstat ihmal edilebilir)
+    //  idle_db = pgstat orani yuksek ama mutlak yuk dusuk (DB bos/az kullaniliyor — pgstat sorun DEGIL)
+    //  review  = yuksek oran + yuksek mutlak (gercekten pgstat yuku — incele)
+    const c = data.counts;
+    // Ton: review varsa kirmizi, yoksa yesil (idle_db kotu degil)
+    const tone = c.review > 0 ? 'red' : 'green';
+    const toneBg = tone === 'green' ? 'bg-[#ECFDF5] border-[#A7F3D0]' : 'bg-[#FEF2F2] border-[#FECACA]';
+    const toneText = tone === 'green' ? 'text-[#047857]' : 'text-[#B91C1C]';
 
     return (
         <div className={`rounded-lg border ${toneBg} p-4 mb-4 print:hidden`}>
             <div className="flex items-start justify-between gap-3">
                 <div className="flex-1">
-                    {/* Yonetici ozeti — tek cumle guvence */}
+                    {/* Yonetici ozeti — siniflandirmaya gore (her instance kendi icinde) */}
                     <div className={`text-sm font-semibold ${toneText}`}>
-                        {tone === 'green' && '✓ '}pgstat izlenen {data.instance_count} veritabaninin sorgu isleme yukunun
-                        ortalama <b>%{avgExec.toFixed(1)}</b>'ini kullaniyor
-                        {tone === 'green' && ' — ihmal edilebilir, DB performansina pratikte etkisi yok.'}
-                        {tone === 'amber' && ' — kabul edilebilir seviye.'}
-                        {tone === 'red' && ' — bazi instance\'larda yuksek (asagidaki detaya bakin).'}
+                        {tone === 'green'
+                            ? <>✓ pgstat hicbir veritabanina kayda deger yuk getirmiyor. Izlenen {data.instance_count} DB'den <b>{c.healthy}</b>'inde pgstat payi dusuk (DB aktif, ihmal edilebilir){c.idle_db > 0 && <>, <b>{c.idle_db}</b>'inde oran yuksek ama bu DB'ler az kullaniliyor (mutlak yuk minik — pgstat sorun degil)</>}.</>
+                            : <>pgstat <b>{c.review}</b> veritabaninda hem yuksek oranli hem mutlak yuku belirgin — incelenmeli. {c.healthy} DB saglikli{c.idle_db > 0 && <>, {c.idle_db} DB az kullaniliyor (oran yuksek ama mutlak dusuk)</>}.</>}
                     </div>
                     <div className="text-xs text-[#64748B] mt-1">
-                        En yuksek instance: %{maxExec.toFixed(1)} exec, %{(data.max_buf_pct ?? 0).toFixed(1)} buffer/IO.
-                        Son 24 saat, gercek olcum (pg_stat_statements). Salt-okuma — veri degistirmez, kimseyi bekletmez.
+                        Onemli: yuksek pgstat orani <b>tek basina</b> kotu degildir — o DB az kullaniliyorsa (uygulama az sorgu calistiriyorsa)
+                        pgstat'in sabit periyodik sorgulari oransal one cikar ama mutlak yuk minik kalir.
+                        pgstat zarar vermez; salt-okuma, veri degistirmez, kimseyi bekletmez. (Son {data.hours} saat, pg_stat_statements.)
                     </div>
                 </div>
                 <button onClick={() => setOpen(v => !v)}
@@ -596,20 +594,27 @@ function LoadAssuranceCard() {
                                 <thead className="bg-[#F8FAFC] sticky top-0">
                                     <tr>
                                         <th className="py-1.5 px-2 text-left font-semibold text-[#64748B]">Instance</th>
-                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">Exec %</th>
+                                        <th className="py-1.5 px-2 text-left font-semibold text-[#64748B]">Durum</th>
+                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]" title="Bu DB'nin kendi sorgu yukunde pgstat'in exec time payi">Exec %</th>
                                         <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">Buffer %</th>
-                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">pgstat exec (ms)</th>
+                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]" title="pgstat'in mutlak yuku (24sa toplam exec ms) — asil onemli olan bu">pgstat exec (ms)</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-[#F1F5F9]">
                                     {data.rows.map(r => {
                                         const ep = r.exec_pct == null ? 0 : Number(r.exec_pct);
+                                        const cat = r.category === 'review'
+                                            ? { label: 'Incele', cls: 'bg-red-100 text-red-700', tip: 'Yuksek oran + yuksek mutlak yuk' }
+                                            : r.category === 'idle_db'
+                                                ? { label: 'DB az kullaniliyor', cls: 'bg-slate-100 text-slate-600', tip: 'Oran yuksek ama mutlak yuk dusuk — pgstat sorun degil, DB bos' }
+                                                : { label: 'Saglikli', cls: 'bg-emerald-100 text-emerald-700', tip: 'pgstat orani dusuk, ihmal edilebilir' };
                                         return (
                                             <tr key={r.instance_pk} className="hover:bg-[#F8FAFC]">
                                                 <td className="py-1 px-2">{r.instance_name}</td>
-                                                <td className="py-1 px-2 text-right font-mono">
-                                                    <span className={`px-1.5 py-0.5 rounded ${ep < 5 ? 'bg-emerald-100 text-emerald-700' : ep < 15 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>%{ep.toFixed(1)}</span>
+                                                <td className="py-1 px-2">
+                                                    <span title={cat.tip} className={`px-1.5 py-0.5 rounded cursor-help ${cat.cls}`}>{cat.label}</span>
                                                 </td>
+                                                <td className="py-1 px-2 text-right font-mono text-[#64748B]">%{ep.toFixed(1)}</td>
                                                 <td className="py-1 px-2 text-right font-mono text-[#64748B]">%{r.buf_pct == null ? '0' : Number(r.buf_pct).toFixed(1)}</td>
                                                 <td className="py-1 px-2 text-right font-mono text-[#64748B]">{Number(r.pgstat_exec_ms).toLocaleString('tr-TR')}</td>
                                             </tr>

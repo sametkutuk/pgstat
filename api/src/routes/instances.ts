@@ -166,21 +166,35 @@ router.get('/footprint-summary', async (req, res, next) => {
       order by exec_pct desc nulls last
     `, [hours]);
 
-    // Fleet ozeti: ortalama + max pgstat exec payi
+    // Her instance'i KENDI ICINDE siniflandir (iki boyut: pgstat orani + mutlak yuk).
+    // Mantik: yuksek pgstat orani TEK BASINA kotu degil — DB bos/az kullaniliyordur,
+    // pgstat zarar vermez. ASIL onemli olan pgstat'in MUTLAK yuku. Bir DB ancak
+    // hem yuksek oran HEM yuksek mutlak yuk varsa "incelenecek".
+    //
+    // Esikler (her instance'in KENDI 24sa pgstat exec ms'i):
+    //   mutlak yuksek esigi: pgstat exec > 60000 ms/24sa (~ort 42ms/dk surekli)
+    //   oran yuksek esigi: exec_pct > 50
+    const ABS_HIGH_MS = 60000;
+    const PCT_HIGH = 50;
     const rows = result.rows;
-    const execPcts = rows.map((r: any) => Number(r.exec_pct)).filter((v: number) => Number.isFinite(v));
-    const bufPcts = rows.map((r: any) => Number(r.buf_pct)).filter((v: number) => Number.isFinite(v));
-    const avg = (a: number[]) => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
-    const max = (a: number[]) => a.length ? Math.max(...a) : 0;
+    let saglikli = 0;       // dusuk oran VEYA dusuk mutlak — pgstat sorun degil
+    let bosDb = 0;          // yuksek oran + dusuk mutlak — DB az kullaniliyor
+    let inceleneecek = 0;   // yuksek oran + yuksek mutlak — gercekten pgstat yuku
+    const classified = rows.map((r: any) => {
+      const pct = r.exec_pct == null ? 0 : Number(r.exec_pct);
+      const absMs = Number(r.pgstat_exec_ms || 0);
+      let category: 'healthy' | 'idle_db' | 'review';
+      if (pct >= PCT_HIGH && absMs >= ABS_HIGH_MS) { category = 'review'; inceleneecek++; }
+      else if (pct >= PCT_HIGH) { category = 'idle_db'; bosDb++; }
+      else { category = 'healthy'; saglikli++; }
+      return { ...r, category };
+    });
 
     res.json({
       hours,
       instance_count: rows.length,
-      avg_exec_pct: Math.round(avg(execPcts) * 100) / 100,
-      max_exec_pct: Math.round(max(execPcts) * 100) / 100,
-      avg_buf_pct: Math.round(avg(bufPcts) * 100) / 100,
-      max_buf_pct: Math.round(max(bufPcts) * 100) / 100,
-      rows,
+      counts: { healthy: saglikli, idle_db: bosDb, review: inceleneecek },
+      rows: classified,
     });
   } catch (err) {
     next(err);
