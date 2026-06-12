@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import StatementColumnsModal, { useStatementColumns, fmtStmtValue } from '../components/statements/StatementColumnsModal';
 import DataColumnsModal, { useDataColumns, fmtValue, type ColumnsMeta } from '../components/common/DataColumnsModal';
 import StatementSqlCell from '../components/statements/StatementSqlCell';
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip as RcTooltip } from 'recharts';
 import ResizableTh, { useColumnWidths, toggleSort, sortKeysToParam, type SortKey } from '../components/statements/ResizableTh';
 import DataKindBanner from '../components/common/DataKindBanner';
 import ViewModeToggle, { type ViewMode } from '../components/common/ViewModeToggle';
@@ -221,8 +222,27 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
         enabled: !!instancePk,
     });
 
-    if (isLoading) return <SkeletonTable rows={8} cols={7} />;
+    if (isLoading) return <SkeletonTable rows={8} cols={8} />;
     const rows = data?.rows ?? [];
+    const windowMinutes = hours * 60;
+
+    // Toplam yuk + cagri (pasta yuzdeleri ve ozet icin)
+    const totalExecMs = rows.reduce((s, r) => s + Number(r.total_exec_ms || 0), 0);
+    const totalCalls = rows.reduce((s, r) => s + Number(r.total_calls || 0), 0);
+
+    // Pasta: top 8 + "diger". Kisa etiket (sorgunun ilk anlamli kismi).
+    const PIE_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#94A3B8'];
+    function buildPie(valueOf: (r: FootprintRow) => number) {
+        const sorted = [...rows].sort((a, b) => valueOf(b) - valueOf(a));
+        const top = sorted.slice(0, 8);
+        const rest = sorted.slice(8);
+        const slices = top.map(r => ({ name: shortLabel(r.query_text), value: valueOf(r) }));
+        const restSum = rest.reduce((s, r) => s + valueOf(r), 0);
+        if (restSum > 0) slices.push({ name: `Diger (${rest.length})`, value: restSum });
+        return slices.filter(s => s.value > 0);
+    }
+    const execPie = buildPie(r => Number(r.total_exec_ms || 0));
+    const callsPie = buildPie(r => Number(r.total_calls || 0));
 
     return (
         <div className="space-y-4">
@@ -239,7 +259,21 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
                         {h === 6 ? '6sa' : h === 24 ? '24sa' : h === 168 ? '7g' : '30g'}
                     </button>
                 ))}
+                <span className="ml-4 text-xs text-[#64748B]">
+                    Toplam: <b className="text-[#1E293B]">{Math.round(totalExecMs).toLocaleString('tr-TR')} ms</b> exec,
+                    {' '}<b className="text-[#1E293B]">{totalCalls.toLocaleString('tr-TR')}</b> cagri
+                    {' '}(<b className="text-[#1E293B]">{(totalExecMs / windowMinutes).toFixed(0)}</b> ms/dk ort. yuk)
+                </span>
             </div>
+
+            {/* Iki pasta: yuk dagilimi (exec time) + cagri dagilimi */}
+            {rows.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FootprintPie title="Yuk dagilimi (exec time)" data={execPie} colors={PIE_COLORS} unit="ms" />
+                    <FootprintPie title="Cagri dagilimi" data={callsPie} colors={PIE_COLORS} unit="cagri" />
+                </div>
+            )}
+
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
                 <table className="w-full text-sm">
                     <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
@@ -247,29 +281,75 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
                             <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Sorgu</th>
                             <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">DB</th>
                             <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Cagri</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Ortalama cagri/dakika (pencere boyunca)">Cagri/dk</th>
                             <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Pencere boyunca toplam execution suresi">Toplam (ms)</th>
+                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Toplam yukun yuzde kaci">Yuk %</th>
                             <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase" title="Cagri basina ortalama">Ort (ms)</th>
                             <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Max (ms)</th>
-                            <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Satir</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-[#F1F5F9]">
                         {rows.length === 0 ? (
-                            <tr><td colSpan={7} className="py-8 text-center text-sm text-[#64748B]">Bu pencerede collector sorgusu yok.</td></tr>
-                        ) : rows.map((r) => (
-                            <tr key={r.queryid} className="hover:bg-[#F8FAFC]">
-                                <td className="py-2 px-3 font-mono text-xs text-[#1E293B] max-w-md truncate" title={r.query_text ?? ''}>{r.query_text ?? '—'}</td>
-                                <td className="py-2 px-3 text-xs text-[#64748B]">{r.datname ?? '—'}</td>
-                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_calls).toLocaleString('tr-TR')}</td>
-                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_exec_ms).toLocaleString('tr-TR')}</td>
-                                <td className="py-2 px-3 text-right font-mono text-xs">{r.mean_exec_ms ?? '—'}</td>
-                                <td className="py-2 px-3 text-right font-mono text-xs">{r.max_exec_ms ?? '—'}</td>
-                                <td className="py-2 px-3 text-right font-mono text-xs">{Number(r.total_rows).toLocaleString('tr-TR')}</td>
-                            </tr>
-                        ))}
+                            <tr><td colSpan={8} className="py-8 text-center text-sm text-[#64748B]">Bu pencerede collector sorgusu yok.</td></tr>
+                        ) : rows.map((r) => {
+                            const execMs = Number(r.total_exec_ms || 0);
+                            const calls = Number(r.total_calls || 0);
+                            const loadPct = totalExecMs > 0 ? (execMs * 100 / totalExecMs) : 0;
+                            const perMin = calls / windowMinutes;
+                            return (
+                                <tr key={r.queryid} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 font-mono text-xs text-[#1E293B] max-w-md truncate" title={r.query_text ?? ''}>{r.query_text ?? '—'}</td>
+                                    <td className="py-2 px-3 text-xs text-[#64748B]">{r.datname ?? '—'}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{calls.toLocaleString('tr-TR')}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{perMin < 0.1 ? perMin.toFixed(2) : perMin.toFixed(1)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{execMs.toLocaleString('tr-TR')}</td>
+                                    <td className="py-2 px-3 text-right">
+                                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${loadPct >= 25 ? 'bg-red-100 text-red-700' : loadPct >= 10 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                                            %{loadPct.toFixed(1)}
+                                        </span>
+                                    </td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{r.mean_exec_ms ?? '—'}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{r.max_exec_ms ?? '—'}</td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
+        </div>
+    );
+}
+
+// Sorgu metninden kisa etiket — pasta dilim adi icin (ilk FROM/tablo veya ilk kelimeler)
+function shortLabel(query: string | null): string {
+    if (!query) return '?';
+    const q = query.replace(/\s+/g, ' ').trim();
+    // "from X" yakala
+    const m = q.match(/from\s+([a-z_."]+)/i);
+    if (m) return m[1].replace(/"/g, '').slice(0, 30);
+    // SET komutlari
+    const setM = q.match(/^set\s+(\w+)/i);
+    if (setM) return 'SET ' + setM[1];
+    return q.slice(0, 30);
+}
+
+function FootprintPie({ title, data, colors, unit }: {
+    title: string; data: { name: string; value: number }[]; colors: string[]; unit: string;
+}) {
+    return (
+        <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] p-3">
+            <h3 className="text-xs font-semibold text-[#1E293B] mb-2">{title}</h3>
+            <ResponsiveContainer width="100%" height={260}>
+                <PieChart>
+                    <Pie data={data} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={90}
+                        label={(e: any) => `%${((e.percent ?? 0) * 100).toFixed(0)}`} labelLine={false}>
+                        {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
+                    </Pie>
+                    <RcTooltip formatter={(v: any) => [`${Number(v).toLocaleString('tr-TR')} ${unit}`, '']} />
+                    <Legend layout="vertical" align="right" verticalAlign="middle"
+                        wrapperStyle={{ fontSize: 10, maxWidth: '45%' }} />
+                </PieChart>
+            </ResponsiveContainer>
         </div>
     );
 }
