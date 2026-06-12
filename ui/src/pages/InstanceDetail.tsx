@@ -233,23 +233,9 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
     const rows = data?.rows ?? [];
     const windowMinutes = hours * 60;
 
-    // Toplam yuk + cagri (pasta yuzdeleri ve ozet icin)
+    // Toplam yuk + cagri (tablo yuk% ve ozet icin)
     const totalExecMs = rows.reduce((s, r) => s + Number(r.total_exec_ms || 0), 0);
     const totalCalls = rows.reduce((s, r) => s + Number(r.total_calls || 0), 0);
-
-    // Pasta: top 8 + "diger". Kisa etiket (sorgunun ilk anlamli kismi).
-    const PIE_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#94A3B8'];
-    function buildPie(valueOf: (r: FootprintRow) => number) {
-        const sorted = [...rows].sort((a, b) => valueOf(b) - valueOf(a));
-        const top = sorted.slice(0, 8);
-        const rest = sorted.slice(8);
-        const slices = top.map(r => ({ name: shortLabel(r.query_text), value: valueOf(r) }));
-        const restSum = rest.reduce((s, r) => s + valueOf(r), 0);
-        if (restSum > 0) slices.push({ name: `Diger (${rest.length})`, value: restSum });
-        return slices.filter(s => s.value > 0);
-    }
-    const execPie = buildPie(r => Number(r.total_exec_ms || 0));
-    const callsPie = buildPie(r => Number(r.total_calls || 0));
 
     return (
         <div className="space-y-4">
@@ -296,16 +282,6 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
                 );
             })()}
 
-            {/* Collector ic kirilim: hangi collector sorgusu yukun yuzde kaci */}
-            {rows.length > 0 && (
-                <div>
-                    <div className="text-xs font-semibold text-[#64748B] mb-2">Collector sorgulari ic kirilim</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <FootprintPie title="Yuk dagilimi (exec time)" data={execPie} colors={PIE_COLORS} unit="ms" />
-                        <FootprintPie title="Cagri dagilimi" data={callsPie} colors={PIE_COLORS} unit="cagri" />
-                    </div>
-                </div>
-            )}
 
             <div className="bg-white rounded-lg shadow-sm border border-[#E2E8F0] overflow-x-auto">
                 <table className="w-full text-sm">
@@ -351,19 +327,6 @@ function CollectorFootprintTab({ instancePk }: { instancePk: string }) {
             </div>
         </div>
     );
-}
-
-// Sorgu metninden kisa etiket — pasta dilim adi icin (ilk FROM/tablo veya ilk kelimeler)
-function shortLabel(query: string | null): string {
-    if (!query) return '?';
-    const q = query.replace(/\s+/g, ' ').trim();
-    // "from X" yakala
-    const m = q.match(/from\s+([a-z_."]+)/i);
-    if (m) return m[1].replace(/"/g, '').slice(0, 30);
-    // SET komutlari
-    const setM = q.match(/^set\s+(\w+)/i);
-    if (setM) return 'SET ' + setM[1];
-    return q.slice(0, 30);
 }
 
 function FootprintPie({ title, data, colors, unit }: {
