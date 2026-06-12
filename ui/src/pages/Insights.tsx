@@ -270,23 +270,29 @@ export default function Insights() {
                         ))}
                     </select>
                 </div>
-                <div>
-                    <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
-                    <TimeRangePicker value={range} onChange={setRange} persistKey="insights-range" />
-                </div>
-                <div className="ml-auto">
-                    <label className="block text-xs text-[#64748B] mb-1">Otomatik Yenile</label>
-                    <button
-                        onClick={() => setAutoRefresh(v => !v)}
-                        title={autoRefresh ? '30 saniyede bir veriler yenileniyor — kapatmak icin tikla' : 'Veriler durağan — 30sn yenilenme istersen tikla'}
-                        className={`px-3 py-1.5 text-sm rounded border transition-colors ${autoRefresh
-                            ? 'border-[#10B981] text-[#047857] bg-[#ECFDF5]'
-                            : 'border-[#E2E8F0] text-[#64748B] bg-white hover:bg-[#F8FAFC]'
-                            }`}
-                    >
-                        {autoRefresh ? '🟢 Acik (30sn)' : '⏸ Kapali'}
-                    </button>
-                </div>
+                {/* Freeze sekmesi son snapshot gosterir; tarih araligi + otomatik
+                    yenile anlamsiz, bu yuzden freeze'de gizlenir. */}
+                {tab !== 'freeze' && (
+                    <>
+                        <div>
+                            <label className="block text-xs text-[#64748B] mb-1">Tarih Aralığı</label>
+                            <TimeRangePicker value={range} onChange={setRange} persistKey="insights-range" />
+                        </div>
+                        <div className="ml-auto">
+                            <label className="block text-xs text-[#64748B] mb-1">Otomatik Yenile</label>
+                            <button
+                                onClick={() => setAutoRefresh(v => !v)}
+                                title={autoRefresh ? '30 saniyede bir veriler yenileniyor — kapatmak icin tikla' : 'Veriler durağan — 30sn yenilenme istersen tikla'}
+                                className={`px-3 py-1.5 text-sm rounded border transition-colors ${autoRefresh
+                                    ? 'border-[#10B981] text-[#047857] bg-[#ECFDF5]'
+                                    : 'border-[#E2E8F0] text-[#64748B] bg-white hover:bg-[#F8FAFC]'
+                                    }`}
+                            >
+                                {autoRefresh ? '🟢 Acik (30sn)' : '⏸ Kapali'}
+                            </button>
+                        </div>
+                    </>
+                )}
             </div>
 
             {/* Sekme bar */}

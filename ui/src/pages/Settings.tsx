@@ -294,6 +294,10 @@ function RetentionTab() {
             key: 'snapshot_retention_hours', header: 'Snapshot (saat)', className: 'text-right',
             render: (r: any) => r.snapshot_retention_hours ?? '-'
         },
+        {
+            key: 'table_freeze_retention_days', header: 'Table Freeze (gun)', className: 'text-right',
+            render: (r: any) => r.table_freeze_retention_days ?? '-'
+        },
         { key: 'purge_enabled', header: 'Purge', render: (r: any) => r.purge_enabled ? '✅' : '❌' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
         { key: 'is_active', header: 'Durum', render: (r: any) => <Badge value={r.is_active ? 'ready' : 'paused'} /> },
@@ -478,6 +482,10 @@ function ScheduleTab() {
         { key: 'cluster_interval_seconds', header: 'Cluster (s)', className: 'text-right' },
         { key: 'statements_interval_seconds', header: 'Stmts (s)', className: 'text-right' },
         { key: 'db_objects_interval_seconds', header: 'DbObj (s)', className: 'text-right' },
+        {
+            key: 'table_freeze_interval_seconds', header: 'Table Freeze (s)', className: 'text-right',
+            render: (r: any) => r.table_freeze_interval_seconds ?? '-'
+        },
         { key: 'max_host_concurrency', header: 'Paralel', className: 'text-right' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
         { key: 'is_active', header: 'Durum', render: (r: any) => <Badge value={r.is_active ? 'ready' : 'paused'} /> },
