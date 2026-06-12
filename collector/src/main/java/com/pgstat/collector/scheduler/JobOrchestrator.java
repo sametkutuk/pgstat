@@ -396,6 +396,10 @@ public class JobOrchestrator {
     // =========================================================================
 
     private void executeDbObjectsJob() {
+        // Manuel tetikleme: control.db_objects_trigger'da pending varsa o instance'in
+        // TUM tablolarini interval'a bakmadan topla (Vacuum Lag "Simdi Topla" butonu).
+        processManualDbObjectsTriggers();
+
         List<DbObjectsTarget> dueTargets = inventoryRepo.findDueDbObjects(props.getSchedulerBatchSize());
         if (dueTargets.isEmpty()) return;
 
@@ -420,6 +424,68 @@ public class JobOrchestrator {
         }
 
         finishJob(jobRunId, "db_objects", futures);
+    }
+
+    /**
+     * control.db_objects_trigger'daki pending kayitlari isler: ilgili instance'in
+     * TUM tablolarini hemen toplar (interval'a bakmaz). Vacuum sonrasi UI'dan
+     * "Simdi Topla" ile tetiklenir. Her trigger ayri instance, sirayla islenir.
+     */
+    private void processManualDbObjectsTriggers() {
+        List<Long> triggerIds;
+        try {
+            triggerIds = jdbc.queryForList(
+                "select trigger_id from control.db_objects_trigger where status = 'pending' order by trigger_id",
+                Long.class);
+        } catch (Exception e) {
+            // Tablo henuz yoksa (V079 uygulanmamis) sessizce gec
+            return;
+        }
+        if (triggerIds.isEmpty()) return;
+
+        for (Long triggerId : triggerIds) {
+            Long instancePk;
+            try {
+                instancePk = jdbc.queryForObject(
+                    "update control.db_objects_trigger set status = 'running', started_at = now() " +
+                    "where trigger_id = ? and status = 'pending' returning instance_pk",
+                    Long.class, triggerId);
+            } catch (Exception e) {
+                continue; // baska worker almis olabilir
+            }
+            if (instancePk == null) continue;
+
+            try {
+                List<DbObjectsTarget> targets = inventoryRepo.findDbObjectsByInstance(instancePk);
+                if (targets.isEmpty()) {
+                    jdbc.update("update control.db_objects_trigger set status = 'done', finished_at = now(), rows_written = 0 where trigger_id = ?", triggerId);
+                    continue;
+                }
+                long jobRunId = opsRepo.startJobRun("db_objects_manual", props.getHostname());
+                long totalRows = 0;
+                int succeeded = 0;
+                int failed = 0;
+                for (DbObjectsTarget target : targets) {
+                    try {
+                        InstanceResult r = processDbObjectsTarget(jobRunId, target);
+                        totalRows += r.rowsWritten();
+                        if (r.success()) succeeded++; else failed++;
+                    } catch (Exception e) {
+                        failed++;
+                        log.warn("Manuel db_objects hatasi instance={} db={}: {}",
+                            instancePk, target.datname(), e.getMessage());
+                    }
+                }
+                opsRepo.finishJobRun(jobRunId, "done", totalRows, succeeded, failed, null);
+                jdbc.update("update control.db_objects_trigger set status = 'done', finished_at = now(), rows_written = ? where trigger_id = ?",
+                    totalRows, triggerId);
+                log.info("Manuel db_objects toplama tamamlandi: instance_pk={}, {} db, {} satir",
+                    instancePk, targets.size(), totalRows);
+            } catch (Exception e) {
+                log.warn("Manuel db_objects trigger hatasi trigger_id={}: {}", triggerId, e.getMessage());
+                jdbc.update("update control.db_objects_trigger set status = 'failed', finished_at = now() where trigger_id = ?", triggerId);
+            }
+        }
     }
 
     private InstanceResult processDbObjectsTarget(long jobRunId, DbObjectsTarget target) {

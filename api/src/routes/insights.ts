@@ -360,6 +360,62 @@ async function fetchQueryCacheHitTrend(id: string, seriesId: string, fromIso: st
 }
 
 // =========================================================================
+// db_objects manuel tetikleme — Vacuum Lag "Simdi Topla" butonu
+// /:id/* parametreli route'lardan ONCE (statik path ama tutarlilik icin).
+// =========================================================================
+
+// POST /api/insights/db-objects-refresh  body: { instancePk }
+// Secili instance'in tum tablolarini hemen toplamak icin pending trigger ekler.
+router.post('/db-objects-refresh', async (req, res, next) => {
+  try {
+    const instancePk = Number(req.body?.instancePk);
+    if (!Number.isInteger(instancePk) || instancePk <= 0) {
+      res.status(400).json({ error: 'instancePk zorunlu (sayisal)' });
+      return;
+    }
+    // Zaten bekleyen/calisan bir tetik varsa yenisini ekleme (idempotent)
+    const existing = await pool.query(
+      `select trigger_id from control.db_objects_trigger
+       where instance_pk = $1 and status in ('pending', 'running') limit 1`,
+      [instancePk]
+    );
+    if (existing.rows.length > 0) {
+      res.json({ status: 'already_pending', trigger_id: existing.rows[0].trigger_id });
+      return;
+    }
+    const result = await pool.query(
+      `insert into control.db_objects_trigger (instance_pk, status, requested_by)
+       values ($1, 'pending', 'ui') returning trigger_id`,
+      [instancePk]
+    );
+    res.json({ status: 'queued', trigger_id: result.rows[0].trigger_id });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/insights/db-objects-refresh/status?instancePk=N — son tetik durumu
+router.get('/db-objects-refresh/status', async (req, res, next) => {
+  try {
+    const instancePk = Number(req.query.instancePk);
+    if (!Number.isInteger(instancePk) || instancePk <= 0) {
+      res.status(400).json({ error: 'instancePk zorunlu (sayisal)' });
+      return;
+    }
+    const result = await pool.query(
+      `select trigger_id, status, requested_at, started_at, finished_at, rows_written
+       from control.db_objects_trigger
+       where instance_pk = $1
+       order by trigger_id desc limit 1`,
+      [instancePk]
+    );
+    res.json(result.rows[0] ?? null);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// =========================================================================
 // FREEZE sekmesi — per-DB + per-table XID/MXID freeze age
 // ONEMLI: Bu route'lar /:id/* parametreli route'lardan ONCE tanimlanmali.
 // Aksi halde "/freeze/databases" cagrisi "/:id/databases" route'una dusup

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { apiGet } from '../api/client';
+import { apiGet, apiPost } from '../api/client';
 import { SkeletonTable } from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import TimeRangePicker, { loadPersistedRange, defaultRange, type TimeRange } from '../components/common/TimeRangePicker';
@@ -3202,6 +3202,8 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
     const [datname, setDatname] = useState<string>('');
     const [avStatusFilter, setAvStatusFilter] = useState<string>('');
     const [expandedKey, setExpandedKey] = useState<string | null>(null);
+    const toast = useToast();
+    const [refreshing, setRefreshing] = useState(false);
     // Vacuum Lag icin compare default 'off' — tablo bazli veri retention
     // sinirindan dolayi gecmis donem genelde bos donuyor. Ayri localStorage
     // anahtari ile digerlerinden bagimsiz tutuluyor.
@@ -3235,6 +3237,37 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
         refetchInterval: autoRefresh ? 30_000 : false,
         staleTime: 0,
     });
+    // "Simdi Topla": db_objects manuel tetikleme. Vacuum sonrasi tablo
+    // istatistiklerini 30dk interval'i beklemeden hemen tazeler. Trigger eklenir,
+    // status poll edilir, done olunca tablo refetch edilir.
+    async function refreshNow() {
+        if (refreshing) return;
+        setRefreshing(true);
+        try {
+            await apiPost('/insights/db-objects-refresh', { instancePk });
+            toast.success('Tablo istatistikleri toplaniyor — birkac saniye surebilir...');
+            // status poll: max ~60sn, 3sn arayla
+            const deadline = Date.now() + 60_000;
+            let done = false;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 3000));
+                const st = await apiGet<{ status: string } | null>(`/insights/db-objects-refresh/status?instancePk=${instancePk}`);
+                if (st && (st.status === 'done' || st.status === 'failed')) {
+                    done = true;
+                    if (st.status === 'done') toast.success('Tablo istatistikleri guncellendi.');
+                    else toast.error('Toplama basarisiz (collector log).');
+                    break;
+                }
+            }
+            if (!done) toast.success('Toplama devam ediyor; birazdan Yenile ile kontrol edin.');
+            await refetch();
+        } catch (e: any) {
+            toast.error(e?.message || 'Tetikleme basarisiz');
+        } finally {
+            setRefreshing(false);
+        }
+    }
+
     const rows = data?.rows ?? [];
     const visibleRows = useMemo(
         () => avStatusFilter ? rows.filter(row => row.av_status === avStatusFilter) : rows,
@@ -3520,6 +3553,11 @@ function VacuumLagCardInner({ instancePk, range, onRangeChange: _onRangeChange, 
                             </button>
                         ))}
                     </div>
+                    <button onClick={refreshNow} disabled={refreshing}
+                        title="Bu instance'in tum tablo istatistiklerini hemen topla (vacuum sonrasi 30dk interval'i bekleme)"
+                        className="px-3 py-1.5 text-xs rounded border border-[#10B981] text-[#047857] bg-[#ECFDF5] hover:bg-[#D1FAE5] disabled:opacity-50">
+                        {refreshing ? 'Toplaniyor...' : 'Simdi Topla'}
+                    </button>
                     <button onClick={() => refetch()} className="px-3 py-1.5 text-xs text-[#64748B] border border-[#E2E8F0] rounded hover:bg-[#F8FAFC]">
                         {isFetching ? '...' : 'Yenile'}
                     </button>

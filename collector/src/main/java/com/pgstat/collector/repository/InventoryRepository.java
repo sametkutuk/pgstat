@@ -344,4 +344,55 @@ public class InventoryRepository {
             maxDatabasesPerRun
         );
     }
+
+    /**
+     * Manuel tetikleme: tek instance'in TUM aktif DB'leri (interval'a bakmadan).
+     * Vacuum Lag "Simdi Topla" butonu kullanir — kullanici vacuum sonrasi
+     * tablo istatistiklerini hemen gormek ister. findDueDbObjects ile ayni
+     * kolonlar, sadece next_db_objects_collect_at zaman filtresi YOK.
+     */
+    public List<com.pgstat.collector.model.DbObjectsTarget> findDbObjectsByInstance(long instancePk) {
+        return jdbc.query("""
+            select
+              i.instance_pk,
+              i.instance_id,
+              i.host,
+              i.port,
+              ds.dbid,
+              dr.datname,
+              i.secret_ref,
+              i.ssl_mode,
+              i.collector_username,
+              p.db_objects_interval_seconds,
+              p.statement_timeout_ms,
+              p.lock_timeout_ms,
+              p.connect_timeout_seconds
+            from control.database_state ds
+            join control.instance_inventory i on i.instance_pk = ds.instance_pk
+            join control.schedule_profile p on p.schedule_profile_id = i.schedule_profile_id
+            join dim.database_ref dr on dr.instance_pk = ds.instance_pk and dr.dbid = ds.dbid
+            where i.instance_pk = ?
+              and i.is_active
+              and dr.is_active
+              and i.bootstrap_state in ('ready', 'degraded')
+            order by dr.datname
+            """,
+            (rs, rowNum) -> new com.pgstat.collector.model.DbObjectsTarget(
+                rs.getLong("instance_pk"),
+                rs.getString("instance_id"),
+                rs.getString("host"),
+                rs.getInt("port"),
+                rs.getLong("dbid"),
+                rs.getString("datname"),
+                rs.getString("secret_ref"),
+                rs.getString("ssl_mode"),
+                rs.getString("collector_username"),
+                rs.getInt("db_objects_interval_seconds"),
+                rs.getInt("statement_timeout_ms"),
+                rs.getInt("lock_timeout_ms"),
+                rs.getInt("connect_timeout_seconds")
+            ),
+            instancePk
+        );
+    }
 }
