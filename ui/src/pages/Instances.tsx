@@ -391,6 +391,9 @@ export default function Instances() {
                 </Link>
             </div>
 
+            {/* Yuk Guvencesi karti — sadece liste view'inda */}
+            {view === 'list' && <LoadAssuranceCard />}
+
             {/* Form sadece liste view'ında */}
             {view === 'list' && formMode !== 'closed' && (
                 <div className="bg-white rounded-lg shadow-sm p-5 mb-5">
@@ -517,4 +520,112 @@ function fmtBytes(value: any): string {
     if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${bytes.toLocaleString()} B`;
+}
+
+// ============================================================================
+// Yuk Guvencesi karti — "pgstat DB'lerimi yorar mi?" sorusunun kanitli cevabi
+// Fleet geneli pgstat sorgu yuku payi (canli) + katmanli aciklama
+// (yonetici ozeti + DBA teknik detay).
+// ============================================================================
+interface FootprintSummary {
+    hours: number;
+    instance_count: number;
+    avg_exec_pct: number;
+    max_exec_pct: number;
+    avg_buf_pct: number;
+    max_buf_pct: number;
+    rows: { instance_pk: number; instance_name: string; exec_pct: number | null; buf_pct: number | null; pgstat_calls: string; pgstat_exec_ms: string }[];
+}
+
+function LoadAssuranceCard() {
+    const [open, setOpen] = useState(false);
+    const { data } = useQuery({
+        queryKey: ['footprint-summary'],
+        queryFn: () => apiGet<FootprintSummary>('/instances/footprint-summary?hours=24'),
+    });
+    if (!data || data.instance_count === 0) return null;
+
+    const avgExec = data.avg_exec_pct ?? 0;
+    const maxExec = data.max_exec_pct ?? 0;
+    // Genel ton: ortalama exec payi dusukse yesil
+    const tone = avgExec < 5 ? 'green' : avgExec < 15 ? 'amber' : 'red';
+    const toneBg = tone === 'green' ? 'bg-[#ECFDF5] border-[#A7F3D0]'
+        : tone === 'amber' ? 'bg-[#FFFBEB] border-[#FDE68A]' : 'bg-[#FEF2F2] border-[#FECACA]';
+    const toneText = tone === 'green' ? 'text-[#047857]' : tone === 'amber' ? 'text-[#92400E]' : 'text-[#B91C1C]';
+
+    return (
+        <div className={`rounded-lg border ${toneBg} p-4 mb-4 print:hidden`}>
+            <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                    {/* Yonetici ozeti — tek cumle guvence */}
+                    <div className={`text-sm font-semibold ${toneText}`}>
+                        {tone === 'green' && '✓ '}pgstat izlenen {data.instance_count} veritabaninin sorgu isleme yukunun
+                        ortalama <b>%{avgExec.toFixed(1)}</b>'ini kullaniyor
+                        {tone === 'green' && ' — ihmal edilebilir, DB performansina pratikte etkisi yok.'}
+                        {tone === 'amber' && ' — kabul edilebilir seviye.'}
+                        {tone === 'red' && ' — bazi instance\'larda yuksek (asagidaki detaya bakin).'}
+                    </div>
+                    <div className="text-xs text-[#64748B] mt-1">
+                        En yuksek instance: %{maxExec.toFixed(1)} exec, %{(data.max_buf_pct ?? 0).toFixed(1)} buffer/IO.
+                        Son 24 saat, gercek olcum (pg_stat_statements). Salt-okuma — veri degistirmez, kimseyi bekletmez.
+                    </div>
+                </div>
+                <button onClick={() => setOpen(v => !v)}
+                    className="text-xs px-3 py-1.5 rounded border border-[#CBD5E1] bg-white text-[#475569] hover:bg-[#F8FAFC] whitespace-nowrap">
+                    {open ? 'Detayi gizle' : 'Teknik detay'}
+                </button>
+            </div>
+
+            {open && (
+                <div className="mt-3 pt-3 border-t border-[#E2E8F0] space-y-3 text-xs text-[#334155]">
+                    <div>
+                        <div className="font-semibold mb-1">pgstat kaynak DB'de NE YAPAR:</div>
+                        <ul className="list-disc ml-5 space-y-0.5 text-[#475569]">
+                            <li><b>Sadece SELECT</b> — pg_stat_*, pg_settings, pg_class gibi sistem view'lari okur. INSERT/UPDATE/DELETE/DDL <b>YOK</b>.</li>
+                            <li><b>VACUUM/ANALYZE calistirmaz</b>, istatistik reset etmez, extension kurmaz.</li>
+                            <li><b>AccessShareLock</b> alir (okuma) — normal sorgulari (okuma/yazma) bekletmez. Yalnizca DDL (ACCESS EXCLUSIVE) ile kisa etkilesim olabilir.</li>
+                            <li><b>statement_timeout + lock_timeout</b> korumali — yavas/kilitli durumda collector cekilir, kaynak DB'yi mesgul etmez.</li>
+                            <li>Gereken yetki: <b>pg_monitor</b> rolu (superuser GEREKMEZ).</li>
+                            <li>Tum sorgular kaynak DB'de <code>application_name = 'pgstat_collector'</code> ile izlenebilir.</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <div className="font-semibold mb-1">Instance bazli pgstat payi (exec time, son 24sa):</div>
+                        <div className="overflow-x-auto max-h-60 overflow-y-auto border border-[#E2E8F0] rounded">
+                            <table className="w-full">
+                                <thead className="bg-[#F8FAFC] sticky top-0">
+                                    <tr>
+                                        <th className="py-1.5 px-2 text-left font-semibold text-[#64748B]">Instance</th>
+                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">Exec %</th>
+                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">Buffer %</th>
+                                        <th className="py-1.5 px-2 text-right font-semibold text-[#64748B]">pgstat exec (ms)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[#F1F5F9]">
+                                    {data.rows.map(r => {
+                                        const ep = r.exec_pct == null ? 0 : Number(r.exec_pct);
+                                        return (
+                                            <tr key={r.instance_pk} className="hover:bg-[#F8FAFC]">
+                                                <td className="py-1 px-2">{r.instance_name}</td>
+                                                <td className="py-1 px-2 text-right font-mono">
+                                                    <span className={`px-1.5 py-0.5 rounded ${ep < 5 ? 'bg-emerald-100 text-emerald-700' : ep < 15 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>%{ep.toFixed(1)}</span>
+                                                </td>
+                                                <td className="py-1 px-2 text-right font-mono text-[#64748B]">%{r.buf_pct == null ? '0' : Number(r.buf_pct).toFixed(1)}</td>
+                                                <td className="py-1 px-2 text-right font-mono text-[#64748B]">{Number(r.pgstat_exec_ms).toLocaleString('tr-TR')}</td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div className="text-[#94A3B8]">
+                        Not: Bu degerler <b>DB sorgu isleme yuku</b> payidir (pg_stat_statements exec time/buffer).
+                        Makine CPU/RAM yuzdesi degildir — onun icin isletim sistemi metrikleri gerekir.
+                        Instance detayindaki "Collector Ayak Izi" sekmesinde her DB icin sorgu kirilimi gorulebilir.
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }

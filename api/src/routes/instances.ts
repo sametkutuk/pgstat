@@ -121,6 +121,72 @@ router.get('/storage-summary', async (_req, res, next) => {
   }
 });
 
+// GET /api/instances/footprint-summary?hours=24
+// FLEET GENELI yuk guvencesi: her instance'ta pgstat collector'un toplam sorgu
+// yukundeki (exec time + buffer) payi. "pgstat DB'lerimi ne kadar yoruyor"
+// sorusunun kanitli cevabi. Veri zaten fact.pgss_delta'da.
+router.get('/footprint-summary', async (req, res, next) => {
+  try {
+    const hours = parseHours(req.query.hours, 24);
+    const result = await pool.query(`
+      with grouped as (
+        select
+          d.instance_pk,
+          case when rr.rolname = ii.collector_username then 'pgstat' else 'diger' end as grup,
+          sum(d.total_exec_time_ms_delta) as exec_ms,
+          sum(d.calls_delta) as calls,
+          sum(d.shared_blks_hit_delta + d.shared_blks_read_delta) as buffers
+        from fact.pgss_delta d
+        join dim.statement_series ss on ss.statement_series_id = d.statement_series_id
+        join control.instance_inventory ii on ii.instance_pk = d.instance_pk
+        left join dim.role_ref rr on rr.instance_pk = ss.instance_pk and rr.userid = ss.userid
+        where d.sample_ts >= now() - make_interval(hours => $1)
+        group by d.instance_pk, case when rr.rolname = ii.collector_username then 'pgstat' else 'diger' end
+      ),
+      pivot as (
+        select
+          instance_pk,
+          coalesce(sum(exec_ms) filter (where grup = 'pgstat'), 0) as pg_exec,
+          coalesce(sum(exec_ms) filter (where grup = 'diger'), 0) as ot_exec,
+          coalesce(sum(buffers) filter (where grup = 'pgstat'), 0) as pg_buf,
+          coalesce(sum(buffers) filter (where grup = 'diger'), 0) as ot_buf,
+          coalesce(sum(calls) filter (where grup = 'pgstat'), 0) as pg_calls
+        from grouped group by instance_pk
+      )
+      select
+        p.instance_pk,
+        ii.display_name as instance_name,
+        round((p.pg_exec * 100.0 / nullif(p.pg_exec + p.ot_exec, 0))::numeric, 2) as exec_pct,
+        round((p.pg_buf * 100.0 / nullif(p.pg_buf + p.ot_buf, 0))::numeric, 2) as buf_pct,
+        p.pg_calls::bigint as pgstat_calls,
+        round(p.pg_exec::numeric, 0) as pgstat_exec_ms
+      from pivot p
+      join control.instance_inventory ii on ii.instance_pk = p.instance_pk
+      where ii.is_active
+      order by exec_pct desc nulls last
+    `, [hours]);
+
+    // Fleet ozeti: ortalama + max pgstat exec payi
+    const rows = result.rows;
+    const execPcts = rows.map((r: any) => Number(r.exec_pct)).filter((v: number) => Number.isFinite(v));
+    const bufPcts = rows.map((r: any) => Number(r.buf_pct)).filter((v: number) => Number.isFinite(v));
+    const avg = (a: number[]) => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
+    const max = (a: number[]) => a.length ? Math.max(...a) : 0;
+
+    res.json({
+      hours,
+      instance_count: rows.length,
+      avg_exec_pct: Math.round(avg(execPcts) * 100) / 100,
+      max_exec_pct: Math.round(max(execPcts) * 100) / 100,
+      avg_buf_pct: Math.round(avg(bufPcts) * 100) / 100,
+      max_buf_pct: Math.round(max(bufPcts) * 100) / 100,
+      rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/instances/report — Aktif instance envanteri raporu
 router.get('/report', async (req, res) => {
   try {
