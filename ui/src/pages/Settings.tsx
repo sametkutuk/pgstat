@@ -423,7 +423,7 @@ function RetentionTab() {
 
 const emptySchedule = {
     profile_code: '', cluster_interval_seconds: 60, statements_interval_seconds: 300,
-    db_objects_interval_seconds: 1800, hourly_rollup_interval_seconds: 3600,
+    db_objects_interval_seconds: 1800, hourly_rollup_interval_seconds: 300,
     daily_rollup_hour_utc: 1, bootstrap_sql_text_batch: 100,
     max_databases_per_run: 5, statement_timeout_ms: 5000,
     lock_timeout_ms: 250, connect_timeout_seconds: 5, max_host_concurrency: 1,

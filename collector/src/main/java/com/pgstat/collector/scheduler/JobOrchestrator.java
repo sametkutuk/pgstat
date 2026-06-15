@@ -96,6 +96,10 @@ public class JobOrchestrator {
     private volatile int lastHotSettingsHourUtc = -1;
     // Freeze/settings snapshot: 6 saatte bir (XID freeze izleme gun ici resolve icin)
     private volatile int lastFreezeSnapshotHourUtc = -1;
+    // Saatlik rollup: son calisma zamani (ms). schedule_profile.hourly_rollup_interval_seconds
+    // ile sinirlanir. Eskiden her poll'da (5sn) calisiyordu -> dakikada ~9 kez,
+    // gereksiz agg yeniden-yazma + yuksek central DB TPS. Interval guard ile seyreltildi.
+    private volatile long lastHourlyRollupAtMs = 0L;
     // Per-table freeze: instance bazli son toplama zamani
     private final java.util.Map<Long, Long> lastTableFreezeMillisByInstance =
         new java.util.concurrent.ConcurrentHashMap<>();
@@ -530,21 +534,32 @@ public class JobOrchestrator {
         String errorText = null;
 
         try {
-            // 1. Partition olusturma (gelecek gunler icin)
+            // 1. Partition olusturma (gelecek gunler icin) — HER cycle calisir
+            //    (partition eksikligi kritik, ucuz islem).
             partitionManager.ensureFuturePartitions();
 
-            // 2. Saatlik rollup
-            int hourlyRows = aggRepo.rollupHourly();
-            totalRows += hourlyRows;
-            log.info("Saatlik rollup tamamlandi: {} satir", hourlyRows);
+            // 2. Saatlik rollup — INTERVAL GUARD'li. Eskiden her poll'da (5sn)
+            //    calisiyordu: dakikada ~9 kez ayni saatlik bucket'i yeniden yaziyordu
+            //    (ON CONFLICT DO UPDATE), gereksiz central DB TPS. Artik
+            //    schedule_profile.hourly_rollup_interval_seconds (en kisa aktif profil,
+            //    default 300sn) gecmeden atlanir.
+            long nowMs = System.currentTimeMillis();
+            int rollupIntervalSec = readHourlyRollupIntervalSec();
+            if (nowMs - lastHourlyRollupAtMs >= rollupIntervalSec * 1000L) {
+                lastHourlyRollupAtMs = nowMs;
 
-            int tableStatHourlyRows = aggRepo.rollupTableStatHourly();
-            totalRows += tableStatHourlyRows;
-            log.info("Table stat saatlik rollup tamamlandi: {} satir", tableStatHourlyRows);
+                int hourlyRows = aggRepo.rollupHourly();
+                totalRows += hourlyRows;
+                log.info("Saatlik rollup tamamlandi: {} satir", hourlyRows);
 
-            int walHourlyRows = aggRepo.rollupWalHourly();
-            totalRows += walHourlyRows;
-            log.info("WAL saatlik rollup tamamlandi: {} satir", walHourlyRows);
+                int tableStatHourlyRows = aggRepo.rollupTableStatHourly();
+                totalRows += tableStatHourlyRows;
+                log.info("Table stat saatlik rollup tamamlandi: {} satir", tableStatHourlyRows);
+
+                int walHourlyRows = aggRepo.rollupWalHourly();
+                totalRows += walHourlyRows;
+                log.info("WAL saatlik rollup tamamlandi: {} satir", walHourlyRows);
+            }
 
             // 3. Gunluk rollup — sadece UTC saat eslesirse, gunde 1 kez (idempotency guard)
             int dailyRollupHour = 1; // default
@@ -759,14 +774,14 @@ public class JobOrchestrator {
             // 3e-3. Per-table freeze snapshot — instance bazli interval (schedule_profile).
             try {
                 List<com.pgstat.collector.model.InstanceInfo> ready = inventoryRepo.findAllReady();
-                long nowMs = System.currentTimeMillis();
+                long freezeNowMs = System.currentTimeMillis();
                 long collected = 0;
                 for (com.pgstat.collector.model.InstanceInfo inst : ready) {
                     int intervalSec = inst.tableFreezeIntervalSeconds() > 0
                         ? inst.tableFreezeIntervalSeconds() : 21600;
                     long last = lastTableFreezeMillisByInstance.getOrDefault(inst.instancePk(), 0L);
-                    if (nowMs - last >= intervalSec * 1000L) {
-                        lastTableFreezeMillisByInstance.put(inst.instancePk(), nowMs);
+                    if (freezeNowMs - last >= intervalSec * 1000L) {
+                        lastTableFreezeMillisByInstance.put(inst.instancePk(), freezeNowMs);
                         try {
                             collected += nightlySnapshotCollector.collectTableFreezeOnly(inst);
                         } catch (Exception e) {
@@ -844,6 +859,23 @@ public class JobOrchestrator {
         }
 
         opsRepo.finishJobRun(jobRunId, status, totalRows, 0, 0, errorText);
+    }
+
+    /**
+     * Saatlik rollup interval'i (saniye). schedule_profile.hourly_rollup_interval_seconds
+     * en kucuk aktif degerini okur (rollup global oldugu icin en sik isteyen profili baz al).
+     * Kolon yoksa/sorgu hatasiysa 300sn (5dk) default. Rollup bu interval'den sik calismaz.
+     */
+    private int readHourlyRollupIntervalSec() {
+        try {
+            Integer v = jdbc.queryForObject(
+                "select min(hourly_rollup_interval_seconds) from control.schedule_profile where is_active",
+                Integer.class);
+            if (v != null && v > 0) return v;
+        } catch (Exception e) {
+            log.debug("hourly_rollup_interval okunamadi, default 300: {}", e.getMessage());
+        }
+        return 300;
     }
 
     // =========================================================================
