@@ -195,8 +195,15 @@ router.get('/archiver-failures', async (_req, res, next) => {
   }
 });
 
-// GET /api/dashboard/slru-cache-miss — Top 5 SLRU cache miss
+// GET /api/dashboard/slru-cache-miss — SLRU cache miss yasayan instance'lar
 // pg_slru_snapshot kolonlari: sample_ts, blks_read, blks_hit (kumulatif — max-min ile delta hesapla)
+// Bu widget KASITLI olarak sadece "dikkat gerektiren" instance'lari gosterir:
+//   - son 1 saatte SLRU disk okumasi (read_delta) olmus, VE
+//   - hit orani %99.9'un ALTINDA (yani gercekten anlamli cache miss var).
+// Sadece birkac blok okuyup yine ~%100 hit'te kalan instance'lar (orn pgstat
+// central DB) burada gosterilmez — '100% hit' satiri yaniltici olurdu.
+// Sorunsuz (yuksek hit) instance'lari listelememek bilincli bir tasarim:
+// widget bir "saglik tablosu" degil, "SLRU darbogazi yasayanlar" uyarisidir.
 router.get('/slru-cache-miss', async (_req, res, next) => {
   try {
     const result = await pool.query(`
@@ -221,7 +228,11 @@ router.get('/slru-cache-miss', async (_req, res, next) => {
       join control.instance_inventory i on i.instance_pk = d.instance_pk and i.is_active
       group by d.instance_pk, i.display_name
       having sum(d.read_delta) > 0
-      order by total_blks_read desc
+         -- hit orani %99.9 altinda olanlar = gercekten cache miss yasayanlar.
+         -- '100% hit'e yuvarlanan (birkac blok okuyan) instance'lari ele.
+         and (sum(d.read_delta) + sum(d.hit_delta)) > 0
+         and (100.0 * sum(d.hit_delta) / (sum(d.read_delta) + sum(d.hit_delta))) < 99.9
+      order by hit_ratio asc, total_blks_read desc
       limit 5
     `);
     res.json(result.rows);
