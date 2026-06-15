@@ -194,7 +194,10 @@ public class ReportGenerator {
         // Pencere: bir onceki tam UTC gunu [dayStart, dayEnd). Bind parametre olarak gecer.
         java.sql.Timestamp tsStart = java.sql.Timestamp.from(dayStart.toInstant());
         java.sql.Timestamp tsEnd = java.sql.Timestamp.from(dayEnd.toInstant());
-        sb.append("pgstat Gunluk Ozet - ").append(reportDay).append(" (UTC)\n\n");
+        // Baslik. NOT: rapor body'si NotificationService'te escapeHtml'den geciyor,
+        // o yuzden burada HTML tag (<b>) veya Markdown (**) KULLANMA — literal gorunur.
+        // Bicim sadece emoji + duz metin + satir duzeni ile saglanir.
+        sb.append("📊 pgstat Gunluk Ozet - ").append(reportDay).append(" (UTC)\n\n");
 
         // Fleet durumu
         try {
@@ -219,7 +222,7 @@ public class ReportGenerator {
         // Per-instance ozet — pencere bir onceki tam UTC gunu [dayStart, dayEnd).
         // tsStart 7 subquery'de, tsEnd 6 subquery'de bind edilir (connections hari).
         // Bind sirasi SQL'deki ? sirasini birebir takip eder.
-        sb.append("Per-instance (").append(reportDay).append(" UTC, tam gun):\n");
+        sb.append("Per-instance (").append(reportDay).append(" UTC, tam gun):\n\n");
         try {
             List<Map<String, Object>> instances = jdbc.queryForList("""
                 select i.instance_pk, i.display_name,
@@ -265,13 +268,16 @@ public class ReportGenerator {
                 long deadlocks = toLong(inst.get("deadlocks"));
                 long invalidIndexes = toLong(inst.get("invalid_indexes"));
                 double cachePct = toDouble(inst.get("cache_pct"));
-                String status = "OK";
-                if (invalidIndexes > 0) status = "CHECK";
-                if (tempFiles > 100 || deadlocks > 0 || cachePct < 95) status = "WARN";
+                // Durum -> emoji baloncuk: yesil saglikli, sari dikkat (warn/check).
+                // Esikler: temp_files > 100 VEYA deadlock > 0 VEYA cache < 95 -> dikkat;
+                // invalid index varsa da dikkat (veri butunlugu).
+                boolean attention = invalidIndexes > 0 || tempFiles > 100 || deadlocks > 0 || cachePct < 95;
+                String emoji = attention ? "🟡" : "🟢";
 
-                sb.append("[").append(status).append("] ").append(inst.get("display_name"));
-                sb.append(" | TPS ").append(inst.get("avg_tps"));
-                sb.append(" | Conn ").append(inst.get("connections"));
+                // 1. satir: emoji + instance adi. 2. satir: girintili metrikler.
+                sb.append(emoji).append(" ").append(inst.get("display_name")).append("\n");
+                sb.append("  TPS: ").append(inst.get("avg_tps"));
+                sb.append(" | Baglanti: ").append(inst.get("connections"));
                 sb.append(" | WAL: ").append(humanBytes(toLong(inst.get("wal_bytes"))));
                 sb.append(" | Cache: ").append(cachePct).append("%");
                 sb.append(" | Temp: ").append(tempFiles).append(" / ").append(humanBytes(tempBytes));
