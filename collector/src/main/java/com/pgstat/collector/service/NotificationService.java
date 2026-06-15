@@ -34,6 +34,10 @@ public class NotificationService {
     private final JdbcTemplate jdbc;
     private final HttpClient httpClient;
 
+    private record TelegramSendResult(boolean ok, String chatId, Long firstMessageId) {}
+
+    private record TelegramPostResult(boolean ok, Long messageId) {}
+
     /** JavaMailSender opsiyonel — SMTP ayarları yoksa null kalır */
     @Autowired(required = false)
     private JavaMailSender mailSender;
@@ -91,7 +95,7 @@ public class NotificationService {
             }
 
             // Snooze kontrolü
-            if (isAlertSnoozed(alertKey, instancePk)) {
+            if (!isResolvedNotice && isAlertSnoozed(alertKey, alertCode, instancePk)) {
                 log.debug("Alert snoozed, bildirim atlanıyor: {}", alertKey);
                 return;
             }
@@ -108,7 +112,7 @@ public class NotificationService {
 
             for (Map<String, Object> channel : channels) {
                 try {
-                    sendToChannel(channel, alertId, severity, instancePk, title, message);
+                    sendToChannel(channel, alertId, alertKey, alertCode, severity, instancePk, title, message);
                 } catch (Exception e) {
                     log.error("Bildirim gönderme hatası channel_id={}: {}",
                             channel.get("channel_id"), e.getMessage());
@@ -160,8 +164,8 @@ public class NotificationService {
     // Kanal yönlendirme
     // =========================================================================
 
-    private void sendToChannel(Map<String, Object> channel, long alertId, String severity,
-                                Long instancePk, String title, String message) {
+    private void sendToChannel(Map<String, Object> channel, long alertId, String alertKey, String alertCode,
+                                String severity, Long instancePk, String title, String message) {
         String type = (String) channel.get("channel_type");
         String config = channel.get("config") != null ? channel.get("config").toString() : "{}";
 
@@ -171,7 +175,13 @@ public class NotificationService {
             ok = switch (type) {
                 case "email"    -> sendEmail(config, title, message, severity);
                 case "teams"    -> sendTeams(config, title, message, severity);
-                case "telegram" -> sendTelegram(config, title, message, severity);
+                case "telegram" -> {
+                    TelegramSendResult result = sendTelegramWithResult(config, title, message, severity);
+                    if (result.ok() && result.firstMessageId() != null) {
+                        rememberTelegramMessage(result.chatId(), result.firstMessageId(), alertId, alertKey, alertCode, instancePk);
+                    }
+                    yield result.ok();
+                }
                 case "webhook"  -> sendWebhook(config, alertId, severity, instancePk, title, message);
                 default -> {
                     log.warn("Desteklenmeyen kanal tipi: {}", type);
@@ -320,13 +330,17 @@ public class NotificationService {
     // =========================================================================
 
     private boolean sendTelegram(String configJson, String title, String message, String severity) {
+        return sendTelegramWithResult(configJson, title, message, severity).ok();
+    }
+
+    private TelegramSendResult sendTelegramWithResult(String configJson, String title, String message, String severity) {
         Map<String, Object> config = parseJson(configJson);
         String botToken = (String) config.get("bot_token");
         String chatId = config.get("chat_id") != null ? config.get("chat_id").toString() : null;
 
         if (botToken == null || chatId == null) {
             log.warn("Telegram kanalında bot_token veya chat_id tanımlı değil");
-            return false;
+            return new TelegramSendResult(false, chatId, null);
         }
 
         String emoji = switch (severity) {
@@ -348,6 +362,7 @@ public class NotificationService {
         List<String> parts = splitForTelegram(text, TELEGRAM_SAFE_MESSAGE_LENGTH);
 
         boolean allOk = true;
+        Long firstMessageId = null;
         for (int i = 0; i < parts.size(); i++) {
             String part = parts.get(i);
             if (parts.size() > 1) {
@@ -356,11 +371,12 @@ public class NotificationService {
             String payload = """
                 {"chat_id": "%s", "text": "%s", "parse_mode": "HTML", "disable_web_page_preview": true}
                 """.formatted(chatId, escapeJson(part));
-            boolean ok = postWebhook(url, payload);
-            allOk = allOk && ok;
+            TelegramPostResult postResult = postTelegram(url, payload);
+            if (i == 0) firstMessageId = postResult.messageId();
+            allOk = allOk && postResult.ok();
         }
         if (allOk) log.info("Telegram bildirimi gonderildi: chat_id={}, parts={}", chatId, parts.size());
-        return allOk;
+        return new TelegramSendResult(allOk, chatId, firstMessageId);
     }
 
     /** HTML parse_mode icin Telegram'da yeterli — sadece 3 karakter. */
@@ -439,6 +455,60 @@ public class NotificationService {
         int lastGt = text.lastIndexOf('>', end - 1);
         if (lastLt > lastGt && lastLt > start) return lastLt;
         return end;
+    }
+
+    private TelegramPostResult postTelegram(String url, String jsonPayload) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .timeout(Duration.ofSeconds(15))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 400) {
+                log.error("Telegram hatasi: HTTP {} - {}", response.statusCode(), response.body());
+                return new TelegramPostResult(false, null);
+            }
+            return new TelegramPostResult(true, extractTelegramMessageId(response.body()));
+        } catch (Exception e) {
+            log.error("Telegram gonderme hatasi: {}", e.getMessage());
+            return new TelegramPostResult(false, null);
+        }
+    }
+
+    private Long extractTelegramMessageId(String responseBody) {
+        if (responseBody == null || responseBody.isBlank()) return null;
+        Matcher matcher = Pattern.compile("\"message_id\"\\s*:\\s*(\\d+)").matcher(responseBody);
+        if (!matcher.find()) return null;
+        try {
+            return Long.parseLong(matcher.group(1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private void rememberTelegramMessage(String chatId, Long messageId, long alertId, String alertKey,
+                                          String alertCode, Long instancePk) {
+        if (chatId == null || messageId == null || alertKey == null || alertKey.isBlank()) return;
+        try {
+            jdbc.update("""
+                insert into control.telegram_message_map
+                    (chat_id, message_id, alert_id, alert_key, alert_code, instance_pk, sent_at)
+                values (?, ?, ?, ?, ?, ?, now())
+                on conflict (chat_id, message_id) do update
+                set alert_id = excluded.alert_id,
+                    alert_key = excluded.alert_key,
+                    alert_code = excluded.alert_code,
+                    instance_pk = excluded.instance_pk,
+                    sent_at = excluded.sent_at
+                """,
+                chatId, messageId, alertId, alertKey, alertCode, instancePk);
+        } catch (Exception e) {
+            log.debug("Telegram message map yazilamadi: {}", e.getMessage());
+        }
     }
 
     // =========================================================================
@@ -586,13 +656,20 @@ public class NotificationService {
             severity);
     }
 
-    private boolean isAlertSnoozed(String alertKey, Long instancePk) {
+    private boolean isAlertSnoozed(String alertKey, String alertCode, Long instancePk) {
         try {
             Integer count = jdbc.queryForObject(
-                "select count(*) from control.alert_snooze " +
-                "where snooze_until > now() " +
-                "  and (instance_pk is null or instance_pk = ?)",
-                Integer.class, instancePk);
+                """
+                select count(*)
+                from control.alert_snooze
+                where (snooze_until is null or snooze_until > now())
+                  and (
+                    (alert_key is not null and alert_key = ?)
+                    or (alert_code is not null and alert_code = ? and (instance_pk is null or instance_pk = ?))
+                    or (alert_key is null and alert_code is null and (instance_pk is null or instance_pk = ?))
+                  )
+                """,
+                Integer.class, alertKey, alertCode, instancePk, instancePk);
             return count != null && count > 0;
         } catch (Exception e) {
             return false;
