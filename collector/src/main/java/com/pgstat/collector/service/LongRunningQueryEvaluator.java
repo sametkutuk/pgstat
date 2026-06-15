@@ -152,9 +152,7 @@ public class LongRunningQueryEvaluator {
             durationMinutes,
             subscription.longQueryMinutes(),
             "Uzun suren sorgu: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
-            "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
-                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
-                + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
+            buildActivityMessage(row)
         );
     }
 
@@ -180,9 +178,7 @@ public class LongRunningQueryEvaluator {
             durationMinutes,
             subscription.idleTxMinutes(),
             "Uzun idle transaction: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
-            "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
-                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
-                + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
+            buildActivityMessage(row)
         );
     }
 
@@ -208,9 +204,7 @@ public class LongRunningQueryEvaluator {
             durationMinutes,
             subscription.idleTxMinutes(),
             "Hatali idle transaction: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
-            "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
-                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
-                + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
+            buildActivityMessage(row)
         );
     }
 
@@ -284,6 +278,19 @@ public class LongRunningQueryEvaluator {
 
     private static String safe(String value) {
         return value == null ? "-" : value;
+    }
+
+    /**
+     * Alert body'si — alan basina bir satir, "• name: deger" bicimi.
+     * pid ve sure BASLIKTA oldugu icin burada TEKRAR EDILMEZ (cift yazim onlenir).
+     * datname/user/app/client/sorgu alanlari alt alta, okunakli.
+     */
+    private static String buildActivityMessage(ActivityRow row) {
+        return "• datname: " + safe(row.datname()) + "\n"
+            + "• user: " + safe(row.usename()) + "\n"
+            + "• app: " + safe(row.applicationName()) + "\n"
+            + "• client: " + row.clientLocation() + "\n"
+            + "• sorgu: " + queryPreview(row.query());
     }
 
     private static OffsetDateTime toOffsetDateTime(Object value) {
