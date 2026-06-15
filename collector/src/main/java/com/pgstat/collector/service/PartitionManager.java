@@ -264,14 +264,21 @@ public class PartitionManager {
     }
 
     private PartitionBounds queryBounds(String truncUnit, String intervalUnit, int offset) {
+        // ONEMLI: Bound'lar UTC midnight hizasinda uretilir (date_trunc 'utc'
+        // zaman diliminde). Aksi halde session timezone (orn. Europe/Istanbul,
+        // +03) ile date_trunc Istanbul-midnight (00:00+03) uretir; mevcut
+        // partition'lar ise UTC-midnight (00:00 UTC = 03:00+03). Iki farkli hiza
+        // CAKISIR ve aradaki gun partition'i olusturulamaz (delik + alert).
+        // 'now() at time zone utc' UTC duvar saatini verir, date_trunc UTC gunune
+        // hizalar; sonra geri timestamptz'ye cast edilir.
         String sql = String.format("""
             select quote_literal(lower_bound) as lower_literal,
                    quote_literal(upper_bound) as upper_literal,
                    lower_bound::text as lower_text,
                    upper_bound::text as upper_text
             from (
-                select date_trunc('%s', now() + (cast(? as int) * interval '%s')) as lower_bound,
-                       date_trunc('%s', now() + ((cast(? as int) + 1) * interval '%s')) as upper_bound
+                select (date_trunc('%s', (now() at time zone 'UTC') + (cast(? as int) * interval '%s')) at time zone 'UTC') as lower_bound,
+                       (date_trunc('%s', (now() at time zone 'UTC') + ((cast(? as int) + 1) * interval '%s')) at time zone 'UTC') as upper_bound
             ) b
             """, truncUnit, intervalUnit, truncUnit, intervalUnit);
 
