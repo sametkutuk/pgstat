@@ -277,9 +277,36 @@ public class SystemHealthEvaluator {
     }
 
     private void checkCleanupFailed() {
-        // TODO: Implement when cleanup tracking is persisted in backend tables.
-        recordHealthState("cleanup_failed", "stub", "henuz implement edilmedi");
-        log.debug("Cleanup failed system check is a stub");
+        // Job hatalari (rollup/statements/db_objects vb.) runJob tarafinda
+        // SYSTEM_CLEANUP_FAILED alert'i ile raise edilir (alert_key:
+        // system_cleanup_failed:system:global). Ancak raise eden var, RESOLVE
+        // eden yoktu -> hata gecse bile alert sonsuza dek 'open' kaliyordu.
+        // Burada: son 1 saatte job_run'da 'failed' yoksa alert'i resolve et.
+        String resolveKey = "system_cleanup_failed:system:global";
+        Integer recentFailures = null;
+        try {
+            recentFailures = jdbc.queryForObject("""
+                select count(*)
+                from ops.job_run
+                where status = 'failed'
+                  and started_at > now() - interval '1 hour'
+                """, Integer.class);
+        } catch (Exception e) {
+            // Sorgu hatasi: alert durumuna dokunma, sadece state kaydet
+            recordHealthState("cleanup_failed", "ok", "job_run sorgulanamadi: " + e.getMessage());
+            return;
+        }
+
+        int failures = recentFailures == null ? 0 : recentFailures;
+        if (failures == 0) {
+            // Son 1 saatte hata yok -> varsa acik alert'i kapat
+            alertService.resolveSystemAlert(resolveKey);
+            recordHealthState("cleanup_failed", "ok", "Son 1 saatte basarisiz job yok");
+        } else {
+            // Hata var: raiseJobAlert zaten alert'i guncel tutuyor; burada sadece state
+            recordHealthState("cleanup_failed", "warning",
+                "Son 1 saatte " + failures + " basarisiz job calismasi");
+        }
     }
 
     private void checkDiskFull() {
