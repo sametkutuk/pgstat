@@ -137,7 +137,7 @@ public class ReportGenerator {
             return;
         }
         log.info("Gunluk rapor uretiliyor...");
-        String title = "📊 pgstat Günlük Özet — " + LocalDate.now(ZoneOffset.UTC);
+        String title = "pgstat Gunluk Ozet - " + LocalDate.now(ZoneOffset.UTC);
         try {
             String body = buildDailyReport();
             if (body == null || body.isBlank()) {
@@ -145,9 +145,16 @@ public class ReportGenerator {
                 return;
             }
             SendResult result = sendReportToChannels(title, body);
+            String eventsBody = buildDailyEventReport();
+            if (eventsBody != null && !eventsBody.isBlank()) {
+                sendReportToChannels("pgstat Gunluk Olaylar - " + LocalDate.now(ZoneOffset.UTC), eventsBody);
+            }
+            String historyBody = eventsBody == null || eventsBody.isBlank()
+                ? body
+                : body + "\n\n---\n\n" + eventsBody;
             // History kaydi (basari/kismi/hata fark etmeksizin)
             try {
-                reportHistoryRepo.insert("daily", title, body,
+                reportHistoryRepo.insert("daily", title, historyBody,
                     result.recipientsJson(), result.status(),
                     result.channelsCount(), result.errorMessage());
             } catch (Exception e) {
@@ -163,7 +170,7 @@ public class ReportGenerator {
     private String buildDailyReport() {
         StringBuilder sb = new StringBuilder();
         String today = LocalDate.now(ZoneOffset.UTC).toString();
-        sb.append("📊 **pgstat Günlük Özet** — ").append(today).append("\n\n");
+        sb.append("pgstat Gunluk Ozet - ").append(today).append("\n\n");
 
         // Fleet durumu
         try {
@@ -177,16 +184,16 @@ public class ReportGenerator {
             int openAlerts = jdbc.queryForObject(
                 "select count(*) from ops.alert where status = 'open'", Integer.class);
 
-            sb.append("**Fleet:** ").append(fleet.get("total")).append(" instance (")
+            sb.append("Fleet: ").append(fleet.get("total")).append(" instance (")
               .append(fleet.get("ready")).append(" ready, ")
-              .append(fleet.get("degraded")).append(" degraded) · ")
-              .append(openAlerts).append(" açık alert\n\n");
+              .append(fleet.get("degraded")).append(" degraded) | ")
+              .append(openAlerts).append(" acik alert\n\n");
         } catch (Exception e) {
             sb.append("Fleet bilgisi alinamadi\n\n");
         }
 
         // Per-instance ozet
-        sb.append("**Per-Instance (son 24h):**\n");
+        sb.append("Per-instance (son 24h):\n");
         try {
             List<Map<String, Object>> instances = jdbc.queryForList("""
                 select i.instance_pk, i.display_name,
@@ -219,67 +226,113 @@ public class ReportGenerator {
                 """);
 
             for (Map<String, Object> inst : instances) {
-                String status = "🟢";
                 long tempFiles = toLong(inst.get("temp_files"));
                 long tempBytes = toLong(inst.get("temp_bytes"));
                 long deadlocks = toLong(inst.get("deadlocks"));
                 long invalidIndexes = toLong(inst.get("invalid_indexes"));
                 double cachePct = toDouble(inst.get("cache_pct"));
-                if (invalidIndexes > 0) status = "\uD83D\uDFE1";
-                if (tempFiles > 100 || deadlocks > 0 || cachePct < 95) status = "🟡";
+                String status = "OK";
+                if (invalidIndexes > 0) status = "CHECK";
+                if (tempFiles > 100 || deadlocks > 0 || cachePct < 95) status = "WARN";
 
-                sb.append(status).append(" **").append(inst.get("display_name")).append("**\n");
-                sb.append("  TPS: ").append(inst.get("avg_tps"));
-                sb.append(" | Bağlantı: ").append(inst.get("connections"));
+                sb.append("[").append(status).append("] ").append(inst.get("display_name"));
+                sb.append(" | TPS ").append(inst.get("avg_tps"));
+                sb.append(" | Conn ").append(inst.get("connections"));
                 sb.append(" | WAL: ").append(humanBytes(toLong(inst.get("wal_bytes"))));
                 sb.append(" | Cache: ").append(cachePct).append("%");
                 sb.append(" | Temp: ").append(tempFiles).append(" / ").append(humanBytes(tempBytes));
                 sb.append(" | Deadlock: ").append(deadlocks);
-                sb.append(" | Invalid index: ").append(invalidIndexes).append("\n\n");
+                sb.append(" | Invalid index: ").append(invalidIndexes).append("\n");
             }
         } catch (Exception e) {
             sb.append("Instance bilgileri alinamadi: ").append(e.getMessage()).append("\n");
         }
+        return sb.toString();
+    }
 
-        // Olay bildirileri — is_event_type=true ve include_in_daily_report=true olan
-        // son 24 saatte first_seen veya last_seen geçen alert'ler.
-        sb.append("\n**Olay Bildirileri (son 24 saat):**\n");
+    private String buildDailyEventReport() {
+        StringBuilder sb = new StringBuilder();
         try {
-            List<Map<String, Object>> events = jdbc.queryForList("""
-                select a.alert_id, a.alert_code, a.severity, a.alert_key, a.status,
-                       a.first_seen_at, a.last_seen_at, a.title, a.message,
-                       i.display_name as instance_name
+            Map<String, Object> total = jdbc.queryForMap("""
+                select count(*) as total_events
+                from ops.alert a
+                where a.alert_source in ('system', 'adaptive')
+                  and (a.first_seen_at > now() - interval '24 hours'
+                       or a.last_seen_at > now() - interval '24 hours')
+                """);
+            long totalEvents = toLong(total.get("total_events"));
+            if (totalEvents == 0) return "";
+
+            sb.append("Gunluk Olay Ozeti (son 24h)\n");
+            sb.append("Toplam olay: ").append(totalEvents).append("\n\n");
+
+            List<Map<String, Object>> byCode = jdbc.queryForList("""
+                select a.alert_code, a.severity, count(*) as event_count,
+                       count(*) filter (where a.status = 'open') as open_count,
+                       max(a.last_seen_at) as last_seen_at
+                from ops.alert a
+                where a.alert_source in ('system', 'adaptive')
+                  and (a.first_seen_at > now() - interval '24 hours'
+                       or a.last_seen_at > now() - interval '24 hours')
+                group by a.alert_code, a.severity
+                order by count(*) desc,
+                         case a.severity
+                           when 'emergency' then 1
+                           when 'critical' then 2
+                           when 'error' then 3
+                           when 'warning' then 4
+                           else 5
+                         end,
+                         a.alert_code
+                limit 20
+                """);
+            sb.append("Kod/severity dagilimi:\n");
+            for (Map<String, Object> row : byCode) {
+                sb.append("- ").append(row.get("alert_code"))
+                  .append(" [").append(row.get("severity")).append("]: ")
+                  .append(row.get("event_count")).append(" olay");
+                long openCount = toLong(row.get("open_count"));
+                if (openCount > 0) sb.append(" (").append(openCount).append(" open)");
+                sb.append("\n");
+            }
+
+            List<Map<String, Object>> byInstance = jdbc.queryForList("""
+                select coalesce(i.display_name, '(global)') as instance_name,
+                       coalesce(i.host, '-') as host,
+                       count(*) as event_count,
+                       count(*) filter (where a.severity in ('critical', 'emergency')) as critical_count,
+                       count(*) filter (where a.severity = 'error') as error_count,
+                       count(*) filter (where a.severity = 'warning') as warning_count,
+                       count(*) filter (where a.status = 'open') as open_count
                 from ops.alert a
                 left join control.instance_inventory i on i.instance_pk = a.instance_pk
                 where a.alert_source in ('system', 'adaptive')
                   and (a.first_seen_at > now() - interval '24 hours'
                        or a.last_seen_at > now() - interval '24 hours')
-                order by a.last_seen_at desc
+                group by coalesce(i.display_name, '(global)'), coalesce(i.host, '-')
+                order by count(*) desc, coalesce(i.display_name, '(global)')
                 limit 20
                 """);
-            if (events.isEmpty()) {
-                sb.append("Son 24 saatte olay bildirisi yok.\n\n");
-            } else {
-                for (Map<String, Object> e : events) {
-                    String when = e.get("last_seen_at").toString().substring(0, 19);
-                    sb.append("• ").append(when)
-                      .append(" [").append(e.get("severity")).append("] ")
-                      .append(e.get("alert_code"));
-                    if (e.get("instance_name") != null) {
-                        sb.append(" — ").append(e.get("instance_name"));
-                    }
-                    String title = (String) e.get("title");
-                    if (title != null && !title.isBlank()) {
-                        sb.append(" — ").append(title.length() > 80 ? title.substring(0, 80) + "..." : title);
-                    }
-                    sb.append(" [").append(e.get("status")).append("]\n");
-                }
+            sb.append("\nInstance/host dagilimi:\n");
+            for (Map<String, Object> row : byInstance) {
+                sb.append("- ").append(row.get("instance_name"))
+                  .append(" (").append(row.get("host")).append("): ")
+                  .append(row.get("event_count")).append(" olay");
+                long criticalCount = toLong(row.get("critical_count"));
+                long errorCount = toLong(row.get("error_count"));
+                long warningCount = toLong(row.get("warning_count"));
+                long openCount = toLong(row.get("open_count"));
+                List<String> parts = new ArrayList<>();
+                if (criticalCount > 0) parts.add("critical " + criticalCount);
+                if (errorCount > 0) parts.add("error " + errorCount);
+                if (warningCount > 0) parts.add("warning " + warningCount);
+                if (openCount > 0) parts.add("open " + openCount);
+                if (!parts.isEmpty()) sb.append(" [").append(String.join(", ", parts)).append("]");
                 sb.append("\n");
             }
         } catch (Exception e) {
-            sb.append("Olay bildirileri alinamadi: ").append(e.getMessage()).append("\n\n");
+            sb.append("Olay ozeti alinamadi: ").append(e.getMessage()).append("\n");
         }
-
         return sb.toString();
     }
 

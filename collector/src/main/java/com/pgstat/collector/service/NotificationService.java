@@ -29,6 +29,7 @@ import java.util.regex.Pattern;
 public class NotificationService {
 
     private static final Logger log = LoggerFactory.getLogger(NotificationService.class);
+    private static final int TELEGRAM_SAFE_MESSAGE_LENGTH = 3900;
 
     private final JdbcTemplate jdbc;
     private final HttpClient httpClient;
@@ -343,26 +344,101 @@ public class NotificationService {
                 + "<b>" + escapeHtml(title) + "</b>\n"
                 + escapeHtml(message);
 
-        // Telegram mesaj limiti 4096 char. HTML tag'leri sayilir ama yaklasik kalsin.
-        // Truncate olduguna dair belirti birak.
-        if (text.length() > 4000) {
-            text = text.substring(0, 3950) + "\n\n... (mesaj kesildi)";
-        }
-
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
-        String payload = """
-            {"chat_id": "%s", "text": "%s", "parse_mode": "HTML", "disable_web_page_preview": true}
-            """.formatted(chatId, escapeJson(text));
+        List<String> parts = splitForTelegram(text, TELEGRAM_SAFE_MESSAGE_LENGTH);
 
-        boolean ok = postWebhook(url, payload);
-        if (ok) log.info("Telegram bildirimi gönderildi: chat_id={}", chatId);
-        return ok;
+        boolean allOk = true;
+        for (int i = 0; i < parts.size(); i++) {
+            String part = parts.get(i);
+            if (parts.size() > 1) {
+                part = part + "\n\n(" + (i + 1) + "/" + parts.size() + ")";
+            }
+            String payload = """
+                {"chat_id": "%s", "text": "%s", "parse_mode": "HTML", "disable_web_page_preview": true}
+                """.formatted(chatId, escapeJson(part));
+            boolean ok = postWebhook(url, payload);
+            allOk = allOk && ok;
+        }
+        if (allOk) log.info("Telegram bildirimi gonderildi: chat_id={}, parts={}", chatId, parts.size());
+        return allOk;
     }
 
     /** HTML parse_mode icin Telegram'da yeterli — sadece 3 karakter. */
     private String escapeHtml(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private List<String> splitForTelegram(String text, int maxLen) {
+        if (text == null) return List.of("");
+        if (text.length() <= maxLen) return List.of(text);
+
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        String[] blocks = text.split("(?<=\\n\\n)", -1);
+
+        for (String block : blocks) {
+            if (block.length() > maxLen) {
+                flushTelegramPart(parts, current);
+                parts.addAll(splitLongTelegramBlock(block, maxLen));
+            } else if (current.length() + block.length() > maxLen) {
+                flushTelegramPart(parts, current);
+                current.append(block);
+            } else {
+                current.append(block);
+            }
+        }
+
+        flushTelegramPart(parts, current);
+        return parts.isEmpty() ? List.of("") : parts;
+    }
+
+    private void flushTelegramPart(List<String> parts, StringBuilder current) {
+        if (current.length() == 0) return;
+        parts.add(current.toString());
+        current.setLength(0);
+    }
+
+    private List<String> splitLongTelegramBlock(String text, int maxLen) {
+        List<String> parts = new ArrayList<>();
+        int start = 0;
+        while (start < text.length()) {
+            int end = Math.min(start + maxLen, text.length());
+            if (end < text.length()) {
+                int boundary = findTelegramSplitBoundary(text, start, end, maxLen);
+                if (boundary > start) end = boundary;
+            }
+            parts.add(text.substring(start, end));
+            start = end;
+        }
+        return parts;
+    }
+
+    private int findTelegramSplitBoundary(String text, int start, int end, int maxLen) {
+        int minUseful = start + Math.min(200, maxLen / 2);
+        int[] candidates = new int[] {
+            text.lastIndexOf("\n\n", end),
+            text.lastIndexOf("\n", end),
+            text.lastIndexOf(". ", end),
+            text.lastIndexOf("; ", end),
+            text.lastIndexOf(", ", end),
+            text.lastIndexOf(" ", end)
+        };
+
+        for (int candidate : candidates) {
+            if (candidate > minUseful) {
+                return avoidHtmlTagCut(text, start, candidate + 1);
+            }
+        }
+
+        return avoidHtmlTagCut(text, start, end);
+    }
+
+    private int avoidHtmlTagCut(String text, int start, int end) {
+        int lastLt = text.lastIndexOf('<', end - 1);
+        int lastGt = text.lastIndexOf('>', end - 1);
+        if (lastLt > lastGt && lastLt > start) return lastLt;
+        return end;
     }
 
     // =========================================================================
