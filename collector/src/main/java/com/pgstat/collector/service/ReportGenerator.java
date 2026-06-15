@@ -149,18 +149,24 @@ public class ReportGenerator {
             log.info("Gunluk rapor bugun zaten gonderilmis (DB), atlandi");
             return 0;
         }
-        log.info("Gunluk rapor uretiliyor{}...", force ? " (manuel/force)" : "");
-        String title = "pgstat Gunluk Ozet - " + LocalDate.now(ZoneOffset.UTC);
+        // Gunluk rapor HER ZAMAN bir onceki tam UTC gununu kapsar (dun 00:00 - bugun 00:00 UTC).
+        // Otomatik (UTC 06:00) ve manuel tetiklemede ayni: tetikleme saatinden bagimsiz,
+        // "dunun tamami" raporlanir. Boylece rapor gun sinirina oturur, kayan 24h penceresi degil.
+        LocalDate reportDay = LocalDate.now(ZoneOffset.UTC).minusDays(1);
+        OffsetDateTime dayStart = reportDay.atStartOfDay().atOffset(ZoneOffset.UTC);
+        OffsetDateTime dayEnd = reportDay.plusDays(1).atStartOfDay().atOffset(ZoneOffset.UTC);
+        log.info("Gunluk rapor uretiliyor{} (gun={} UTC)...", force ? " (manuel/force)" : "", reportDay);
+        String title = "pgstat Gunluk Ozet - " + reportDay;
         try {
-            String body = buildDailyReport();
+            String body = buildDailyReport(reportDay, dayStart, dayEnd);
             if (body == null || body.isBlank()) {
                 log.warn("Gunluk rapor bos uretildi, gonderim atlandi");
                 return 0;
             }
             SendResult result = sendReportToChannels(title, body);
-            String eventsBody = buildDailyEventReport();
+            String eventsBody = buildDailyEventReport(reportDay, dayStart, dayEnd);
             if (eventsBody != null && !eventsBody.isBlank()) {
-                sendReportToChannels("pgstat Gunluk Olaylar - " + LocalDate.now(ZoneOffset.UTC), eventsBody);
+                sendReportToChannels("pgstat Gunluk Olaylar - " + reportDay, eventsBody);
             }
             String historyBody = eventsBody == null || eventsBody.isBlank()
                 ? body
@@ -183,10 +189,12 @@ public class ReportGenerator {
         }
     }
 
-    private String buildDailyReport() {
+    private String buildDailyReport(LocalDate reportDay, OffsetDateTime dayStart, OffsetDateTime dayEnd) {
         StringBuilder sb = new StringBuilder();
-        String today = LocalDate.now(ZoneOffset.UTC).toString();
-        sb.append("pgstat Gunluk Ozet - ").append(today).append("\n\n");
+        // Pencere: bir onceki tam UTC gunu [dayStart, dayEnd). Bind parametre olarak gecer.
+        java.sql.Timestamp tsStart = java.sql.Timestamp.from(dayStart.toInstant());
+        java.sql.Timestamp tsEnd = java.sql.Timestamp.from(dayEnd.toInstant());
+        sb.append("pgstat Gunluk Ozet - ").append(reportDay).append(" (UTC)\n\n");
 
         // Fleet durumu
         try {
@@ -208,28 +216,31 @@ public class ReportGenerator {
             sb.append("Fleet bilgisi alinamadi\n\n");
         }
 
-        // Per-instance ozet
-        sb.append("Per-instance (son 24h):\n");
+        // Per-instance ozet — pencere bir onceki tam UTC gunu [dayStart, dayEnd).
+        // tsStart 7 subquery'de, tsEnd 6 subquery'de bind edilir (connections hari).
+        // Bind sirasi SQL'deki ? sirasini birebir takip eder.
+        sb.append("Per-instance (").append(reportDay).append(" UTC, tam gun):\n");
         try {
             List<Map<String, Object>> instances = jdbc.queryForList("""
                 select i.instance_pk, i.display_name,
                   coalesce((select round(sum(xact_commit_delta + xact_rollback_delta)::numeric / 86400)
                     from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as avg_tps,
+                    where d.instance_pk = i.instance_pk and d.sample_ts >= ? and d.sample_ts < ?), 0) as avg_tps,
                   coalesce((select sum(numbackends) from fact.pg_database_delta d
                     where d.instance_pk = i.instance_pk
-                    and d.sample_ts = (select max(sample_ts) from fact.pg_database_delta where instance_pk = i.instance_pk)), 0) as connections,
+                    and d.sample_ts = (select max(sample_ts) from fact.pg_database_delta
+                                       where instance_pk = i.instance_pk and sample_ts >= ? and sample_ts < ?)), 0) as connections,
                   coalesce((select sum(period_wal_size_byte) from fact.pg_wal_snapshot w
-                    where w.instance_pk = i.instance_pk and w.sample_ts > now() - interval '24 hours'), 0) as wal_bytes,
+                    where w.instance_pk = i.instance_pk and w.sample_ts >= ? and w.sample_ts < ?), 0) as wal_bytes,
                   coalesce((select round(100.0 * sum(blks_hit_delta)::numeric / nullif(sum(blks_hit_delta + blks_read_delta), 0), 1)
                     from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as cache_pct,
+                    where d.instance_pk = i.instance_pk and d.sample_ts >= ? and d.sample_ts < ?), 0) as cache_pct,
                   coalesce((select sum(temp_files_delta) from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as temp_files,
+                    where d.instance_pk = i.instance_pk and d.sample_ts >= ? and d.sample_ts < ?), 0) as temp_files,
                   coalesce((select sum(temp_bytes_delta) from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as temp_bytes,
+                    where d.instance_pk = i.instance_pk and d.sample_ts >= ? and d.sample_ts < ?), 0) as temp_bytes,
                   coalesce((select sum(deadlocks_delta) from fact.pg_database_delta d
-                    where d.instance_pk = i.instance_pk and d.sample_ts > now() - interval '24 hours'), 0) as deadlocks,
+                    where d.instance_pk = i.instance_pk and d.sample_ts >= ? and d.sample_ts < ?), 0) as deadlocks,
                   coalesce((select count(*) from (
                     select distinct on (x.dbid, x.index_relid) x.is_valid, x.is_ready
                     from fact.pg_index_stat_delta x
@@ -239,7 +250,14 @@ public class ReportGenerator {
                 from control.instance_inventory i
                 where i.is_active and i.bootstrap_state = 'ready'
                 order by i.display_name
-                """);
+                """,
+                tsStart, tsEnd,   // avg_tps
+                tsStart, tsEnd,   // connections (son snapshot'i gun icine sinirla)
+                tsStart, tsEnd,   // wal_bytes
+                tsStart, tsEnd,   // cache_pct
+                tsStart, tsEnd,   // temp_files
+                tsStart, tsEnd,   // temp_bytes
+                tsStart, tsEnd);  // deadlocks
 
             for (Map<String, Object> inst : instances) {
                 long tempFiles = toLong(inst.get("temp_files"));
@@ -266,20 +284,24 @@ public class ReportGenerator {
         return sb.toString();
     }
 
-    private String buildDailyEventReport() {
+    private String buildDailyEventReport(LocalDate reportDay, OffsetDateTime dayStart, OffsetDateTime dayEnd) {
         StringBuilder sb = new StringBuilder();
+        // Olay penceresi: bir onceki tam UTC gunu. Bir alert gun icinde acildi VEYA
+        // gun icinde tekrar gorulduyse (last_seen) o gune dahil edilir.
+        java.sql.Timestamp tsStart = java.sql.Timestamp.from(dayStart.toInstant());
+        java.sql.Timestamp tsEnd = java.sql.Timestamp.from(dayEnd.toInstant());
         try {
             Map<String, Object> total = jdbc.queryForMap("""
                 select count(*) as total_events
                 from ops.alert a
                 where a.alert_source in ('system', 'adaptive')
-                  and (a.first_seen_at > now() - interval '24 hours'
-                       or a.last_seen_at > now() - interval '24 hours')
-                """);
+                  and ((a.first_seen_at >= ? and a.first_seen_at < ?)
+                       or (a.last_seen_at >= ? and a.last_seen_at < ?))
+                """, tsStart, tsEnd, tsStart, tsEnd);
             long totalEvents = toLong(total.get("total_events"));
             if (totalEvents == 0) return "";
 
-            sb.append("Gunluk Olay Ozeti (son 24h)\n");
+            sb.append("Gunluk Olay Ozeti - ").append(reportDay).append(" (UTC, tam gun)\n");
             sb.append("Toplam olay: ").append(totalEvents).append("\n\n");
 
             List<Map<String, Object>> byCode = jdbc.queryForList("""
@@ -288,8 +310,8 @@ public class ReportGenerator {
                        max(a.last_seen_at) as last_seen_at
                 from ops.alert a
                 where a.alert_source in ('system', 'adaptive')
-                  and (a.first_seen_at > now() - interval '24 hours'
-                       or a.last_seen_at > now() - interval '24 hours')
+                  and ((a.first_seen_at >= ? and a.first_seen_at < ?)
+                       or (a.last_seen_at >= ? and a.last_seen_at < ?))
                 group by a.alert_code, a.severity
                 order by count(*) desc,
                          case a.severity
@@ -301,7 +323,7 @@ public class ReportGenerator {
                          end,
                          a.alert_code
                 limit 20
-                """);
+                """, tsStart, tsEnd, tsStart, tsEnd);
             sb.append("Kod/severity dagilimi:\n");
             for (Map<String, Object> row : byCode) {
                 sb.append("- ").append(row.get("alert_code"))
@@ -323,12 +345,12 @@ public class ReportGenerator {
                 from ops.alert a
                 left join control.instance_inventory i on i.instance_pk = a.instance_pk
                 where a.alert_source in ('system', 'adaptive')
-                  and (a.first_seen_at > now() - interval '24 hours'
-                       or a.last_seen_at > now() - interval '24 hours')
+                  and ((a.first_seen_at >= ? and a.first_seen_at < ?)
+                       or (a.last_seen_at >= ? and a.last_seen_at < ?))
                 group by coalesce(i.display_name, '(global)'), coalesce(i.host, '-')
                 order by count(*) desc, coalesce(i.display_name, '(global)')
                 limit 20
-                """);
+                """, tsStart, tsEnd, tsStart, tsEnd);
             sb.append("\nInstance/host dagilimi:\n");
             for (Map<String, Object> row : byInstance) {
                 sb.append("- ").append(row.get("instance_name"))
