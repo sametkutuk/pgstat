@@ -81,8 +81,8 @@ router.patch('/config', async (req, res, next) => {
 router.post('/trigger/:type', async (req, res, next) => {
     try {
         const reportType = req.params.type;
-        if (reportType !== 'weekly') {
-            res.status(400).json({ error: 'Geçersiz rapor tipi' });
+        if (reportType !== 'weekly' && reportType !== 'daily') {
+            res.status(400).json({ error: 'Geçersiz rapor tipi (daily | weekly)' });
             return;
         }
         const requestedBy = (req as any).user?.username || (req as any).user?.email || 'ui';

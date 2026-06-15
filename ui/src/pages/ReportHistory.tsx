@@ -66,6 +66,16 @@ export default function ReportHistory() {
         onError: () => toast.error('Haftalık rapor tetiklenemedi'),
     });
 
+    const triggerDailyMut = useMutation({
+        mutationFn: () => apiPost('/reports/trigger/daily', {}),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['report-history'] });
+            toast.success('Günlük rapor kuyruğa alındı');
+            window.setTimeout(() => qc.invalidateQueries({ queryKey: ['report-history'] }), 7000);
+        },
+        onError: () => toast.error('Günlük rapor tetiklenemedi'),
+    });
+
     const columns = [
         {
             key: 'report_type', header: 'Tip',
@@ -126,10 +136,16 @@ export default function ReportHistory() {
                         ⚙ Ayarlar
                     </Link>
                     <button
+                        onClick={() => triggerDailyMut.mutate()}
+                        disabled={triggerDailyMut.isPending}
+                        className="px-3 py-1.5 text-sm bg-[#10B981] text-white rounded hover:bg-[#059669] disabled:opacity-50 print:hidden">
+                        {triggerDailyMut.isPending ? 'Tetikleniyor...' : '📊 Günlük Raporu Çalıştır'}
+                    </button>
+                    <button
                         onClick={() => triggerWeeklyMut.mutate()}
                         disabled={triggerWeeklyMut.isPending}
                         className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] disabled:opacity-50 print:hidden">
-                        {triggerWeeklyMut.isPending ? 'Tetikleniyor...' : 'Haftalık Raporu Çalıştır'}
+                        {triggerWeeklyMut.isPending ? 'Tetikleniyor...' : '📈 Haftalık Raporu Çalıştır'}
                     </button>
                     <LastUpdated dataUpdatedAt={dataUpdatedAt} />
                     <PrintButton title="Rapor Tarihçesi" />
