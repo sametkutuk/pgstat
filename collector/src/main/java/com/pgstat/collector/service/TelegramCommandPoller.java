@@ -30,22 +30,32 @@ public class TelegramCommandPoller {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramCommandPoller.class);
     private static final int TELEGRAM_SAFE_MESSAGE_LENGTH = 3900;
+    private static final int MAX_UPDATES_PER_CYCLE = 20;
+    private static final int MAX_COMMAND_TEXT_LENGTH = 256;
+    private static final int RATE_LIMIT_MAX_COMMANDS = 10;
+    private static final int AUDIT_TEXT_LENGTH = 50;
+    private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration RATE_LIMIT_WINDOW = Duration.ofMinutes(1);
+    private static final Duration MAX_SNOOZE_DURATION = Duration.ofDays(30);
     private static final Pattern CONFIG_KV =
         Pattern.compile("\"([^\"]+)\"\\s*:\\s*(\"[^\"]*\"|[^,}]+)");
-    private static final Pattern DURATION_PATTERN = Pattern.compile("^(\\d+)([mhd]?)$");
+    private static final Pattern DURATION_PATTERN = Pattern.compile("^(\\d{1,4})([mhd]?)$");
 
     private final JdbcTemplate jdbc;
     private final HttpClient httpClient;
     private final JsonParser jsonParser;
+    private final Map<Long, List<Long>> commandRateWindow = new HashMap<>();
 
-    private record Command(String action, boolean codeScope, String durationToken, Long snoozeId) {}
+    private record Command(String action, boolean codeScope, String durationToken, Long snoozeId, String errorMessage) {}
 
     private record ReplyAlert(Long alertId, String alertKey, String alertCode, Long instancePk, String instanceName) {}
+
+    private record DurationParseResult(OffsetDateTime until, boolean clamped, String effectiveText) {}
 
     public TelegramCommandPoller(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
         this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(HTTP_TIMEOUT)
             .build();
         this.jsonParser = JsonParserFactory.getJsonParser();
     }
@@ -83,16 +93,23 @@ public class TelegramCommandPoller {
         long lastUpdateId = loadLastUpdateId(botKey);
         String url = "https://api.telegram.org/bot" + botToken
             + "/getUpdates?offset=" + (lastUpdateId + 1)
+            + "&limit=" + MAX_UPDATES_PER_CYCLE
             + "&timeout=0";
 
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create(url))
-            .timeout(Duration.ofSeconds(15))
+            .timeout(HTTP_TIMEOUT)
             .GET()
             .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 409) {
+            log.warn("Telegram getUpdates 409: webhook aktif olabilir, bot={}, chat={}",
+                maskBotToken(botToken), chatId);
+            return;
+        }
         if (response.statusCode() >= 400) {
-            log.warn("Telegram getUpdates hatasi: HTTP {} - {}", response.statusCode(), response.body());
+            log.warn("Telegram getUpdates hatasi: HTTP {} bot={} chat={} - {}",
+                response.statusCode(), maskBotToken(botToken), chatId, response.body());
             return;
         }
 
@@ -100,7 +117,10 @@ public class TelegramCommandPoller {
         Object resultObj = root.get("result");
         if (!(resultObj instanceof List<?> updates)) return;
 
+        int processed = 0;
         for (Object updateObj : updates) {
+            if (processed >= MAX_UPDATES_PER_CYCLE) break;
+            processed++;
             if (!(updateObj instanceof Map<?, ?> updateMap)) continue;
             Long updateId = toLong(updateMap.get("update_id"));
             if (updateId == null) continue;
@@ -121,9 +141,25 @@ public class TelegramCommandPoller {
         String chatId = chatId(message);
         if (!configuredChatId.equals(chatId)) return;
 
-        String text = stringValue(message.get("text"));
+        String text = limitText(stringValue(message.get("text")), MAX_COMMAND_TEXT_LENGTH);
+        if (text == null || text.isBlank()) return;
+
+        Long userId = senderUserId(message);
+        if (!isAllowedUser(userId)) {
+            if (text.trim().startsWith("/")) auditUnauthorized(message, chatId, text);
+            return;
+        }
+        if (isRateLimited(userId)) {
+            auditRateLimited(message, chatId, text);
+            return;
+        }
+
         Command command = parseCommand(text);
         if (command == null) return;
+        if (command.errorMessage() != null) {
+            sendPlain(botToken, configuredChatId, command.errorMessage());
+            return;
+        }
 
         if ("report".equals(command.action())) {
             sendSnoozeReport(botToken, configuredChatId);
@@ -150,7 +186,7 @@ public class TelegramCommandPoller {
             if (tokens.length > 1) {
                 String second = tokens[1].toLowerCase(Locale.ROOT);
                 if ("report".equals(second) || "rapor".equals(second)) {
-                    return new Command("report", false, null, null);
+                    return new Command("report", false, null, null, null);
                 }
             }
             int idx = 1;
@@ -163,12 +199,18 @@ public class TelegramCommandPoller {
                 }
             }
             String durationToken = tokens.length > idx ? tokens[idx] : null;
-            return new Command("mute", codeScope, durationToken, null);
+            return new Command("mute", codeScope, durationToken, null, null);
         }
 
         if ("/unmute".equals(name) || "/ac".equals(name)) {
-            Long snoozeId = tokens.length > 1 ? parseLong(tokens[1]) : null;
-            return new Command("unmute", false, null, snoozeId);
+            if (tokens.length > 1) {
+                Long snoozeId = parsePositiveLong(tokens[1]);
+                if (snoozeId == null) {
+                    return new Command("unmute", false, null, null, "Hata: snooze_id pozitif integer olmali.");
+                }
+                return new Command("unmute", false, null, snoozeId, null);
+            }
+            return new Command("unmute", false, null, null, null);
         }
 
         return null;
@@ -185,13 +227,15 @@ public class TelegramCommandPoller {
             return;
         }
 
+        DurationParseResult duration = null;
         OffsetDateTime until = null;
         if (command.durationToken() != null && !command.durationToken().isBlank()) {
-            until = parseUntil(command.durationToken());
-            if (until == null) {
-                sendPlain(botToken, chatId, "Hata: Sure formati gecersiz. Ornek: 30m, 2h, 1d, 90.");
+            duration = parseDuration(command.durationToken());
+            if (duration == null) {
+                sendPlain(botToken, chatId, "Hata: Sure formati gecersiz. Ornek: 30m, 2h, 1d, 90. Ust sinir 30d.");
                 return;
             }
+            until = duration.until();
         }
 
         String createdBy = createdBy(message);
@@ -208,9 +252,10 @@ public class TelegramCommandPoller {
             Integer.class, alertKey, alertCode, instancePk, until, createdBy);
 
         String scope = command.codeScope() ? "kod " + alert.alertCode() : alert.alertKey();
-        String durationText = until == null ? "suresiz" : command.durationToken();
+        String durationText = until == null ? "suresiz" : duration.effectiveText();
+        String warning = duration != null && duration.clamped() ? " Uyari: sure 30 gun ile sinirlandi." : "";
         sendPlain(botToken, chatId, "OK: " + alert.instanceName() + " uzerindeki " + scope
-            + " " + durationText + " susturuldu. /ac " + snoozeId + " ile acabilirsin.");
+            + " " + durationText + " susturuldu. /ac " + snoozeId + " ile acabilirsin." + warning);
     }
 
     private void handleUnmute(String botToken, String chatId, Map<String, Object> message, Command command) {
@@ -301,18 +346,30 @@ public class TelegramCommandPoller {
         );
     }
 
-    private OffsetDateTime parseUntil(String token) {
+    private DurationParseResult parseDuration(String token) {
         if (token == null || token.isBlank()) return null;
         Matcher matcher = DURATION_PATTERN.matcher(token.toLowerCase(Locale.ROOT));
         if (!matcher.matches()) return null;
         long amount = Long.parseLong(matcher.group(1));
         String unit = matcher.group(2);
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        return switch (unit) {
-            case "h" -> now.plusHours(amount);
-            case "d" -> now.plusDays(amount);
-            default -> now.plusMinutes(amount);
+        Duration requested = switch (unit) {
+            case "h" -> Duration.ofHours(amount);
+            case "d" -> Duration.ofDays(amount);
+            default -> Duration.ofMinutes(amount);
         };
+        boolean clamped = requested.compareTo(MAX_SNOOZE_DURATION) > 0;
+        Duration effective = clamped ? MAX_SNOOZE_DURATION : requested;
+        String suffix = unit == null || unit.isBlank() ? "m" : unit;
+        long effectiveAmount = switch (suffix) {
+            case "h" -> effective.toHours();
+            case "d" -> effective.toDays();
+            default -> effective.toMinutes();
+        };
+        return new DurationParseResult(
+            OffsetDateTime.now(ZoneOffset.UTC).plus(effective),
+            clamped,
+            effectiveAmount + suffix
+        );
     }
 
     private long loadLastUpdateId(String botKey) {
@@ -341,6 +398,45 @@ public class TelegramCommandPoller {
         }
     }
 
+    private boolean isAllowedUser(Long userId) {
+        if (userId == null) return false;
+        try {
+            Boolean allowed = jdbc.queryForObject("""
+                select exists (
+                  select 1
+                  from control.telegram_command_allowlist
+                  where telegram_user_id = ? and is_enabled = true
+                )
+                """,
+                Boolean.class, userId);
+            return Boolean.TRUE.equals(allowed);
+        } catch (Exception e) {
+            log.debug("Telegram allowlist kontrolu fail-closed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean isRateLimited(Long userId) {
+        if (userId == null) return true;
+        long now = System.currentTimeMillis();
+        long cutoff = now - RATE_LIMIT_WINDOW.toMillis();
+        List<Long> window = commandRateWindow.computeIfAbsent(userId, ignored -> new ArrayList<>());
+        window.removeIf(ts -> ts < cutoff);
+        if (window.size() >= RATE_LIMIT_MAX_COMMANDS) return true;
+        window.add(now);
+        return false;
+    }
+
+    private void auditUnauthorized(Map<String, Object> message, String chatId, String text) {
+        log.warn("telegram yetkisiz komut: user_id={}, username={}, chat={}, text={}",
+            senderUserId(message), username(message), chatId, auditText(text));
+    }
+
+    private void auditRateLimited(Map<String, Object> message, String chatId, String text) {
+        log.warn("telegram rate limit: user_id={}, username={}, chat={}, text={}",
+            senderUserId(message), username(message), chatId, auditText(text));
+    }
+
     private void sendPlain(String botToken, String chatId, String text) {
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
         for (String part : splitText(text, TELEGRAM_SAFE_MESSAGE_LENGTH)) {
@@ -352,7 +448,7 @@ public class TelegramCommandPoller {
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(payload))
-                    .timeout(Duration.ofSeconds(15))
+                    .timeout(HTTP_TIMEOUT)
                     .build();
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
                 if (response.statusCode() >= 400) {
@@ -396,6 +492,22 @@ public class TelegramCommandPoller {
         return result;
     }
 
+    private String limitText(String text, int maxLen) {
+        if (text == null) return null;
+        return text.length() <= maxLen ? text : text.substring(0, maxLen);
+    }
+
+    private String auditText(String text) {
+        if (text == null) return "";
+        String clean = text.replace("\n", " ").replace("\r", " ");
+        return clean.length() <= AUDIT_TEXT_LENGTH ? clean : clean.substring(0, AUDIT_TEXT_LENGTH);
+    }
+
+    private String maskBotToken(String botToken) {
+        if (botToken == null || botToken.isBlank()) return "bot***";
+        return "bot***";
+    }
+
     private String botKey(String botToken, String chatId) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -420,6 +532,24 @@ public class TelegramCommandPoller {
         if (username == null || username.isBlank()) username = stringValue(from.get("first_name"));
         if (username == null || username.isBlank()) username = String.valueOf(from.getOrDefault("id", "unknown"));
         return "telegram:" + username;
+    }
+
+    private Long senderUserId(Map<String, Object> message) {
+        Map<String, Object> from = mapValue(message.get("from"));
+        return from == null ? null : toLong(from.get("id"));
+    }
+
+    private String username(Map<String, Object> message) {
+        Map<String, Object> from = mapValue(message.get("from"));
+        if (from == null) return "";
+        String username = stringValue(from.get("username"));
+        if (username == null || username.isBlank()) username = stringValue(from.get("first_name"));
+        return username == null ? "" : username;
+    }
+
+    private Long parsePositiveLong(String value) {
+        Long parsed = parseLong(value);
+        return parsed != null && parsed > 0 ? parsed : null;
     }
 
     private Long parseLong(String value) {

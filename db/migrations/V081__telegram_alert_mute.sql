@@ -51,3 +51,11 @@ create table if not exists control.telegram_poll_state (
   last_update_id bigint not null default 0,
   updated_at timestamptz default now()
 );
+
+create table if not exists control.telegram_command_allowlist (
+  telegram_user_id bigint primary key,
+  username text,
+  note text,
+  is_enabled boolean not null default true,
+  created_at timestamptz default now()
+);
