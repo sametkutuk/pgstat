@@ -520,6 +520,15 @@ public class PurgeEvaluator {
         } catch (Exception e) {
             log.debug("notification_log purge atlandi: {}", e.getMessage());
         }
+
+        try {
+            int n = jdbc.update(
+                "delete from control.telegram_message_map where sent_at < now() - make_interval(days => ?)",
+                7);
+            if (n > 0) log.info("Eski telegram_message_map temizlendi: {} satir (>7 gun)", n);
+        } catch (Exception e) {
+            log.debug("telegram_message_map purge atlandi: {}", e.getMessage());
+        }
     }
 
     /**
