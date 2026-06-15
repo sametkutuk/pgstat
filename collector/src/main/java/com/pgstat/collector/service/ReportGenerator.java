@@ -124,25 +124,38 @@ public class ReportGenerator {
      * Gunluk ozet rapor uretir ve bildirim kanallarina gonderir.
      * Her instance icin: TPS, baglanti, WAL, cache, temp, deadlock ozeti.
      */
+    /** Zamanlanmis gunluk rapor: idempotency guard aktif (gunde bir kez). */
     public void generateAndSendDailyReport() {
+        generateAndSendDailyReport(false);
+    }
+
+    /**
+     * Gunluk ozet rapor uretir ve bildirim kanallarina gonderir.
+     * Her instance icin: TPS, baglanti, WAL, cache, temp, deadlock ozeti.
+     *
+     * @param force true ise bugun zaten gonderilmis olsa bile yeniden uretir
+     *              (manuel/elle tetikleme). false ise gunluk idempotency guard'i uygular.
+     * @return olusturulan report_history id'si, gonderim atlandiysa 0
+     */
+    public long generateAndSendDailyReport(boolean force) {
         if (!isDailyEnabled()) {
             log.info("Gunluk rapor devre disi (config), atlandi");
-            return;
+            return 0;
         }
-        // DB-bazlı idempotency: bugün zaten gönderilmişse atla.
+        // DB-bazlı idempotency: bugün zaten gönderilmişse atla (force degilse).
         // In-memory flag collector restart'ta sıfırlanıyordu → restart UTC 06:00-06:59
         // arasındaysa rapor 2. kez gönderiliyordu. Bu kontrol restart'a karşı korur.
-        if (alreadySentToday("daily")) {
+        if (!force && alreadySentToday("daily")) {
             log.info("Gunluk rapor bugun zaten gonderilmis (DB), atlandi");
-            return;
+            return 0;
         }
-        log.info("Gunluk rapor uretiliyor...");
+        log.info("Gunluk rapor uretiliyor{}...", force ? " (manuel/force)" : "");
         String title = "pgstat Gunluk Ozet - " + LocalDate.now(ZoneOffset.UTC);
         try {
             String body = buildDailyReport();
             if (body == null || body.isBlank()) {
                 log.warn("Gunluk rapor bos uretildi, gonderim atlandi");
-                return;
+                return 0;
             }
             SendResult result = sendReportToChannels(title, body);
             String eventsBody = buildDailyEventReport();
@@ -153,8 +166,9 @@ public class ReportGenerator {
                 ? body
                 : body + "\n\n---\n\n" + eventsBody;
             // History kaydi (basari/kismi/hata fark etmeksizin)
+            long reportId = 0;
             try {
-                reportHistoryRepo.insert("daily", title, historyBody,
+                reportId = reportHistoryRepo.insert("daily", title, historyBody,
                     result.recipientsJson(), result.status(),
                     result.channelsCount(), result.errorMessage());
             } catch (Exception e) {
@@ -162,8 +176,10 @@ public class ReportGenerator {
             }
             log.info("Gunluk rapor gonderildi (status={}, channels={})",
                 result.status(), result.channelsCount());
+            return reportId;
         } catch (Exception e) {
             log.warn("Gunluk rapor hatasi: {}", e.getMessage());
+            return 0;
         }
     }
 
@@ -518,11 +534,17 @@ public class ReportGenerator {
             if (claimed == 0) continue;
 
             try {
-                if (!"weekly".equals(reportType)) {
+                long reportId;
+                if ("weekly".equals(reportType)) {
+                    OffsetDateTime periodEnd = toOffsetDateTime(trigger.get("requested_at"));
+                    reportId = generateAndSendWeeklyReport(true, periodEnd);
+                } else if ("daily".equals(reportType)) {
+                    // Manuel gunluk: bugun zaten gonderilmis olsa bile force=true ile
+                    // yeniden uret (test/elle tetikleme amacli). Idempotency guard bypass.
+                    reportId = generateAndSendDailyReport(true);
+                } else {
                     throw new IllegalArgumentException("Desteklenmeyen manuel rapor tipi: " + reportType);
                 }
-                OffsetDateTime periodEnd = toOffsetDateTime(trigger.get("requested_at"));
-                long reportId = generateAndSendWeeklyReport(true, periodEnd);
                 jdbc.update("""
                     update control.report_trigger
                     set status = 'done', completed_at = now(), report_id = ?
