@@ -105,7 +105,8 @@ public class LongRunningQueryEvaluator {
     private List<ActivityRow> loadActivityRows(long instancePk, OffsetDateTime snapshotTs) {
         return jdbc.query("""
             select a.pid, a.datname, a.usename, a.state, a.query_start, a.xact_start,
-                   a.query, a.backend_type, a.wait_event_type, a.wait_event, a.query_id
+                   a.query, a.backend_type, a.wait_event_type, a.wait_event, a.query_id,
+                   a.application_name, a.client_addr::text as client_addr, a.client_hostname
             from fact.pg_activity_snapshot a
             where a.instance_pk = ?
               and a.snapshot_ts = ?
@@ -122,7 +123,10 @@ public class LongRunningQueryEvaluator {
             rs.getString("backend_type"),
             rs.getString("wait_event_type"),
             rs.getString("wait_event"),
-            rs.getObject("query_id") == null ? null : rs.getLong("query_id")
+            rs.getObject("query_id") == null ? null : rs.getLong("query_id"),
+            rs.getString("application_name"),
+            rs.getString("client_addr"),
+            rs.getString("client_hostname")
         ), instancePk, snapshotTs);
     }
 
@@ -149,6 +153,7 @@ public class LongRunningQueryEvaluator {
             subscription.longQueryMinutes(),
             "Uzun suren sorgu: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
             "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
+                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
                 + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
         );
     }
@@ -176,6 +181,7 @@ public class LongRunningQueryEvaluator {
             subscription.idleTxMinutes(),
             "Uzun idle transaction: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
             "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
+                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
                 + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
         );
     }
@@ -203,6 +209,7 @@ public class LongRunningQueryEvaluator {
             subscription.idleTxMinutes(),
             "Hatali idle transaction: pid=" + row.pid() + " (" + durationMinutes + " dk) - " + subscription.label(),
             "pid=" + row.pid() + ", datname=" + safe(row.datname()) + ", user=" + safe(row.usename())
+                + ", app=" + safe(row.applicationName()) + ", client=" + row.clientLocation()
                 + ", sure=" + durationMinutes + " dk. Sorgu: " + queryPreview(row.query())
         );
     }
@@ -222,6 +229,10 @@ public class LongRunningQueryEvaluator {
             .addContext("duration_minutes", durationMinutes)
             .addContext("threshold_minutes", thresholdMinutes)
             .addContext("query_preview", queryPreview(row.query()))
+            .addContext("application_name", row.applicationName())
+            .addContext("client_addr", row.clientAddr())
+            .addContext("client_hostname", row.clientHostname())
+            .addContext("client_location", row.clientLocation())
             .addContext("instance_id", subscription.instanceId())
             .addContext("host", subscription.host())
             .addContext("wait_event_type", row.waitEventType())
@@ -323,6 +334,20 @@ public class LongRunningQueryEvaluator {
         String backendType,
         String waitEventType,
         String waitEvent,
-        Long queryId
-    ) {}
+        Long queryId,
+        String applicationName,
+        String clientAddr,
+        String clientHostname
+    ) {
+        /**
+         * Baglantinin geldigi yeri tek string olarak doner:
+         * client_addr (IP) varsa onu, yoksa client_hostname (log_hostname=on ise dolu),
+         * o da yoksa 'local' (Unix socket — kaynak DB ile ayni makineden baglanti).
+         */
+        String clientLocation() {
+            if (clientAddr != null && !clientAddr.isBlank()) return clientAddr;
+            if (clientHostname != null && !clientHostname.isBlank()) return clientHostname;
+            return "local";
+        }
+    }
 }
