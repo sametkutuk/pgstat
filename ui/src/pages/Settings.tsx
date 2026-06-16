@@ -8,15 +8,17 @@ import Skeleton from '../components/common/Skeleton';
 import { useToast } from '../components/common/Toast';
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import NotificationChannelsTab from './NotificationChannels';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit' | 'dashboard' | 'telegram'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit' | 'dashboard' | 'channels' | 'telegram'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
         { key: 'reports' as const, label: 'Raporlar' },
         { key: 'audit' as const, label: 'Audit Log' },
         { key: 'dashboard' as const, label: 'Dashboard Görünümü' },
+        { key: 'channels' as const, label: 'Bildirim Kanalları' },
         { key: 'telegram' as const, label: 'Telegram Komutları' },
     ];
 
@@ -36,6 +38,7 @@ export default function Settings() {
             {tab === 'reports' && <ReportsTab />}
             {tab === 'audit' && <AuditLogTab />}
             {tab === 'dashboard' && <DashboardWidgetsTab />}
+            {tab === 'channels' && <NotificationChannelsTab />}
             {tab === 'telegram' && <TelegramAllowlistTab />}
         </div>
     );
