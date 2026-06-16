@@ -48,19 +48,22 @@ public class DiscoveryCollector {
     private final StateRepository stateRepo;
     private final DimensionRepository dimensionRepo;
     private final PgStatStatementsExtensionResolver pgssResolver;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     public DiscoveryCollector(SourceConnectionFactory connectionFactory,
                               SqlFamilyResolver familyResolver,
                               CapabilityRepository capabilityRepo,
                               StateRepository stateRepo,
                               DimensionRepository dimensionRepo,
-                              PgStatStatementsExtensionResolver pgssResolver) {
+                              PgStatStatementsExtensionResolver pgssResolver,
+                              org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
         this.stateRepo = stateRepo;
         this.dimensionRepo = dimensionRepo;
         this.pgssResolver = pgssResolver;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -69,6 +72,48 @@ public class DiscoveryCollector {
      * @param instance hedef instance bilgileri
      * @return kesfedilen yetenekler; hata durumunda null
      */
+    /**
+     * Hafif yeniden-kesif: SADECE database listesini yeniler (version/capability/pgss
+     * gibi agir adimlari ATLAR). Bootstrap'tan sonra 'ready' instance'larda periyodik
+     * cagrilir ki sonradan eklenen database'ler (dim.database_ref) yakalansin.
+     * SQL family capability'den okunur (bootstrap'ta tespit edilmisti).
+     *
+     * @return kesfedilen (template olmayan) database sayisi; baglanti hatasinda -1
+     */
+    public int rediscoverDatabases(InstanceInfo instance) {
+        String sqlFamily = capabilityRepo.findSqlFamily(instance.instancePk());
+        if (sqlFamily == null) {
+            log.debug("Rediscovery atlandi (sql_family yok, bootstrap tamamlanmamis): {}",
+                    instance.instanceId());
+            return -1;
+        }
+        SourceQueries queries = familyResolver.resolveByCode(sqlFamily);
+        try (Connection conn = connectionFactory.connect(instance)) {
+            int before = countKnownDatabases(instance.instancePk());
+            discoverDatabases(conn, queries, instance.instancePk());
+            int after = countKnownDatabases(instance.instancePk());
+            if (after > before) {
+                log.info("Rediscovery: {} — {} yeni database kesfedildi (toplam {})",
+                        instance.instanceId(), after - before, after);
+            }
+            return after;
+        } catch (Exception e) {
+            log.warn("Rediscovery hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            return -1;
+        }
+    }
+
+    private int countKnownDatabases(long instancePk) {
+        try {
+            Integer n = jdbc.queryForObject(
+                "select count(*) from dim.database_ref where instance_pk = ?",
+                Integer.class, instancePk);
+            return n != null ? n : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public InstanceCapability discover(InstanceInfo instance) {
         log.info("Discovery baslatiliyor: {} ({}:{})",
                 instance.instanceId(), instance.host(), instance.port());

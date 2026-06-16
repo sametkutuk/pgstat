@@ -45,6 +45,7 @@ public class JobOrchestrator {
 
     // Collector'lar
     private final BootstrapHandler bootstrapHandler;
+    private final com.pgstat.collector.collector.DiscoveryCollector discoveryCollector;
     private final ClusterCollector clusterCollector;
     private final StatementsCollector statementsCollector;
     private final DbObjectsCollector dbObjectsCollector;
@@ -103,6 +104,10 @@ public class JobOrchestrator {
     // Per-table freeze: instance bazli son toplama zamani
     private final java.util.Map<Long, Long> lastTableFreezeMillisByInstance =
         new java.util.concurrent.ConcurrentHashMap<>();
+    // Periyodik database re-discovery: ready instance'larda sonradan eklenen
+    // database'leri yakalamak icin (discovery normalde sadece bootstrap'ta calisir).
+    private volatile long lastRediscoveryAtMs = 0L;
+    private static final long REDISCOVERY_INTERVAL_MS = 3600_000L; // saatte bir
 
     public JobOrchestrator(AdvisoryLockManager lockManager,
                            CollectorProperties props,
@@ -127,7 +132,8 @@ public class JobOrchestrator {
                            com.pgstat.collector.service.ReportGenerator reportGenerator,
                            com.pgstat.collector.service.WorkloadClassifier workloadClassifier,
                            com.pgstat.collector.service.SystemHealthEvaluator systemHealthEvaluator,
-                           com.pgstat.collector.service.XidFreezeEvaluator xidFreezeEvaluator) {
+                           com.pgstat.collector.service.XidFreezeEvaluator xidFreezeEvaluator,
+                           com.pgstat.collector.collector.DiscoveryCollector discoveryCollector) {
         this.lockManager = lockManager;
         this.props = props;
         this.collectorExecutor = collectorExecutor;
@@ -152,6 +158,7 @@ public class JobOrchestrator {
         this.workloadClassifier = workloadClassifier;
         this.systemHealthEvaluator = systemHealthEvaluator;
         this.xidFreezeEvaluator = xidFreezeEvaluator;
+        this.discoveryCollector = discoveryCollector;
     }
 
     /**
@@ -193,6 +200,7 @@ public class JobOrchestrator {
         runJob("statements", this::executeStatementsJob);
         runJob("db_objects", this::executeDbObjectsJob);
         runJob("rollup", this::executeRollupJob);
+        runJob("rediscovery", this::executeRediscoveryJob);
 
         // Manuel baseline tetikleri (UI'dan "Hemen Hesapla" butonu)
         try {
@@ -205,6 +213,31 @@ public class JobOrchestrator {
     // =========================================================================
     // Bootstrap queue — advisory lock gerektirmez
     // =========================================================================
+
+    /**
+     * Periyodik database re-discovery (saatte bir). Discovery normalde SADECE
+     * bootstrap'ta calisir; instance 'ready' olduktan sonra eklenen database'ler
+     * (orn yeni CREATE DATABASE) kesfedilmezdi. Bu job ready instance'larin
+     * database listesini periyodik yeniler -> yeni DB'ler dim.database_ref'e girer,
+     * db_objects job onlara baglanmaya baslar (ve erisilemiyorsa
+     * database_inaccessible alerti tetiklenir).
+     */
+    private void executeRediscoveryJob() {
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastRediscoveryAtMs < REDISCOVERY_INTERVAL_MS) return;
+        lastRediscoveryAtMs = nowMs;
+
+        List<InstanceInfo> ready = inventoryRepo.findAllReady();
+        if (ready.isEmpty()) return;
+        log.info("Rediscovery: {} ready instance icin database listesi yenileniyor", ready.size());
+        for (InstanceInfo instance : ready) {
+            try {
+                discoveryCollector.rediscoverDatabases(instance);
+            } catch (Exception e) {
+                log.warn("Rediscovery hatasi: {} — {}", instance.instanceId(), e.getMessage());
+            }
+        }
+    }
 
     private void processBootstrapQueue() {
         List<InstanceInfo> queue = inventoryRepo.findBootstrapQueue(props.getBootstrapBatchSize());
