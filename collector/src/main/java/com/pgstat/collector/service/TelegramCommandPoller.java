@@ -17,11 +17,13 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,7 +46,11 @@ public class TelegramCommandPoller {
     private final JdbcTemplate jdbc;
     private final HttpClient httpClient;
     private final JsonParser jsonParser;
-    private final Map<Long, List<Long>> commandRateWindow = new HashMap<>();
+    // Kullanici basina komut zaman damgalari (rate limit). Thread-safe: scheduler
+    // su an tek-thread ama ileride async/pool'a gecerse race olmamasi icin
+    // ConcurrentHashMap + senkron liste. Pencere disi kayitlar isRateLimited'da
+    // temizleniyor, ayrica bos kalan kullanici girdileri map'ten dusuruluyor.
+    private final Map<Long, List<Long>> commandRateWindow = new ConcurrentHashMap<>();
 
     private record Command(String action, boolean codeScope, String durationToken, Long snoozeId, String errorMessage) {}
 
@@ -81,6 +87,7 @@ public class TelegramCommandPoller {
                 log.debug("Telegram poll hatasi channel={}: {}", channel.get("channel_name"), e.getMessage());
             }
         }
+        pruneRateWindow();
     }
 
     private void pollChannel(Map<String, Object> channel) throws Exception {
@@ -161,6 +168,11 @@ public class TelegramCommandPoller {
             return;
         }
 
+        if ("help".equals(command.action())) {
+            sendHelp(botToken, configuredChatId);
+            return;
+        }
+
         if ("report".equals(command.action())) {
             sendSnoozeReport(botToken, configuredChatId);
             return;
@@ -181,6 +193,12 @@ public class TelegramCommandPoller {
         String name = tokens[0].toLowerCase(Locale.ROOT);
         int at = name.indexOf('@');
         if (at > 0) name = name.substring(0, at);
+
+        // Yardim: kullanilabilir komutlari ve parametreleri listele.
+        if ("/yardim".equals(name) || "/help".equals(name)
+            || "/kullan".equals(name) || "/use".equals(name)) {
+            return new Command("help", false, null, null, null);
+        }
 
         if ("/mute".equals(name) || "/sustur".equals(name)) {
             if (tokens.length > 1) {
@@ -286,6 +304,39 @@ public class TelegramCommandPoller {
         sendPlain(botToken, chatId, deleted > 0
             ? "OK: Reply edilen alert icin " + deleted + " aktif snooze silindi."
             : "Bilgi: Reply edilen alert icin aktif snooze bulunamadi.");
+    }
+
+    private void sendHelp(String botToken, String chatId) {
+        String help = """
+            pgstat Telegram komutlari
+
+            Alert susturma (mute/snooze):
+            - Bir ALERT mesajini REPLY edip yaz:
+              /sustur 30m   -> o alerti 30 dakika sustur
+              /sustur 2h    -> 2 saat
+              /sustur 1d    -> 1 gun
+              /sustur 90    -> 90 dakika (cipsiz = dakika)
+              /sustur       -> SURESIZ sustur (sure yok)
+              /sustur kod 2h -> ayni TIPTEKI (alert_code) tum alertleri 2 saat sustur
+            (Ingilizce esdegeri: /mute)
+
+            Sure birimleri: m=dakika, h=saat, d=gun. Ust sinir 30 gun (30d).
+
+            Susturmayi acma:
+            - /ac 123          -> snooze_id=123 olan susturmayi kaldir
+            - alert mesajini REPLY edip /ac -> o alertin aktif susturmasini kaldir
+            (Ingilizce esdegeri: /unmute)
+
+            Aktif susturmalari listele:
+            - /sustur rapor    (veya /mute report)
+              Her satirda snooze_id var; /ac <id> ile o susturmayi kaldirabilirsin.
+
+            Bu yardim:
+            - /yardim  /help  /kullan  /use
+
+            Not: Susturulmus bir alert COZULUNCE (resolved) bildirim yine gelir.
+            """;
+        sendPlain(botToken, chatId, help);
     }
 
     private void sendSnoozeReport(String botToken, String chatId) {
@@ -420,11 +471,30 @@ public class TelegramCommandPoller {
         if (userId == null) return true;
         long now = System.currentTimeMillis();
         long cutoff = now - RATE_LIMIT_WINDOW.toMillis();
-        List<Long> window = commandRateWindow.computeIfAbsent(userId, ignored -> new ArrayList<>());
-        window.removeIf(ts -> ts < cutoff);
-        if (window.size() >= RATE_LIMIT_MAX_COMMANDS) return true;
-        window.add(now);
+        // Senkron liste — ayni kullanici icin eszamanli erisimde de tutarli.
+        List<Long> window = commandRateWindow.computeIfAbsent(
+            userId, ignored -> Collections.synchronizedList(new ArrayList<>()));
+        synchronized (window) {
+            window.removeIf(ts -> ts < cutoff);
+            if (window.size() >= RATE_LIMIT_MAX_COMMANDS) return true;
+            window.add(now);
+        }
         return false;
+    }
+
+    /**
+     * Bellek sizintisini onler: poll cycle sonunda penceresi tamamen bosalmis
+     * (son 1 dk komut yok) kullanici girdilerini map'ten dusur.
+     */
+    private void pruneRateWindow() {
+        long cutoff = System.currentTimeMillis() - RATE_LIMIT_WINDOW.toMillis();
+        commandRateWindow.entrySet().removeIf(entry -> {
+            List<Long> window = entry.getValue();
+            synchronized (window) {
+                window.removeIf(ts -> ts < cutoff);
+                return window.isEmpty();
+            }
+        });
     }
 
     private void auditUnauthorized(Map<String, Object> message, String chatId, String text) {

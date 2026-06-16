@@ -29,6 +29,7 @@ import onboardingRoutes from './routes/onboarding';
 import preferencesRoutes from './routes/preferences';
 import insightsRoutes from './routes/insights';
 import systemHealthRoutes from './routes/systemHealth';
+import telegramAllowlistRoutes from './routes/telegramAllowlist';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
@@ -180,6 +181,7 @@ app.use('/api/onboarding', requireAuth, onboardingRoutes);
 app.use('/api/preferences', requireAuth, preferencesRoutes);
 app.use('/api/insights', requireAuth, insightsRoutes);
 app.use('/api/system-health', requireAuth, systemHealthRoutes);
+app.use('/api/telegram-allowlist', requireAuth, telegramAllowlistRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);

@@ -10,13 +10,14 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 export default function Settings() {
-    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit' | 'dashboard'>('retention');
+    const [tab, setTab] = useState<'retention' | 'schedule' | 'reports' | 'audit' | 'dashboard' | 'telegram'>('retention');
     const tabs = [
         { key: 'retention' as const, label: 'Retention Politikaları' },
         { key: 'schedule' as const, label: 'Zamanlama Profilleri' },
         { key: 'reports' as const, label: 'Raporlar' },
         { key: 'audit' as const, label: 'Audit Log' },
         { key: 'dashboard' as const, label: 'Dashboard Görünümü' },
+        { key: 'telegram' as const, label: 'Telegram Komutları' },
     ];
 
     return (
@@ -35,6 +36,7 @@ export default function Settings() {
             {tab === 'reports' && <ReportsTab />}
             {tab === 'audit' && <AuditLogTab />}
             {tab === 'dashboard' && <DashboardWidgetsTab />}
+            {tab === 'telegram' && <TelegramAllowlistTab />}
         </div>
     );
 }
@@ -1084,6 +1086,175 @@ function DashboardWidgetsTab() {
                     </p>
                 )}
             </div>
+        </div>
+    );
+}
+
+// =========================================================================
+// Telegram Komutları — allowlist yönetimi
+// Telegram'dan gelen alert susturma komutlarını KİM verebilir kontrolü.
+// Liste BOŞSA hiçbir komut kabul edilmez (fail-closed güvenlik).
+// =========================================================================
+
+interface TelegramAllowEntry {
+    telegram_user_id: string;
+    username: string | null;
+    note: string | null;
+    is_enabled: boolean;
+    created_at: string;
+}
+
+function TelegramAllowlistTab() {
+    const qc = useQueryClient();
+    const toast = useToast();
+    const [userId, setUserId] = useState('');
+    const [username, setUsername] = useState('');
+    const [note, setNote] = useState('');
+    const [deleteTarget, setDeleteTarget] = useState<TelegramAllowEntry | null>(null);
+
+    const { data, isLoading } = useQuery({
+        queryKey: ['telegram-allowlist'],
+        queryFn: () => apiGet<TelegramAllowEntry[]>('/telegram-allowlist'),
+    });
+
+    const invalidate = () => qc.invalidateQueries({ queryKey: ['telegram-allowlist'] });
+
+    const addMut = useMutation({
+        mutationFn: () => apiPost('/telegram-allowlist', {
+            telegram_user_id: userId.trim(),
+            username: username.trim() || null,
+            note: note.trim() || null,
+        }),
+        onSuccess: () => {
+            invalidate();
+            setUserId(''); setUsername(''); setNote('');
+            toast.success('Kullanıcı allowlist\'e eklendi');
+        },
+        onError: (e: Error) => toast.error('Eklenemedi: ' + e.message),
+    });
+
+    const toggleMut = useMutation({
+        mutationFn: (entry: TelegramAllowEntry) =>
+            apiPatch(`/telegram-allowlist/${entry.telegram_user_id}`, { is_enabled: !entry.is_enabled }),
+        onSuccess: () => { invalidate(); toast.success('Durum güncellendi'); },
+        onError: (e: Error) => toast.error('Güncellenemedi: ' + e.message),
+    });
+
+    const deleteMut = useMutation({
+        mutationFn: (id: string) => apiDelete(`/telegram-allowlist/${id}`),
+        onSuccess: () => { invalidate(); setDeleteTarget(null); toast.success('Kullanıcı silindi'); },
+        onError: (e: Error) => toast.error('Silinemedi: ' + e.message),
+    });
+
+    // user_id sadece pozitif tam sayı olmalı
+    const userIdValid = /^\d{1,19}$/.test(userId.trim());
+
+    const columns = [
+        {
+            key: 'telegram_user_id', header: 'Telegram User ID',
+            render: (r: TelegramAllowEntry) => <span className="font-mono">{r.telegram_user_id}</span>,
+        },
+        {
+            key: 'username', header: 'Kullanıcı',
+            render: (r: TelegramAllowEntry) => r.username || <span className="text-[#94A3B8]">-</span>,
+        },
+        {
+            key: 'note', header: 'Not',
+            render: (r: TelegramAllowEntry) => r.note || <span className="text-[#94A3B8]">-</span>,
+        },
+        {
+            key: 'is_enabled', header: 'Durum',
+            render: (r: TelegramAllowEntry) => (
+                <span className={r.is_enabled ? 'text-green-600 font-medium' : 'text-[#94A3B8]'}>
+                    {r.is_enabled ? '🟢 Aktif' : '⚪ Pasif'}
+                </span>
+            ),
+        },
+        {
+            key: 'actions', header: '',
+            render: (r: TelegramAllowEntry) => (
+                <div className="flex gap-1 justify-end">
+                    <button
+                        onClick={() => toggleMut.mutate(r)}
+                        className="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100">
+                        {r.is_enabled ? 'Pasifleştir' : 'Aktifleştir'}
+                    </button>
+                    <button
+                        onClick={() => setDeleteTarget(r)}
+                        className="px-2 py-1 text-xs bg-red-50 text-red-700 rounded hover:bg-red-100">
+                        Sil
+                    </button>
+                </div>
+            ),
+        },
+    ];
+
+    return (
+        <div className="bg-white rounded-lg shadow-sm p-5">
+            <h3 className="font-semibold text-[#1E293B] mb-1">Telegram Komut Yetkisi (Allowlist)</h3>
+            <p className="text-sm text-[#64748B] mb-4">
+                Telegram'dan alert susturma komutlarını (/sustur, /ac, /mute report) yalnızca
+                buradaki <strong>aktif</strong> kullanıcılar verebilir. Liste boşsa hiçbir komut
+                kabul edilmez (güvenli varsayılan).
+            </p>
+
+            <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded p-3 mb-4 text-sm text-[#0C4A6E]">
+                <strong>User ID nasıl bulunur?</strong> Telegram'da <code>@userinfobot</code>'a
+                mesaj at; sana <code>Id: 123456789</code> şeklinde verir. Bu sayıyı aşağıya gir.
+            </div>
+
+            {/* Ekleme formu */}
+            <div className="flex flex-wrap items-end gap-2 mb-5 pb-5 border-b border-[#E2E8F0]">
+                <div>
+                    <label className="block text-xs text-[#64748B] mb-1">Telegram User ID *</label>
+                    <input
+                        value={userId}
+                        onChange={(e) => setUserId(e.target.value)}
+                        placeholder="123456789"
+                        className="px-3 py-1.5 text-sm border border-[#CBD5E1] rounded font-mono w-40" />
+                </div>
+                <div>
+                    <label className="block text-xs text-[#64748B] mb-1">Kullanıcı adı (opsiyonel)</label>
+                    <input
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        placeholder="samet"
+                        className="px-3 py-1.5 text-sm border border-[#CBD5E1] rounded w-36" />
+                </div>
+                <div>
+                    <label className="block text-xs text-[#64748B] mb-1">Not (opsiyonel)</label>
+                    <input
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="kurucu"
+                        className="px-3 py-1.5 text-sm border border-[#CBD5E1] rounded w-36" />
+                </div>
+                <button
+                    onClick={() => addMut.mutate()}
+                    disabled={!userIdValid || addMut.isPending}
+                    className="px-3 py-1.5 text-sm bg-[#3B82F6] text-white rounded hover:bg-[#2563EB] disabled:opacity-50">
+                    {addMut.isPending ? 'Ekleniyor...' : 'Ekle'}
+                </button>
+                {userId.trim() && !userIdValid && (
+                    <span className="text-xs text-red-600">User ID sadece rakam olmalı</span>
+                )}
+            </div>
+
+            {isLoading ? (
+                <Skeleton />
+            ) : (data && data.length > 0) ? (
+                <DataTable columns={columns} data={data} />
+            ) : (
+                <EmptyState icon="📭" title="Henüz yetkili kullanıcı yok"
+                    description="Telegram komutları çalışmaz — yukarıdan kendi User ID'ni ekle." />
+            )}
+
+            <ConfirmDialog
+                open={deleteTarget !== null}
+                title="Kullanıcıyı sil"
+                message={`${deleteTarget?.username || deleteTarget?.telegram_user_id} allowlist'ten silinecek. Bu kullanıcı artık Telegram komutu veremez.`}
+                onConfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.telegram_user_id)}
+                onCancel={() => setDeleteTarget(null)} />
         </div>
     );
 }

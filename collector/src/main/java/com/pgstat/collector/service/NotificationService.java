@@ -472,11 +472,24 @@ public class NotificationService {
                 log.error("Telegram hatasi: HTTP {} - {}", response.statusCode(), response.body());
                 return new TelegramPostResult(false, null);
             }
+            // HTTP 200 olsa bile Telegram yaniti "ok":false donebilir (nadiren).
+            // Bu durumda message_id parse etme — yanlis bir sayiyi id sanmayalim
+            // ve gonderimi basarisiz say (message_map'e bozuk kayit girmesin).
+            if (!isTelegramOk(response.body())) {
+                log.warn("Telegram yaniti ok=false: {}", response.body());
+                return new TelegramPostResult(false, null);
+            }
             return new TelegramPostResult(true, extractTelegramMessageId(response.body()));
         } catch (Exception e) {
             log.error("Telegram gonderme hatasi: {}", e.getMessage());
             return new TelegramPostResult(false, null);
         }
+    }
+
+    /** Telegram yanitinda "ok":true var mi? (HTTP 200 + ok:false olabilir.) */
+    private boolean isTelegramOk(String responseBody) {
+        if (responseBody == null || responseBody.isBlank()) return false;
+        return Pattern.compile("\"ok\"\\s*:\\s*true").matcher(responseBody).find();
     }
 
     private Long extractTelegramMessageId(String responseBody) {
