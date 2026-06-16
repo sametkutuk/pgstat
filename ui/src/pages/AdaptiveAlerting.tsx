@@ -952,6 +952,24 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
+    // Telegram chat_id otomatik tespit: bot_token ile getUpdates cagirir,
+    // son gelen grup/kanal chat_id'sini forma doldurur.
+    const detectMut = useMutation({
+        mutationFn: () => apiPost<{ detected: { chat_id: string; title: string; type: string } | null; candidates: any[]; hint?: string }>(
+            '/adaptive-alerting/notification-channels/detect-chat',
+            { bot_token: form.bot_token }
+        ),
+        onSuccess: (data) => {
+            if (data.detected) {
+                set('chat_id', data.detected.chat_id);
+                toast.success(`Bulundu: ${data.detected.title} (${data.detected.type}) -> ${data.detected.chat_id}`);
+            } else {
+                toast.error(data.hint || 'Chat bulunamadi. Bota gruptan bir mesaj atip tekrar deneyin.');
+            }
+        },
+        onError: (e: Error) => toast.error('Tespit basarisiz: ' + e.message),
+    });
+
     const buildConfig = () => {
         let config: any = {};
         switch (form.channel_type) {
@@ -1166,6 +1184,15 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                 )}
                 {form.channel_type === 'telegram' && (
                     <>
+                        {/* Adim adim kurulum rehberi */}
+                        <div className="bg-[#F0F9FF] border border-[#BAE6FD] rounded-md p-3 text-xs text-[#0C4A6E] space-y-1">
+                            <div className="font-semibold mb-1">Telegram kurulumu (3 adim):</div>
+                            <div><b>1.</b> @BotFather'a <code>/newbot</code> yaz, bot olustur, token'i asagiya yapistir.</div>
+                            <div><b>2.</b> Botu hedef <b>gruba</b> ekle (komut yetkisi icin grup onerilir; kanalda from.id gelmez). Gruba bir mesaj at.</div>
+                            <div><b>3.</b> Asagidaki <b>"Chat ID Tespit Et"</b> butonuna bas — chat_id otomatik dolar.</div>
+                            <div className="pt-1 text-[#0369A1]">Not: Alert susturma komutlari icin yetkili kisileri Ayarlar &gt; Telegram Komutlari'ndan allowlist'e ekle.</div>
+                        </div>
+
                         <div>
                             <label className="block text-xs font-medium text-[#475569] mb-1">
                                 Bot Token *
@@ -1178,11 +1205,22 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                         <div>
                             <label className="block text-xs font-medium text-[#475569] mb-1">
                                 Chat ID *
-                                <InfoTip text="Botu gruba ekledikten sonra gruba bir mesaj yazın. Sonra tarayıcıda https://api.telegram.org/bot{TOKEN}/getUpdates adresini açın. JSON'daki chat.id değerini buraya yazın. Grup ID'leri - ile başlar." className="ml-1" />
+                                <InfoTip text="Botu gruba ekleyip bir mesaj yazdiktan sonra 'Chat ID Tespit Et' butonu ile otomatik bulunur. Elle de girebilirsiniz; grup/kanal ID'leri - ile baslar." className="ml-1" />
                             </label>
-                            <input value={form.chat_id} onChange={e => set('chat_id', e.target.value)}
-                                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
-                                placeholder="-1001234567890 veya @kanal_adi" />
+                            <div className="flex gap-2">
+                                <input value={form.chat_id} onChange={e => set('chat_id', e.target.value)}
+                                    className="flex-1 border border-[#CBD5E1] rounded-md px-3 py-2 text-sm"
+                                    placeholder="-1001234567890 veya @kanal_adi" />
+                                <button type="button"
+                                    onClick={() => detectMut.mutate()}
+                                    disabled={!form.bot_token || detectMut.isPending}
+                                    className="px-3 py-2 text-sm bg-[#3B82F6] text-white rounded-md hover:bg-[#2563EB] disabled:opacity-50 whitespace-nowrap">
+                                    {detectMut.isPending ? 'Aranıyor...' : 'Chat ID Tespit Et'}
+                                </button>
+                            </div>
+                            <p className="text-[11px] text-[#64748B] mt-1">
+                                Bot token'i girip botu gruba ekledikten ve gruba bir mesaj attiktan sonra tespit butonuna bas.
+                            </p>
                         </div>
                     </>
                 )}

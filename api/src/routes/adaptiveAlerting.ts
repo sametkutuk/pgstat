@@ -873,6 +873,69 @@ router.post('/notification-channels', async (req, res, next) => {
     }
 });
 
+// POST /api/notification-channels/detect-chat
+// Telegram chat_id otomatik tespit: bot_token alir, getUpdates ile bota en son
+// gelen mesajin/postun chat_id'sini bulur. Kullanici botu gruba ekleyip bir
+// mesaj attiktan sonra cagirir -> chat_id'yi elle /getUpdates ile bulma derdi biter.
+router.post('/notification-channels/detect-chat', async (req, res) => {
+    const botToken = req.body?.bot_token ? String(req.body.bot_token).trim() : '';
+    // Telegram bot token formati: <digits>:<35+ alfanumerik>. Kabaca dogrula.
+    if (!/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(botToken)) {
+        return res.status(400).json({ error: 'Gecersiz bot_token formati' });
+    }
+    try {
+        const url = `https://api.telegram.org/bot${botToken}/getUpdates?limit=20&timeout=0`;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        let resp: Response;
+        try {
+            resp = await fetch(url, { signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+        if (resp.status === 409) {
+            return res.status(409).json({ error: 'Bota webhook bagli (getUpdates kullanilamaz). Once webhook silinmeli: deleteWebhook' });
+        }
+        if (!resp.ok) {
+            return res.status(502).json({ error: `Telegram API hatasi: HTTP ${resp.status}` });
+        }
+        const data: any = await resp.json();
+        if (!data?.ok || !Array.isArray(data.result)) {
+            return res.status(502).json({ error: 'Telegram yaniti gecersiz (ok=false)' });
+        }
+        // En son gelen update'ten geriye dogru ilk chat'i al (message veya channel_post).
+        const candidates: { chat_id: string; title: string; type: string }[] = [];
+        const seen = new Set<string>();
+        for (let i = data.result.length - 1; i >= 0; i--) {
+            const u = data.result[i];
+            const msg = u?.message || u?.channel_post || u?.my_chat_member;
+            const chat = msg?.chat;
+            if (!chat?.id) continue;
+            const id = String(chat.id);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            candidates.push({
+                chat_id: id,
+                title: chat.title || chat.username || chat.first_name || '(isimsiz)',
+                type: chat.type || '-',
+            });
+        }
+        if (candidates.length === 0) {
+            return res.json({
+                detected: null,
+                candidates: [],
+                hint: 'Hic mesaj bulunamadi. Botu gruba/kanala ekleyip bir mesaj atin, sonra tekrar deneyin. (Eski mesajlar islenmis olabilir.)'
+            });
+        }
+        res.json({ detected: candidates[0], candidates });
+    } catch (err: any) {
+        const aborted = err?.name === 'AbortError';
+        res.status(aborted ? 504 : 500).json({
+            error: aborted ? 'Telegram API zaman asimi' : (err?.message || 'Tespit basarisiz')
+        });
+    }
+});
+
 // GET /api/notification-channels
 router.get('/notification-channels', async (_req, res, next) => {
     try {
