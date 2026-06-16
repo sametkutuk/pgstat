@@ -332,7 +332,7 @@ public class TelegramCommandPoller {
             /sustur 30m   30 dakika
             /sustur 2h    2 saat
             /sustur 1d    1 gun
-            /sustur 90    90 dk (cipsiz=dk)
+            /sustur 90    90 dakika (birimsiz = dk)
             /sustur       suresiz
             /sustur kod 2h   ayni tip
             (max 30d, birim m/h/d)
