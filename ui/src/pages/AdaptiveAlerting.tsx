@@ -952,23 +952,41 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
     });
     const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
+    // Tespit edilen aday gruplar (birden fazla ise kullanici secsin).
+    type ChatCandidate = { chat_id: string; title: string; type: string };
+    const [chatCandidates, setChatCandidates] = useState<ChatCandidate[]>([]);
+
     // Telegram chat_id otomatik tespit: bot_token ile getUpdates cagirir,
-    // son gelen grup/kanal chat_id'sini forma doldurur.
+    // bota gelen grup/kanal chat_id'lerini bulur. Tek aday varsa forma doldurur,
+    // birden fazla aday varsa kullaniciya secim listesi gosterir.
     const detectMut = useMutation({
-        mutationFn: () => apiPost<{ detected: { chat_id: string; title: string; type: string } | null; candidates: any[]; hint?: string }>(
+        mutationFn: () => apiPost<{ detected: ChatCandidate | null; candidates: ChatCandidate[]; hint?: string }>(
             '/adaptive-alerting/notification-channels/detect-chat',
             { bot_token: form.bot_token }
         ),
         onSuccess: (data) => {
-            if (data.detected) {
-                set('chat_id', data.detected.chat_id);
-                toast.success(`Bulundu: ${data.detected.title} (${data.detected.type}) -> ${data.detected.chat_id}`);
-            } else {
+            const list = data.candidates || [];
+            if (list.length === 0) {
+                setChatCandidates([]);
                 toast.error(data.hint || 'Chat bulunamadi. Bota gruptan bir mesaj atip tekrar deneyin.');
+            } else if (list.length === 1) {
+                setChatCandidates([]);
+                set('chat_id', list[0].chat_id);
+                toast.success(`Bulundu: ${list[0].title} (${list[0].type}) -> ${list[0].chat_id}`);
+            } else {
+                // Birden fazla grup -> kullanici secsin
+                setChatCandidates(list);
+                toast.success(`${list.length} grup/kanal bulundu, asagidan secin.`);
             }
         },
         onError: (e: Error) => toast.error('Tespit basarisiz: ' + e.message),
     });
+
+    const pickCandidate = (c: ChatCandidate) => {
+        set('chat_id', c.chat_id);
+        setChatCandidates([]);
+        toast.success(`Secildi: ${c.title} -> ${c.chat_id}`);
+    };
 
     const buildConfig = () => {
         let config: any = {};
@@ -1221,6 +1239,30 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                             <p className="text-[11px] text-[#64748B] mt-1">
                                 Bot token'i girip botu gruba ekledikten ve gruba bir mesaj attiktan sonra tespit butonuna bas.
                             </p>
+
+                            {/* Birden fazla grup bulunduysa: secim listesi */}
+                            {chatCandidates.length > 1 && (
+                                <div className="mt-2 border border-[#FCD34D] bg-[#FFFBEB] rounded-md p-2">
+                                    <div className="text-xs font-medium text-[#92400E] mb-1.5">
+                                        Birden fazla grup/kanal bulundu — dogru olani sec:
+                                    </div>
+                                    <div className="space-y-1">
+                                        {chatCandidates.map(c => (
+                                            <button key={c.chat_id} type="button"
+                                                onClick={() => pickCandidate(c)}
+                                                className={`w-full text-left px-2 py-1.5 text-xs rounded border transition-colors ${
+                                                    form.chat_id === c.chat_id
+                                                        ? 'border-[#3B82F6] bg-[#EFF6FF]'
+                                                        : 'border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]'
+                                                }`}>
+                                                <span className="font-medium text-[#1E293B]">{c.title}</span>
+                                                <span className="ml-2 text-[10px] bg-[#F1F5F9] text-[#475569] px-1.5 py-0.5 rounded uppercase">{c.type}</span>
+                                                <span className="ml-2 font-mono text-[#64748B]">{c.chat_id}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </>
                 )}
