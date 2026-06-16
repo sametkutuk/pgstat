@@ -280,4 +280,41 @@ public class AlertService {
     private String buildInstanceAlertKey(AlertCode code, long instancePk) {
         return code.getCode() + ":" + code.getSourceComponent() + ":" + instancePk;
     }
+
+    // =========================================================================
+    // Database (instance + dbid) bazli alert helper'lari
+    // Bir instance'ta birden fazla database icin ayri alert tutulabilsin diye
+    // alert_key'e dbid eklenir (standart instance key dbid icermez, ikinci DB
+    // birincinin alert'ini ezerdi).
+    // =========================================================================
+
+    /** Alert key: <code>:<source>:<instancePk>:<dbid> */
+    private String buildDatabaseAlertKey(AlertCode code, long instancePk, long dbid) {
+        return code.getCode() + ":" + code.getSourceComponent() + ":" + instancePk + ":" + dbid;
+    }
+
+    public void raiseDatabaseAlert(AlertCode code, long instancePk, long dbid,
+                                   String title, String message, String detailsJson) {
+        String alertKey = buildDatabaseAlertKey(code, instancePk, dbid);
+        try {
+            // FIRST_ONLY: DbObjects job dakikalar arayla calisir; alert acik kaldikca
+            // her cycle'da tekrar bildirim gondermesin (spam). Yeni/reopen/severity
+            // degisiminde bildirir, cozulup tekrar acilinca yine bildirir.
+            alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, detailsJson,
+                AlertRepository.NotifyMode.FIRST_ONLY);
+            log.debug("Database alert olusturuldu: {} — {}", alertKey, title);
+        } catch (Exception e) {
+            log.error("Database alert yazma hatasi: {} — {}", alertKey, e.getMessage());
+        }
+    }
+
+    public void resolveDatabaseAlert(AlertCode code, long instancePk, long dbid) {
+        String alertKey = buildDatabaseAlertKey(code, instancePk, dbid);
+        try {
+            alertRepo.resolve(alertKey);
+            log.debug("Database alert resolve edildi: {}", alertKey);
+        } catch (Exception e) {
+            log.error("Database alert resolve hatasi: {} — {}", alertKey, e.getMessage());
+        }
+    }
 }

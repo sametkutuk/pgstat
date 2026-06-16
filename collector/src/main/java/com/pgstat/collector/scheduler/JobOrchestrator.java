@@ -500,6 +500,10 @@ public class JobOrchestrator {
             stateRepo.updateDatabaseStateAfterSuccess(
                 target.instancePk(), target.dbid(), target.dbObjectsIntervalSeconds());
 
+            // Bu DB'ye basariyla baglanildi -> varsa 'erisilemez' alertini cozumle.
+            alertService.resolveDatabaseAlert(
+                AlertCode.DATABASE_INACCESSIBLE, target.instancePk(), target.dbid());
+
             opsRepo.finishJobRunInstance(runInstanceId, "success", rows, 0, 0, null);
             return new InstanceResult(target.instancePk(), true, rows, null);
 
@@ -509,7 +513,23 @@ public class JobOrchestrator {
             stateRepo.updateDatabaseStateAfterFailure(target.instancePk(), target.dbid());
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
 
-            // Secret/auth hatasi → instance'i degraded'a cek
+            // CONNECT/yetki reddi mi? -> o DB izlenemiyor (kor nokta), warning alert uret.
+            // Bu, instance genelinde bir sorun DEGIL: tek bir database'e pgstat'in
+            // CONNECT yetkisi yok. Bu yuzden instance'i degraded'a CEKMEYIZ; sadece
+            // ilgili database icin alert acariz. Erisim verilince basari dalinda resolve olur.
+            if (isDatabaseAccessDenied(e)) {
+                String title = "Database izlenemiyor: " + target.datname();
+                String message = "pgstat '" + target.datname() + "' database'ine CONNECT edemiyor "
+                    + "(yetki yok). Bu database izlenmiyor. Cozum: collector kullanicisina "
+                    + "GRANT CONNECT ON DATABASE " + target.datname() + " TO <collector_user>; verin. "
+                    + "Hata: " + truncate(e.getMessage());
+                alertService.raiseDatabaseAlert(
+                    AlertCode.DATABASE_INACCESSIBLE, target.instancePk(), target.dbid(),
+                    title, message, null);
+                return new InstanceResult(target.instancePk(), false, 0, e.getMessage());
+            }
+
+            // Diger secret/auth/network hatasi → instance'i degraded'a cek
             String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
             if (em.contains("secret_ref") || em.contains("authentication") || em.contains("password")
                     || em.contains("connect")) {
@@ -521,6 +541,29 @@ public class JobOrchestrator {
             }
             return new InstanceResult(target.instancePk(), false, 0, e.getMessage());
         }
+    }
+
+    /**
+     * Hata, belirli bir database'e CONNECT yetkisinin OLMAMASINDAN mi kaynaklaniyor?
+     * PostgreSQL: SQLState 42501 (insufficient_privilege) veya mesajda
+     * "permission denied for database". Bunu network/auth hatalarindan ayirir ki
+     * sadece gercek yetki reddinde 'database_inaccessible' alerti acilsin.
+     */
+    private boolean isDatabaseAccessDenied(Exception e) {
+        Throwable cur = e;
+        while (cur != null) {
+            if (cur instanceof java.sql.SQLException sqlEx) {
+                String state = sqlEx.getSQLState();
+                if ("42501".equals(state)) return true;
+            }
+            String msg = cur.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("permission denied for database")) return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 
     // =========================================================================

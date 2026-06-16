@@ -27,6 +27,10 @@ public enum AlertCode {
     MXID_FREEZE_WARNING("mxid_freeze_warning", "warning", "adaptive"),
     MXID_FREEZE_CRITICAL("mxid_freeze_critical", "critical", "adaptive"),
 
+    // Kaynak DB'de yeni bir database kesfedildi ama pgstat CONNECT edemiyor
+    // (yetki yok) -> o database izlenemiyor (kor nokta). Erisim verilince auto-resolve.
+    DATABASE_INACCESSIBLE("database_inaccessible", "warning", "adaptive"),
+
     USER_DEFINED_RULE("user_defined_rule", "warning", "rule");
 
     private final String code;
