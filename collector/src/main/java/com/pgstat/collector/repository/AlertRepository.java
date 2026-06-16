@@ -173,6 +173,56 @@ public class AlertRepository {
     }
 
     /**
+     * Adaptive kaynakli, severity'si DINAMIK (kullanici secimli) alert upsert'i.
+     * alert_source = 'adaptive'. notifyMode FIRST_ONLY ile acik kaldikca spam yapmaz.
+     * database_inaccessible gibi severity'si kullanici tarafindan secilen alertler icin.
+     */
+    public long upsertAdaptiveWithSeverity(String alertKey, AlertCode alertCode, String severity,
+                                           Long instancePk, String title, String message,
+                                           String detailsJson, NotifyMode notifyMode, boolean notify) {
+        // notify=false: alert UI'da gorunur/guncellenir ama bildirim (Telegram/email)
+        // GONDERILMEZ. notify=true ise notifyMode'a gore karar verilir.
+        boolean shouldNotify = notify;
+        if (shouldNotify && notifyMode == NotifyMode.FIRST_ONLY) {
+            shouldNotify = decideFirstOnlyNotify(alertKey, severity);
+        }
+        long alertId = jdbc.queryForObject("""
+            insert into ops.alert (
+              alert_key, alert_code, severity, status, source_component,
+              instance_pk, first_seen_at, last_seen_at, occurrence_count,
+              title, message, details_json, alert_source
+            )
+            values (?, ?, ?, 'open', ?, ?, now(), now(), 1, ?, ?, ?::jsonb, 'adaptive')
+            on conflict (alert_key) do update
+            set severity = excluded.severity,
+                status = case
+                  when ops.alert.status in ('resolved', 'acknowledged') then 'open'
+                  else ops.alert.status
+                end,
+                acknowledged_at = case
+                  when ops.alert.status = 'acknowledged' then null
+                  else ops.alert.acknowledged_at
+                end,
+                last_seen_at = now(),
+                title = excluded.title,
+                message = excluded.message,
+                details_json = excluded.details_json,
+                occurrence_count = ops.alert.occurrence_count + 1,
+                resolved_at = null
+            returning alert_id
+            """,
+            Long.class,
+            alertKey, alertCode.getCode(), severity, alertCode.getSourceComponent(),
+            instancePk, title, message, detailsJson
+        );
+
+        if (shouldNotify) {
+            fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
+        }
+        return alertId;
+    }
+
+    /**
      * Kullanici tanimli kural alert'i — severity dinamik, rule_id kaydedilir.
      */
     public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,

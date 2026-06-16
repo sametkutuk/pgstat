@@ -150,6 +150,16 @@ interface XidFreezeSubscription {
     updated_at: string;
 }
 
+interface DatabaseAccessSubscription {
+    instance_pk: number;
+    instance_name: string;
+    is_enabled: boolean;
+    fail_threshold: number;
+    severity: 'warning' | 'critical';
+    notify_on_inaccessible: boolean;
+    updated_at: string | null;
+}
+
 interface XidFreezeStateRow {
     instance_name: string;
     datname: string | null;
@@ -185,7 +195,7 @@ interface XidFreezeEvent {
 // =========================================================================
 
 export default function AdaptiveAlerting() {
-    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'slot-lifecycle' | 'long-query' | 'xid-freeze'>('overview');
+    const [tab, setTab] = useState<'overview' | 'baselines' | 'snooze' | 'maintenance' | 'slot-lifecycle' | 'long-query' | 'xid-freeze' | 'db-access'>('overview');
 
     const tabs = [
         { k: 'overview', l: '📊 Genel Bakış' },
@@ -197,6 +207,7 @@ export default function AdaptiveAlerting() {
     tabs.push({ k: 'slot-lifecycle', l: 'Slot Lifecycle' });
     tabs.push({ k: 'long-query', l: 'Uzun Sorgu' });
     tabs.push({ k: 'xid-freeze', l: 'XID Freeze' });
+    tabs.push({ k: 'db-access', l: 'Erisilemez DB' });
 
     return (
         <div>
@@ -228,6 +239,7 @@ export default function AdaptiveAlerting() {
             {tab === 'slot-lifecycle' && <SlotLifecyclePanel />}
             {tab === 'long-query' && <LongQueryPanel />}
             {tab === 'xid-freeze' && <XidFreezePanel />}
+            {tab === 'db-access' && <DatabaseAccessPanel />}
         </div>
     );
 }
@@ -1327,6 +1339,125 @@ function LongQueryEditModal({ subscription, onClose }: { subscription: LongQuery
                     <ToggleRow label="Idle tx bildirimi" value={form.notify_on_idle_tx} onChange={v => set('notify_on_idle_tx', v)} />
                     <ToggleRow label="Aborted idle tx bildirimi" value={form.notify_on_idle_tx_aborted} onChange={v => set('notify_on_idle_tx_aborted', v)} />
                 </div>
+            </div>
+            <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
+        </Modal>
+    );
+}
+
+// =========================================================================
+// Erisilemez DB (database_inaccessible)
+// =========================================================================
+
+function DatabaseAccessPanel() {
+    const [editing, setEditing] = useState<DatabaseAccessSubscription | null>(null);
+
+    const { data: subscriptions = [] } = useQuery<DatabaseAccessSubscription[]>({
+        queryKey: ['db-access-subscriptions'],
+        queryFn: () => apiGet('/adaptive-alerting/database-access/subscriptions'),
+    });
+
+    return (
+        <div className="space-y-6">
+            <section className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#E2E8F0]">
+                    <h2 className="text-sm font-semibold text-[#1E293B]">Erisilemez Database Alerti</h2>
+                    <p className="text-xs text-[#64748B] mt-0.5">
+                        Kaynak sunucuda yeni bir database acilir ama pgstat CONNECT edemezse (yetki yok),
+                        o database izlenemez. Bu durumda alert uretilir. Ayarlar instance bazindadir.
+                    </p>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                        <thead className="bg-[#F8FAFC] border-b border-[#E2E8F0]">
+                            <tr>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Instance</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Aktif</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Esik (ardisik fail)</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Severity</th>
+                                <th className="py-2 px-3 text-left text-xs font-semibold text-[#64748B] uppercase">Bildirim</th>
+                                <th className="py-2 px-3 text-right text-xs font-semibold text-[#64748B] uppercase">Duzenle</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#F1F5F9]">
+                            {subscriptions.length === 0 ? (
+                                <tr><td colSpan={6} className="py-8 text-center text-sm text-[#64748B]">Aktif instance yok.</td></tr>
+                            ) : subscriptions.map((row) => (
+                                <tr key={row.instance_pk} className="hover:bg-[#F8FAFC]">
+                                    <td className="py-2 px-3 font-medium text-[#1E293B]">{row.instance_name}</td>
+                                    <td className="py-2 px-3">{yesNoBadge(row.is_enabled)}</td>
+                                    <td className="py-2 px-3 text-right font-mono text-xs">{row.fail_threshold}</td>
+                                    <td className="py-2 px-3">{severityBadge(row.severity)}</td>
+                                    <td className="py-2 px-3"><MiniToggle label="bildirim" value={row.notify_on_inaccessible} /></td>
+                                    <td className="py-2 px-3 text-right">
+                                        <button onClick={() => setEditing(row)}
+                                            className="px-3 py-1 text-xs rounded bg-[#EFF6FF] text-[#2563EB] hover:bg-[#DBEAFE]">
+                                            Duzenle
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            {editing && <DatabaseAccessEditModal subscription={editing} onClose={() => setEditing(null)} />}
+        </div>
+    );
+}
+
+function DatabaseAccessEditModal({ subscription, onClose }: { subscription: DatabaseAccessSubscription; onClose: () => void }) {
+    const toast = useToast();
+    const qc = useQueryClient();
+    const [form, setForm] = useState({
+        is_enabled: subscription.is_enabled,
+        fail_threshold: subscription.fail_threshold,
+        severity: subscription.severity,
+        notify_on_inaccessible: subscription.notify_on_inaccessible,
+    });
+
+    const set = (key: keyof typeof form, value: boolean | number | string) => {
+        setForm(prev => ({ ...prev, [key]: value }));
+    };
+
+    const saveMut = useMutation({
+        mutationFn: () => apiPut(`/adaptive-alerting/database-access/subscriptions/${subscription.instance_pk}`, form),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['db-access-subscriptions'] });
+            toast.success('Erisilemez DB ayarlari kaydedildi');
+            onClose();
+        },
+        onError: (e: any) => toast.error(e?.message || 'Kayit basarisiz'),
+    });
+
+    return (
+        <Modal title={`Erisilemez DB - ${subscription.instance_name}`} onClose={onClose}>
+            <div className="space-y-4">
+                <label className="flex items-center gap-2 text-sm text-[#334155]">
+                    <input type="checkbox" checked={form.is_enabled} onChange={e => set('is_enabled', e.target.checked)} />
+                    Aktif (kapaliysa bu instance icin hic alert uretilmez)
+                </label>
+                <div>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                        Esik — kac ardisik basarisiz denemeden sonra alert acilsin
+                    </label>
+                    <input type="number" min={1} value={form.fail_threshold}
+                        onChange={e => set('fail_threshold', Number(e.target.value))}
+                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+                    <p className="text-[11px] text-[#64748B] mt-1">
+                        Anlik/gecici hatada hemen alert atmamak icin. Orn 2 = iki ardisik basarisizliktan sonra.
+                    </p>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">Severity</label>
+                    <select value={form.severity} onChange={e => set('severity', e.target.value)}
+                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm">
+                        <option value="warning">warning</option>
+                        <option value="critical">critical</option>
+                    </select>
+                </div>
+                <ToggleRow label="Bildirim gonder (Telegram/email). Kapaliysa alert sadece UI'da gorunur."
+                    value={form.notify_on_inaccessible} onChange={v => set('notify_on_inaccessible', v)} />
             </div>
             <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />
         </Modal>

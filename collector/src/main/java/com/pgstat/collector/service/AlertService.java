@@ -293,16 +293,20 @@ public class AlertService {
         return code.getCode() + ":" + code.getSourceComponent() + ":" + instancePk + ":" + dbid;
     }
 
-    public void raiseDatabaseAlert(AlertCode code, long instancePk, long dbid,
-                                   String title, String message, String detailsJson) {
+    public void raiseDatabaseAlert(AlertCode code, long instancePk, long dbid, String severity,
+                                   boolean notify, String title, String message, String detailsJson) {
         String alertKey = buildDatabaseAlertKey(code, instancePk, dbid);
+        // severity kullanici secimli (warning|critical); gecersizse koda dus.
+        String sev = ("warning".equals(severity) || "critical".equals(severity))
+            ? severity : code.getDefaultSeverity();
         try {
             // FIRST_ONLY: DbObjects job dakikalar arayla calisir; alert acik kaldikca
             // her cycle'da tekrar bildirim gondermesin (spam). Yeni/reopen/severity
             // degisiminde bildirir, cozulup tekrar acilinca yine bildirir.
-            alertRepo.upsert(alertKey, code, instancePk, null, null, title, message, detailsJson,
-                AlertRepository.NotifyMode.FIRST_ONLY);
-            log.debug("Database alert olusturuldu: {} — {}", alertKey, title);
+            // notify=false ise alert yine kaydedilir ama bildirim gonderilmez.
+            alertRepo.upsertAdaptiveWithSeverity(alertKey, code, sev, instancePk,
+                title, message, detailsJson, AlertRepository.NotifyMode.FIRST_ONLY, notify);
+            log.debug("Database alert olusturuldu: {} [{}] notify={} — {}", alertKey, sev, notify, title);
         } catch (Exception e) {
             log.error("Database alert yazma hatasi: {} — {}", alertKey, e.getMessage());
         }

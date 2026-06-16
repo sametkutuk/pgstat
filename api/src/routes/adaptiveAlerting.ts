@@ -321,6 +321,80 @@ router.put('/long-query/subscriptions/:instancePk', async (req, res, next) => {
     }
 });
 
+// ============================================================================
+// DATABASE ACCESS (database_inaccessible alert) SUBSCRIPTIONS
+// ============================================================================
+
+// GET — tum aktif instance'lar + ayarlari (satir yoksa varsayilan gosterilir)
+router.get('/database-access/subscriptions', async (_req, res, next) => {
+    try {
+        const result = await pool.query(`
+            select
+                i.instance_pk,
+                i.display_name as instance_name,
+                coalesce(s.is_enabled, true) as is_enabled,
+                coalesce(s.fail_threshold, 2) as fail_threshold,
+                coalesce(s.severity, 'warning') as severity,
+                coalesce(s.notify_on_inaccessible, true) as notify_on_inaccessible,
+                s.updated_at
+            from control.instance_inventory i
+            left join control.database_access_subscription s on s.instance_pk = i.instance_pk
+            where i.is_active = true
+            order by i.display_name, i.instance_pk
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// PUT — instance ayarini kaydet (upsert)
+router.put('/database-access/subscriptions/:instancePk', async (req, res, next) => {
+    try {
+        const instancePk = requireInstancePk(req.params.instancePk);
+        if (instancePk == null) {
+            res.status(400).json({ error: 'Gecersiz instancePk' });
+            return;
+        }
+
+        const failThreshold = Number(req.body?.fail_threshold ?? 2);
+        if (!Number.isFinite(failThreshold) || failThreshold < 1) {
+            res.status(400).json({ error: 'fail_threshold en az 1 olmali' });
+            return;
+        }
+        const severity = String(req.body?.severity ?? 'warning');
+        if (severity !== 'warning' && severity !== 'critical') {
+            res.status(400).json({ error: 'severity warning veya critical olmali' });
+            return;
+        }
+
+        const result = await pool.query(`
+            insert into control.database_access_subscription (
+                instance_pk, is_enabled, fail_threshold, severity, notify_on_inaccessible, updated_at
+            )
+            values ($1, $2, $3, $4, $5, now())
+            on conflict (instance_pk) do update
+            set is_enabled = excluded.is_enabled,
+                fail_threshold = excluded.fail_threshold,
+                severity = excluded.severity,
+                notify_on_inaccessible = excluded.notify_on_inaccessible,
+                updated_at = now()
+            returning
+                subscription_id, instance_pk, is_enabled, fail_threshold,
+                severity, notify_on_inaccessible, updated_at
+        `, [
+            instancePk,
+            Boolean(req.body?.is_enabled ?? true),
+            Math.trunc(failThreshold),
+            severity,
+            Boolean(req.body?.notify_on_inaccessible ?? true),
+        ]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        next(err);
+    }
+});
+
 router.get('/long-query/events', async (req, res, next) => {
     try {
         const limit = parseLimit(req.query.limit, 100);

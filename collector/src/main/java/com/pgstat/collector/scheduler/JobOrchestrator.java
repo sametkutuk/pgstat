@@ -513,19 +513,32 @@ public class JobOrchestrator {
             stateRepo.updateDatabaseStateAfterFailure(target.instancePk(), target.dbid());
             opsRepo.finishJobRunInstance(runInstanceId, "failed", 0, 0, 0, truncate(e.getMessage()));
 
-            // CONNECT/yetki reddi mi? -> o DB izlenemiyor (kor nokta), warning alert uret.
+            // CONNECT/yetki reddi mi? -> o DB izlenemiyor (kor nokta), alert uret.
             // Bu, instance genelinde bir sorun DEGIL: tek bir database'e pgstat'in
             // CONNECT yetkisi yok. Bu yuzden instance'i degraded'a CEKMEYIZ; sadece
             // ilgili database icin alert acariz. Erisim verilince basari dalinda resolve olur.
+            // Kullanici ayarlari (control.database_access_subscription): enabled mi,
+            // kac ardisik basarisizliktan sonra, hangi severity, bildirim gitsin mi.
             if (isDatabaseAccessDenied(e)) {
-                String title = "Database izlenemiyor: " + target.datname();
-                String message = "pgstat '" + target.datname() + "' database'ine CONNECT edemiyor "
-                    + "(yetki yok). Bu database izlenmiyor. Cozum: collector kullanicisina "
-                    + "GRANT CONNECT ON DATABASE " + target.datname() + " TO <collector_user>; verin. "
-                    + "Hata: " + truncate(e.getMessage());
-                alertService.raiseDatabaseAlert(
-                    AlertCode.DATABASE_INACCESSIBLE, target.instancePk(), target.dbid(),
-                    title, message, null);
+                DatabaseAccessConfig cfg = loadDatabaseAccessConfig(target.instancePk());
+                if (cfg.enabled()) {
+                    // consecutive_failures az once updateDatabaseStateAfterFailure ile +1 oldu.
+                    int fails = readConsecutiveFailures(target.instancePk(), target.dbid());
+                    if (fails >= cfg.failThreshold()) {
+                        String title = "Database izlenemiyor: " + target.datname();
+                        String message = "pgstat '" + target.datname() + "' database'ine CONNECT edemiyor "
+                            + "(yetki yok, " + fails + " ardisik basarisiz). Bu database izlenmiyor. "
+                            + "Cozum: collector kullanicisina "
+                            + "GRANT CONNECT ON DATABASE " + target.datname() + " TO <collector_user>; verin. "
+                            + "Hata: " + truncate(e.getMessage());
+                        alertService.raiseDatabaseAlert(
+                            AlertCode.DATABASE_INACCESSIBLE, target.instancePk(), target.dbid(),
+                            cfg.severity(), cfg.notifySend(), title, message, null);
+                    } else {
+                        log.debug("database_inaccessible esik altinda ({}/{}), alert yok: {}:{}",
+                            fails, cfg.failThreshold(), target.instanceId(), target.datname());
+                    }
+                }
                 return new InstanceResult(target.instancePk(), false, 0, e.getMessage());
             }
 
@@ -564,6 +577,46 @@ public class JobOrchestrator {
             cur = cur.getCause();
         }
         return false;
+    }
+
+    /** database_inaccessible alert kullanici ayarlari (per-instance). */
+    private record DatabaseAccessConfig(boolean enabled, int failThreshold, String severity, boolean notifySend) {}
+
+    /**
+     * control.database_access_subscription'tan instance ayarlarini okur.
+     * Satir yoksa (eski/yeni instance) guvenli varsayilan: enabled, esik=2,
+     * warning, bildirim acik.
+     */
+    private DatabaseAccessConfig loadDatabaseAccessConfig(long instancePk) {
+        try {
+            return jdbc.queryForObject("""
+                select is_enabled, fail_threshold, severity, notify_on_inaccessible
+                from control.database_access_subscription
+                where instance_pk = ?
+                """,
+                (rs, n) -> new DatabaseAccessConfig(
+                    rs.getBoolean("is_enabled"),
+                    rs.getInt("fail_threshold"),
+                    rs.getString("severity"),
+                    rs.getBoolean("notify_on_inaccessible")
+                ),
+                instancePk);
+        } catch (Exception e) {
+            // Satir yok veya hata -> varsayilan (enabled, esik 2, warning, bildir).
+            return new DatabaseAccessConfig(true, 2, "warning", true);
+        }
+    }
+
+    /** control.database_state.consecutive_failures (per-DB) degerini okur. */
+    private int readConsecutiveFailures(long instancePk, long dbid) {
+        try {
+            Integer v = jdbc.queryForObject(
+                "select consecutive_failures from control.database_state where instance_pk = ? and dbid = ?",
+                Integer.class, instancePk, dbid);
+            return v != null ? v : 1;
+        } catch (Exception e) {
+            return 1;
+        }
     }
 
     // =========================================================================
