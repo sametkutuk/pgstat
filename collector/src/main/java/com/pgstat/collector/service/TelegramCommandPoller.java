@@ -324,34 +324,31 @@ public class TelegramCommandPoller {
     }
 
     private void sendHelp(String botToken, String chatId) {
+        // Mobilde wrap olmadan sigsin diye satirlar kisa tutuldu.
         String help = """
-            pgstat Telegram komutlari
+            pgstat komutlari
 
-            Alert susturma (mute/snooze):
-            - Bir ALERT mesajini REPLY edip yaz:
-              /sustur 30m   -> o alerti 30 dakika sustur
-              /sustur 2h    -> 2 saat
-              /sustur 1d    -> 1 gun
-              /sustur 90    -> 90 dakika (cipsiz = dakika)
-              /sustur       -> SURESIZ sustur (sure yok)
-              /sustur kod 2h -> ayni TIPTEKI (alert_code) tum alertleri 2 saat sustur
-            (Ingilizce esdegeri: /mute)
+            SUSTUR (alert'i REPLY et):
+            /sustur 30m   30 dakika
+            /sustur 2h    2 saat
+            /sustur 1d    1 gun
+            /sustur 90    90 dk (cipsiz=dk)
+            /sustur       suresiz
+            /sustur kod 2h   ayni tip
+            (max 30d, birim m/h/d)
 
-            Sure birimleri: m=dakika, h=saat, d=gun. Ust sinir 30 gun (30d).
+            AC:
+            /ac 123   id ile kaldir
+            /ac       (reply ile kaldir)
 
-            Susturmayi acma:
-            - /ac 123          -> snooze_id=123 olan susturmayi kaldir
-            - alert mesajini REPLY edip /ac -> o alertin aktif susturmasini kaldir
-            (Ingilizce esdegeri: /unmute)
+            LISTE:
+            /sustur rapor   aktif liste
 
-            Aktif susturmalari listele:
-            - /sustur rapor    (veya /mute report)
-              Her satirda snooze_id var; /ac <id> ile o susturmayi kaldirabilirsin.
+            EN esdeger: /mute /unmute
+            Yardim: /yardim /help
 
-            Bu yardim:
-            - /yardim  /help  /kullan  /use
-
-            Not: Susturulmus bir alert COZULUNCE (resolved) bildirim yine gelir.
+            Not: susturulan alert cozulunce
+            bildirim yine gelir.
             """;
         sendPlain(botToken, chatId, help);
     }
