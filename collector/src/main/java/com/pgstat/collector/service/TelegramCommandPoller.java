@@ -142,7 +142,14 @@ public class TelegramCommandPoller {
     }
 
     private void processUpdate(Map<String, Object> update, String botToken, String configuredChatId) {
+        // Telegram normal grup/DM mesajlarini "message", KANAL gonderilerini
+        // "channel_post" alaninda yollar. Ikisini de destekle.
         Map<String, Object> message = mapValue(update.get("message"));
+        boolean isChannelPost = false;
+        if (message == null) {
+            message = mapValue(update.get("channel_post"));
+            isChannelPost = true;
+        }
         if (message == null) return;
 
         String chatId = chatId(message);
@@ -151,12 +158,22 @@ public class TelegramCommandPoller {
         String text = limitText(stringValue(message.get("text")), MAX_COMMAND_TEXT_LENGTH);
         if (text == null || text.isBlank()) return;
 
+        // GUVENLIK — yetkilendirme kanal/grup'a gore farkli:
+        //  - KANAL postu: from.id YOKTUR (gonderiler kanal kimligiyle, anonim admin).
+        //    Kanala SADECE adminler yazabilir, yani Telegram admin yetkisi = komut
+        //    yetkisi. Yetki = chat_id eslesmesi (yukarida zaten dogrulandi). user_id
+        //    allowlist kanal icin UYGULANAMAZ, atlanir.
+        //  - Normal grup/DM: from.id gelir -> user_id allowlist TAM uygulanir (fail-closed).
         Long userId = senderUserId(message);
-        if (!isAllowedUser(userId)) {
-            if (text.trim().startsWith("/")) auditUnauthorized(message, chatId, text);
-            return;
+        if (!isChannelPost) {
+            if (!isAllowedUser(userId)) {
+                if (text.trim().startsWith("/")) auditUnauthorized(message, chatId, text);
+                return;
+            }
         }
-        if (isRateLimited(userId)) {
+        // Rate limit: kanalda userId null olabilir -> chat_id'yi anahtar yap.
+        long rateKey = userId != null ? userId : channelRateKey(chatId);
+        if (isRateLimited(rateKey)) {
             auditRateLimited(message, chatId, text);
             return;
         }
@@ -607,6 +624,15 @@ public class TelegramCommandPoller {
     private Long senderUserId(Map<String, Object> message) {
         Map<String, Object> from = mapValue(message.get("from"));
         return from == null ? null : toLong(from.get("id"));
+    }
+
+    /**
+     * Kanal postlarinda from.id olmadigi icin rate limit anahtari olarak
+     * chat_id'den deterministik (negatif olmayan) bir long uret. Gercek user_id'lerle
+     * (pozitif, ayni aralikta) cakismasin diye negatif uzaya tasi.
+     */
+    private long channelRateKey(String chatId) {
+        return -Math.abs((long) chatId.hashCode()) - 1;
     }
 
     private String username(Map<String, Object> message) {
