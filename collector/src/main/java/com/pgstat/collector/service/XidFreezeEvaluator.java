@@ -23,6 +23,19 @@ public class XidFreezeEvaluator {
     private static final long DEFAULT_XID_MAX_AGE = 200_000_000L;
     private static final long DEFAULT_MXID_MAX_AGE = 400_000_000L;
 
+    // XID/MXID freeze alert esikleri — PostgreSQL'in gercek davranisina gore:
+    //  - yas < freeze_max_age            : tamamen normal, alert yok.
+    //  - freeze_max_age <= yas < 2x      : PG aggressive autovacuum'u YENI tetikledi,
+    //                                       rutin/normal -> alert YOK (gurultu yapma).
+    //  - yas >= 2x freeze_max_age        : aggressive autovacuum basladi ama gecikmeyi
+    //                                       kapatamiyor = "yetisemiyor" netlesti -> WARNING.
+    //  - yas >= CRITICAL_WRAPAROUND_AGE  : gercek wraparound riski (2.1B'de DB durur) -> CRITICAL.
+    // Boylece freeze_max_age'e yaklasma/asma yanlis-CRITICAL uretmez; sadece autovacuum
+    // gercekten geri kalirsa veya wraparound yaklasirsa uyarir. freeze_max_age instance
+    // bazli GUC'tan okunur (her instance farkli olabilir).
+    private static final long WARNING_MAX_AGE_MULTIPLIER = 2L;          // 2x freeze_max_age
+    private static final long CRITICAL_WRAPAROUND_AGE = 1_600_000_000L; // ~wraparound %75 (2.1B tavan)
+
     private final JdbcTemplate jdbc;
     private final AlertRepository alertRepo;
 
@@ -158,24 +171,28 @@ public class XidFreezeEvaluator {
         if (!subscription.notifyOnXid() || row.datfrozenxidAge() == null) {
             return;
         }
-        double pct = (double) row.datfrozenxidAge() * 100.0 / xidMaxAge;
-        AlertCode code = freezeCode(pct, subscription, AlertCode.XID_FREEZE_WARNING, AlertCode.XID_FREEZE_CRITICAL);
+        long age = row.datfrozenxidAge();
+        AlertCode code = freezeCode(age, xidMaxAge, AlertCode.XID_FREEZE_WARNING, AlertCode.XID_FREEZE_CRITICAL);
         if (code == null) {
             return;
         }
         String alertKey = key("xid_freeze", subscription.instancePk(), row.dbid());
         activeAlertKeys.add(alertKey);
-        int displayPct = (int) Math.round(pct);
-        String title = "XID freeze riski: " + safe(row.datname()) + " %" + displayPct + " - " + subscription.label();
-        String message = "datname=" + safe(row.datname()) + ", datfrozenxid_age=" + row.datfrozenxidAge()
-            + " / max=" + xidMaxAge + " (%" + displayPct + "). Wraparound 2.1B'de. autovacuum freeze gerekli.";
+        // Wraparound'a (2.1B) ne kadar kaldigini yuzde olarak goster — gercek risk olcusu.
+        int wraparoundPct = (int) Math.round(age * 100.0 / 2_100_000_000.0);
+        String title = "XID freeze: " + safe(row.datname()) + " - " + subscription.label();
+        String message = "datname=" + safe(row.datname()) + ", xid_yas=" + age
+            + ", autovacuum_freeze_max_age=" + xidMaxAge + ", wraparound=2.1B (%" + wraparoundPct + ")."
+            + (code == AlertCode.XID_FREEZE_CRITICAL
+                ? " Wraparound riski! Manuel VACUUM FREEZE gerekebilir."
+                : " Autovacuum freeze'i yetistiremiyor (yas freeze_max_age'in 2 katindan fazla).");
         String details = new AlertDetailsBuilder()
             .setKind("xid_freeze")
             .addContext("dbid", row.dbid())
             .addContext("datname", row.datname())
-            .addContext("xid_age", row.datfrozenxidAge())
+            .addContext("xid_age", age)
             .addContext("xid_max_age", xidMaxAge)
-            .addContext("pct", displayPct)
+            .addContext("wraparound_pct", wraparoundPct)
             .addContext("kind", "xid")
             .addContext("instance_id", subscription.instanceId())
             .addContext("host", subscription.host())
@@ -191,24 +208,27 @@ public class XidFreezeEvaluator {
         if (!subscription.notifyOnMxid() || row.datminmxidAge() == null) {
             return;
         }
-        double pct = (double) row.datminmxidAge() * 100.0 / mxidMaxAge;
-        AlertCode code = freezeCode(pct, subscription, AlertCode.MXID_FREEZE_WARNING, AlertCode.MXID_FREEZE_CRITICAL);
+        long age = row.datminmxidAge();
+        AlertCode code = freezeCode(age, mxidMaxAge, AlertCode.MXID_FREEZE_WARNING, AlertCode.MXID_FREEZE_CRITICAL);
         if (code == null) {
             return;
         }
         String alertKey = key("mxid_freeze", subscription.instancePk(), row.dbid());
         activeAlertKeys.add(alertKey);
-        int displayPct = (int) Math.round(pct);
-        String title = "MXID freeze riski: " + safe(row.datname()) + " %" + displayPct + " - " + subscription.label();
-        String message = "datname=" + safe(row.datname()) + ", datminmxid_age=" + row.datminmxidAge()
-            + " / max=" + mxidMaxAge + " (%" + displayPct + "). autovacuum freeze gerekli.";
+        int wraparoundPct = (int) Math.round(age * 100.0 / 2_100_000_000.0);
+        String title = "MXID freeze: " + safe(row.datname()) + " - " + subscription.label();
+        String message = "datname=" + safe(row.datname()) + ", mxid_yas=" + age
+            + ", autovacuum_multixact_freeze_max_age=" + mxidMaxAge + ", wraparound=2.1B (%" + wraparoundPct + ")."
+            + (code == AlertCode.MXID_FREEZE_CRITICAL
+                ? " Multixact wraparound riski! Manuel VACUUM FREEZE gerekebilir."
+                : " Autovacuum freeze'i yetistiremiyor (yas freeze_max_age'in 2 katindan fazla).");
         String details = new AlertDetailsBuilder()
             .setKind("xid_freeze")
             .addContext("dbid", row.dbid())
             .addContext("datname", row.datname())
-            .addContext("mxid_age", row.datminmxidAge())
+            .addContext("mxid_age", age)
             .addContext("mxid_max_age", mxidMaxAge)
-            .addContext("pct", displayPct)
+            .addContext("wraparound_pct", wraparoundPct)
             .addContext("kind", "mxid")
             .addContext("instance_id", subscription.instanceId())
             .addContext("host", subscription.host())
@@ -219,11 +239,18 @@ public class XidFreezeEvaluator {
         alertRepo.upsert(alertKey, code, subscription.instancePk(), null, null, title, message, details, notifyMode);
     }
 
-    private AlertCode freezeCode(double pct, Subscription subscription, AlertCode warningCode, AlertCode criticalCode) {
-        if (pct >= subscription.criticalPct()) {
+    /**
+     * Yas-tabanli severity. (Eski yuzde-tabanli mantik kaldirildi — %96 gibi
+     * freeze_max_age'e yaklasma yanlis-CRITICAL uretiyordu.)
+     *   yas >= CRITICAL_WRAPAROUND_AGE (1.6B)     -> critical (gercek wraparound riski)
+     *   yas >= 2x freeze_max_age                  -> warning (autovacuum yetisemiyor)
+     *   aksi                                      -> null (normal / aggressive autovacuum bolgesi)
+     */
+    private AlertCode freezeCode(long age, long freezeMaxAge, AlertCode warningCode, AlertCode criticalCode) {
+        if (age >= CRITICAL_WRAPAROUND_AGE) {
             return criticalCode;
         }
-        if (pct >= subscription.warningPct()) {
+        if (age >= freezeMaxAge * WARNING_MAX_AGE_MULTIPLIER) {
             return warningCode;
         }
         return null;
