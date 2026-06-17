@@ -540,6 +540,11 @@ public class PurgeEvaluator {
      * için Kiro'ya bırakıldı — pattern aynı.
      */
     public void rollupSnapshotsHourly() {
+        // PENCERE = son 26 saat. Gunde 1 kez (UTC 02:00) calisir; 24h + 2h emniyet payi.
+        // ESKIDEN 48h idi -> her gun ~1.5M activity satirini bastan tarayip group by
+        // yapiyordu (not exists ile cogu atiliyordu ama TARANMASI 28-43dk suruyordu,
+        // poll thread'ini bloklayip collector_stale + DB time spike yaratiyordu).
+        // 26h tarama hacmini ~yariya indirir; not exists zaten islenmis saatleri atlar.
         // === WAL hourly rollup ===
         try {
             int rolledUp = jdbc.update("""
@@ -553,7 +558,7 @@ public class PurgeEvaluator {
                        avg(wal_file_count)::int as wal_file_count_avg
                 from fact.pg_wal_snapshot
                 where sample_ts < now() - interval '1 hour'
-                  and sample_ts >= now() - interval '48 hours'
+                  and sample_ts >= now() - interval '26 hours'
                   and not exists (
                     select 1 from agg.pg_wal_hourly h
                     where h.hour_ts = date_trunc('hour', fact.pg_wal_snapshot.sample_ts)
@@ -581,7 +586,7 @@ public class PurgeEvaluator {
                        (array_agg(last_failed_wal order by sample_ts desc))[1]
                 from fact.pg_archiver_snapshot
                 where sample_ts < now() - interval '1 hour'
-                  and sample_ts >= now() - interval '48 hours'
+                  and sample_ts >= now() - interval '26 hours'
                   and not exists (
                     select 1 from agg.pg_archiver_hourly h
                     where h.hour_ts = date_trunc('hour', fact.pg_archiver_snapshot.sample_ts)
@@ -620,7 +625,7 @@ public class PurgeEvaluator {
                     extract(epoch from coalesce(now() - min(xact_start), '0'::interval))::int as max_xact_duration_seconds
                   from fact.pg_activity_snapshot
                   where snapshot_ts < now() - interval '1 hour'
-                    and snapshot_ts >= now() - interval '48 hours'
+                    and snapshot_ts >= now() - interval '26 hours'
                     and backend_type = 'client backend'
                   group by snapshot_ts, instance_pk
                 ) per_sample
@@ -652,7 +657,7 @@ public class PurgeEvaluator {
                     extract(epoch from coalesce(now() - min(waitstart), '0'::interval))::int as wait_sec
                   from fact.pg_lock_snapshot
                   where snapshot_ts < now() - interval '1 hour'
-                    and snapshot_ts >= now() - interval '48 hours'
+                    and snapshot_ts >= now() - interval '26 hours'
                   group by snapshot_ts, instance_pk
                 ) per_sample
                 where not exists (
@@ -683,7 +688,7 @@ public class PurgeEvaluator {
                     extract(epoch from max(replay_lag)) as lag_sec
                   from fact.pg_replication_snapshot
                   where snapshot_ts < now() - interval '1 hour'
-                    and snapshot_ts >= now() - interval '48 hours'
+                    and snapshot_ts >= now() - interval '26 hours'
                   group by snapshot_ts, instance_pk
                 ) per_sample
                 where not exists (
@@ -712,7 +717,7 @@ public class PurgeEvaluator {
                        greatest(max(flushes) - min(flushes), 0)::bigint
                 from fact.pg_slru_snapshot
                 where sample_ts < now() - interval '1 hour'
-                  and sample_ts >= now() - interval '48 hours'
+                  and sample_ts >= now() - interval '26 hours'
                   and not exists (
                     select 1 from agg.pg_slru_hourly h
                     where h.hour_ts = date_trunc('hour', fact.pg_slru_snapshot.sample_ts)

@@ -713,26 +713,34 @@ public class JobOrchestrator {
                 }
             }
 
-            // 3c. Daily cleanup — UTC saat 2'de gunde 1 kez (idempotency guard)
-            // job_run history + rapor history + notification_log retention
+            // 3c. Daily cleanup — UTC saat 2'de gunde 1 kez (idempotency guard).
+            // AGIR is (snapshot rollup dakikalar surebilir) -> AYRI THREAD'de calistir
+            // ki poll loop bloklanmasin (eskiden senkrondu: 28-43dk poll donuyor,
+            // collector_stale alert + DB time spike olusuyordu). Guard senkron set edilir
+            // (ayni gun tekrar tetiklenmesin); is asenkron, hata olursa guard geri alinir.
             if (currentUtcHour == 2 && !todayUtc.equals(lastJobPurgeDate)) {
                 lastJobPurgeDate = todayUtc;
-                try {
-                    purgeEvaluator.purgeJobRunHistory();
-                    purgeEvaluator.purgeReportsAndNotifications();
-                    // Snapshot raw → hourly rollup (24h+ olanları taşır, raw'ı 24h'a iner)
-                    purgeEvaluator.rollupSnapshotsHourly();
-                    // Auto-resolve stale fallback.
+                final java.time.LocalDate purgeDate = todayUtc;
+                collectorExecutor.execute(() -> {
                     try {
-                        int closed = alertService.autoResolveStale(120);
-                        if (closed > 0) log.info("Auto-resolved {} stale alert (>2h)", closed);
+                        log.info("Gunluk bakim (purge + snapshot rollup) ayri thread'de basladi");
+                        purgeEvaluator.purgeJobRunHistory();
+                        purgeEvaluator.purgeReportsAndNotifications();
+                        // Snapshot raw → hourly rollup (son 26h, not exists ile yeni saatler)
+                        purgeEvaluator.rollupSnapshotsHourly();
+                        try {
+                            int closed = alertService.autoResolveStale(120);
+                            if (closed > 0) log.info("Auto-resolved {} stale alert (>2h)", closed);
+                        } catch (Exception e) {
+                            log.warn("Auto-resolve hatası: {}", e.getMessage());
+                        }
+                        log.info("Gunluk bakim tamamlandi");
                     } catch (Exception e) {
-                        log.warn("Auto-resolve hatası: {}", e.getMessage());
+                        log.warn("Daily cleanup hatasi: {}", e.getMessage());
+                        // Hata: guard'i geri al ki bir sonraki cycle tekrar denesin.
+                        if (purgeDate.equals(lastJobPurgeDate)) lastJobPurgeDate = null;
                     }
-                } catch (Exception e) {
-                    log.warn("Daily cleanup hatasi: {}", e.getMessage());
-                    lastJobPurgeDate = null;
-                }
+                });
             }
 
             // 3c1. Manuel komutları işle (UI → API → DB → buradan execute)
