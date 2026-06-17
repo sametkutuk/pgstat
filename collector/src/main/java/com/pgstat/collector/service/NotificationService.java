@@ -343,20 +343,34 @@ public class NotificationService {
             return new TelegramSendResult(false, chatId, null);
         }
 
-        String emoji = switch (severity) {
-            case "emergency" -> "🚨🚨";
-            case "critical" -> "🔴";
-            case "warning" -> "🟡";
-            default -> "🔵";
-        };
+        // Cozulme bildirimi mi? (title "Resolved: " ile baslar) -> yesil + kisa.
+        boolean isResolved = title != null && title.startsWith("Resolved:");
 
-        // HTML parse_mode: Markdown'a gore cok daha guvenilir — sadece &, <, > escape gerekli.
-        // Eski Markdown parse_mode'da _ * ` [ ( ) ] # + - = . ! gibi cok karakter problemli;
-        // alert mesajlarinda sik karsilasilan SQL/regex/dolar isaretleri Telegram'da 400 hata
-        // dondurdugu icin bildirim sessizce kayboluyordu.
-        String text = emoji + " <b>pgstat Alert — " + escapeHtml(severity.toUpperCase()) + "</b>\n\n"
-                + "<b>" + escapeHtml(title) + "</b>\n"
-                + escapeHtml(message);
+        String emoji;
+        String header;
+        if (isResolved) {
+            emoji = "🟢";
+            header = "Cozuldu";
+        } else {
+            emoji = switch (severity) {
+                case "emergency" -> "🚨🚨";
+                case "critical" -> "🔴";
+                case "warning" -> "🟡";
+                default -> "🔵";
+            };
+            header = "pgstat " + severity.toUpperCase();
+        }
+
+        // Mobil-dostu kompakt format: tek baslik satiri + satir-satir govde.
+        // Cozulmede "Resolved: " prefix'ini govdeden cikar (header zaten Cozuldu diyor).
+        // HTML parse_mode: sadece &, <, > escape gerekli. Markdown'dan daha guvenilir.
+        String cleanTitle = isResolved ? title.substring("Resolved:".length()).trim() : title;
+        String text = emoji + " <b>" + escapeHtml(header) + "</b>\n"
+                + escapeHtml(cleanTitle);
+        // Cozulme bildiriminde uzun detay (message) gosterme — mobilde gurultu.
+        if (!isResolved && message != null && !message.isBlank()) {
+            text += "\n" + escapeHtml(formatMessageBody(message));
+        }
 
         String url = "https://api.telegram.org/bot" + botToken + "/sendMessage";
         List<String> parts = splitForTelegram(text, TELEGRAM_SAFE_MESSAGE_LENGTH);
@@ -383,6 +397,51 @@ public class NotificationService {
     private String escapeHtml(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    /**
+     * Alert govdesini mobil-dostu satir-satir formata cevirir.
+     * - Mesaj zaten "•" iceriyorsa (idle-tx gibi onceden formatli) DOKUNMA.
+     * - "key=value, key=value. Aciklama cumlesi." formatini:
+     *     • key: value
+     *     • key: value
+     *     Aciklama cumlesi.
+     *   seklinde bullet'lar.
+     * Pattern'e uymayan mesaj oldugu gibi birakilir (guvenli fallback).
+     */
+    private String formatMessageBody(String message) {
+        if (message == null || message.isBlank()) return message;
+        if (message.contains("•") || message.contains("\n")) return message; // zaten formatli
+
+        // Ilk cumle sonuna kadar key=value listesi, sonrasi serbest aciklama.
+        // "... (%96). Wraparound..." gibi -> ilk ". " bolme noktasi.
+        String kvPart = message;
+        String tail = "";
+        int dot = message.indexOf(". ");
+        if (dot > 0) {
+            kvPart = message.substring(0, dot);
+            tail = message.substring(dot + 2).trim();
+        } else if (message.endsWith(".")) {
+            kvPart = message.substring(0, message.length() - 1);
+        }
+
+        // kvPart "k=v, k=v" mi? En az bir "=" yoksa bullet'lama, oldugu gibi don.
+        if (!kvPart.contains("=")) return message;
+
+        StringBuilder sb = new StringBuilder();
+        for (String part : kvPart.split(",\\s*")) {
+            String p = part.trim();
+            if (p.isEmpty()) continue;
+            int eq = p.indexOf('=');
+            if (eq > 0) {
+                sb.append("• ").append(p.substring(0, eq).trim())
+                  .append(": ").append(p.substring(eq + 1).trim()).append("\n");
+            } else {
+                sb.append("• ").append(p).append("\n");
+            }
+        }
+        if (!tail.isEmpty()) sb.append(tail);
+        return sb.toString().trim();
     }
 
     private List<String> splitForTelegram(String text, int maxLen) {
