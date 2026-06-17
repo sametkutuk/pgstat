@@ -213,7 +213,9 @@ export default function Instances() {
         queryKey: ['preferences'],
         queryFn: () => apiGet<{ pinned_instances: number[] }>('/preferences'),
     });
-    const pinSet = useMemo(() => new Set(prefs.data?.pinned_instances || []), [prefs.data]);
+    // pinned_instances JSONB'den string gelebilir; Number()'a normalize et ki
+    // pinSet.has(instance_pk: number) tutarli eslessin (yildiz dolsun).
+    const pinSet = useMemo(() => new Set((prefs.data?.pinned_instances || []).map(Number)), [prefs.data]);
 
     const togglePinMut = useMutation({
         mutationFn: (id: number) => apiPost(`/preferences/pin/${id}`, {}),

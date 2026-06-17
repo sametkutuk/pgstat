@@ -148,7 +148,13 @@ export default function Dashboard() {
     queryKey: ['preferences'],
     queryFn: () => apiGet<{ pinned_instances: number[]; dashboard_widgets: Record<string, boolean> }>('/preferences'),
   });
-  const pinnedSet = useMemo(() => new Set(preferences.data?.pinned_instances || []), [preferences.data]);
+  // pinned_instances JSONB'den string olarak gelebilir; Number()'a normalize et
+  // ki Set.has(instance_pk: number) tutarli eslessin (yoksa counter dolu ama
+  // kartlar/yildiz eslesmiyordu — string vs number Set mismatch).
+  const pinnedSet = useMemo(
+    () => new Set((preferences.data?.pinned_instances || []).map(Number)),
+    [preferences.data]
+  );
   const widgets = preferences.data?.dashboard_widgets || {};
 
   const metricsQuery = useQuery({
