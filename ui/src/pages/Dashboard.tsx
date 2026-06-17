@@ -290,7 +290,7 @@ export default function Dashboard() {
     return (
       <div
         key={inst.instance_pk}
-        onClick={() => navigate(`/cluster/${inst.instance_pk}`)}
+        onClick={() => navigate(`/instances/${inst.instance_pk}`)}
         className={`border rounded-lg p-3 cursor-pointer transition-all select-none ${c.bg}`}
       >
         <div className="flex items-start justify-between gap-1 mb-1.5">
@@ -457,7 +457,7 @@ export default function Dashboard() {
                   <div key={inst.instance_pk} className="flex items-center justify-between text-sm">
                     <span
                       className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
-                      onClick={() => navigate(`/cluster/${inst.instance_pk}`)}
+                      onClick={() => navigate(`/instances/${inst.instance_pk}`)}
                     >
                       {inst.display_name}
                     </span>
@@ -480,7 +480,7 @@ export default function Dashboard() {
                   <div key={inst.instance_pk} className="flex items-center justify-between text-sm">
                     <span
                       className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
-                      onClick={() => navigate(`/cluster/${inst.instance_pk}`)}
+                      onClick={() => navigate(`/instances/${inst.instance_pk}`)}
                     >
                       {inst.display_name}
                     </span>
@@ -503,7 +503,7 @@ export default function Dashboard() {
                   <div key={inst.instance_pk} className="flex items-center justify-between text-sm">
                     <span
                       className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
-                      onClick={() => navigate(`/cluster/${inst.instance_pk}`)}
+                      onClick={() => navigate(`/instances/${inst.instance_pk}`)}
                     >
                       {inst.display_name}
                     </span>
@@ -526,7 +526,7 @@ export default function Dashboard() {
                   <div key={inst.instance_pk} className="flex items-center justify-between text-sm">
                     <span
                       className="truncate text-[#1E293B] cursor-pointer hover:text-blue-600"
-                      onClick={() => navigate(`/cluster/${inst.instance_pk}`)}
+                      onClick={() => navigate(`/instances/${inst.instance_pk}`)}
                     >
                       {inst.display_name}
                     </span>
