@@ -227,9 +227,9 @@ export default function Instances() {
             key: 'pin', header: '', render: (r: Instance) => (
                 <button
                     onClick={(e) => { e.stopPropagation(); togglePinMut.mutate(r.instance_pk); }}
-                    title={pinSet.has(r.instance_pk) ? 'Pinden çıkar' : 'Sabitle (Dashboard\'da göster)'}
+                    title={pinSet.has(Number(r.instance_pk)) ? 'Pinden çıkar' : 'Sabitle (Dashboard\'da göster)'}
                     className="text-lg hover:scale-110 transition-transform print:hidden">
-                    {pinSet.has(r.instance_pk) ? '⭐' : '☆'}
+                    {pinSet.has(Number(r.instance_pk)) ? '⭐' : '☆'}
                 </button>
             )
         },

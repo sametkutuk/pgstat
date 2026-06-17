@@ -94,12 +94,19 @@ router.post('/pin/:instance_pk', async (req, res, next) => {
             select pinned_instances from control.user_preferences where user_id = $1
         `, [CURRENT_USER]);
 
-        let pinned: number[] = cur.rows[0]?.pinned_instances || [];
+        // JSONB'den string/number karisik gelebilir -> Number'a normalize et,
+        // NaN/cop ele. Yoksa includes(number) string array'de hep false donup
+        // toggle bozuluyordu (eklenip cikarilamiyor, liste tutarsizlasiyordu).
+        let pinned: number[] = (cur.rows[0]?.pinned_instances || [])
+            .map((p: unknown) => Number(p))
+            .filter((p: number) => Number.isInteger(p));
         if (pinned.includes(instancePk)) {
             pinned = pinned.filter(p => p !== instancePk);
         } else {
             pinned = [...pinned, instancePk];
         }
+        // Tekrar tekilllestir (eski cop kayitlardan birikmis duplikatlari temizle)
+        pinned = [...new Set(pinned)];
 
         const result = await pool.query(`
             insert into control.user_preferences (user_id, pinned_instances)

@@ -368,7 +368,7 @@ export default function Dashboard() {
             <span className="text-xs text-[#94A3B8]">({pinnedSet.size})</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {(health.data || []).filter(h => pinnedSet.has(h.instance_pk)).map(inst => {
+            {(health.data || []).filter(h => pinnedSet.has(Number(h.instance_pk))).map(inst => {
               const m = (metricsQuery.data || []).find(mm => mm.instance_pk === inst.instance_pk);
               const status = inst.bootstrap_state === 'ready' && inst.consecutive_failures === 0 && inst.open_alerts === 0 ? 'ok'
                 : inst.bootstrap_state === 'degraded' || inst.consecutive_failures > 0 ? 'critical'
