@@ -234,6 +234,7 @@ const emptyRetention = {
     daily_retention_days: 730,
     snapshot_retention_hours: 48,
     table_freeze_retention_days: 90,
+    nightly_snapshot_retention_days: 180,
     purge_enabled: true,
     is_active: true,
 };
@@ -274,6 +275,7 @@ function RetentionTab() {
             daily_retention_days: r.daily_retention_days ?? (r.daily_retention_months ?? 24) * 30,
             snapshot_retention_hours: r.snapshot_retention_hours ?? 48,
             table_freeze_retention_days: r.table_freeze_retention_days ?? 90,
+            nightly_snapshot_retention_days: r.nightly_snapshot_retention_days ?? 180,
             purge_enabled: r.purge_enabled,
             is_active: r.is_active,
         });
@@ -302,6 +304,10 @@ function RetentionTab() {
         {
             key: 'table_freeze_retention_days', header: 'Table Freeze (gun)', className: 'text-right',
             render: (r: any) => r.table_freeze_retention_days ?? '-'
+        },
+        {
+            key: 'nightly_snapshot_retention_days', header: 'Nightly (gun)', className: 'text-right',
+            render: (r: any) => r.nightly_snapshot_retention_days ?? '-'
         },
         { key: 'purge_enabled', header: 'Purge', render: (r: any) => r.purge_enabled ? '✅' : '❌' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
@@ -392,6 +398,7 @@ function RetentionTab() {
                         {numField('Daily (gün)', 'daily_retention_days')}
                         {numField('Snapshot (saat)', 'snapshot_retention_hours')}
                         {numField('Table Freeze (gun)', 'table_freeze_retention_days')}
+                        {numField('Nightly (gun)', 'nightly_snapshot_retention_days')}
                         <div className="flex items-center gap-2">
                             <label className="text-xs text-[#64748B]">Purge Aktif</label>
                             <input type="checkbox" checked={form.purge_enabled as boolean} onChange={(e) => setForm({ ...form, purge_enabled: e.target.checked })} />

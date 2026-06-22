@@ -62,6 +62,15 @@ public class PurgeEvaluator {
         "agg.pg_table_stat_hourly"
     };
 
+    /** Gece (nightly) snapshot tablolari — gunde 1 kez toplanir, rollup edilmez,
+     *  nightly_snapshot_retention_days ile purge edilir (V083). snapshot_ts kullanir. */
+    private static final String[] NIGHTLY_SNAPSHOT_TABLES = {
+        "fact.pg_settings_snapshot",
+        "fact.pg_relation_size_snapshot",
+        "fact.pg_sequence_state_snapshot",
+        "fact.pg_database_freeze_snapshot"
+    };
+
     private final JdbcTemplate jdbc;
 
     public PurgeEvaluator(JdbcTemplate jdbc) {
@@ -72,6 +81,7 @@ public class PurgeEvaluator {
         purgeRawDeltaFacts();
         purgeSnapshotFacts();
         purgeTableFreezeFacts();
+        purgeNightlySnapshotFacts();
         purgeHourlyAgg();
         purgeDailyAgg();
         purgeOps();
@@ -218,6 +228,55 @@ public class PurgeEvaluator {
             }
         } catch (Exception e) {
             log.warn("Table freeze fact purge hatasi: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // Gece (nightly) snapshot facts — gun-bazli retention (V083)
+    // pg_settings/pg_relation_size/pg_sequence_state/pg_database_freeze snapshot.
+    // Gunde 1 kez toplanir -> rollup yok, sadece nightly_snapshot_retention_days
+    // ile purge. Pattern purgeTableFreezeFacts ile ayni.
+    // =========================================================================
+
+    private void purgeNightlySnapshotFacts() {
+        try {
+            LocalDate hardDropBefore = jdbc.queryForObject("""
+                select (current_date - max(coalesce(p.nightly_snapshot_retention_days, 180)))::date
+                from control.retention_policy p
+                where p.is_active and p.purge_enabled
+                """,
+                LocalDate.class
+            );
+            if (hardDropBefore == null) return;
+
+            log.info("Nightly snapshot fact purge: hard drop siniri = {}", hardDropBefore);
+            for (String table : NIGHTLY_SNAPSHOT_TABLES) {
+                dropPartitionsBefore(table, hardDropBefore);
+            }
+
+            // Instance bazli batched delete (hard drop sonrasi kalan artiklar icin)
+            List<Map<String, Object>> instanceCutoffs = jdbc.queryForList("""
+                select
+                  i.instance_pk,
+                  (current_date - coalesce(p.nightly_snapshot_retention_days, 180))::date as keep_from
+                from control.instance_inventory i
+                join control.retention_policy p on p.retention_policy_id = i.retention_policy_id
+                where i.is_active and p.is_active and p.purge_enabled
+                """);
+
+            for (Map<String, Object> row : instanceCutoffs) {
+                long instancePk = ((Number) row.get("instance_pk")).longValue();
+                java.sql.Date keepFromSql = (java.sql.Date) row.get("keep_from");
+                LocalDate instanceKeepFrom = keepFromSql.toLocalDate();
+                if (instanceKeepFrom.isAfter(hardDropBefore)) {
+                    for (String table : NIGHTLY_SNAPSHOT_TABLES) {
+                        batchedDeleteForInstance(table, "snapshot_ts",
+                            instancePk, hardDropBefore, instanceKeepFrom);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Nightly snapshot fact purge hatasi: {}", e.getMessage());
         }
     }
 
