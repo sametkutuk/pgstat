@@ -34,18 +34,30 @@ public class AggRepository {
               rows_sum,
               shared_blks_read_sum,
               shared_blks_hit_sum,
-              temp_blks_written_sum
+              temp_blks_written_sum,
+              wal_bytes_sum,
+              wal_records_sum,
+              wal_fpi_sum,
+              min_exec_time_ms,
+              avg_exec_time_ms,
+              max_exec_time_ms
             )
             select
               date_trunc('hour', sample_ts)   as bucket_start,
               instance_pk,
               statement_series_id,
-              sum(calls_delta)                as calls_sum,
-              sum(total_exec_time_ms_delta)   as exec_time_ms_sum,
-              sum(rows_delta)                 as rows_sum,
-              sum(shared_blks_read_delta)     as shared_blks_read_sum,
-              sum(shared_blks_hit_delta)      as shared_blks_hit_sum,
-              sum(temp_blks_written_delta)    as temp_blks_written_sum
+              sum(coalesce(calls_delta, 0))                as calls_sum,
+              sum(coalesce(total_exec_time_ms_delta, 0))   as exec_time_ms_sum,
+              sum(coalesce(rows_delta, 0))                 as rows_sum,
+              sum(coalesce(shared_blks_read_delta, 0))     as shared_blks_read_sum,
+              sum(coalesce(shared_blks_hit_delta, 0))      as shared_blks_hit_sum,
+              sum(coalesce(temp_blks_written_delta, 0))    as temp_blks_written_sum,
+              sum(coalesce(wal_bytes_delta, 0))::bigint    as wal_bytes_sum,
+              sum(coalesce(wal_records_delta, 0))::bigint  as wal_records_sum,
+              sum(coalesce(wal_fpi_delta, 0))::bigint      as wal_fpi_sum,
+              min(min_exec_time_ms)                        as min_exec_time_ms,
+              avg(mean_exec_time_ms)                       as avg_exec_time_ms,
+              max(max_exec_time_ms)                        as max_exec_time_ms
             from fact.pgss_delta
             where sample_ts >= date_trunc('hour', now() - interval '1 hour')
               and sample_ts <  date_trunc('hour', now())
@@ -56,7 +68,13 @@ public class AggRepository {
                   rows_sum              = excluded.rows_sum,
                   shared_blks_read_sum  = excluded.shared_blks_read_sum,
                   shared_blks_hit_sum   = excluded.shared_blks_hit_sum,
-                  temp_blks_written_sum = excluded.temp_blks_written_sum
+                  temp_blks_written_sum = excluded.temp_blks_written_sum,
+                  wal_bytes_sum         = excluded.wal_bytes_sum,
+                  wal_records_sum       = excluded.wal_records_sum,
+                  wal_fpi_sum           = excluded.wal_fpi_sum,
+                  min_exec_time_ms      = excluded.min_exec_time_ms,
+                  avg_exec_time_ms      = excluded.avg_exec_time_ms,
+                  max_exec_time_ms      = excluded.max_exec_time_ms
             """);
     }
 

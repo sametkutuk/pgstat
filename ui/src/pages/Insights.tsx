@@ -1609,11 +1609,6 @@ function QueryWalTrendPanel({ instancePk, seriesId, range, autoRefresh, compareK
 
     return (
         <div className="space-y-2">
-            {data?.raw_retention_limited && (
-                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    Sorgu bazli WAL trend max {data.raw_retention_days ?? 7} gun gosterilir. Hourly aggregate'te sorgu bazli kirilim mevcut degil.
-                </div>
-            )}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <InsightChart title="WAL Yazimi (MB)" height={200}>
                     <AreaChart data={chartData}>

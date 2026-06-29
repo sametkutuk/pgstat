@@ -209,9 +209,15 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
   const timeWhere = pgssTimeWhere(source, 3, 4);
   const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
   const execExpr = pgssMetric(source, 'd.total_exec_time_ms_delta', 'd.exec_time_ms_sum');
-  const minExpr = source === 'pgss_delta' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
-  const avgExpr = source === 'pgss_delta' ? 'avg(d.mean_exec_time_ms)::double precision' : 'null::double precision';
-  const maxExpr = source === 'pgss_delta' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';
+  const minExpr = source === 'pgss_delta'
+    ? 'min(d.min_exec_time_ms)::double precision'
+    : source === 'pgss_hourly' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
+  const avgExpr = source === 'pgss_delta'
+    ? 'avg(d.mean_exec_time_ms)::double precision'
+    : source === 'pgss_hourly' ? 'avg(d.avg_exec_time_ms)::double precision' : 'null::double precision';
+  const maxExpr = source === 'pgss_delta'
+    ? 'max(d.max_exec_time_ms)::double precision'
+    : source === 'pgss_hourly' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';
   const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
   return pool.query(`
         with buckets as (
@@ -283,23 +289,29 @@ async function fetchQueryTempTrend(id: string, seriesId: string, fromIso: string
     `, [id, seriesId, fromIso, toIso]);
 }
 
-async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string, toIso: string, bucketExpr: string, windowHours: number, rawDays: number, alignIntervalSql?: string) {
-  const stepSql = pgssBucketStepSql(windowHours, rawDays);
-  // $3 ve $4 from/to (1: id, 2: seriesId).
-  const gridStart = pgssBucketAlignSql(windowHours, 3, rawDays);
+async function fetchQueryWalTrend(id: string, seriesId: string, fromIso: string, toIso: string, source: DataSource, windowHours: number, rawDays: number, alignIntervalSql?: string) {
+  const stepSql = pgssStepSql(source, windowHours, rawDays);
+  const gridStart = pgssGridStartSql(source, windowHours, 3, rawDays);
+  const sourceTable = pgssSourceTable(source);
+  const bucketExpr = pgssBucketForSource(source, windowHours, rawDays);
+  const timeWhere = pgssTimeWhere(source, 3, 4);
+  const callsExpr = pgssMetric(source, 'd.calls_delta', 'd.calls_sum');
+  const walBytesExpr = pgssMetric(source, 'coalesce(d.wal_bytes_delta, 0)', 'coalesce(d.wal_bytes_sum, 0)');
+  const walRecordsExpr = pgssMetric(source, 'coalesce(d.wal_records_delta, 0)', 'coalesce(d.wal_records_sum, 0)');
+  const walFpiExpr = pgssMetric(source, 'coalesce(d.wal_fpi_delta, 0)', 'coalesce(d.wal_fpi_sum, 0)');
   const alignedSelect = alignIntervalSql ? `, g.bucket_start + ${alignIntervalSql} as bucket_aligned` : '';
   return pool.query(`
         with buckets as (
           select
             ${bucketExpr} as bucket_start,
-            coalesce(sum(coalesce(d.wal_bytes_delta, 0)), 0)::double precision as wal_bytes,
-            coalesce(sum(coalesce(d.wal_records_delta, 0)), 0)::bigint as wal_records,
-            coalesce(sum(coalesce(d.wal_fpi_delta, 0)), 0)::bigint as wal_fpi,
-            coalesce(sum(d.calls_delta), 0)::bigint as calls
-          from fact.pgss_delta d
+            coalesce(sum(${walBytesExpr}), 0)::double precision as wal_bytes,
+            coalesce(sum(${walRecordsExpr}), 0)::bigint as wal_records,
+            coalesce(sum(${walFpiExpr}), 0)::bigint as wal_fpi,
+            coalesce(sum(${callsExpr}), 0)::bigint as calls
+          from ${sourceTable} d
           where d.instance_pk = $1
             and d.statement_series_id = $2::bigint
-            and d.sample_ts between $3::timestamptz and $4::timestamptz
+            and ${timeWhere}
           group by bucket_start
         ),
         grid as (
@@ -700,9 +712,9 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
 
     const windowHours = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 3_600_000;
     const retention = await getInstanceRetention(id);
-    const bucketExpr = pgssBucketExpr(windowHours, retention.raw_days);
+    const source = pickPgssSource(windowHours, retention.raw_days);
 
-    const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, bucketExpr, windowHours, retention.raw_days);
+    const current = await fetchQueryWalTrend(id, seriesIdRaw, fromIso, toIso, source, windowHours, retention.raw_days);
     let previous: any[] = [];
     if (compare) {
       const offset = COMPARE_OFFSETS[compare];
@@ -711,7 +723,7 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
         seriesIdRaw,
         shiftedIso(fromIso, offset.seconds),
         shiftedIso(toIso, offset.seconds),
-        bucketExpr,
+        source,
         windowHours,
         retention.raw_days,
         offset.intervalSql,
@@ -721,9 +733,9 @@ router.get('/:id/query-wal-trend', async (req, res, next) => {
       current: current.rows,
       previous,
       compare,
+      data_source: source,
       raw_retention_days: retention.raw_days,
       hourly_retention_days: retention.hourly_days,
-      raw_retention_limited: windowHours > retention.raw_days * 24,
     });
   } catch (err) {
     next(err);
