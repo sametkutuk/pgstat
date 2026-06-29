@@ -2172,8 +2172,13 @@ function TempSpillCardInner({ instancePk, range, onRangeChange, autoRefresh, ins
                         {datname && <span className="text-xs px-2 py-0.5 rounded bg-[#EFF6FF] text-[#2563EB]">{datname}</span>}
                     </div>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1 text-xs text-[#64748B]">
-                        <div>Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b> · En yüksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b></div>
-                        <div>Mevcut work_mem: <b className="text-[#1E293B]">{totals?.work_mem_kb == null ? '\u2014' : formatBytes(totals.work_mem_kb * 1024)}</b></div>
+                        <div className="md:col-span-2">
+                            Toplam temp: <b className="text-[#1E293B]">{summary.totalMb.toLocaleString('tr-TR')} MB</b>
+                            <span className="mx-1">|</span>
+                            En yuksek sorgu: <b className="text-[#1E293B]">%{summary.topShare.toFixed(1)}</b>
+                            <span className="mx-1">|</span>
+                            Mevcut work_mem: <b className="text-[#1E293B]">{totals?.work_mem_kb == null ? '\u2014' : formatBytes(totals.work_mem_kb * 1024)}</b>
+                        </div>
                         <div>
                             {'>'}100MB yazan sorgu: <b className={summary.overHundred > 0 ? 'text-orange-700' : 'text-[#1E293B]'}>{summary.overHundred}</b>
                             <span className="mx-1">·</span>

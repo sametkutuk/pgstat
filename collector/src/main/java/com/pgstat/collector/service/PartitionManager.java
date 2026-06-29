@@ -63,7 +63,8 @@ public class PartitionManager {
     /** Aylik partition gerektiren hourly aggregate tablolari */
     private static final String[] MONTHLY_AGG_TABLES = {
         "agg.pgss_hourly",
-        "agg.pg_table_stat_hourly"
+        "agg.pg_table_stat_hourly",
+        "agg.pg_wal_hourly"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
