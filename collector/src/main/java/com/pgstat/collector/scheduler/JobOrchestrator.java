@@ -725,6 +725,8 @@ public class JobOrchestrator {
                     try {
                         log.info("Gunluk bakim (purge + snapshot rollup) ayri thread'de basladi");
                         purgeEvaluator.purgeJobRunHistory();
+                        purgeEvaluator.purgeAuditLog();
+                        purgeEvaluator.purgeAlerts();
                         purgeEvaluator.purgeReportsAndNotifications();
                         // Snapshot raw → hourly rollup (son 26h, not exists ile yeni saatler)
                         purgeEvaluator.rollupSnapshotsHourly();

@@ -20,7 +20,7 @@ import java.util.Map;
  *     - Arada kalan aralikta instance bazli batched DELETE
  *  2. SNAPSHOT tablolari icin saat bazli retention (cok daha kisa)
  *  3. hourly/daily agg tablolari icin ay bazli partition drop
- *  4. ops tablolari icin sabit 90 gun
+ *  4. ops tablolarinda policy bazli gunluk temizlik
  */
 @Component
 public class PurgeEvaluator {
@@ -28,7 +28,6 @@ public class PurgeEvaluator {
     private static final Logger log = LoggerFactory.getLogger(PurgeEvaluator.class);
 
     private static final int DELETE_BATCH_SIZE = 10_000;
-    private static final int OPS_RETENTION_DAYS = 90;
 
     /** Ham delta tablolari — sample_ts kullanir, day-bazli partition */
     private static final String[] DELTA_FACT_TABLES = {
@@ -84,7 +83,6 @@ public class PurgeEvaluator {
         purgeNightlySnapshotFacts();
         purgeHourlyAgg();
         purgeDailyAgg();
-        purgeOps();
     }
 
     // =========================================================================
@@ -315,27 +313,6 @@ public class PurgeEvaluator {
     }
 
     // =========================================================================
-    // ops tablolari (90 gun sabit)
-    // =========================================================================
-
-    private void purgeOps() {
-        int deletedRuns = jdbc.update("""
-            delete from ops.job_run
-            where started_at < now() - make_interval(days => ?)
-            """, OPS_RETENTION_DAYS);
-
-        int deletedAlerts = jdbc.update("""
-            delete from ops.alert
-            where resolved_at is not null
-              and resolved_at < now() - make_interval(days => ?)
-            """, OPS_RETENTION_DAYS);
-
-        if (deletedRuns > 0 || deletedAlerts > 0) {
-            log.info("Ops purge: {} job_run, {} alert silindi", deletedRuns, deletedAlerts);
-        }
-    }
-
-    // =========================================================================
     // Yardimci metotlar
     // =========================================================================
 
@@ -511,6 +488,57 @@ public class PurgeEvaluator {
             }
         } catch (Exception e) {
             log.warn("Job run cleanup hatasi: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * ops.audit_log instance bazli degil; global bir tablo oldugu icin tum
+     * policy'ler arasindaki en kisa retention kullanilir.
+     */
+    public void purgeAuditLog() {
+        try {
+            Integer retentionDays = jdbc.queryForObject("""
+                select coalesce(min(audit_log_retention_days), 90)
+                from control.retention_policy
+                """, Integer.class);
+            int days = retentionDays != null && retentionDays > 0 ? retentionDays : 90;
+
+            int deleted = jdbc.update("""
+                delete from ops.audit_log
+                where occurred_at < now() - make_interval(days => ?)
+                """, days);
+
+            if (deleted > 0) {
+                log.info("Audit log purge: {} satir silindi ({} gun)", deleted, days);
+            }
+        } catch (Exception e) {
+            log.warn("Audit log purge hatasi: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Sadece kapanmis alert kayitlari silinir; acik/acknowledged alert'lerin
+     * gecmisi incident state'i icin tutulur.
+     */
+    public void purgeAlerts() {
+        try {
+            Integer retentionDays = jdbc.queryForObject("""
+                select coalesce(min(alert_retention_days), 90)
+                from control.retention_policy
+                """, Integer.class);
+            int days = retentionDays != null && retentionDays > 0 ? retentionDays : 90;
+
+            int deleted = jdbc.update("""
+                delete from ops.alert
+                where resolved_at is not null
+                  and resolved_at < now() - make_interval(days => ?)
+                """, days);
+
+            if (deleted > 0) {
+                log.info("Alert purge: {} satir silindi ({} gun)", deleted, days);
+            }
+        } catch (Exception e) {
+            log.warn("Alert purge hatasi: {}", e.getMessage());
         }
     }
 

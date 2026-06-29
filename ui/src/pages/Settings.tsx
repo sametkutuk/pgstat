@@ -235,6 +235,8 @@ const emptyRetention = {
     snapshot_retention_hours: 48,
     table_freeze_retention_days: 90,
     nightly_snapshot_retention_days: 180,
+    audit_log_retention_days: 90,
+    alert_retention_days: 90,
     purge_enabled: true,
     is_active: true,
 };
@@ -276,6 +278,8 @@ function RetentionTab() {
             snapshot_retention_hours: r.snapshot_retention_hours ?? 48,
             table_freeze_retention_days: r.table_freeze_retention_days ?? 90,
             nightly_snapshot_retention_days: r.nightly_snapshot_retention_days ?? 180,
+            audit_log_retention_days: r.audit_log_retention_days ?? 90,
+            alert_retention_days: r.alert_retention_days ?? 90,
             purge_enabled: r.purge_enabled,
             is_active: r.is_active,
         });
@@ -309,6 +313,14 @@ function RetentionTab() {
             key: 'nightly_snapshot_retention_days', header: 'Nightly (gun)', className: 'text-right',
             render: (r: any) => r.nightly_snapshot_retention_days ?? '-'
         },
+        {
+            key: 'audit_log_retention_days', header: 'Audit (gun)', className: 'text-right',
+            render: (r: any) => r.audit_log_retention_days ?? 90
+        },
+        {
+            key: 'alert_retention_days', header: 'Alert (gun)', className: 'text-right',
+            render: (r: any) => r.alert_retention_days ?? 90
+        },
         { key: 'purge_enabled', header: 'Purge', render: (r: any) => r.purge_enabled ? '✅' : '❌' },
         { key: 'bound_instances', header: 'Bağlı', render: (r: any) => r.bound_instances, className: 'text-right' },
         { key: 'is_active', header: 'Durum', render: (r: any) => <Badge value={r.is_active ? 'ready' : 'paused'} /> },
@@ -326,10 +338,10 @@ function RetentionTab() {
         },
     ];
 
-    const numField = (label: string, key: keyof typeof form) => (
+    const numField = (label: string, key: keyof typeof form, tooltip?: string) => (
         <div>
-            <label className="block text-xs text-[#64748B] mb-1">{label}</label>
-            <input type="number" value={form[key] as number} onChange={(e) => setForm({ ...form, [key]: parseInt(e.target.value) || 0 })}
+            <label className="block text-xs text-[#64748B] mb-1" title={tooltip}>{label}</label>
+            <input type="number" min={1} max={9999} title={tooltip} value={form[key] as number} onChange={(e) => setForm({ ...form, [key]: parseInt(e.target.value) || 0 })}
                 className="w-full border border-[#E2E8F0] rounded px-3 py-2 text-sm" />
         </div>
     );
@@ -399,6 +411,8 @@ function RetentionTab() {
                         {numField('Snapshot (saat)', 'snapshot_retention_hours')}
                         {numField('Table Freeze (gun)', 'table_freeze_retention_days')}
                         {numField('Nightly (gun)', 'nightly_snapshot_retention_days')}
+                        {numField('Audit Log (gun)', 'audit_log_retention_days', 'ops.audit_log retention. Default 90 gun. UI islem kayitlari.')}
+                        {numField('Alert (gun)', 'alert_retention_days', 'ops.alert retention. Default 90 gun. Tetiklenen alarmlar.')}
                         <div className="flex items-center gap-2">
                             <label className="text-xs text-[#64748B]">Purge Aktif</label>
                             <input type="checkbox" checked={form.purge_enabled as boolean} onChange={(e) => setForm({ ...form, purge_enabled: e.target.checked })} />
