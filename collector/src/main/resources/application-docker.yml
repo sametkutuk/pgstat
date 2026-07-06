@@ -5,8 +5,8 @@
 spring:
   datasource:
     url: jdbc:postgresql://${PGSTAT_DB_HOST:db}:${PGSTAT_DB_PORT:5432}/${PGSTAT_DB_NAME:pgstat}
-    username: ${PGSTAT_DB_USER:samet}
-    password: ${PGSTAT_DB_PASSWORD:samet}
+    username: ${PGSTAT_DB_USER}
+    password: ${PGSTAT_DB_PASSWORD}
 
 pgstat:
   worker:

@@ -32,7 +32,14 @@ import systemHealthRoutes from './routes/systemHealth';
 import telegramAllowlistRoutes from './routes/telegramAllowlist';
 
 // Zorunlu env değişkenlerini kontrol et
-const requiredEnv = ['PGSTAT_DB_HOST', 'PGSTAT_DB_PORT', 'PGSTAT_DB_NAME', 'PGSTAT_DB_USER', 'PGSTAT_DB_PASSWORD'];
+const requiredEnv = [
+    'PGSTAT_DB_HOST',
+    'PGSTAT_DB_PORT',
+    'PGSTAT_DB_NAME',
+    'PGSTAT_DB_USER',
+    'PGSTAT_DB_PASSWORD',
+    'PGSTAT_SECRET_KEY',
+];
 for (const key of requiredEnv) {
     if (!process.env[key]) {
         console.error(`HATA: Zorunlu env değişkeni eksik: ${key}`);

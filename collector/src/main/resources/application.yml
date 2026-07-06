@@ -9,8 +9,8 @@ spring:
   # Central DB bağlantısı (HikariCP)
   datasource:
     url: jdbc:postgresql://${PGSTAT_DB_HOST:localhost}:${PGSTAT_DB_PORT:5417}/${PGSTAT_DB_NAME:pgstat}
-    username: ${PGSTAT_DB_USER:samet}
-    password: ${PGSTAT_DB_PASSWORD:samet}
+    username: ${PGSTAT_DB_USER}
+    password: ${PGSTAT_DB_PASSWORD}
     hikari:
       maximum-pool-size: 15
       minimum-idle: 5

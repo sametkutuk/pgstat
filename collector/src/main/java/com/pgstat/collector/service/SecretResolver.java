@@ -29,6 +29,8 @@ public class SecretResolver {
     /** env: prefix'i — environment variable'dan sifre okur */
     private static final String ENV_PREFIX = "env:";
 
+    private static final String LEGACY_SALT = "pgstat-salt";
+
     /**
      * secret_ref degerini cozumler.
      *
@@ -102,16 +104,14 @@ public class SecretResolver {
      */
     private String decryptSecret(String ivHex, String authTagHex, String encryptedHex) {
         try {
-            String passphrase = System.getenv("PGSTAT_SECRET_KEY");
-            if (passphrase == null || passphrase.isBlank()) {
-                passphrase = "pgstat-default-key-change-in-production";
-            }
+            String passphrase = getRequiredSecretKey();
+            String saltValue = getSecretSalt();
 
             // scrypt ile key turet (Node.js tarafiyla ayni parametreler)
             javax.crypto.SecretKeyFactory factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
             // Not: Node.js scryptSync kullanıyor, Java tarafında da scrypt kullanmalıyız
             // Basit uyumluluk için aynı passphrase + salt ile key türetiyoruz
-            byte[] salt = "pgstat-salt".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] salt = saltValue.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             javax.crypto.spec.PBEKeySpec spec = new javax.crypto.spec.PBEKeySpec(
                 passphrase.toCharArray(), salt, 65536, 256);
             byte[] keyBytes = factory.generateSecret(spec).getEncoded();
@@ -133,9 +133,28 @@ public class SecretResolver {
             byte[] decrypted = cipher.doFinal(cipherTextWithTag);
             log.debug("Secret basariyla decrypt edildi");
             return new String(decrypted, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (SecretResolveException e) {
+            throw e;
         } catch (Exception e) {
             throw new SecretResolveException("Secret decrypt hatasi", e);
         }
+    }
+
+    private String getRequiredSecretKey() {
+        String passphrase = System.getenv("PGSTAT_SECRET_KEY");
+        if (passphrase == null || passphrase.isBlank()) {
+            throw new SecretResolveException("PGSTAT_SECRET_KEY zorunlu - ./pgstat setup ile uretin");
+        }
+        return passphrase;
+    }
+
+    private String getSecretSalt() {
+        String salt = System.getenv("PGSTAT_SECRET_SALT");
+        if (salt == null || salt.isBlank()) {
+            log.warn("PGSTAT_SECRET_SALT yok; eski pgstat-salt fallback kullaniliyor. ./pgstat setup ile salt uretin.");
+            return LEGACY_SALT;
+        }
+        return salt;
     }
 
     private byte[] hexToBytes(String hex) {

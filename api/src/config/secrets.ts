@@ -1,18 +1,34 @@
 import { createCipheriv, createDecipheriv, randomBytes, pbkdf2Sync } from 'crypto';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 
 // AES-256-GCM ile şifreleme
 // Her iki taraf (Node.js API + Java Collector) aynı PBKDF2 parametreleri kullanır
 const ALGORITHM = 'aes-256-gcm';
 const SECRETS_DIR = process.env.PGSTAT_SECRETS_DIR || join(process.cwd(), 'data', 'secrets');
-const SALT = 'pgstat-salt';
+const LEGACY_SALT = 'pgstat-salt';
 const ITERATIONS = 65536;
 const KEY_LENGTH = 32;
 
+function getPassphrase(): string {
+    const passphrase = process.env.PGSTAT_SECRET_KEY;
+    if (!passphrase) {
+        throw new Error('PGSTAT_SECRET_KEY zorunlu - ./pgstat setup ile uretin');
+    }
+    return passphrase;
+}
+
+function getSalt(): string {
+    const salt = process.env.PGSTAT_SECRET_SALT;
+    if (salt) {
+        return salt;
+    }
+    console.warn('PGSTAT_SECRET_SALT yok; eski pgstat-salt fallback kullaniliyor. ./pgstat setup ile salt uretin.');
+    return LEGACY_SALT;
+}
+
 function getKey(): Buffer {
-    const passphrase = process.env.PGSTAT_SECRET_KEY || 'pgstat-default-key-change-in-production';
-    return pbkdf2Sync(passphrase, SALT, ITERATIONS, KEY_LENGTH, 'sha256');
+    return pbkdf2Sync(getPassphrase(), getSalt(), ITERATIONS, KEY_LENGTH, 'sha256');
 }
 
 /** Şifreyi encrypt edip dosyaya yazar, secret_ref döner */
@@ -33,7 +49,8 @@ export function saveSecret(instanceId: string, password: string): string {
     }
 
     const filePath = join(SECRETS_DIR, `${instanceId}.pass`);
-    writeFileSync(filePath, payload, { mode: 0o644 });
+    writeFileSync(filePath, payload, { mode: 0o600 });
+    chmodSync(filePath, 0o600);
 
     return `file:${filePath}`;
 }

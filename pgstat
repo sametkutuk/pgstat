@@ -33,11 +33,20 @@ load_env() {
   : "${API_PORT:=3001}"
   : "${COLLECTOR_HOSTNAME:=collector-01}"
   : "${GRAFANA_ADMIN_USER:=admin}"
-  : "${GRAFANA_ADMIN_PASSWORD:=pgstat-admin}"
+  : "${GRAFANA_ADMIN_PASSWORD:=}"
   : "${GRAFANA_ROOT_URL:=http://localhost:${UI_PORT}/grafana/}"
   : "${PGSTAT_GRAFANA_DB_USER:=pgstat_grafana_ro}"
   : "${PGSTAT_GRAFANA_DB_PASSWORD:=}"
-  export UI_PORT API_PORT COLLECTOR_HOSTNAME
+  : "${PGSTAT_SECRET_SALT:=}"
+  require_env PGSTAT_DB_HOST
+  require_env PGSTAT_DB_PORT
+  require_env PGSTAT_DB_NAME
+  require_env PGSTAT_DB_USER
+  require_env PGSTAT_DB_PASSWORD
+  require_env PGSTAT_SECRET_KEY
+  require_env GRAFANA_ADMIN_PASSWORD
+  require_env PGSTAT_GRAFANA_DB_PASSWORD
+  export UI_PORT API_PORT COLLECTOR_HOSTNAME PGSTAT_SECRET_SALT
   export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_ROOT_URL
   export PGSTAT_GRAFANA_DB_USER PGSTAT_GRAFANA_DB_PASSWORD
 }
@@ -46,6 +55,31 @@ gen_secret() {
   openssl rand -hex 32 2>/dev/null \
     || python3 -c "import secrets; print(secrets.token_hex(32))" 2>/dev/null \
     || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 64
+}
+
+require_env() {
+  local name="$1"
+  [ -n "${!name:-}" ] || fail "$name zorunlu. ./pgstat setup ile uretin"
+}
+
+set_env_value() {
+  local name="$1"
+  local value="$2"
+  if grep -q "^${name}=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^${name}=.*|${name}=${value}|" "$ENV_FILE"
+  else
+    printf '\n%s=%s\n' "$name" "$value" >> "$ENV_FILE"
+  fi
+  export "$name=$value"
+}
+
+ensure_generated_env() {
+  local name="$1"
+  local length="${2:-64}"
+  if [ -z "${!name:-}" ]; then
+    set_env_value "$name" "$(gen_secret | head -c "$length")"
+    ok "$name olusturuldu"
+  fi
 }
 
 do_migrate() {
@@ -196,6 +230,10 @@ case "${1:-help}" in
 
     if [ -f "$ENV_FILE" ]; then
       source "$ENV_FILE"
+      ensure_generated_env PGSTAT_SECRET_KEY 64
+      ensure_generated_env PGSTAT_SECRET_SALT 64
+      ensure_generated_env GRAFANA_ADMIN_PASSWORD 32
+      ensure_generated_env PGSTAT_GRAFANA_DB_PASSWORD 48
       warn ".env zaten var. Mevcut ayarlarla devam ediliyor."
       echo "  Sıfırdan başlamak için: rm .env && ./pgstat setup"
       echo ""
@@ -240,6 +278,12 @@ case "${1:-help}" in
       echo "  Trend grafikleri, DoD/WoW karşılaştırması, top sorgu drill-down."
       read -rp "$(echo -e "${C}?${N} Grafana kurulsun mu? [Y/n]: ")" GRAFANA_ENABLE
       GRAFANA_ENABLE=${GRAFANA_ENABLE:-Y}
+      HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+      DEFAULT_URL="http://${HOST_IP:-localhost}:${UI_P}/grafana/"
+      GRAFANA_ADMIN_USR=admin
+      GR_ADMIN_PASS=$(gen_secret | head -c 16)
+      GR_DB_PASS=$(gen_secret | head -c 24)
+      GR_ROOT_URL=$DEFAULT_URL
       if [[ "$GRAFANA_ENABLE" =~ ^[Yy]$ ]]; then
         GRAFANA_ADMIN_USR=$(ask "Grafana admin kullanıcı" "admin")
         read -rsp "$(echo -e "${C}?${N} Grafana admin şifre (boş = otomatik üret): ")" GR_ADMIN_PASS; echo ""
@@ -247,13 +291,16 @@ case "${1:-help}" in
         # DB read-only kullanici sifresi — otomatik
         GR_DB_PASS=$(gen_secret | head -c 24)
         # Root URL — otomatik tahmin
-        HOST_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-        DEFAULT_URL="http://${HOST_IP:-localhost}:${UI_P}/grafana/"
         GR_ROOT_URL=$(ask "Grafana root URL" "$DEFAULT_URL")
       fi
 
       echo ""
       ok "Ayarlar hazırlanıyor..."
+
+      SECRET_KEY=$(gen_secret)
+      SECRET_SALT=$(gen_secret)
+      JWT_SECRET=$(gen_secret)
+      JWT_REFRESH_SECRET=$(gen_secret)
 
       cat > "$ENV_FILE" << EOF
 # pgstat konfigürasyonu — $(date +%Y-%m-%d)
@@ -262,16 +309,16 @@ PGSTAT_DB_PORT=$DB_PORT
 PGSTAT_DB_NAME=$DB_NAME
 PGSTAT_DB_USER=$DB_USER
 PGSTAT_DB_PASSWORD=$DB_PASS
-PGSTAT_SECRET_KEY=$(gen_secret)
-PGSTAT_JWT_SECRET=$(gen_secret)
-PGSTAT_JWT_REFRESH_SECRET=$(gen_secret)
+PGSTAT_SECRET_KEY=$SECRET_KEY
+PGSTAT_SECRET_SALT=$SECRET_SALT
+PGSTAT_JWT_SECRET=$JWT_SECRET
+PGSTAT_JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
 PGSTAT_ADMIN_PASSWORD=$ADMIN_PASS
 API_PORT=$API_P
 UI_PORT=$UI_P
 COLLECTOR_HOSTNAME=$(hostname -s 2>/dev/null || echo "collector-01")
 EOF
-      if [[ "$GRAFANA_ENABLE" =~ ^[Yy]$ ]]; then
-        cat >> "$ENV_FILE" << EOF
+      cat >> "$ENV_FILE" << EOF
 
 # Grafana entegrasyonu
 GRAFANA_ADMIN_USER=$GRAFANA_ADMIN_USR
@@ -280,7 +327,6 @@ GRAFANA_ROOT_URL=$GR_ROOT_URL
 PGSTAT_GRAFANA_DB_USER=pgstat_grafana_ro
 PGSTAT_GRAFANA_DB_PASSWORD=$GR_DB_PASS
 EOF
-      fi
       chmod 600 "$ENV_FILE"
       ok ".env oluşturuldu"
     fi
@@ -301,7 +347,7 @@ EOF
     do_migrate
 
     # Grafana kurulumu istendiyse: superuser ile rol oluştur
-    if [ -n "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
+    if [[ "${GRAFANA_ENABLE:-Y}" =~ ^[Yy]$ ]] && [ -n "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
       echo ""
       echo -e "${C}Grafana read-only kullanıcı oluşturuluyor (superuser bilgisi gerekli):${N}"
       read -rp "$(echo -e "${C}?${N} Superuser kullanıcı [postgres]: ")" SU_USER
@@ -465,6 +511,12 @@ EOF
 
   setup-grafana)
     # Grafana read-only kullanicisini olustur (superuser ile, tek seferlik)
+    [ -f "$ENV_FILE" ] || fail ".env bulunamadi. Once: ./pgstat setup"
+    set -a; source "$ENV_FILE"; set +a
+    ensure_generated_env PGSTAT_SECRET_KEY 64
+    ensure_generated_env PGSTAT_SECRET_SALT 64
+    ensure_generated_env GRAFANA_ADMIN_PASSWORD 32
+    ensure_generated_env PGSTAT_GRAFANA_DB_PASSWORD 48
     load_env
     # Eksik Grafana env'lerini interaktif sor ve .env'e ekle
     if [ -z "${PGSTAT_GRAFANA_DB_PASSWORD:-}" ]; then
