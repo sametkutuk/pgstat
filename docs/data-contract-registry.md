@@ -7,6 +7,7 @@ Scope: pgstat collected data, APIs, UI, alerts, reports, and pgdbaagent evidence
 Related documents:
 
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
+- [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 

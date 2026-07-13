@@ -7,6 +7,7 @@ Scope: source-level inventory for pgstat collector data and known gaps
 Related documents:
 
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
+- [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [PostgreSQL Stat Views Matrix](pg-stat-views-matrix.md)
 - [Data Model Guide](data-model-guide.md)
@@ -112,6 +113,9 @@ consumer intent, and gap status.
 ## 6. What pgstat Does Not Collect Yet
 
 These are the important gaps for the pgstat + pgdbaagent roadmap.
+
+The pgstat-side implementation order is defined in
+[pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md).
 
 | Gap | Why it matters | Suggested owner | Priority |
 | --- | --- | --- | --- |
