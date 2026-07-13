@@ -23,6 +23,8 @@ The code-derived table/column/API/UI inventory is generated at
 [Generated pgstat Project Inventory](generated/project-inventory.md).
 The table-level lifecycle matrix is generated at
 [Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md).
+The table/data-family operational contract matrix is generated at
+[Generated pgstat Data Family Contracts](generated/data-family-contracts.md).
 
 It exists to prevent hidden coupling. When a field is added, changed,
 deprecated, or removed, the project must know which collectors, tables, APIs,
@@ -114,19 +116,22 @@ Consumer map categories:
 Before adding a new collected field:
 
 1. Confirm PostgreSQL version availability.
-2. Confirm exact source column availability for every supported PostgreSQL
+2. Check the generated data family contract for the parent table and promote
+   any missing table-level ownership notes into this field registry.
+3. Confirm exact source column availability for every supported PostgreSQL
    version and define `unsupported_behavior`.
-3. Confirm required privilege.
-4. Decide snapshot vs delta semantics.
-5. Add migration if storage changes.
-6. Add collector SQL with null-safe and version-safe behavior.
-7. Assign retention class, purge path, and rollup/no-rollup behavior.
-8. Add API whitelist/ColumnRegistry if exposed.
-9. Decide whether field is default UI column or optional.
-10. Add report/alert/recommendation usage if needed.
-11. Add evidence package usage if pgdbaagent needs it.
-12. Add tests.
-13. Update this registry.
+4. Confirm required privilege.
+5. Decide snapshot vs delta semantics.
+6. Add migration if storage changes.
+7. Add collector SQL with null-safe and version-safe behavior.
+8. Assign retention class, purge path, and rollup/no-rollup behavior.
+9. Add API whitelist/ColumnRegistry if exposed.
+10. Decide whether field is default UI column or optional.
+11. Add report/alert/recommendation usage if needed.
+12. Add evidence package usage if pgdbaagent needs it.
+13. Regenerate project inventory, lifecycle matrix, and data family contracts.
+14. Add tests.
+15. Update this registry.
 
 ## 6. Remove Field Checklist
 

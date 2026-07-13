@@ -312,15 +312,18 @@ docs:
 | PostgreSQL version availability | `pg-stat-views-matrix.md` |
 | Generated code inventory | [Generated pgstat Project Inventory](generated/project-inventory.md) |
 | Generated data lifecycle matrix | [Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md) |
+| Generated data family contracts | [Generated pgstat Data Family Contracts](generated/data-family-contracts.md) |
 
 The master document should not duplicate every field or SQL detail. It keeps
 the project-wide map, product boundaries, capability ledger, and non-negotiable
 rules. Domain documents hold detailed inventory.
 
-The generated inventory and lifecycle matrix are mechanical and should be
+The generated inventory, lifecycle matrix, and data family contracts are
+mechanical and should be
 regenerated whenever
 migrations, collector SQL, API routes, UI endpoint references, purge, partition,
-or rollup ownership changes:
+rollup ownership, schedule ownership, source ownership, or consumer mapping
+changes:
 
 ```text
 node scripts/generate-doc-inventory.mjs
@@ -349,10 +352,10 @@ Triggers that must be detected:
 | Change detected | Required docs |
 | --- | --- |
 | migration under `db/migrations` | data model, retention, source dictionary, data contract if exposed |
-| collector SQL/source query | generated inventory, source dictionary, PG version matrix, data contract |
+| collector SQL/source query | generated inventory, generated data family contracts, source dictionary, PG version matrix, data contract |
 | new fact/snapshot/aggregate table | telemetry roadmap, retention/purge/partition notes |
-| API route or response shape | generated inventory, data contract, capability docs |
-| UI tab/card/chart | generated inventory, capability ledger, data contract consumers |
+| API route or response shape | generated inventory, generated data family contracts, data contract, capability docs |
+| UI tab/card/chart | generated inventory, generated data family contracts, capability ledger, data contract consumers |
 | alert/report behavior | governance, data contract consumers, user-facing docs |
 | setup/config/security change | governance, setup/security notes |
 | pgdbaagent schema/reasoning change | architecture, evidence/finding/recommendation docs |

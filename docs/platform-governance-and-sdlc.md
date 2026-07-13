@@ -165,7 +165,8 @@ change must include a documentation impact section before merge.
 If the change affects migrations, collector SQL, API routes, UI endpoint
 references, purge, partitions, or rollups, regenerate
 docs/generated/project-inventory.md and
-docs/generated/data-lifecycle-matrix.md.
+docs/generated/data-lifecycle-matrix.md and
+docs/generated/data-family-contracts.md.
 ```
 
 ## 7. Data Lifecycle Rules

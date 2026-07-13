@@ -617,6 +617,547 @@ function buildLifecycleRows({ schema, collector }) {
   });
 }
 
+const CONTRACT_HINTS = {
+  'fact.pgss_delta': {
+    job: 'statements',
+    schedule: 'control.schedule_profile.statements_interval_seconds',
+    source: 'pg_stat_statements(false), pg_stat_statements_info, pg_roles, pg_control_system, pg_postmaster_start_time',
+    pgVersion: 'PG11+ via SourceQueries families; pgss extension required; newer pgss columns are version-gated',
+    unsupported: 'missing pg_stat_statements fails statements job; unsupported columns are null/zero via source family',
+    sensitivity: 'query identity; query text is in dim.query_text',
+    pgdbaagent: 'query workload, temp spill, WAL spike, cache hit, latency evidence',
+  },
+  'dim.statement_series': {
+    job: 'statements',
+    schedule: 'control.schedule_profile.statements_interval_seconds',
+    source: 'pg_stat_statements identifiers + pg_control_system epoch context',
+    pgVersion: 'PG11+; toplevel and pgss metadata version-gated',
+    unsupported: 'unsupported identity fields stored as null/default by source family',
+    sensitivity: 'query identity metadata',
+    pgdbaagent: 'stable query identity for evidence packages',
+  },
+  'dim.query_text': {
+    job: 'text_enrichment',
+    schedule: 'after statements job; bootstrap_sql_text_batch limits batch size',
+    source: 'pg_stat_statements query text',
+    pgVersion: 'PG11+ with pg_stat_statements extension',
+    unsupported: 'text enrichment skips/fails independently; numeric pgss collection can still exist',
+    sensitivity: 'query text; mask/export/AI rules required',
+    pgdbaagent: 'query explanation and plan matching context',
+  },
+  'dim.role_ref': {
+    job: 'statements',
+    schedule: 'control.schedule_profile.statements_interval_seconds',
+    source: 'pg_roles',
+    pgVersion: 'PG11+',
+    unsupported: 'role refresh warning; pgss collection continues',
+    sensitivity: 'role/user names',
+    pgdbaagent: 'query owner context',
+  },
+  'dim.database_ref': {
+    job: 'discovery/rediscovery',
+    schedule: 'bootstrap + rediscovery hourly',
+    source: 'pg_database',
+    pgVersion: 'PG11+',
+    unsupported: 'database discovery failure blocks/marks bootstrap state',
+    sensitivity: 'database names',
+    pgdbaagent: 'database scope for findings',
+  },
+  'dim.relation_ref': {
+    job: 'db_objects',
+    schedule: 'control.schedule_profile.db_objects_interval_seconds',
+    source: 'pg_stat_user_tables, pg_stat_user_indexes, pg_statio_* relids',
+    pgVersion: 'PG11+',
+    unsupported: 'per-database failures update database_state and may alert',
+    sensitivity: 'schema/table/index names',
+    pgdbaagent: 'relation identity for index/table findings',
+  },
+  'fact.pg_database_delta': {
+    job: 'db_objects',
+    schedule: 'control.schedule_profile.db_objects_interval_seconds',
+    source: 'pg_stat_database',
+    pgVersion: 'PG11+; checksum PG12+; session counters PG14+; parallel worker counters PG18+',
+    unsupported: 'SourceQueries fills unsupported counters as null/zero; per-DB access errors are isolated',
+    sensitivity: 'database names and workload counters',
+    pgdbaagent: 'database workload, TPS, temp, cache, session evidence',
+  },
+  'fact.pg_table_stat_delta': {
+    job: 'db_objects',
+    schedule: 'control.schedule_profile.db_objects_interval_seconds',
+    source: 'pg_stat_user_tables, pg_statio_user_tables',
+    pgVersion: 'PG11+; newer vacuum/freeze time fields version-gated',
+    unsupported: 'SourceQueries fills unsupported fields as null/zero',
+    sensitivity: 'schema/table names',
+    pgdbaagent: 'vacuum lag, bloat proxy, table health, index advice context',
+  },
+  'fact.pg_index_stat_delta': {
+    job: 'db_objects',
+    schedule: 'control.schedule_profile.db_objects_interval_seconds',
+    source: 'pg_stat_user_indexes, pg_statio_user_indexes',
+    pgVersion: 'PG11+',
+    unsupported: 'SourceQueries fills unsupported fields as null/zero',
+    sensitivity: 'schema/table/index names',
+    pgdbaagent: 'unused/inefficient index and write-risk evidence',
+  },
+  'fact.pg_cluster_delta': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_bgwriter, pg_stat_wal, pg_stat_checkpointer',
+    pgVersion: 'PG11+ bgwriter; pg_stat_wal PG13+; pg_stat_checkpointer PG17+',
+    unsupported: 'query method returns null or source family maps missing fields to zero/null',
+    sensitivity: 'cluster-level counters only',
+    pgdbaagent: 'checkpoint, bgwriter, WAL pressure evidence',
+  },
+  'fact.pg_io_stat_delta': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_io',
+    pgVersion: 'PG16+ only',
+    unsupported: 'skipped when pgMajor < 16 or query is null',
+    sensitivity: 'backend/object/context I/O counters',
+    pgdbaagent: 'I/O bottleneck evidence',
+  },
+  'fact.pg_activity_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_activity',
+    pgVersion: 'PG11+; leader_pid PG13+; query_id PG14+',
+    unsupported: 'version family stores unsupported fields as null',
+    sensitivity: 'query text, user, application, client host/addr',
+    pgdbaagent: 'session/wait/blocking context',
+  },
+  'fact.pg_replication_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_replication',
+    pgVersion: 'PG11+; reply_time PG12+ safe lookup',
+    unsupported: 'primary-only; skipped on standby; unsupported columns null',
+    sensitivity: 'user/application/client replication metadata',
+    pgdbaagent: 'replication lag evidence',
+  },
+  'fact.pg_lock_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_locks + pg_stat_activity',
+    pgVersion: 'PG11+; waitstart PG14+',
+    unsupported: 'waitstart null on older PG',
+    sensitivity: 'pid/database/relation lock context',
+    pgdbaagent: 'blocking and lock-root-cause evidence',
+  },
+  'fact.pg_progress_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_vacuum/analyze/create_index summary',
+    pgVersion: 'version-gated per progress view',
+    unsupported: 'query methods returning null are skipped',
+    sensitivity: 'relation and operation progress metadata',
+    pgdbaagent: 'long operation context',
+  },
+  'fact.pg_wal_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_current_wal_lsn, pg_last_wal_replay_lsn, pg_walfile_name, pg_ls_waldir',
+    pgVersion: 'PG10+ functions; collected through supported SourceQueries',
+    unsupported: 'sub-step warning; cluster job continues',
+    sensitivity: 'WAL file/LSN metadata',
+    pgdbaagent: 'WAL growth and archive pressure evidence',
+  },
+  'fact.pg_archiver_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_archiver',
+    pgVersion: 'PG11+',
+    unsupported: 'sub-step warning; cluster job continues',
+    sensitivity: 'WAL archive file names/timestamps',
+    pgdbaagent: 'archive lag evidence',
+  },
+  'fact.pg_wal_receiver_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_wal_receiver',
+    pgVersion: 'PG11+ standby-only',
+    unsupported: 'standby-only; sub-step warning; cluster job continues',
+    sensitivity: 'replication connection metadata',
+    pgdbaagent: 'standby receive lag evidence',
+  },
+  'fact.pg_replication_slot_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_replication_slots, pg_stat_replication_slots',
+    pgVersion: 'PG11+ slots; pg_stat_replication_slots PG14+; PG17/18 fields safe lookup',
+    unsupported: 'unsupported columns null/zero through to_jsonb safe lookup',
+    sensitivity: 'slot names, database names, replication state',
+    pgdbaagent: 'slot lag, spill, lifecycle evidence',
+  },
+  'fact.pg_database_conflict_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_database_conflicts',
+    pgVersion: 'PG11+; logical slot conflict PG16+ safe lookup',
+    unsupported: 'unsupported conflict fields default to zero',
+    sensitivity: 'database names and conflict counters',
+    pgdbaagent: 'standby conflict evidence',
+  },
+  'fact.pg_slru_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_slru',
+    pgVersion: 'PG13+',
+    unsupported: 'query null/skipped on PG11-12',
+    sensitivity: 'SLRU area counters',
+    pgdbaagent: 'SLRU pressure evidence',
+  },
+  'fact.pg_subscription_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_subscription, pg_stat_subscription_stats',
+    pgVersion: 'PG10+ subscription stats; PG15+ stats view; PG17/18 fields safe lookup',
+    unsupported: 'unsupported stats/conflict fields null/zero',
+    sensitivity: 'subscription names and replication metadata',
+    pgdbaagent: 'logical replication health evidence',
+  },
+  'fact.pg_recovery_prefetch_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_recovery_prefetch',
+    pgVersion: 'PG15+ standby feature',
+    unsupported: 'query null/skipped when unsupported',
+    sensitivity: 'recovery prefetch counters',
+    pgdbaagent: 'standby recovery performance evidence',
+  },
+  'fact.pg_user_function_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_user_functions',
+    pgVersion: 'PG11+; only useful when track_functions enabled',
+    unsupported: 'sub-step warning; empty if tracking disabled',
+    sensitivity: 'schema/function names',
+    pgdbaagent: 'function execution evidence',
+  },
+  'fact.pg_sequence_io_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_statio_user_sequences',
+    pgVersion: 'PG11+',
+    unsupported: 'sub-step warning; cluster job continues',
+    sensitivity: 'schema/sequence names',
+    pgdbaagent: 'sequence I/O evidence',
+  },
+  'fact.pg_progress_vacuum_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_vacuum',
+    pgVersion: 'PG11+',
+    unsupported: 'sub-step warning or skipped by source family',
+    sensitivity: 'relation operation metadata',
+    pgdbaagent: 'vacuum progress evidence',
+  },
+  'fact.pg_progress_analyze_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_analyze',
+    pgVersion: 'PG13+',
+    unsupported: 'skipped when query method is null',
+    sensitivity: 'relation operation metadata',
+    pgdbaagent: 'analyze progress evidence',
+  },
+  'fact.pg_progress_create_index_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_create_index',
+    pgVersion: 'PG12+',
+    unsupported: 'skipped when query method is null',
+    sensitivity: 'relation/index operation metadata',
+    pgdbaagent: 'index build progress evidence',
+  },
+  'fact.pg_progress_basebackup_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_basebackup',
+    pgVersion: 'PG13+ primary-only',
+    unsupported: 'skipped when query method is null or standby',
+    sensitivity: 'backup progress metadata',
+    pgdbaagent: 'backup impact evidence',
+  },
+  'fact.pg_progress_copy_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_copy',
+    pgVersion: 'PG14+',
+    unsupported: 'skipped when query method is null',
+    sensitivity: 'copy command progress metadata',
+    pgdbaagent: 'bulk load progress evidence',
+  },
+  'fact.pg_progress_cluster_snapshot': {
+    job: 'cluster',
+    schedule: 'control.schedule_profile.cluster_interval_seconds',
+    source: 'pg_stat_progress_cluster',
+    pgVersion: 'PG12+',
+    unsupported: 'skipped when query method is null',
+    sensitivity: 'relation operation metadata',
+    pgdbaagent: 'cluster/vacuum full progress evidence',
+  },
+  'fact.pg_settings_snapshot': {
+    job: 'nightly_snapshot/hot_settings/freeze_settings',
+    schedule: 'UTC 03:00 full snapshot; hot settings every 3h; freeze/settings every 6h',
+    source: 'pg_settings',
+    pgVersion: 'PG11+; selected setting names may not exist on every version',
+    unsupported: 'missing settings are absent; collector continues',
+    sensitivity: 'configuration values; may expose paths, host behavior, tuning choices',
+    pgdbaagent: 'parameter tuning and risk context',
+  },
+  'fact.pg_relation_size_snapshot': {
+    job: 'nightly_snapshot',
+    schedule: 'UTC 03:00 full snapshot or manual trigger',
+    source: 'pg_class, pg_namespace, pg_index, pg_relation_size, pg_total_relation_size',
+    pgVersion: 'PG11+',
+    unsupported: 'per-database failures logged and skipped',
+    sensitivity: 'schema/relation names and sizes',
+    pgdbaagent: 'index/table storage and write-risk context',
+  },
+  'fact.pg_sequence_state_snapshot': {
+    job: 'nightly_snapshot',
+    schedule: 'UTC 03:00 full snapshot or manual trigger',
+    source: 'pg_sequences',
+    pgVersion: 'PG10+',
+    unsupported: 'per-database failures logged and skipped',
+    sensitivity: 'schema/sequence names and current values',
+    pgdbaagent: 'sequence exhaustion evidence',
+  },
+  'fact.pg_database_freeze_snapshot': {
+    job: 'nightly_snapshot/freeze_settings',
+    schedule: 'UTC 03:00 full snapshot; freeze/settings every 6h',
+    source: 'pg_database age(datfrozenxid), mxid_age(datminmxid)',
+    pgVersion: 'PG11+',
+    unsupported: 'admin connection failure logs warning',
+    sensitivity: 'database names and xid ages',
+    pgdbaagent: 'wraparound risk evidence',
+  },
+  'fact.pg_table_freeze_snapshot': {
+    job: 'table_freeze_snapshot',
+    schedule: 'instance table_freeze_interval_seconds, default 21600s',
+    source: 'pg_class, pg_namespace, age(relfrozenxid), mxid_age(relminmxid)',
+    pgVersion: 'PG11+',
+    unsupported: 'per-database failures logged and skipped',
+    sensitivity: 'schema/table names and xid ages',
+    pgdbaagent: 'table-level wraparound/autovacuum evidence',
+  },
+};
+
+function defaultContractHint(tableName, semantics) {
+  if (tableName.startsWith('agg.')) {
+    return {
+      job: 'rollup',
+      schedule: 'control.schedule_profile.hourly_rollup_interval_seconds or UTC daily maintenance',
+      source: 'central pgstat fact/aggregate tables',
+      pgVersion: 'not source-PG specific; inherits source coverage',
+      unsupported: 'rollup skips/fails independently; source evidence may be missing',
+      sensitivity: 'inherits source table sensitivity',
+      pgdbaagent: 'historical trend and baseline evidence',
+    };
+  }
+  if (tableName.startsWith('control.')) {
+    return {
+      job: 'pgstat application/control plane',
+      schedule: 'event-driven or operator-configured',
+      source: 'pgstat central database',
+      pgVersion: 'not source-PG specific',
+      unsupported: 'not applicable',
+      sensitivity: 'configuration/control metadata; review before export',
+      pgdbaagent: 'control/context when explicitly contracted',
+    };
+  }
+  if (tableName.startsWith('ops.')) {
+    return {
+      job: 'pgstat operations/alert/report pipeline',
+      schedule: 'event-driven and daily maintenance',
+      source: 'pgstat central database',
+      pgVersion: 'not source-PG specific',
+      unsupported: 'not applicable',
+      sensitivity: 'operational/audit/notification metadata',
+      pgdbaagent: 'operations context when explicitly contracted',
+    };
+  }
+  if (tableName.startsWith('dim.')) {
+    return {
+      job: 'collector dimension upsert',
+      schedule: 'collector-dependent',
+      source: 'source PostgreSQL identity/catalog/stat view',
+      pgVersion: 'collector-dependent; see SourceQueries and PG matrix',
+      unsupported: 'collector-dependent',
+      sensitivity: 'object identity metadata',
+      pgdbaagent: 'entity identity context',
+    };
+  }
+  return {
+    job: 'unknown/verify',
+    schedule: 'verify',
+    source: 'verify',
+    pgVersion: 'verify',
+    unsupported: 'verify',
+    sensitivity: 'verify',
+    pgdbaagent: 'verify',
+  };
+}
+
+function buildContractRows({ schema, collector, api, ui }) {
+  const lifecycleRows = buildLifecycleRows({ schema, collector });
+  const lifecycleByTable = new Map(lifecycleRows.map((row) => [row.table, row]));
+  const apiByTable = new Map();
+  for (const entry of api.tableRefs) {
+    const routes = api.routes
+      .filter((route) => route.file === entry.file)
+      .map((route) => `${route.method} ${route.path}`);
+    for (const table of entry.refs) {
+      if (!apiByTable.has(table)) apiByTable.set(table, []);
+      apiByTable.get(table).push(`${entry.file} (${routes.length} routes)`);
+    }
+  }
+
+  const uiByApiFile = {
+    'api/src/routes/instances.ts': ['ui/src/pages/Instances.tsx', 'ui/src/pages/InstanceDetail.tsx'],
+    'api/src/routes/insights.ts': ['ui/src/pages/Insights.tsx'],
+    'api/src/routes/statements.ts': ['ui/src/pages/Statements.tsx', 'ui/src/pages/StatementDetail.tsx'],
+    'api/src/routes/dashboard.ts': ['ui/src/pages/Dashboard.tsx'],
+    'api/src/routes/alerts.ts': ['ui/src/pages/Alerts.tsx', 'ui/src/pages/AlertsHub.tsx'],
+    'api/src/routes/alertRules.ts': ['ui/src/pages/AlertRules.tsx'],
+    'api/src/routes/reports.ts': ['ui/src/pages/ReportHistory.tsx'],
+    'api/src/routes/systemHealth.ts': ['ui/src/pages/SystemHealthDashboard.tsx'],
+    'api/src/routes/clusters.ts': ['ui/src/pages/Clusters.tsx', 'ui/src/pages/ClusterDetail.tsx'],
+    'api/src/routes/jobRuns.ts': ['ui/src/pages/JobRuns.tsx'],
+    'api/src/routes/auditLog.ts': ['ui/src/pages/Settings.tsx'],
+    'api/src/routes/retentionPolicies.ts': ['ui/src/pages/Settings.tsx'],
+    'api/src/routes/scheduleProfiles.ts': ['ui/src/pages/Settings.tsx'],
+  };
+
+  function uiConsumers(tableName) {
+    const pages = new Set();
+    for (const apiRef of apiByTable.get(tableName) ?? []) {
+      const file = apiRef.split(' ')[0];
+      for (const page of uiByApiFile[file] ?? []) pages.add(page);
+    }
+    return [...pages].sort();
+  }
+
+  function alertReportConsumers(tableName, codeRefs) {
+    const out = [];
+    if (codeRefs.includes('AlertRuleEvaluator.java') || codeRefs.includes('AlertService.java') || codeRefs.includes('SystemHealthEvaluator.java')) {
+      out.push('alerts');
+    }
+    if (codeRefs.includes('ReportGenerator.java') || codeRefs.includes('ReportHistoryRepository.java')) {
+      out.push('reports');
+    }
+    if (codeRefs.includes('NotificationService.java') || codeRefs.includes('TelegramCommandPoller.java')) {
+      out.push('notifications/telegram');
+    }
+    return out;
+  }
+
+  return schema.tables.map((table) => {
+    const lifecycle = lifecycleByTable.get(table.name);
+    const semantics = lifecycle?.semantics ?? inferSemantics(table);
+    const hint = { ...defaultContractHint(table.name, semantics), ...(CONTRACT_HINTS[table.name] ?? {}) };
+    const codeRefs = lifecycle?.codeRefs ?? '';
+    const alertReports = alertReportConsumers(table.name, codeRefs);
+    return {
+      table: table.name,
+      semantics,
+      collectorJob: hint.job,
+      source: hint.source,
+      pgVersion: hint.pgVersion,
+      schedule: hint.schedule,
+      retention: lifecycle?.retention ?? 'not detected',
+      purgeSql: lifecycle?.purgeOwner === 'yes' ? 'collector/service/PurgeEvaluator.java' : 'not detected',
+      partition: lifecycle?.partitionPolicy ?? 'not detected',
+      rollup: lifecycle?.rollup ?? 'not detected',
+      api: (apiByTable.get(table.name) ?? []).join('<br>') || 'not detected',
+      ui: uiConsumers(table.name).join('<br>') || 'not detected',
+      alertReport: alertReports.join(', ') || 'not detected',
+      pgdbaagent: hint.pgdbaagent,
+      sensitivity: hint.sensitivity,
+      unsupported: hint.unsupported,
+      contractStatus: CONTRACT_HINTS[table.name] ? 'seeded semantic contract' : 'generated default; needs review',
+    };
+  });
+}
+
+function renderDataFamilyContracts({ schema, collector, api, ui }) {
+  const rows = buildContractRows({ schema, collector, api, ui });
+  const lines = [];
+  lines.push('# Generated pgstat Data Family Contracts');
+  lines.push('');
+  lines.push('Status: generated seed');
+  lines.push('Source: repository static scan + maintained contract hints in scripts/generate-doc-inventory.mjs');
+  lines.push('');
+  lines.push('Do not edit this file manually. Run:');
+  lines.push('');
+  lines.push('```text');
+  lines.push('node scripts/generate-doc-inventory.mjs');
+  lines.push('# or on systems with make: make docs-inventory');
+  lines.push('```');
+  lines.push('');
+  lines.push('This file answers the operational contract questions at table/data-family level. It is not yet a substitute for field-level contracts. Field-level `since_pg`, `removed_pg`, exact unsupported behavior, and downstream stable consumers still belong in the data contract registry.');
+  lines.push('');
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(mdTable(['Metric', 'Count'], [
+    ['Tables analyzed', rows.length],
+    ['Seeded semantic contracts', rows.filter((row) => row.contractStatus === 'seeded semantic contract').length],
+    ['Generated defaults needing review', rows.filter((row) => row.contractStatus !== 'seeded semantic contract').length],
+    ['Tables with detected API consumers', rows.filter((row) => row.api !== 'not detected').length],
+    ['Tables with inferred UI consumers', rows.filter((row) => row.ui !== 'not detected').length],
+    ['Tables with alert/report/notification consumers', rows.filter((row) => row.alertReport !== 'not detected').length],
+  ]));
+  lines.push('');
+  lines.push('## Contract Matrix');
+  lines.push('');
+  lines.push(mdTable([
+    'Table',
+    'Semantics',
+    'Collector job',
+    'Source PG view/catalog/function',
+    'PG version / column gate',
+    'Schedule',
+    'Retention policy',
+    'Purge SQL owner',
+    'Partition',
+    'Rollup',
+    'API consumers',
+    'UI consumers',
+    'Alert/report consumers',
+    'pgdbaagent usage',
+    'Sensitive data',
+    'Unsupported behavior',
+    'Contract status',
+  ], rows.map((row) => [
+    row.table,
+    row.semantics,
+    row.collectorJob,
+    row.source,
+    row.pgVersion,
+    row.schedule,
+    row.retention,
+    row.purgeSql,
+    row.partition,
+    row.rollup,
+    row.api,
+    row.ui,
+    row.alertReport,
+    row.pgdbaagent,
+    row.sensitivity,
+    row.unsupported,
+    row.contractStatus,
+  ])));
+  lines.push('');
+  lines.push('## Static Scan Limits');
+  lines.push('');
+  lines.push('- API and UI consumers are inferred from route files and known UI route ownership; they are not proof of exact column-level usage.');
+  lines.push('- PostgreSQL version coverage is table/data-family level. Exact column-level version coverage must still be promoted into the data contract registry.');
+  lines.push('- Security classification is a seeded default and must be reviewed before export/AI use.');
+  lines.push('- `generated default; needs review` rows are not considered stable product contracts.');
+  return `${lines.join('\n')}\n`;
+}
+
 function renderLifecycleMatrix({ schema, collector }) {
   const rows = buildLifecycleRows({ schema, collector });
   const lines = [];
@@ -710,8 +1251,16 @@ writeText(rel('docs', 'generated', 'data-lifecycle-matrix.md'), renderLifecycleM
   collector,
 }));
 
+writeText(rel('docs', 'generated', 'data-family-contracts.md'), renderDataFamilyContracts({
+  schema,
+  collector,
+  api,
+  ui,
+}));
+
 console.log('Generated docs/generated/project-inventory.md');
 console.log('Generated docs/generated/data-lifecycle-matrix.md');
+console.log('Generated docs/generated/data-family-contracts.md');
 console.log(`Tables: ${schema.tables.length}`);
 console.log(`Columns: ${schema.tables.reduce((sum, t) => sum + t.columns.size, 0)}`);
 console.log(`API routes: ${api.routes.length}`);

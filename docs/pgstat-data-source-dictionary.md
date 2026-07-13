@@ -37,13 +37,19 @@ The table-level lifecycle view lives in
 It shows inferred semantics, timestamp columns, retention policy mapping,
 purge ownership, partition ownership, and rollup role.
 
+The table/data-family operational contract view lives in
+[Generated pgstat Data Family Contracts](generated/data-family-contracts.md).
+It shows collector job, PostgreSQL source, version gate, schedule, retention,
+purge, partition, rollup, API/UI/alert/report consumers, pgdbaagent relevance,
+sensitive-data classification, and unsupported-version behavior.
+
 ```text
 node scripts/generate-doc-inventory.mjs
 # or on systems with make: make docs-inventory
 ```
 
-Use the generated inventory to verify that this human-readable dictionary stays
-complete.
+Use the generated inventory and contract outputs to verify that this
+human-readable dictionary stays complete.
 
 Core rule:
 
