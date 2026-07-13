@@ -437,7 +437,7 @@ Immediate documentation and platform work:
    storage contracts, deploy/application events, and full lock graph.
 3. Harden evidence package v1 for pgdbaagent.
 4. Harden signal/finding/recommendation schemas.
-5. Harden documentation impact checker rules.
+5. Harden documentation impact checker rules over time.
 6. Keep clone lifecycle user-provided until the evidence and reasoning layer is
    stable.
 

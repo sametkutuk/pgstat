@@ -200,7 +200,32 @@ field_id:
   notes: ...
 ```
 
-## 8. Initial High-Value Contracts
+## 8. Promoted Core Field Contracts
+
+The first manual promotion pass covers the six highest-value pgdbaagent input
+families. Their fields are generated from repository schema plus maintained
+contract rules in `scripts/generate-doc-inventory.mjs` and are marked as
+`manual core field contract` in
+[Generated pgstat Field Contracts](generated/field-contracts.md).
+
+| Table | Fields | Source family | Contract status | Primary evidence use |
+| --- | --- | --- | --- | --- |
+| `fact.pgss_delta` | 52 | `pg_stat_statements(false)` plus pgss metadata | promoted | query workload, Temp Spill, WAL Spike, Cache Hit, latency |
+| `fact.pg_table_stat_delta` | 41 | `pg_stat_user_tables`, `pg_statio_user_tables` | promoted | Vacuum Lag, autovacuum health, table bloat/freeze proxy |
+| `fact.pg_database_delta` | 32 | `pg_stat_database` | promoted | database workload, TPS, temp, cache, sessions |
+| `fact.pg_index_stat_delta` | 18 | `pg_stat_user_indexes`, `pg_statio_user_indexes`, `pg_index` | promoted | index usage, unused index risk, write overhead |
+| `fact.pg_settings_snapshot` | 7 | selected `pg_settings` rows | promoted | parameter context and risk model |
+| `fact.pg_lock_snapshot` | 10 | `pg_locks`, `pg_stat_activity`, `pg_blocking_pids()` | promoted | lock wait and blocker evidence |
+
+Promotion means each field has a documented source family, source
+column/expression, PostgreSQL version gate, unsupported behavior, collector job,
+schedule, retention, purge owner, partition/rollup role, consumer map,
+sensitivity classification, and AI-context policy in generated docs.
+
+Exact consumer usage is still route/file-level unless a field is separately
+registered below as a durable API/UI/alert/report contract.
+
+## 9. Initial High-Value Contracts
 
 The full registry must be built incrementally. The first fields to formalize are
 the ones required by DBA recommendations.
@@ -327,7 +352,7 @@ Primary consumers:
 - audit log
 - post-apply observation
 
-## 9. Required Automation
+## 10. Required Automation
 
 The registry should eventually be checked automatically.
 

@@ -1250,6 +1250,88 @@ function fieldAiContext(sensitivity, tableContract) {
   return 'allowed in structured evidence';
 }
 
+const PROMOTED_CORE_FIELD_TABLES = new Set([
+  'fact.pgss_delta',
+  'fact.pg_table_stat_delta',
+  'fact.pg_database_delta',
+  'fact.pg_index_stat_delta',
+  'fact.pg_settings_snapshot',
+  'fact.pg_lock_snapshot',
+]);
+
+function isPromotedCoreField(tableName) {
+  return PROMOTED_CORE_FIELD_TABLES.has(tableName);
+}
+
+function coreSincePg(tableName, columnName) {
+  const internal = new Set(['sample_ts', 'snapshot_ts', 'instance_pk']);
+  if (internal.has(columnName)) return 'pgstat internal, PG11+ target support';
+  if (tableName === 'fact.pgss_delta') {
+    if (columnName === 'statement_series_id') return 'pgstat dimension reference, PG11+';
+    if (['plans_delta', 'total_plan_time_ms_delta', 'min_plan_time_ms', 'max_plan_time_ms', 'mean_plan_time_ms', 'stddev_plan_time_ms'].includes(columnName)) return 'PG13+ pg_stat_statements planning fields; null/zero before PG13';
+    if (['wal_records_delta', 'wal_fpi_delta', 'wal_bytes_delta'].includes(columnName)) return 'PG13+ pg_stat_statements WAL fields; null/zero before PG13';
+    if (['jit_functions_delta'].includes(columnName)) return 'PG14+ pg_stat_statements JIT fields; null/zero before PG14';
+    if (['jit_inlining_count', 'jit_optimization_count', 'jit_emission_count'].includes(columnName)) return 'PG15+ pg_stat_statements JIT count fields; null/zero before PG15';
+    if (['jit_deform_count_delta', 'jit_deform_time_ms_delta'].includes(columnName)) return 'PG16+ pg_stat_statements JIT deform fields; null/zero before PG16';
+    if (['shared_blk_read_time_ms_delta', 'shared_blk_write_time_ms_delta', 'local_blk_read_time_ms_delta', 'local_blk_write_time_ms_delta', 'wal_buffers_full_delta'].includes(columnName)) return 'PG17+ pg_stat_statements split I/O/WAL buffer fields; null/zero before PG17';
+    if (['parallel_workers_to_launch_delta', 'parallel_workers_launched_delta'].includes(columnName)) return 'PG18+ pg_stat_statements parallel worker fields; null/zero before PG18';
+    if (['temp_blk_read_time_ms_delta', 'temp_blk_write_time_ms_delta', 'stats_since', 'minmax_stats_since'].includes(columnName)) return 'PG15+ pg_stat_statements timing/reset fields; null before PG15';
+    return 'PG11+ via SourceQueries compatibility aliases';
+  }
+  if (tableName === 'fact.pg_table_stat_delta') {
+    if (columnName === 'n_ins_since_vacuum') return 'PG13+ pg_stat_user_tables; null/zero before PG13';
+    if (['last_seq_scan', 'last_idx_scan', 'n_tup_newpage_upd'].includes(columnName)) return 'PG16+ pg_stat_user_tables; null/zero before PG16';
+    if (['total_vacuum_time_ms_delta', 'total_autovacuum_time_ms_delta', 'total_analyze_time_ms_delta', 'total_autoanalyze_time_ms_delta'].includes(columnName)) return 'PG18+ pg_stat_user_tables; null/zero before PG18';
+    return 'PG11+ pg_stat_user_tables/pg_statio_user_tables';
+  }
+  if (tableName === 'fact.pg_database_delta') {
+    if (['checksum_failures_delta', 'checksum_last_failure'].includes(columnName)) return 'PG12+ pg_stat_database checksum fields; null/zero before PG12';
+    if (['session_time_ms_delta', 'active_time_ms_delta', 'idle_in_transaction_time_ms_delta', 'sessions_delta', 'sessions_abandoned_delta', 'sessions_fatal_delta', 'sessions_killed_delta'].includes(columnName)) return 'PG14+ pg_stat_database session fields; null/zero before PG14';
+    if (['parallel_workers_to_launch_delta', 'parallel_workers_launched_delta'].includes(columnName)) return 'PG18+ pg_stat_database parallel worker fields; null/zero before PG18';
+    return 'PG11+ pg_stat_database';
+  }
+  if (tableName === 'fact.pg_index_stat_delta') {
+    if (columnName === 'last_idx_scan') return 'PG16+ pg_stat_user_indexes; null before PG16';
+    if (['is_valid', 'is_ready', 'is_primary', 'is_unique'].includes(columnName)) return 'PG11+ pg_index catalog fields';
+    return 'PG11+ pg_stat_user_indexes/pg_statio_user_indexes';
+  }
+  if (tableName === 'fact.pg_settings_snapshot') return 'PG11+ pg_settings; selected setting names may be absent by version';
+  if (tableName === 'fact.pg_lock_snapshot') {
+    if (columnName === 'waitstart') return 'PG14+ pg_locks.waitstart; null before PG14';
+    if (columnName === 'blocked_by_pids') return 'PG11+ derived from pg_blocking_pids(pid)';
+    return 'PG11+ pg_locks';
+  }
+  return null;
+}
+
+function coreUnsupportedBehavior(tableName, columnName) {
+  if (!isPromotedCoreField(tableName)) return null;
+  if (tableName === 'fact.pgss_delta') {
+    if (['sample_ts', 'instance_pk', 'statement_series_id'].includes(columnName)) return 'required pgstat envelope/dimension field; insert fails if missing';
+    return 'pg_stat_statements missing -> statements job fails; unsupported version fields are stored as null or zero by SourceQueries';
+  }
+  if (tableName === 'fact.pg_table_stat_delta') {
+    if (['sample_ts', 'instance_pk', 'dbid', 'relid', 'schemaname', 'relname'].includes(columnName)) return 'required identity/envelope field for collected rows';
+    return 'unsupported version fields are stored as null or zero; per-database collection failures update database_state';
+  }
+  if (tableName === 'fact.pg_database_delta') {
+    if (['sample_ts', 'instance_pk', 'dbid', 'datname'].includes(columnName)) return 'required identity/envelope field for collected rows';
+    return 'unsupported version fields are stored as null or zero; per-database access errors are isolated';
+  }
+  if (tableName === 'fact.pg_index_stat_delta') {
+    if (['sample_ts', 'instance_pk', 'dbid', 'table_relid', 'index_relid', 'schemaname', 'table_relname', 'index_relname'].includes(columnName)) return 'required identity/envelope field for collected rows';
+    return 'unsupported version fields are stored as null; per-database collection failures update database_state';
+  }
+  if (tableName === 'fact.pg_settings_snapshot') return 'missing selected setting is absent from snapshot; collector continues';
+  if (tableName === 'fact.pg_lock_snapshot') return columnName === 'waitstart' ? 'stored null before PG14' : 'waiting-lock snapshot row omitted when no waiting lock exists';
+  return null;
+}
+
+function coreSourceConfidence(tableName, currentConfidence) {
+  if (!isPromotedCoreField(tableName)) return currentConfidence;
+  return 'manual_core_promoted';
+}
+
 function fieldAggregation(columnName, semantics) {
   if (columnName.endsWith('_delta')) return 'delta sample; sum over windows unless documented otherwise';
   if (columnName.endsWith('_sum')) return 'rollup sum';
@@ -1272,7 +1354,11 @@ function buildFieldContractRows({ schema, collector, api, ui }) {
       const source = fieldSourceGuess(tableContract, table.name, column.name);
       const sensitivity = fieldSensitivity(tableContract, column.name, column.type);
       const aiContext = fieldAiContext(sensitivity, tableContract);
-      const needsReview = (
+      const promotedCore = isPromotedCoreField(table.name);
+      const pgVersion = coreSincePg(table.name, column.name) ?? tableContract.pgVersion;
+      const unsupported = coreUnsupportedBehavior(table.name, column.name) ?? tableContract.unsupported;
+      const sourceConfidence = coreSourceConfidence(table.name, source.confidence);
+      const needsReview = !promotedCore && (
         tableContract.contractStatus !== 'seeded semantic contract' ||
         source.confidence.includes('inferred') ||
         source.confidence === 'table_family_inherited'
@@ -1286,9 +1372,9 @@ function buildFieldContractRows({ schema, collector, api, ui }) {
         aggregation: fieldAggregation(column.name, tableContract.semantics),
         sourceFamily: tableContract.source,
         sourceColumn: source.source,
-        sourceConfidence: source.confidence,
-        pgVersion: tableContract.pgVersion,
-        unsupported: tableContract.unsupported,
+        sourceConfidence,
+        pgVersion,
+        unsupported,
         collectorJob: tableContract.collectorJob,
         schedule: tableContract.schedule,
         retention: tableContract.retention,
@@ -1302,7 +1388,7 @@ function buildFieldContractRows({ schema, collector, api, ui }) {
         sensitivity,
         aiContext,
         firstMigration: column.firstMigration,
-        status: needsReview ? 'needs field-level review' : 'family contract inherited',
+        status: promotedCore ? 'manual core field contract' : (needsReview ? 'needs field-level review' : 'family contract inherited'),
       });
     }
   }
@@ -1329,6 +1415,7 @@ function renderFieldContracts({ schema, collector, api, ui }) {
   lines.push('');
   lines.push(mdTable(['Metric', 'Count'], [
     ['Fields analyzed', rows.length],
+    ['Manual core field contracts', rows.filter((row) => row.status === 'manual core field contract').length],
     ['Fields needing review', rows.filter((row) => row.status === 'needs field-level review').length],
     ['Fields inheriting seeded family contract', rows.filter((row) => row.status === 'family contract inherited').length],
     ['Fields with pgstat internal/envelope source', rows.filter((row) => row.sourceConfidence === 'pgstat_internal').length],
@@ -1412,6 +1499,11 @@ function renderContractReviewQueue({ schema, collector, api, ui }) {
     ...familyRows.filter((row) => row.table === 'fact.pg_lock_snapshot'),
   ];
   const priorityRows = [...new Map(generatedByPriority.map((row) => [row.table, row])).values()];
+  const promotedFieldCountByTable = new Map();
+  for (const row of fieldRows) {
+    if (row.status !== 'manual core field contract') continue;
+    promotedFieldCountByTable.set(row.table, (promotedFieldCountByTable.get(row.table) ?? 0) + 1);
+  }
 
   const lines = [];
   lines.push('# Generated pgstat Contract Review Queue');
@@ -1436,11 +1528,12 @@ function renderContractReviewQueue({ schema, collector, api, ui }) {
   lines.push('');
   lines.push('## First Manual Review Targets');
   lines.push('');
-  lines.push(mdTable(['Priority', 'Table', 'Why first', 'Columns', 'Current status'], priorityRows.map((row, index) => [
+  lines.push(mdTable(['Priority', 'Table', 'Why first', 'Columns', 'Promoted fields', 'Current status'], priorityRows.map((row, index) => [
     index + 1,
     row.table,
     row.pgdbaagent,
     tableByName.get(row.table)?.columns.size ?? 0,
+    promotedFieldCountByTable.get(row.table) ?? 0,
     row.contractStatus,
   ])));
   lines.push('');

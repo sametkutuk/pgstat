@@ -14,20 +14,20 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 56 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 1072 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Field contracts needing exact source/version review | 924 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
 | Sensitive or conditional AI fields | 561 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 7 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
 
-| Priority | Table | Why first | Columns | Current status |
-| --- | --- | --- | --- | --- |
-| 1 | fact.pgss_delta | query workload, temp spill, WAL spike, cache hit, latency evidence | 52 | seeded semantic contract |
-| 2 | fact.pg_table_stat_delta | vacuum lag, bloat proxy, table health, index advice context | 41 | seeded semantic contract |
-| 3 | fact.pg_database_delta | database workload, TPS, temp, cache, session evidence | 32 | seeded semantic contract |
-| 4 | fact.pg_index_stat_delta | unused/inefficient index and write-risk evidence | 18 | seeded semantic contract |
-| 5 | fact.pg_settings_snapshot | parameter tuning and risk context | 7 | seeded semantic contract |
-| 6 | fact.pg_lock_snapshot | blocking and lock-root-cause evidence | 10 | seeded semantic contract |
+| Priority | Table | Why first | Columns | Promoted fields | Current status |
+| --- | --- | --- | --- | --- | --- |
+| 1 | fact.pgss_delta | query workload, temp spill, WAL spike, cache hit, latency evidence | 52 | 52 | seeded semantic contract |
+| 2 | fact.pg_table_stat_delta | vacuum lag, bloat proxy, table health, index advice context | 41 | 41 | seeded semantic contract |
+| 3 | fact.pg_database_delta | database workload, TPS, temp, cache, session evidence | 32 | 32 | seeded semantic contract |
+| 4 | fact.pg_index_stat_delta | unused/inefficient index and write-risk evidence | 18 | 18 | seeded semantic contract |
+| 5 | fact.pg_settings_snapshot | parameter tuning and risk context | 7 | 7 | seeded semantic contract |
+| 6 | fact.pg_lock_snapshot | blocking and lock-root-cause evidence | 10 | 10 | seeded semantic contract |
 
 ## Data Families Needing Review
 
@@ -578,75 +578,75 @@ node scripts/generate-doc-inventory.mjs
 | fact.pg_archiver_snapshot.archived_count | filesystem/WAL metadata | conditional; redact or allowlist | archive lag evidence | needs field-level review |
 | fact.pg_archiver_snapshot.last_archived_time | filesystem/WAL metadata | conditional; redact or allowlist | archive lag evidence | needs field-level review |
 | fact.pg_archiver_snapshot.last_archived_wal | filesystem/WAL metadata | conditional; redact or allowlist | archive lag evidence | needs field-level review |
-| fact.pg_database_delta.temp_files_delta | filesystem/WAL metadata | conditional; redact or allowlist | database workload, TPS, temp, cache, session evidence | needs field-level review |
+| fact.pg_database_delta.temp_files_delta | filesystem/WAL metadata | conditional; redact or allowlist | database workload, TPS, temp, cache, session evidence | manual core field contract |
 | fact.pg_replication_snapshot.application_name | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.client_addr | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.client_hostname | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.client_port | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.usename | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
-| fact.pg_settings_snapshot.context | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | needs field-level review |
-| fact.pg_settings_snapshot.instance_pk | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | family contract inherited |
-| fact.pg_settings_snapshot.setting_name | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | needs field-level review |
-| fact.pg_settings_snapshot.setting_value | configuration or structured metadata; review before export | conditional; redact or allowlist | parameter tuning and risk context | needs field-level review |
-| fact.pg_settings_snapshot.snapshot_ts | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | family contract inherited |
-| fact.pg_settings_snapshot.source | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | needs field-level review |
-| fact.pg_settings_snapshot.unit | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | needs field-level review |
+| fact.pg_settings_snapshot.context | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.instance_pk | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.setting_name | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.setting_value | configuration or structured metadata; review before export | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.snapshot_ts | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.source | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
+| fact.pg_settings_snapshot.unit | configuration values; may expose paths, host behavior, tuning choices | conditional; redact or allowlist | parameter tuning and risk context | manual core field contract |
 | fact.pg_wal_receiver_snapshot.sender_host | identity/network metadata | conditional; redact or allowlist | standby receive lag evidence | needs field-level review |
 | fact.pg_wal_snapshot.current_wal_file | filesystem/WAL metadata | conditional; redact or allowlist | WAL growth and archive pressure evidence | needs field-level review |
 | fact.pg_wal_snapshot.wal_directory_size_byte | filesystem/WAL metadata | conditional; redact or allowlist | WAL growth and archive pressure evidence | needs field-level review |
 | fact.pg_wal_snapshot.wal_file_count | filesystem/WAL metadata | conditional; redact or allowlist | WAL growth and archive pressure evidence | needs field-level review |
-| fact.pgss_delta.blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.calls_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.instance_pk | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | family contract inherited |
-| fact.pgss_delta.jit_deform_count_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_deform_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_emission_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_emission_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_functions_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_generation_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_inlining_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_inlining_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_optimization_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.jit_optimization_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blks_dirtied_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blks_hit_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.local_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.max_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.max_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.mean_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.mean_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.min_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.min_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.minmax_stats_since | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.parallel_workers_launched_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.parallel_workers_to_launch_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.plans_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.rows_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.sample_ts | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | family contract inherited |
-| fact.pgss_delta.shared_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.shared_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.shared_blks_dirtied_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.shared_blks_hit_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.shared_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.shared_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.statement_series_id | query text or query identity | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.stats_since | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.stddev_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.stddev_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.temp_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.temp_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.temp_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.temp_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.total_exec_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.total_plan_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.wal_buffers_full_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.wal_bytes_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.wal_fpi_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
-| fact.pgss_delta.wal_records_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | needs field-level review |
+| fact.pgss_delta.blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.calls_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.instance_pk | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_deform_count_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_deform_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_emission_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_emission_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_functions_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_generation_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_inlining_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_inlining_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_optimization_count | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.jit_optimization_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blks_dirtied_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blks_hit_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.local_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.max_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.max_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.mean_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.mean_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.min_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.min_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.minmax_stats_since | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.parallel_workers_launched_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.parallel_workers_to_launch_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.plans_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.rows_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.sample_ts | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blks_dirtied_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blks_hit_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.shared_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.statement_series_id | query text or query identity | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.stats_since | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.stddev_exec_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.stddev_plan_time_ms | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.temp_blk_read_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.temp_blk_write_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.temp_blks_read_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.temp_blks_written_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.total_exec_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.total_plan_time_ms_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.wal_buffers_full_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.wal_bytes_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.wal_fpi_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
+| fact.pgss_delta.wal_records_delta | query identity; query text is in dim.query_text | conditional; redact or allowlist | query workload, temp spill, WAL spike, cache hit, latency evidence | manual core field contract |
 | ops.alert.alert_key | secret/config sensitive | blocked | operations context when explicitly contracted | needs field-level review |
 | ops.alert.details_json | configuration or structured metadata; review before export | conditional; redact or allowlist | operations context when explicitly contracted | needs field-level review |
 | ops.audit_log.client_ip | identity/network metadata | conditional; redact or allowlist | operations context when explicitly contracted | needs field-level review |
