@@ -4,9 +4,19 @@ Date: 2026-07-13
 Status: draft
 Scope: pgstat collected data, APIs, UI, alerts, reports, and pgdbaagent evidence
 
+Related documents:
+
+- [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
+- [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
+- [Platform Governance And SDLC](platform-governance-and-sdlc.md)
+
 ## 1. Purpose
 
 This registry tracks collected data fields and their downstream consumers.
+
+The source-level inventory lives in
+[pgstat Data Source Dictionary](pgstat-data-source-dictionary.md). This
+registry is the field-level contract layer on top of that inventory.
 
 It exists to prevent hidden coupling. When a field is added, changed,
 deprecated, or removed, the project must know which collectors, tables, APIs,

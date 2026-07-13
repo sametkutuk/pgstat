@@ -8,6 +8,7 @@ Related documents:
 
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 - [Data Contract Registry](data-contract-registry.md)
+- [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
 
 ## 1. Purpose
 
