@@ -65,9 +65,15 @@ Every field entry must include:
 | source_view | yes | PostgreSQL source view/function |
 | source_column | yes | Source column or expression |
 | pg_version | yes | Version availability |
+| since_pg | yes | First PostgreSQL major version where the source is available |
+| removed_pg | no | PostgreSQL major version where the source was removed or replaced |
+| unsupported_behavior | yes | null, skip field, skip collector, or error |
 | collector | yes | Collector or SQL family |
 | storage_table | yes | pgstat table |
 | storage_column | yes | pgstat column |
+| retention_class | yes | raw, snapshot, hourly, daily, nightly, audit, alert, or custom |
+| retention_policy_field | yes | `control.retention_policy` field that purges the stored data |
+| rollup_policy | yes | none, hourly, daily, or custom summary path |
 | semantics | yes | Meaning and units |
 | aggregation | yes | snapshot, delta, sum, max, avg, derived |
 | reset_behavior | yes | cumulative reset handling if applicable |
@@ -103,16 +109,19 @@ Consumer map categories:
 Before adding a new collected field:
 
 1. Confirm PostgreSQL version availability.
-2. Confirm required privilege.
-3. Decide snapshot vs delta semantics.
-4. Add migration if storage changes.
-5. Add collector SQL with null-safe behavior.
-6. Add API whitelist/ColumnRegistry if exposed.
-7. Decide whether field is default UI column or optional.
-8. Add report/alert/recommendation usage if needed.
-9. Add evidence package usage if pgdbaagent needs it.
-10. Add tests.
-11. Update this registry.
+2. Confirm exact source column availability for every supported PostgreSQL
+   version and define `unsupported_behavior`.
+3. Confirm required privilege.
+4. Decide snapshot vs delta semantics.
+5. Add migration if storage changes.
+6. Add collector SQL with null-safe and version-safe behavior.
+7. Assign retention class, purge path, and rollup/no-rollup behavior.
+8. Add API whitelist/ColumnRegistry if exposed.
+9. Decide whether field is default UI column or optional.
+10. Add report/alert/recommendation usage if needed.
+11. Add evidence package usage if pgdbaagent needs it.
+12. Add tests.
+13. Update this registry.
 
 ## 6. Remove Field Checklist
 
@@ -136,10 +145,13 @@ field_id:
     view: pg_stat_...
     column: ...
     pg_version: "PG..."
+    since_pg: 10
+    removed_pg: null
     privilege: pg_read_all_stats
   collector:
     component: collector
     sql_family: ...
+    unsupported_behavior: null|skip_field|skip_collector|error
     reset_behavior: ...
   storage:
     table: fact....
@@ -147,6 +159,9 @@ field_id:
     type: ...
     aggregation: snapshot|delta|sum|max|derived
     unit: ...
+    retention_class: raw|snapshot|hourly|daily|nightly|audit|alert|custom
+    retention_policy_field: ...
+    rollup_policy: none|hourly|daily|custom
   consumers:
     api: []
     ui: []

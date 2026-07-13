@@ -30,7 +30,7 @@ Core rule:
 
 ```text
 Every collected data family must have a source, storage location, semantics,
-consumer intent, and gap status.
+consumer intent, PostgreSQL version coverage, retention policy, and gap status.
 ```
 
 ## 2. Status Labels
@@ -210,6 +210,15 @@ Required updates:
 4. If PostgreSQL version coverage changes, update
    [PostgreSQL Stat Views Matrix](pg-stat-views-matrix.md) or add a note there.
 5. Mention coverage limits and unsupported cases explicitly.
+6. Define how each source column is handled by PostgreSQL version. Unsupported
+   source columns must be skipped or stored as `null`; they must not break the
+   whole collector cycle.
+7. Define retention before merge. New fact/snapshot/aggregate tables must be
+   wired into `control.retention_policy`, `PurgeEvaluator`, and
+   `PartitionManager` when partitioned storage is needed.
+8. If the data needs long-range analysis, define the rollup table and purge
+   behavior at the same time. Raw telemetry must not be kept forever by
+   accident.
 
 This keeps pgstat standalone and makes pgdbaagent reasoning evidence-driven
 instead of assumption-driven.

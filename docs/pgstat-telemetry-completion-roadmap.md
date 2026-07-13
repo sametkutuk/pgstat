@@ -36,12 +36,20 @@ clone/staging validation target, not to the production collector.
 1. Prefer safe catalog/stat view reads over invasive checks.
 2. Make optional/heavy collectors explicit, disabled by default, and
    rate-limited.
-3. Store coverage metadata so recommendations know when evidence is missing.
-4. Every new data family updates:
+3. Make collection PostgreSQL-version and column aware. A collector must know
+   which `server_version_num` values expose each source column and must skip or
+   store `null` for unsupported columns instead of failing the whole cycle.
+4. Store coverage metadata so recommendations know when evidence is missing.
+   For every field, keep `since_pg`, optional `removed_pg`, collector SQL
+   family, and unsupported-version behavior in the data contract.
+5. Do not store any new fact, snapshot, or aggregate family forever. Every new
+   table must be assigned to an explicit retention policy, purge path, and
+   rollup/no-rollup decision before implementation is considered complete.
+6. Every new data family updates:
    - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
    - [Data Contract Registry](data-contract-registry.md)
    - APIs/UI consumers if exposed
-5. Do not make AI or UI heuristics depend on undocumented columns.
+7. Do not make AI or UI heuristics depend on undocumented columns.
 
 ## 3. Priority Order
 
@@ -149,6 +157,41 @@ Existing state columns can remain for core jobs:
 - table freeze, until it is migrated
 
 Catalog/stats/optional collectors should use the generic job state pattern.
+
+### 4.7 Version Gates And Retention Gates
+
+Version and retention rules are hard gates for every new telemetry family.
+
+Version gate:
+
+| Rule | Required behavior |
+| --- | --- |
+| Source availability | Detect by `server_version_num`, capability rows, or source-query family; do not assume a column exists on every supported PG version. |
+| Storage shape | Storage may be a superset schema, but fields unavailable on a PG version must be `null`, absent from the collector SQL, or explicitly marked unsupported. |
+| Field contract | Every exposed field must record `since_pg`, optional `removed_pg`, source column/expression, and unsupported-version behavior. |
+| Consumer behavior | UI, alerts, reports, and pgdbaagent must treat missing evidence as missing evidence, not as zero or success. |
+| Matrix update | Any version coverage change updates the PostgreSQL stat views matrix or adds a precise note in this roadmap. |
+
+Initial workstream gates:
+
+| Workstream | Version rule |
+| --- | --- |
+| Catalog metadata | Base catalogs are broadly available, but individual expressions, index features, and generated/identity metadata are version-gated. Use version-specific select lists when needed. |
+| Safe planner stats | `pg_stats` and extended statistics metadata must be collected only when the view/column exists. Prefer view/capability detection over optimistic SQL. |
+| Deploy/application events | Not PostgreSQL-version gated because events are pgstat-owned input. Still record producer version if the event comes from CI/CD tooling. |
+| Lock graph | `pg_blocking_pids` is broadly available, but lock/session context fields vary. Store unavailable fields as `null` and record the capability. |
+| Future EXPLAIN/validation evidence | Production collector does not run validation. Clone/staging evidence must still record target PG version and plan format version. |
+
+Retention gate:
+
+| Rule | Required behavior |
+| --- | --- |
+| Policy mapping | Every new table maps to `control.retention_policy` directly or through an existing policy family. |
+| Purge path | `PurgeEvaluator` must know how to delete or partition-prune the data. |
+| Partition path | Monthly/time partitions must be added to `PartitionManager` for high-volume time-series tables. |
+| Rollup decision | If raw data can grow quickly, define an hourly/daily rollup or explicitly justify no rollup. |
+| UI/API setting | If a separate retention knob is required, update setup defaults, settings UI/API, and docs together. |
+| No infinite default | A table without purge/partition/retention wiring is not accepted, even if it starts small. |
 
 ## 5. Workstream Details
 
@@ -638,6 +681,11 @@ Each workstream is done only when:
 2. Coverage and limits are visible to users.
 3. Data source dictionary is updated.
 4. Data contract registry has field-level entries for exposed fields.
-5. Tests/build are clean.
-6. Existing pgstat standalone behavior is not weakened.
-7. pgdbaagent consumer impact is documented.
+5. PostgreSQL version coverage is documented, including `since_pg`,
+   `removed_pg` when applicable, and unsupported-version behavior.
+6. Collector SQL is version-safe and column-safe for supported versions.
+7. Retention is implemented: policy mapping, purge path, partition path when
+   needed, and rollup/no-rollup decision.
+8. Tests/build are clean.
+9. Existing pgstat standalone behavior is not weakened.
+10. pgdbaagent consumer impact is documented.
