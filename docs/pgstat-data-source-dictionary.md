@@ -43,6 +43,11 @@ It shows collector job, PostgreSQL source, version gate, schedule, retention,
 purge, partition, rollup, API/UI/alert/report consumers, pgdbaagent relevance,
 sensitive-data classification, and unsupported-version behavior.
 
+The generated field-level scaffold lives in
+[Generated pgstat Field Contracts](generated/field-contracts.md), with current
+review gaps summarized in
+[Generated pgstat Contract Review Queue](generated/contract-review-queue.md).
+
 ```text
 node scripts/generate-doc-inventory.mjs
 # or on systems with make: make docs-inventory

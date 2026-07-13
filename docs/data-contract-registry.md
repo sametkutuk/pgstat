@@ -25,6 +25,12 @@ The table-level lifecycle matrix is generated at
 [Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md).
 The table/data-family operational contract matrix is generated at
 [Generated pgstat Data Family Contracts](generated/data-family-contracts.md).
+The field-level scaffold is generated at
+[Generated pgstat Field Contracts](generated/field-contracts.md), and current
+promotion/review gaps are generated at
+[Generated pgstat Contract Review Queue](generated/contract-review-queue.md).
+pgdbaagent-facing evidence, finding, recommendation, and reasoning contracts
+live in [pgdbaagent Contracts](pgdbaagent-contracts.md).
 
 It exists to prevent hidden coupling. When a field is added, changed,
 deprecated, or removed, the project must know which collectors, tables, APIs,
@@ -116,8 +122,8 @@ Consumer map categories:
 Before adding a new collected field:
 
 1. Confirm PostgreSQL version availability.
-2. Check the generated data family contract for the parent table and promote
-   any missing table-level ownership notes into this field registry.
+2. Check the generated data family contract and generated field contract for
+   the parent field.
 3. Confirm exact source column availability for every supported PostgreSQL
    version and define `unsupported_behavior`.
 4. Confirm required privilege.
@@ -129,7 +135,8 @@ Before adding a new collected field:
 10. Decide whether field is default UI column or optional.
 11. Add report/alert/recommendation usage if needed.
 12. Add evidence package usage if pgdbaagent needs it.
-13. Regenerate project inventory, lifecycle matrix, and data family contracts.
+13. Regenerate project inventory, lifecycle matrix, data family contracts,
+    field contracts, and contract review queue.
 14. Add tests.
 15. Update this registry.
 

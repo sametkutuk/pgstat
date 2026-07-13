@@ -29,6 +29,7 @@ Related documents:
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
 - [Data Contract Registry](data-contract-registry.md)
+- [pgdbaagent Contracts](pgdbaagent-contracts.md)
 - [PostgreSQL Stat Views Matrix](pg-stat-views-matrix.md)
 
 ## 1. Scope
@@ -309,17 +310,20 @@ docs:
 | Current and planned pgstat telemetry | `pgstat-telemetry-completion-roadmap.md` |
 | Source-level collection inventory | `pgstat-data-source-dictionary.md` |
 | Field-level contracts and consumers | `data-contract-registry.md` |
+| pgdbaagent evidence, finding, recommendation, and reasoning contracts | `pgdbaagent-contracts.md` |
 | PostgreSQL version availability | `pg-stat-views-matrix.md` |
 | Generated code inventory | [Generated pgstat Project Inventory](generated/project-inventory.md) |
 | Generated data lifecycle matrix | [Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md) |
 | Generated data family contracts | [Generated pgstat Data Family Contracts](generated/data-family-contracts.md) |
+| Generated field contract scaffold | [Generated pgstat Field Contracts](generated/field-contracts.md) |
+| Generated contract review queue | [Generated pgstat Contract Review Queue](generated/contract-review-queue.md) |
 
 The master document should not duplicate every field or SQL detail. It keeps
 the project-wide map, product boundaries, capability ledger, and non-negotiable
 rules. Domain documents hold detailed inventory.
 
-The generated inventory, lifecycle matrix, and data family contracts are
-mechanical and should be
+The generated inventory, lifecycle matrix, data family contracts, field
+contracts, and review queue are mechanical and should be
 regenerated whenever
 migrations, collector SQL, API routes, UI endpoint references, purge, partition,
 rollup ownership, schedule ownership, source ownership, or consumer mapping
@@ -352,10 +356,10 @@ Triggers that must be detected:
 | Change detected | Required docs |
 | --- | --- |
 | migration under `db/migrations` | data model, retention, source dictionary, data contract if exposed |
-| collector SQL/source query | generated inventory, generated data family contracts, source dictionary, PG version matrix, data contract |
+| collector SQL/source query | generated inventory, generated data family/field contracts, source dictionary, PG version matrix, data contract |
 | new fact/snapshot/aggregate table | telemetry roadmap, retention/purge/partition notes |
-| API route or response shape | generated inventory, generated data family contracts, data contract, capability docs |
-| UI tab/card/chart | generated inventory, generated data family contracts, capability ledger, data contract consumers |
+| API route or response shape | generated inventory, generated data family/field contracts, data contract, capability docs |
+| UI tab/card/chart | generated inventory, generated data family/field contracts, capability ledger, data contract consumers |
 | alert/report behavior | governance, data contract consumers, user-facing docs |
 | setup/config/security change | governance, setup/security notes |
 | pgdbaagent schema/reasoning change | architecture, evidence/finding/recommendation docs |
@@ -364,9 +368,9 @@ Triggers that must be detected:
 Automation phases:
 
 1. Manual PR checklist now.
-2. Scripted docs impact checker next.
+2. Scripted docs impact checker via `node scripts/check-doc-impact.mjs --staged`.
 3. Documentation steward agent after the checker is stable.
-4. CI blocking for missing required docs.
+4. CI blocking for missing required docs after repository token/workflow scope is available.
 5. Scheduled documentation audit.
 
 ## 12. Documentation Update Rule
@@ -427,13 +431,13 @@ additional enterprise rules:
 
 Immediate documentation and platform work:
 
-1. Complete field-level contracts for query workload, temp spill, WAL, cache,
+1. Promote field-level contracts for query workload, temp spill, WAL, cache,
    vacuum/table health, and settings evidence.
 2. Add the P0 pgstat data gaps: catalog metadata, safe planner stats, validation
    storage contracts, deploy/application events, and full lock graph.
-3. Define evidence package v1 for pgdbaagent.
-4. Define signal/finding/recommendation schemas.
-5. Build documentation impact checking.
+3. Harden evidence package v1 for pgdbaagent.
+4. Harden signal/finding/recommendation schemas.
+5. Harden documentation impact checker rules.
 6. Keep clone lifecycle user-provided until the evidence and reasoning layer is
    stable.
 

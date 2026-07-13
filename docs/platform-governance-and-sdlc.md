@@ -166,7 +166,15 @@ If the change affects migrations, collector SQL, API routes, UI endpoint
 references, purge, partitions, or rollups, regenerate
 docs/generated/project-inventory.md and
 docs/generated/data-lifecycle-matrix.md and
-docs/generated/data-family-contracts.md.
+docs/generated/data-family-contracts.md and
+docs/generated/field-contracts.md and
+docs/generated/contract-review-queue.md.
+```
+
+Run the local documentation impact checker before commit:
+
+```text
+node scripts/check-doc-impact.mjs --staged
 ```
 
 ## 7. Data Lifecycle Rules
@@ -316,7 +324,7 @@ Required next documents or tools:
 1. Data contract registry
 2. ADR template
 3. PR checklist template
-4. Evidence package schema v1
-5. Recommendation schema v1
-6. Documentation impact checker
+4. Evidence package schema v1 hardening
+5. Recommendation schema v1 validation tests
+6. Documentation impact checker CI wiring after repository token/workflow scope is available
 7. Documentation steward agent workflow

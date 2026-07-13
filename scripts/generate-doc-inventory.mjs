@@ -1158,6 +1158,326 @@ function renderDataFamilyContracts({ schema, collector, api, ui }) {
   return `${lines.join('\n')}\n`;
 }
 
+function fieldSourceGuess(tableContract, tableName, columnName) {
+  const internalColumns = new Set([
+    'id',
+    'instance_pk',
+    'created_at',
+    'updated_at',
+    'collected_at',
+    'first_seen_at',
+    'last_seen_at',
+    'sample_ts',
+    'snapshot_ts',
+    'bucket_start',
+    'hour_ts',
+    'day_ts',
+  ]);
+  if (internalColumns.has(columnName)) {
+    return {
+      source: 'pgstat envelope/control column',
+      confidence: 'pgstat_internal',
+    };
+  }
+  if (tableName.startsWith('control.') || tableName.startsWith('ops.') || tableName.startsWith('audit.')) {
+    return {
+      source: 'pgstat application/control plane',
+      confidence: 'pgstat_internal',
+    };
+  }
+  if (tableName.startsWith('agg.')) {
+    let source = columnName;
+    if (columnName.endsWith('_sum')) source = columnName.replace(/_sum$/, '_delta');
+    if (columnName.endsWith('_avg')) source = columnName.replace(/_avg$/, '');
+    if (columnName.endsWith('_max')) source = columnName.replace(/_max$/, '');
+    if (columnName.endsWith('_min')) source = columnName.replace(/_min$/, '');
+    return {
+      source: `${source} from rollup source`,
+      confidence: 'rollup_inferred',
+    };
+  }
+  if (columnName.endsWith('_delta')) {
+    return {
+      source: columnName.replace(/_delta$/, ''),
+      confidence: 'source_column_inferred_from_delta',
+    };
+  }
+  if (columnName.endsWith('_ms_delta')) {
+    return {
+      source: columnName.replace(/_ms_delta$/, ''),
+      confidence: 'source_column_inferred_from_delta',
+    };
+  }
+  if (columnName.endsWith('_byte_delta')) {
+    return {
+      source: columnName.replace(/_byte_delta$/, ''),
+      confidence: 'source_column_inferred_from_delta',
+    };
+  }
+  if (columnName.endsWith('_bytes_delta')) {
+    return {
+      source: columnName.replace(/_bytes_delta$/, ''),
+      confidence: 'source_column_inferred_from_delta',
+    };
+  }
+  if (tableName.startsWith('dim.') || tableName.startsWith('fact.')) {
+    return {
+      source: columnName,
+      confidence: 'source_column_name_inferred',
+    };
+  }
+  return {
+    source: tableContract.source,
+    confidence: 'table_family_inherited',
+  };
+}
+
+function fieldSensitivity(tableContract, columnName, type) {
+  const name = columnName.toLowerCase();
+  const dataType = type.toLowerCase();
+  if (/(password|secret|token|key|dsn|conn|credential)/.test(name)) return 'secret/config sensitive';
+  if (/(query|sql|statement)/.test(name)) return 'query text or query identity';
+  if (/(client|host|addr|hostname|application|user|role|usename|username)/.test(name)) return 'identity/network metadata';
+  if (/(path|file|directory|archive|wal_file)/.test(name)) return 'filesystem/WAL metadata';
+  if (name === 'setting_value' || dataType === 'jsonb') return 'configuration or structured metadata; review before export';
+  return tableContract.sensitivity;
+}
+
+function fieldAiContext(sensitivity, tableContract) {
+  if (/secret/.test(sensitivity)) return 'blocked';
+  if (/query text|identity|network|configuration|filesystem/.test(sensitivity)) return 'conditional; redact or allowlist';
+  if (tableContract.pgdbaagent === 'verify') return 'not contracted';
+  return 'allowed in structured evidence';
+}
+
+function fieldAggregation(columnName, semantics) {
+  if (columnName.endsWith('_delta')) return 'delta sample; sum over windows unless documented otherwise';
+  if (columnName.endsWith('_sum')) return 'rollup sum';
+  if (columnName.endsWith('_avg')) return 'rollup average';
+  if (columnName.endsWith('_max')) return 'rollup max';
+  if (columnName.endsWith('_min')) return 'rollup min';
+  if (semantics.includes('snapshot')) return 'snapshot value';
+  if (semantics.includes('dimension')) return 'dimension value';
+  if (semantics.includes('aggregate')) return 'aggregate value';
+  return 'field-specific; verify';
+}
+
+function buildFieldContractRows({ schema, collector, api, ui }) {
+  const tableContracts = buildContractRows({ schema, collector, api, ui });
+  const tableByName = new Map(tableContracts.map((row) => [row.table, row]));
+  const rows = [];
+  for (const table of schema.tables) {
+    const tableContract = tableByName.get(table.name);
+    for (const column of [...table.columns.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      const source = fieldSourceGuess(tableContract, table.name, column.name);
+      const sensitivity = fieldSensitivity(tableContract, column.name, column.type);
+      const aiContext = fieldAiContext(sensitivity, tableContract);
+      const needsReview = (
+        tableContract.contractStatus !== 'seeded semantic contract' ||
+        source.confidence.includes('inferred') ||
+        source.confidence === 'table_family_inherited'
+      );
+      rows.push({
+        fieldId: `${table.name}.${column.name}`,
+        table: table.name,
+        column: column.name,
+        type: column.type,
+        semantics: tableContract.semantics,
+        aggregation: fieldAggregation(column.name, tableContract.semantics),
+        sourceFamily: tableContract.source,
+        sourceColumn: source.source,
+        sourceConfidence: source.confidence,
+        pgVersion: tableContract.pgVersion,
+        unsupported: tableContract.unsupported,
+        collectorJob: tableContract.collectorJob,
+        schedule: tableContract.schedule,
+        retention: tableContract.retention,
+        purgeSql: tableContract.purgeSql,
+        partition: tableContract.partition,
+        rollup: tableContract.rollup,
+        api: tableContract.api,
+        ui: tableContract.ui,
+        alertReport: tableContract.alertReport,
+        pgdbaagent: tableContract.pgdbaagent,
+        sensitivity,
+        aiContext,
+        firstMigration: column.firstMigration,
+        status: needsReview ? 'needs field-level review' : 'family contract inherited',
+      });
+    }
+  }
+  return rows;
+}
+
+function renderFieldContracts({ schema, collector, api, ui }) {
+  const rows = buildFieldContractRows({ schema, collector, api, ui });
+  const lines = [];
+  lines.push('# Generated pgstat Field Contracts');
+  lines.push('');
+  lines.push('Status: generated scaffold');
+  lines.push('Source: repository static scan + table/data-family contracts');
+  lines.push('');
+  lines.push('Do not edit this file manually. Run:');
+  lines.push('');
+  lines.push('```text');
+  lines.push('node scripts/generate-doc-inventory.mjs');
+  lines.push('```');
+  lines.push('');
+  lines.push('This file covers every discovered storage column. It is a field-level scaffold, not proof that every source column and PostgreSQL version gate has been manually verified. Rows marked `needs field-level review` must be promoted into the manual data contract registry before they are considered stable product contracts.');
+  lines.push('');
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(mdTable(['Metric', 'Count'], [
+    ['Fields analyzed', rows.length],
+    ['Fields needing review', rows.filter((row) => row.status === 'needs field-level review').length],
+    ['Fields inheriting seeded family contract', rows.filter((row) => row.status === 'family contract inherited').length],
+    ['Fields with pgstat internal/envelope source', rows.filter((row) => row.sourceConfidence === 'pgstat_internal').length],
+    ['Fields with inferred source column', rows.filter((row) => row.sourceConfidence.includes('inferred')).length],
+    ['Fields blocked from AI context', rows.filter((row) => row.aiContext === 'blocked').length],
+    ['Fields requiring conditional AI redaction/allowlist', rows.filter((row) => row.aiContext.startsWith('conditional')).length],
+  ]));
+  lines.push('');
+  lines.push('## Field Matrix');
+  lines.push('');
+  lines.push(mdTable([
+    'Field ID',
+    'Type',
+    'Semantics',
+    'Aggregation',
+    'Source family',
+    'Source column/expression',
+    'Source confidence',
+    'PG version / gate',
+    'Unsupported behavior',
+    'Collector job',
+    'Schedule',
+    'Retention',
+    'Purge owner',
+    'Partition',
+    'Rollup',
+    'API consumers',
+    'UI consumers',
+    'Alert/report consumers',
+    'pgdbaagent usage',
+    'Sensitivity',
+    'AI context',
+    'First migration',
+    'Status',
+  ], rows.map((row) => [
+    row.fieldId,
+    row.type,
+    row.semantics,
+    row.aggregation,
+    row.sourceFamily,
+    row.sourceColumn,
+    row.sourceConfidence,
+    row.pgVersion,
+    row.unsupported,
+    row.collectorJob,
+    row.schedule,
+    row.retention,
+    row.purgeSql,
+    row.partition,
+    row.rollup,
+    row.api,
+    row.ui,
+    row.alertReport,
+    row.pgdbaagent,
+    row.sensitivity,
+    row.aiContext,
+    row.firstMigration,
+    row.status,
+  ])));
+  lines.push('');
+  lines.push('## Promotion Rule');
+  lines.push('');
+  lines.push('A row becomes a stable manual field contract only after the data contract registry records exact source view/function, source column or expression, since_pg, removed_pg if any, unsupported behavior, retention class, and explicit API/UI/alert/report/pgdbaagent consumers.');
+  return `${lines.join('\n')}\n`;
+}
+
+function renderContractReviewQueue({ schema, collector, api, ui }) {
+  const familyRows = buildContractRows({ schema, collector, api, ui });
+  const fieldRows = buildFieldContractRows({ schema, collector, api, ui });
+  const tableByName = new Map(schema.tables.map((table) => [table.name, table]));
+  const defaultFamilies = familyRows.filter((row) => row.contractStatus !== 'seeded semantic contract');
+  const reviewFields = fieldRows.filter((row) => row.status === 'needs field-level review');
+  const conditionalAiFields = fieldRows.filter((row) => row.aiContext.startsWith('conditional') || row.aiContext === 'blocked');
+  const noRetention = familyRows.filter((row) => row.retention === 'not detected' && /fact|agg/.test(row.semantics));
+  const generatedByPriority = [
+    ...familyRows.filter((row) => row.table === 'fact.pgss_delta'),
+    ...familyRows.filter((row) => row.table === 'fact.pg_table_stat_delta'),
+    ...familyRows.filter((row) => row.table === 'fact.pg_database_delta'),
+    ...familyRows.filter((row) => row.table === 'fact.pg_index_stat_delta'),
+    ...familyRows.filter((row) => row.table === 'fact.pg_settings_snapshot'),
+    ...familyRows.filter((row) => row.table === 'fact.pg_lock_snapshot'),
+  ];
+  const priorityRows = [...new Map(generatedByPriority.map((row) => [row.table, row])).values()];
+
+  const lines = [];
+  lines.push('# Generated pgstat Contract Review Queue');
+  lines.push('');
+  lines.push('Status: generated');
+  lines.push('Source: generated family and field contract scaffolds');
+  lines.push('');
+  lines.push('Do not edit this file manually. Run:');
+  lines.push('');
+  lines.push('```text');
+  lines.push('node scripts/generate-doc-inventory.mjs');
+  lines.push('```');
+  lines.push('');
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(mdTable(['Queue', 'Count', 'Action'], [
+    ['Table/data-family contracts needing semantic review', defaultFamilies.length, 'Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed'],
+    ['Field contracts needing exact source/version review', reviewFields.length, 'Verify source expression, since_pg, unsupported behavior, and stable consumers'],
+    ['Sensitive or conditional AI fields', conditionalAiFields.length, 'Define redaction, allowlist, or blocked policy before pgdbaagent use'],
+    ['Fact/aggregate families without detected retention mapping', noRetention.length, 'Wire to PurgeEvaluator/retention policy or document durable retention exception'],
+  ]));
+  lines.push('');
+  lines.push('## First Manual Review Targets');
+  lines.push('');
+  lines.push(mdTable(['Priority', 'Table', 'Why first', 'Columns', 'Current status'], priorityRows.map((row, index) => [
+    index + 1,
+    row.table,
+    row.pgdbaagent,
+    tableByName.get(row.table)?.columns.size ?? 0,
+    row.contractStatus,
+  ])));
+  lines.push('');
+  lines.push('## Data Families Needing Review');
+  lines.push('');
+  lines.push(mdTable(['Table', 'Semantics', 'Columns', 'Retention', 'API consumers', 'UI consumers', 'Reason'], defaultFamilies.map((row) => [
+    row.table,
+    row.semantics,
+    tableByName.get(row.table)?.columns.size ?? 0,
+    row.retention,
+    row.api,
+    row.ui,
+    row.contractStatus,
+  ])));
+  lines.push('');
+  lines.push('## Sensitive / AI-Gated Fields');
+  lines.push('');
+  lines.push(mdTable(['Field ID', 'Sensitivity', 'AI context', 'pgdbaagent usage', 'Status'], conditionalAiFields.map((row) => [
+    row.fieldId,
+    row.sensitivity,
+    row.aiContext,
+    row.pgdbaagent,
+    row.status,
+  ])));
+  lines.push('');
+  lines.push('## Retention Gaps');
+  lines.push('');
+  lines.push(mdTable(['Table', 'Semantics', 'Partition', 'Rollup', 'Action'], noRetention.map((row) => [
+    row.table,
+    row.semantics,
+    row.partition,
+    row.rollup,
+    'verify retention policy or document exception',
+  ])));
+  return `${lines.join('\n')}\n`;
+}
+
 function renderLifecycleMatrix({ schema, collector }) {
   const rows = buildLifecycleRows({ schema, collector });
   const lines = [];
@@ -1258,9 +1578,25 @@ writeText(rel('docs', 'generated', 'data-family-contracts.md'), renderDataFamily
   ui,
 }));
 
+writeText(rel('docs', 'generated', 'field-contracts.md'), renderFieldContracts({
+  schema,
+  collector,
+  api,
+  ui,
+}));
+
+writeText(rel('docs', 'generated', 'contract-review-queue.md'), renderContractReviewQueue({
+  schema,
+  collector,
+  api,
+  ui,
+}));
+
 console.log('Generated docs/generated/project-inventory.md');
 console.log('Generated docs/generated/data-lifecycle-matrix.md');
 console.log('Generated docs/generated/data-family-contracts.md');
+console.log('Generated docs/generated/field-contracts.md');
+console.log('Generated docs/generated/contract-review-queue.md');
 console.log(`Tables: ${schema.tables.length}`);
 console.log(`Columns: ${schema.tables.reduce((sum, t) => sum + t.columns.size, 0)}`);
 console.log(`API routes: ${api.routes.length}`);
