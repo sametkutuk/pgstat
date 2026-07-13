@@ -4,6 +4,14 @@ Date: 2026-07-13
 Status: draft
 Scope: pgstat + pgdbaagent product family
 
+Related documents:
+
+- [Agentic DBA Project Master Document](agentic-dba-project-master.md)
+- [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
+- [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
+- [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
+- [Data Contract Registry](data-contract-registry.md)
+
 ## 1. Purpose
 
 This document defines how the pgstat product family must be developed as an
@@ -174,7 +182,12 @@ Every field must have:
 - owner
 - source
 - PostgreSQL version availability
+- unsupported-version behavior
 - storage table/column
+- retention policy and purge path
+- rollup or no-rollup decision
+- operational volume budget
+- security classification
 - API exposure
 - UI/report consumers
 - alert/recommendation consumers
