@@ -32,6 +32,11 @@ The mechanical code-derived inventory lives in
 regenerated from migrations, collector code, API routes, UI references, purge
 ownership, partition ownership, and rollup ownership with:
 
+The table-level lifecycle view lives in
+[Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md).
+It shows inferred semantics, timestamp columns, retention policy mapping,
+purge ownership, partition ownership, and rollup role.
+
 ```text
 node scripts/generate-doc-inventory.mjs
 # or on systems with make: make docs-inventory

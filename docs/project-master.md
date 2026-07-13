@@ -311,12 +311,14 @@ docs:
 | Field-level contracts and consumers | `data-contract-registry.md` |
 | PostgreSQL version availability | `pg-stat-views-matrix.md` |
 | Generated code inventory | [Generated pgstat Project Inventory](generated/project-inventory.md) |
+| Generated data lifecycle matrix | [Generated pgstat Data Lifecycle Matrix](generated/data-lifecycle-matrix.md) |
 
 The master document should not duplicate every field or SQL detail. It keeps
 the project-wide map, product boundaries, capability ledger, and non-negotiable
 rules. Domain documents hold detailed inventory.
 
-The generated inventory is mechanical and should be regenerated whenever
+The generated inventory and lifecycle matrix are mechanical and should be
+regenerated whenever
 migrations, collector SQL, API routes, UI endpoint references, purge, partition,
 or rollup ownership changes:
 

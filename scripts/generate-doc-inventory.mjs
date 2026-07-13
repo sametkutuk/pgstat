@@ -216,6 +216,24 @@ function extractTableRefs(text) {
   return [...refs].sort((a, b) => a.localeCompare(b));
 }
 
+function extractJavaStringArray(text, name) {
+  const regex = new RegExp(`${name}\\s*=\\s*\\{([\\s\\S]*?)\\}`, 'm');
+  const match = regex.exec(text);
+  if (!match) return [];
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort((a, b) => a.localeCompare(b));
+}
+
+function extractRollupEdges(...texts) {
+  const edges = [];
+  for (const text of texts) {
+    const regex = /insert\s+into\s+(agg\.[a-zA-Z_][a-zA-Z0-9_]*)[\s\S]*?from\s+((?:fact|agg)\.[a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    for (const match of text.matchAll(regex)) {
+      edges.push({ source: match[2], target: match[1] });
+    }
+  }
+  return edges.sort((a, b) => `${a.source}->${a.target}`.localeCompare(`${b.source}->${b.target}`));
+}
+
 function parseCollector() {
   const dir = rel('collector', 'src', 'main', 'java', 'com', 'pgstat', 'collector');
   const javaFiles = listFiles(dir, (f) => f.endsWith('.java'));
@@ -257,10 +275,32 @@ function parseCollector() {
     }
   }
 
-  function refsFor(fileName) {
+  function fileText(fileName) {
     const file = javaFiles.find((f) => path.basename(f) === fileName);
-    return file ? extractTableRefs(readText(file)) : [];
+    return file ? readText(file) : '';
   }
+
+  function refsFor(fileName) {
+    const text = fileText(fileName);
+    return text ? extractTableRefs(text) : [];
+  }
+
+  const purgeText = fileText('PurgeEvaluator.java');
+  const partitionText = fileText('PartitionManager.java');
+  const aggText = fileText('AggRepository.java');
+
+  const purgeGroups = {
+    deltaFactTables: extractJavaStringArray(purgeText, 'DELTA_FACT_TABLES'),
+    snapshotFactTables: extractJavaStringArray(purgeText, 'SNAPSHOT_FACT_TABLES'),
+    hourlyAggTables: extractJavaStringArray(purgeText, 'HOURLY_AGG_TABLES'),
+    nightlySnapshotTables: extractJavaStringArray(purgeText, 'NIGHTLY_SNAPSHOT_TABLES'),
+  };
+
+  const partitionGroups = {
+    dailyFactTables: extractJavaStringArray(partitionText, 'DAILY_FACT_TABLES'),
+    monthlyAggTables: extractJavaStringArray(partitionText, 'MONTHLY_AGG_TABLES'),
+    yearlyAggTables: ['agg.pgss_daily'],
+  };
 
   return {
     sourceFamilies,
@@ -268,6 +308,9 @@ function parseCollector() {
     purgeRefs: refsFor('PurgeEvaluator.java'),
     partitionRefs: refsFor('PartitionManager.java'),
     aggRefs: refsFor('AggRepository.java'),
+    purgeGroups,
+    partitionGroups,
+    rollupEdges: extractRollupEdges(aggText, purgeText),
   };
 }
 
@@ -465,6 +508,191 @@ function renderInventory({ schema, collector, api, ui }) {
   return `${lines.join('\n')}\n`;
 }
 
+function inferSemantics(table) {
+  const [schemaName, tableName] = table.name.split('.');
+  if (schemaName === 'agg') return 'aggregate';
+  if (schemaName === 'dim') return 'dimension';
+  if (schemaName === 'control') return 'control/config';
+  if (schemaName === 'ops') return 'operations';
+  if (schemaName === 'audit') return 'audit';
+  if (tableName.endsWith('_delta')) return 'delta fact';
+  if (tableName.includes('_snapshot')) return 'snapshot fact';
+  return schemaName;
+}
+
+function timestampColumns(table) {
+  const names = [...table.columns.keys()];
+  return names.filter((name) => (
+    name === 'sample_ts' ||
+    name === 'snapshot_ts' ||
+    name === 'bucket_start' ||
+    name === 'hour_ts' ||
+    name === 'day_ts' ||
+    name.endsWith('_at') ||
+    name.endsWith('_time') ||
+    name.endsWith('_ts')
+  )).sort();
+}
+
+function buildLifecycleRows({ schema, collector }) {
+  const purgeRefs = new Set(collector.purgeRefs);
+  const partitionRefs = new Set(collector.partitionRefs);
+  const aggRefs = new Set(collector.aggRefs);
+  const rollupSources = new Map();
+  const rollupTargets = new Map();
+  for (const edge of collector.rollupEdges) {
+    if (!rollupSources.has(edge.source)) rollupSources.set(edge.source, []);
+    if (!rollupTargets.has(edge.target)) rollupTargets.set(edge.target, []);
+    rollupSources.get(edge.source).push(edge.target);
+    rollupTargets.get(edge.target).push(edge.source);
+  }
+
+  const group = collector.purgeGroups;
+  const partitionGroup = collector.partitionGroups;
+  const deltaFacts = new Set(group.deltaFactTables);
+  const snapshotFacts = new Set(group.snapshotFactTables);
+  const hourlyAgg = new Set(group.hourlyAggTables);
+  const nightlySnapshots = new Set(group.nightlySnapshotTables);
+  const dailyFacts = new Set(partitionGroup.dailyFactTables);
+  const monthlyAgg = new Set(partitionGroup.monthlyAggTables);
+  const yearlyAgg = new Set(partitionGroup.yearlyAggTables);
+
+  const codeRefs = new Map();
+  for (const entry of collector.tableRefsByFile) {
+    for (const table of entry.refs) {
+      if (!codeRefs.has(table)) codeRefs.set(table, []);
+      codeRefs.get(table).push(entry.file);
+    }
+  }
+
+  function retention(tableName) {
+    if (deltaFacts.has(tableName)) return 'control.retention_policy.raw_retention_days/raw_retention_months';
+    if (snapshotFacts.has(tableName)) return 'control.retention_policy.snapshot_retention_hours';
+    if (nightlySnapshots.has(tableName)) return 'control.retention_policy.nightly_snapshot_retention_days';
+    if (tableName === 'fact.pg_table_freeze_snapshot') return 'control.retention_policy.table_freeze_retention_days';
+    if (hourlyAgg.has(tableName)) return 'control.retention_policy.hourly_retention_days/hourly_retention_months';
+    if (tableName === 'agg.pgss_daily') return 'control.retention_policy.daily_retention_days/daily_retention_months';
+    if (tableName === 'ops.audit_log') return 'control.retention_policy.audit_log_retention_days';
+    if (tableName === 'ops.alert') return 'control.retention_policy.alert_retention_days (resolved alerts only)';
+    if (tableName === 'ops.job_run' || tableName === 'ops.job_run_instance') return 'control.retention_policy.job_run_retention_days';
+    if (tableName === 'ops.report_history') return 'control.report_config.daily_retention_days/weekly_retention_days';
+    if (tableName === 'ops.notification_log') return 'control.report_config.notification_log_retention_days';
+    if (tableName === 'control.telegram_message_map') return 'fixed 7 days in PurgeEvaluator';
+    if (purgeRefs.has(tableName)) return 'referenced by PurgeEvaluator; verify policy mapping';
+    return 'not detected';
+  }
+
+  function partitionPolicy(tableName) {
+    if (dailyFacts.has(tableName)) return 'daily partitions by PartitionManager';
+    if (monthlyAgg.has(tableName)) return 'monthly partitions by PartitionManager';
+    if (yearlyAgg.has(tableName)) return 'yearly partitions by PartitionManager';
+    if (partitionRefs.has(tableName)) return 'referenced by PartitionManager; verify group';
+    return 'not detected';
+  }
+
+  function rollupRole(tableName) {
+    const roles = [];
+    if (rollupSources.has(tableName)) roles.push(`source -> ${rollupSources.get(tableName).join(', ')}`);
+    if (rollupTargets.has(tableName)) roles.push(`target <- ${rollupTargets.get(tableName).join(', ')}`);
+    if (!roles.length && aggRefs.has(tableName)) roles.push('referenced by AggRepository; verify role');
+    return roles.join('; ') || 'not detected';
+  }
+
+  return schema.tables.map((table) => {
+    const refs = (codeRefs.get(table.name) ?? []).map((f) => f.replace(/^collector\/src\/main\/java\/com\/pgstat\/collector\//, 'collector/'));
+    return {
+      table: table.name,
+      semantics: inferSemantics(table),
+      columns: table.columns.size,
+      timestamps: timestampColumns(table).join(', ') || 'none detected',
+      schemaPartitioned: table.partitioned ? `yes (${table.partitionKey})` : 'no',
+      partitionPolicy: partitionPolicy(table.name),
+      retention: retention(table.name),
+      purgeOwner: purgeRefs.has(table.name) ? 'yes' : 'no',
+      rollup: rollupRole(table.name),
+      firstMigration: table.firstMigration,
+      lastMigration: table.lastMigration,
+      codeRefs: refs.slice(0, 6).join('<br>') + (refs.length > 6 ? `<br>... +${refs.length - 6} more` : ''),
+    };
+  });
+}
+
+function renderLifecycleMatrix({ schema, collector }) {
+  const rows = buildLifecycleRows({ schema, collector });
+  const lines = [];
+  lines.push('# Generated pgstat Data Lifecycle Matrix');
+  lines.push('');
+  lines.push('Status: generated');
+  lines.push('Source: repository static scan');
+  lines.push('');
+  lines.push('Do not edit this file manually. Run:');
+  lines.push('');
+  lines.push('```text');
+  lines.push('node scripts/generate-doc-inventory.mjs');
+  lines.push('# or on systems with make: make docs-inventory');
+  lines.push('```');
+  lines.push('');
+  lines.push('This matrix answers, mechanically, how each table is stored, whether purge/partition/rollup ownership is visible in code, and which retention policy can be inferred. Human semantic meaning still belongs in the data source dictionary and data contract registry.');
+  lines.push('');
+  lines.push('## Summary');
+  lines.push('');
+  const missingRetention = rows.filter((row) => row.retention === 'not detected').length;
+  const missingPartition = rows.filter((row) => row.schemaPartitioned.startsWith('yes') && row.partitionPolicy === 'not detected').length;
+  const partitionOwnerWithoutSchema = rows.filter((row) => row.partitionPolicy !== 'not detected' && row.schemaPartitioned === 'no').length;
+  const verifyPolicy = rows.filter((row) => row.retention.includes('verify policy mapping')).length;
+  lines.push(mdTable(['Metric', 'Count'], [
+    ['Tables analyzed', rows.length],
+    ['Tables without detected retention mapping', missingRetention],
+    ['Partitioned tables without detected PartitionManager ownership', missingPartition],
+    ['PartitionManager-owned tables not schema-partitioned in static scan', partitionOwnerWithoutSchema],
+    ['Purge-referenced tables requiring policy verification', verifyPolicy],
+    ['Rollup edges detected', collector.rollupEdges.length],
+  ]));
+  lines.push('');
+  lines.push('## Lifecycle Matrix');
+  lines.push('');
+  lines.push(mdTable([
+    'Table',
+    'Semantics',
+    'Columns',
+    'Timestamp columns',
+    'Schema partitioned',
+    'Partition policy',
+    'Retention / purge policy',
+    'Purge owner',
+    'Rollup role',
+    'First migration',
+    'Last migration',
+    'Code refs',
+  ], rows.map((row) => [
+    row.table,
+    row.semantics,
+    row.columns,
+    row.timestamps,
+    row.schemaPartitioned,
+    row.partitionPolicy,
+    row.retention,
+    row.purgeOwner,
+    row.rollup,
+    row.firstMigration,
+    row.lastMigration,
+    row.codeRefs,
+  ])));
+  lines.push('');
+  lines.push('## Rollup Edges');
+  lines.push('');
+  lines.push(mdTable(['Source', 'Target'], collector.rollupEdges.map((edge) => [edge.source, edge.target])));
+  lines.push('');
+  lines.push('## Static Scan Limits');
+  lines.push('');
+  lines.push('- Retention policy mapping is inferred from current Java arrays and explicit purge methods.');
+  lines.push('- `referenced by PurgeEvaluator; verify policy mapping` means the table token appears in purge code, but this generator did not classify it into a specific retention policy branch.');
+  lines.push('- `not detected` does not automatically mean a bug. Some control/dim tables are intentionally persistent. It does mean the table needs a documented lifecycle decision.');
+  lines.push('- Runtime database schema verification is not performed by this generator.');
+  lines.push('');
+  return `${lines.join('\n')}\n`;
+}
+
 const schema = parseSchema();
 const collector = parseCollector();
 const api = parseApi();
@@ -477,7 +705,13 @@ writeText(rel('docs', 'generated', 'project-inventory.md'), renderInventory({
   ui,
 }));
 
+writeText(rel('docs', 'generated', 'data-lifecycle-matrix.md'), renderLifecycleMatrix({
+  schema,
+  collector,
+}));
+
 console.log('Generated docs/generated/project-inventory.md');
+console.log('Generated docs/generated/data-lifecycle-matrix.md');
 console.log(`Tables: ${schema.tables.length}`);
 console.log(`Columns: ${schema.tables.reduce((sum, t) => sum + t.columns.size, 0)}`);
 console.log(`API routes: ${api.routes.length}`);
