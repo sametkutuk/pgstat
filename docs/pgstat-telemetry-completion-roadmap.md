@@ -7,7 +7,7 @@ pgdbaagent reasoning
 
 Related documents:
 
-- [Agentic DBA Project Master Document](agentic-dba-project-master.md)
+- [pgstat Project Master Document](project-master.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)

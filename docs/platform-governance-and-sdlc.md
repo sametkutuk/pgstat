@@ -6,7 +6,7 @@ Scope: pgstat + pgdbaagent product family
 
 Related documents:
 
-- [Agentic DBA Project Master Document](agentic-dba-project-master.md)
+- [pgstat Project Master Document](project-master.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)

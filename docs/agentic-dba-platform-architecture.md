@@ -6,7 +6,7 @@ Owner: pgstat / pgdbaagent product direction
 
 Related documents:
 
-- [Agentic DBA Project Master Document](agentic-dba-project-master.md)
+- [pgstat Project Master Document](project-master.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)

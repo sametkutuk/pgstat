@@ -6,7 +6,7 @@ Scope: source-level inventory for pgstat collector data and known gaps
 
 Related documents:
 
-- [Agentic DBA Project Master Document](agentic-dba-project-master.md)
+- [pgstat Project Master Document](project-master.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [Data Contract Registry](data-contract-registry.md)
