@@ -57,9 +57,102 @@ clone/staging validation target, not to the production collector.
 | P2 | Optional wait sampling integration | Useful if `pg_wait_sampling` exists; not core dependency |
 | P3 | Production plan history | Useful, but risky/noisy; keep explicit and off by default |
 
-## 4. Workstream Details
+## 4. Existing Coverage, Scheduling, And Retention
 
-### 4.1 Catalog Metadata For Tables, Indexes, And Columns
+Some of the P0/P1 workstreams already exist partially. The work is not "start
+from zero"; it is completion and contract hardening.
+
+### 4.1 Current Coverage
+
+| Workstream | Already exists | Missing completion |
+| --- | --- | --- |
+| Catalog metadata | `dim.relation_ref`, table/index relids and names, table/index stats, some index validity flags | column metadata, constraints, index definition text, expression indexes, partial predicates, included columns, structured current catalog model |
+| Safe planner stats | none | safe `pg_stats` scalar fields and extended stats metadata |
+| Deploy/application events | none | event ingestion API, UI/manual entry, CI/CD webhook shape, chart timeline overlays |
+| Lock graph | waiting lock snapshot and `blocked_by_pids` | explicit blocked->blocker edge rows, blocker session/query context, hourly graph summary |
+
+### 4.2 Use Existing Profile And Retention Model
+
+New pgstat-side telemetry must use the existing control-plane model:
+
+- `control.schedule_profile` controls collection cadence.
+- `control.retention_policy` controls raw, snapshot, hourly, daily, nightly,
+  audit, and alert retention.
+- instance assignment remains through `control.instance_inventory`.
+- purge remains centralized in `PurgeEvaluator`.
+- rollup remains centralized in `AggRepository` / `PurgeEvaluator`.
+
+Do not add one-off cron jobs outside this model.
+
+### 4.3 Proposed Cadence And Retention Matrix
+
+| Data family | Collection trigger | Default cadence | Schedule profile field | Raw storage | Summarize? | Retention policy |
+| --- | --- | --- | --- | --- | --- | --- |
+| Catalog metadata completion | catalog snapshot job, plus manual trigger after deploy/schema change | 6h or nightly in first implementation | Prefer `catalog_snapshot_interval_seconds` if separate from nightly; otherwise reuse nightly snapshot trigger | current dimension/upsert tables + change snapshot tables | No hourly rollup; keep current state plus change history | `catalog_snapshot_retention_days` if added; otherwise `nightly_snapshot_retention_days` |
+| Safe `pg_stats` scalar metadata | stats snapshot job, plus manual trigger after ANALYZE/deploy | daily by default | `stats_snapshot_interval_seconds` only if separate cadence is needed | `fact.pg_column_stats_snapshot`, `fact.pg_extended_stats_snapshot` | No hourly rollup; daily snapshot is enough | `stats_snapshot_retention_days` if added; otherwise `nightly_snapshot_retention_days` |
+| Deploy/application events | API/manual/CI webhook | event-driven | none | `fact.application_event` | No rollup; events are sparse | `application_event_retention_days` if added; otherwise `daily_retention_days` |
+| Full lock graph | cluster collector, only when blockers/waiters exist | same as `cluster_interval_seconds` | existing `cluster_interval_seconds` | `fact.pg_lock_graph_snapshot` | Yes: hourly graph summary | raw: `snapshot_retention_hours`; hourly: `hourly_snapshot_retention_days` |
+
+### 4.4 Default Policy Recommendation
+
+Use these defaults unless real production volume proves otherwise:
+
+| Policy | Catalog snapshot | Stats snapshot | App events | Lock graph raw |
+| --- | --- | --- | --- | --- |
+| `r3-short` | 90 days | 90 days | 365 days | `snapshot_retention_hours` |
+| `r6-default` | 180 days | 180 days | 730 days | `snapshot_retention_hours` |
+| `r12-long` | 365 days | 365 days | 1095 days | `snapshot_retention_hours` |
+
+Rationale:
+
+- catalog/stats snapshots are slow-moving and useful for historical
+  recommendation context.
+- application/deploy events must survive as long as daily trend analysis.
+- lock graph raw data can grow quickly and should follow existing short
+  snapshot retention; long-range use should read hourly summaries.
+
+### 4.5 Summarization Rules
+
+| Data family | Rollup rule |
+| --- | --- |
+| Catalog metadata | No time-series rollup. Store current state and change history keyed by hash/version. |
+| Safe stats metadata | No hourly rollup. Store sampled daily/scheduled snapshots. |
+| Deploy/application events | No rollup. Sparse event log only. |
+| Lock graph | Roll raw samples into hourly aggregates by instance, database, relation when available, blocker role/application when safe. |
+
+### 4.6 State Tracking
+
+Avoid adding many one-off `last_*_collect_at` columns to
+`control.instance_state`.
+
+Preferred new pattern for non-core collectors:
+
+```text
+control.collector_job_state
+  instance_pk
+  job_type
+  scope_type       -- instance, database, relation, external
+  scope_key
+  last_collect_at
+  next_collect_at
+  consecutive_failures
+  last_error_at
+  last_error_text
+```
+
+Existing state columns can remain for core jobs:
+
+- cluster
+- statements
+- db_objects
+- rollup
+- table freeze, until it is migrated
+
+Catalog/stats/optional collectors should use the generic job state pattern.
+
+## 5. Workstream Details
+
+### 5.1 Catalog Metadata For Tables, Indexes, And Columns
 
 Problem:
 
@@ -122,7 +215,7 @@ First implementation:
 Add collector + API + UI read-only catalog view. Do not generate index advice
 inside this collector.
 
-### 4.2 Safe Column Statistics And Extended Statistics
+### 5.2 Safe Column Statistics And Extended Statistics
 
 Problem:
 
@@ -177,7 +270,7 @@ Consumers:
 - stale statistics detection
 - pgdbaagent EXPLAIN interpretation
 
-### 4.3 Validation Storage Contracts
+### 5.3 Validation Storage Contracts
 
 Problem:
 
@@ -238,7 +331,7 @@ Consumers:
 - audit trail
 - evidence package v1+
 
-### 4.4 Lock Graph And Wait Context
+### 5.4 Lock Graph And Wait Context
 
 Problem:
 
@@ -279,7 +372,7 @@ First implementation:
 Keep current `fact.pg_lock_snapshot`, add graph snapshot rather than breaking
 existing lock UI.
 
-### 4.5 Wait-Time Accounting
+### 5.5 Wait-Time Accounting
 
 Problem:
 
@@ -310,7 +403,7 @@ Boundary:
 
 `pg_wait_sampling` must remain optional. pgstat core cannot require it.
 
-### 4.6 Exact Or Approximate Bloat
+### 5.6 Exact Or Approximate Bloat
 
 Problem:
 
@@ -341,7 +434,7 @@ Consumers:
 - index maintenance candidates
 - risk model for storage-heavy recommendations
 
-### 4.7 OS Metric Ingestion Contract
+### 5.7 OS Metric Ingestion Contract
 
 Problem:
 
@@ -379,7 +472,7 @@ Consumers:
 - checkpoint I/O pressure findings
 - capacity recommendations
 
-### 4.8 Deploy And Application Context
+### 5.8 Deploy And Application Context
 
 Problem:
 
@@ -415,7 +508,7 @@ Consumers:
 - report timelines
 - pgdbaagent evidence packages
 
-### 4.9 Production Plan History
+### 5.9 Production Plan History
 
 Problem:
 
@@ -438,18 +531,18 @@ Preferred early alternative:
 
 Store plan history from pgdbaagent validation results first.
 
-## 5. First Implementation Batch
+## 6. First Implementation Batch
 
 The first pgstat-side implementation batch should avoid risky production work
 and unlock the most reasoning value.
 
-Batch 1:
+Batch 1 is completion work on top of existing pgstat telemetry:
 
 1. Catalog metadata snapshots:
-   - tables
-   - columns
-   - indexes
-   - constraints
+   - keep current table/index refs
+   - add columns
+   - add constraints
+   - add index definitions, expressions, predicates, included columns
 2. Safe stats snapshots:
    - `pg_stats` scalar fields
    - extended stats metadata
@@ -468,7 +561,7 @@ Why this batch:
 - high value for recommendations
 - improves pgstat standalone UI too
 
-## 6. Second Implementation Batch
+## 7. Second Implementation Batch
 
 Batch 2:
 
@@ -484,7 +577,7 @@ Batch 2:
    - schema and API
    - no mandatory agent yet
 
-## 7. Optional / Enterprise Batch
+## 8. Optional / Enterprise Batch
 
 Batch 3:
 
@@ -502,7 +595,7 @@ All optional collectors must have:
 - audit log
 - visible coverage status
 
-## 8. What This Means For pgdbaagent
+## 9. What This Means For pgdbaagent
 
 After Batch 1 and Batch 2, pgdbaagent can reason with much better evidence:
 
@@ -525,18 +618,19 @@ pgdbaagent still owns:
 - confidence and risk scoring
 - AI context preparation
 
-## 9. Open Decisions
+## 10. Open Decisions
 
 | Decision | Default recommendation |
 | --- | --- |
 | Store index definitions as text only or structured JSON too? | Store both raw `pg_get_indexdef` and parsed JSON when parser is available |
 | Store raw histogram/MCV values? | No by default; start with safe scalar stats |
+| Add separate schedule/retention columns for catalog and stats? | Add them only if nightly cadence is not enough in production; otherwise reuse nightly snapshot retention |
 | Add host agent now? | No; start with ingestion contract |
 | Run production EXPLAIN automatically? | No |
 | Use exact bloat by default? | No; start proxy/estimate, make exact optional |
 | Put reasoning in pgstat UI tabs? | No; pgstat exposes signals/findings, pgdbaagent reasons |
 
-## 10. Definition Of Done For Each Workstream
+## 11. Definition Of Done For Each Workstream
 
 Each workstream is done only when:
 
