@@ -78,8 +78,8 @@ pgstat + pgdbaagent =
   + AI-assisted explanation
 ```
 
-If clone lifecycle is automated and reliable, this architecture can produce
-stronger recommendations because it combines:
+When a user-provided clone or staging database is available, this architecture
+can produce stronger recommendations because it combines:
 
 - historical production impact
 - workload trend and baseline
@@ -199,20 +199,27 @@ The validation layer provides safe execution environments.
 
 Responsibilities:
 
-- create or attach to clone databases
+- attach to user-provided clone or staging databases
 - isolate test execution from production
 - run controlled EXPLAIN and optional EXPLAIN ANALYZE
 - run candidate DDL in clone when policy permits
-- enforce timeout, quota, TTL, cleanup, and concurrency limits
+- enforce timeout, access policy, and concurrency limits
 - store before/after evidence
 
-Initial providers:
+Initial supported model:
 
 - manual/staging clone target
+
+Explicit non-goal for early phases:
+
+- pgstat will not create, refresh, or destroy clones automatically.
+- clone database provisioning is the user's responsibility.
+- pgstat only stores the validation target connection and runs controlled tests
+  against it.
+
+Possible future providers:
+
 - DBLab provider
-
-Future providers:
-
 - pgBackRest restore provider
 - WAL-G restore provider
 - native ZFS/LVM provider
@@ -468,14 +475,14 @@ The clone validation flow is separate from recommendation generation.
 ```text
 recommendation candidate
 -> choose validation target
--> create or attach clone
+-> connect to user-provided clone/staging database
 -> verify clone freshness
 -> run baseline EXPLAIN
 -> apply candidate change if policy allows
 -> run after EXPLAIN
 -> optionally run EXPLAIN ANALYZE
 -> compare plans and metrics
--> cleanup or keep clone by TTL
+-> leave validation target lifecycle to the user
 -> store validation result
 ```
 
@@ -484,13 +491,18 @@ Safety controls:
 - statement timeout
 - lock timeout
 - max runtime
-- clone TTL
-- clone quota
-- concurrent validation limit
+- validation target access policy
+- concurrent validation limit per target
 - per-instance policy
 - read-only production guarantee
 - explicit permission for DDL on clone
 - audit log for all executed SQL
+
+Early-phase constraint:
+
+```text
+Clone lifecycle is external. pgstat does not provision clone databases.
+```
 
 EXPLAIN ANALYZE policy:
 
@@ -696,7 +708,7 @@ Deliverables:
 Deliverables:
 
 - validation target CRUD
-- clone/staging DSN support
+- user-provided clone/staging DSN support
 - validation job queue
 - EXPLAIN before/after storage
 
@@ -710,14 +722,14 @@ Deliverables:
 - AI-generated action plan
 - strict evidence-only prompt contract
 
-### Phase 6: Clone Provider Automation
+### Phase 6: Global Reasoning Coverage
 
 Deliverables:
 
-- DBLab provider
-- clone create/delete/status
-- TTL and cleanup
-- quota and concurrency controls
+- migrate UI-local heuristics into backend signals
+- expand shared finding model across Temp Spill, WAL Spike, Cache Hit, Vacuum Lag
+- centralize severity, confidence, and risk scoring
+- store durable findings and recommendation candidates
 
 ### Phase 7: Approved Operations
 
@@ -728,6 +740,18 @@ Deliverables:
 - rollback plan
 - audit log
 - post-apply observation
+
+### Future Optional: Clone Provider Automation
+
+Clone creation, refresh, delete, TTL, quota, and provider integration are future
+capabilities. They must not block the first advisory platform.
+
+Possible providers:
+
+- DBLab
+- pgBackRest restore
+- WAL-G restore
+- native ZFS/LVM
 
 ## 14. First Domain Recommendation
 
@@ -747,7 +771,7 @@ First end-to-end target:
 Temp spill evidence package
 -> pgdbaagent finding
 -> recommendation candidate
--> manual clone validation
+-> optional user-provided clone validation
 -> final recommendation
 -> AI action plan
 ```

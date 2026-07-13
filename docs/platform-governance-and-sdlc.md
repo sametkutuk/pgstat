@@ -256,7 +256,8 @@ Architecture Decision Records are required for:
 - product boundary changes
 - pgstat/pgdbaagent contract changes
 - data model changes that affect recommendations
-- clone provider design
+- validation target design
+- future clone provider design
 - AI provider design
 - paid/free packaging boundaries
 - automatic or approved operation capabilities
@@ -300,4 +301,3 @@ Required next documents or tools:
 5. Recommendation schema v1
 6. Documentation impact checker
 7. Documentation steward agent workflow
-

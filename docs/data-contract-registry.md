@@ -260,12 +260,12 @@ Primary consumers:
 
 ### Validation Contract
 
-Domain: clone/staging validation
+Domain: user-provided clone/staging validation
 
 Critical fields:
 
 - validation target identity
-- clone freshness
+- validation target freshness
 - executed SQL
 - explain_before
 - explain_after
@@ -298,4 +298,3 @@ Target checks:
 
 Early implementation can be a documentation steward checklist. Later it should
 be a CI check.
-
