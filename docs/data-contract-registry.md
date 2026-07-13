@@ -19,6 +19,8 @@ This registry tracks collected data fields and their downstream consumers.
 The source-level inventory lives in
 [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md). This
 registry is the field-level contract layer on top of that inventory.
+The code-derived table/column/API/UI inventory is generated at
+[Generated pgstat Project Inventory](generated/project-inventory.md).
 
 It exists to prevent hidden coupling. When a field is added, changed,
 deprecated, or removed, the project must know which collectors, tables, APIs,

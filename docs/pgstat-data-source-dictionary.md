@@ -27,6 +27,19 @@ collector jobs, storage tables, semantics, and known limits. Field-level
 ownership and consumer mapping belongs in
 [Data Contract Registry](data-contract-registry.md).
 
+The mechanical code-derived inventory lives in
+[Generated pgstat Project Inventory](generated/project-inventory.md). It is
+regenerated from migrations, collector code, API routes, UI references, purge
+ownership, partition ownership, and rollup ownership with:
+
+```text
+node scripts/generate-doc-inventory.mjs
+# or on systems with make: make docs-inventory
+```
+
+Use the generated inventory to verify that this human-readable dictionary stays
+complete.
+
 Core rule:
 
 ```text

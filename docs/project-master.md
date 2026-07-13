@@ -310,10 +310,20 @@ docs:
 | Source-level collection inventory | `pgstat-data-source-dictionary.md` |
 | Field-level contracts and consumers | `data-contract-registry.md` |
 | PostgreSQL version availability | `pg-stat-views-matrix.md` |
+| Generated code inventory | [Generated pgstat Project Inventory](generated/project-inventory.md) |
 
 The master document should not duplicate every field or SQL detail. It keeps
 the project-wide map, product boundaries, capability ledger, and non-negotiable
 rules. Domain documents hold detailed inventory.
+
+The generated inventory is mechanical and should be regenerated whenever
+migrations, collector SQL, API routes, UI endpoint references, purge, partition,
+or rollup ownership changes:
+
+```text
+node scripts/generate-doc-inventory.mjs
+# or on systems with make: make docs-inventory
+```
 
 ## 11. Automatic Documentation Model
 
@@ -325,6 +335,7 @@ Target process:
 code diff
 -> docs impact scanner
 -> changed area detected
+-> generated inventory refreshed
 -> required docs identified
 -> docs patch suggested or PR blocked
 -> human review
@@ -336,10 +347,10 @@ Triggers that must be detected:
 | Change detected | Required docs |
 | --- | --- |
 | migration under `db/migrations` | data model, retention, source dictionary, data contract if exposed |
-| collector SQL/source query | source dictionary, PG version matrix, data contract |
+| collector SQL/source query | generated inventory, source dictionary, PG version matrix, data contract |
 | new fact/snapshot/aggregate table | telemetry roadmap, retention/purge/partition notes |
-| API route or response shape | data contract, capability docs |
-| UI tab/card/chart | capability ledger, data contract consumers |
+| API route or response shape | generated inventory, data contract, capability docs |
+| UI tab/card/chart | generated inventory, capability ledger, data contract consumers |
 | alert/report behavior | governance, data contract consumers, user-facing docs |
 | setup/config/security change | governance, setup/security notes |
 | pgdbaagent schema/reasoning change | architecture, evidence/finding/recommendation docs |

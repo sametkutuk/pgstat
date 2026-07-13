@@ -143,6 +143,7 @@ Target process:
 ```text
 code diff
 -> documentation impact scan
+-> generated inventory refresh
 -> missing docs detected
 -> docs patch generated or PR blocked
 ```
@@ -161,6 +162,9 @@ Minimum immediate rule:
 ```text
 Any collector, schema, API, insight, alert, recommendation, validation, or AI
 change must include a documentation impact section before merge.
+If the change affects migrations, collector SQL, API routes, UI endpoint
+references, purge, partitions, or rollups, regenerate
+docs/generated/project-inventory.md.
 ```
 
 ## 7. Data Lifecycle Rules
