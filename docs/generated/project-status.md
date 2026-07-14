@@ -24,7 +24,7 @@ Current task: **PGSTAT-P0-001 - Promote next critical data-family contracts**
 
 Status: `in_progress`
 
-Next action: Promote the next batch of data-family contracts; this is the active critical-path task.
+Next action: Execute the P0-001 work order: promote the selected 10 aggregate data-family contracts.
 
 Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the first 161**
 
@@ -54,7 +54,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | Order | ID | Priority | Workstream | Status | Title | Next action |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 0 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Closed; continue with PGSTAT-P0-001. |
-| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | Promote the next batch of data-family contracts; this is the active critical-path task. |
+| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | Execute the P0-001 work order: promote the selected 10 aggregate data-family contracts. |
 | 2 | PGSTAT-P0-002 | P0 | contracts | planned | Promote next field contracts beyond the first 161 | Start after the next data-family contract batch is stable. |
 | 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | Define redaction policy before planner stats or AI evidence export. |
 | 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | Create release checklist before broad schema/collector implementation. |

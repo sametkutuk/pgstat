@@ -59,6 +59,7 @@ As of 2026-07-14:
 | Contract review queue | active | `docs/generated/contract-review-queue.md` |
 | Project board | active | `docs/project-board.json` |
 | Generated project status | active | `docs/generated/project-status.md` |
+| Active P0-001 work order | ready | `docs/work-orders/PGSTAT-P0-001-critical-data-family-contracts.md` |
 | pgstat node agent requirements | draft | `docs/pgstat-node-agent-requirements.md` |
 | pgdbaagent contracts | draft | `docs/pgdbaagent-contracts.md` |
 | Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints |

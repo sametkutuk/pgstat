@@ -127,6 +127,7 @@
         "Review generated queue counts and promoted rows."
       ],
       "required_docs": [
+        "docs/work-orders/PGSTAT-P0-001-critical-data-family-contracts.md",
         "docs/data-contract-registry.md",
         "docs/generated/data-family-contracts.md",
         "docs/generated/contract-review-queue.md",
@@ -142,7 +143,7 @@
         "evidence": ""
       },
       "verification_evidence": [],
-      "next_action": "Promote the next batch of data-family contracts; this is the active critical-path task."
+      "next_action": "Execute the P0-001 work order: promote the selected 10 aggregate data-family contracts."
     },
     {
       "id": "PGSTAT-P0-002",

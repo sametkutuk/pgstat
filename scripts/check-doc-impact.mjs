@@ -60,6 +60,7 @@ const MANUAL_CONTRACT_DOCS = [
   /^docs\/agentic-dba-platform-architecture\.md$/,
   /^docs\/platform-governance-and-sdlc\.md$/,
   /^docs\/pg-stat-views-matrix\.md$/,
+  /^docs\/work-orders\/.*\.md$/,
 ];
 
 const CRITICAL_GROUPS = [
