@@ -171,6 +171,7 @@ Primary scope:
 - deploy/application event API
 - full lock graph snapshot
 - OS/system metric ingestion without target PostgreSQL database load
+- PostgreSQL-related host service health observation and fast alerting
 - validation target and validation result storage contracts
 - exact retention and purge rules for new data families
 

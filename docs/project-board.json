@@ -546,6 +546,8 @@
         "Direct OS collection must use least privilege. Default design should work with a read-only OS user and command/source allowlist; no root/sudo requirement by default.",
         "Define host identity and OS change history so a machine can move from Windows to Linux, RHEL to Ubuntu, or similar without corrupting historical evidence.",
         "Define PostgreSQL instance to host/container binding: automatic evidence-based matching, explicit manual override, binding confidence, ambiguity handling, valid_from/valid_to history, and no AI high-confidence use when binding is missing or low-confidence.",
+        "Define host service health observation for PostgreSQL-related services: PostgreSQL server, PgBouncer, Patroni, pgpool-II, HAProxy/Keepalived when tagged as PostgreSQL traffic components, and container/Kubernetes equivalents.",
+        "Define a fast service heartbeat separate from heavier OS metric cadence so stopped, failed, unhealthy, or restart-looping PostgreSQL-related services can alert quickly without querying the target PostgreSQL database.",
         "Define minimum metrics: CPU/load/iowait/steal, memory/swap, disk IOPS/throughput/latency/utilization, filesystem bytes/inodes, network throughput/errors/drops, and optional PostgreSQL process CPU/memory where safely available.",
         "Define missing/stale/partial coverage behavior. Missing OS metrics must never be silently treated as zero or healthy evidence.",
         "Define schedule, retention, purge, partition, rollup, units, security, export, and AI evidence policy."
@@ -573,16 +575,21 @@
         },
         {
           "id": "AC5",
-          "text": "Minimum metric list includes units, cadence, retention, purge, partition, and rollup decisions.",
+          "text": "PostgreSQL-related service health contract is documented, including service discovery sources, allowlist/tag model, status values, fast heartbeat cadence, alert transitions, and container/Kubernetes service health mapping.",
           "status": "pending"
         },
         {
           "id": "AC6",
-          "text": "Missing/stale/partial metrics behavior is documented and blocks high-confidence findings when needed.",
+          "text": "Minimum metric list includes units, cadence, retention, purge, partition, and rollup decisions.",
           "status": "pending"
         },
         {
           "id": "AC7",
+          "text": "Missing/stale/partial metrics behavior is documented and blocks high-confidence findings when needed.",
+          "status": "pending"
+        },
+        {
+          "id": "AC8",
           "text": "pgdbaagent optional evidence usage is documented without making OS metrics silently mandatory.",
           "status": "pending"
         }
@@ -592,6 +599,8 @@
         "Choose source adapter priority: API/import first, exporter bridge second, direct read-only OS user third unless customer accepts host access design.",
         "Define dim.host_ref, host observation history, container observation history, instance_host_binding, metric naming, units, and retention before migration work.",
         "Define binding precedence: manual binding, explicit agent claim, container/Kubernetes label, listener/process match, cloud tag, then unbound/ambiguous.",
+        "Define service observation as read-only state collection: systemd/Windows SCM/container runtime/Kubernetes status, no start/stop/restart actions, no shell execution by default.",
+        "Define fast service heartbeat targets and thresholds separately from OS metric collection to support quick alerts for PostgreSQL/PgBouncer service failure.",
         "Document that OS collection must not add load to target PostgreSQL databases."
       ],
       "verification_plan": [
@@ -631,10 +640,12 @@
       "problem": "After the OS/system metric contract is accepted, pgstat needs low-overhead storage and ingestion so host pressure can be correlated with PostgreSQL evidence.",
       "requirements": [
         "Implement host identity, OS observation history, and OS metric fact/snapshot storage according to the accepted contract.",
+        "Implement PostgreSQL-related service inventory and service health snapshot storage according to the accepted contract.",
         "Implement API/import path first unless the accepted contract chooses another adapter.",
         "Implement retention and purge using the same policy model as existing database metrics where appropriate.",
         "Partition high-volume OS metric tables by timestamp where needed.",
         "Record collection coverage status so missing/stale/partial OS data is visible globally.",
+        "Record service status changes and fast-alert eligible transitions for PostgreSQL-related services without letting the agent manage services.",
         "Do not add target PostgreSQL database load for OS metric collection."
       ],
       "acceptance_criteria": [
@@ -660,6 +671,11 @@
         },
         {
           "id": "AC5",
+          "text": "Service inventory and service health snapshots exist for PostgreSQL-related services with documented retention, purge, and alert transition behavior.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
           "text": "Implementation creates no target PostgreSQL query/load for OS metrics.",
           "status": "pending"
         }
