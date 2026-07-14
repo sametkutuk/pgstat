@@ -14,8 +14,8 @@ node scripts/generate-project-status.mjs
 | Metric | Value |
 | --- | ---: |
 | Total tasks | 22 |
-| Done tasks | 2 |
-| Remaining tasks | 20 |
+| Done tasks | 3 |
+| Remaining tasks | 19 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -32,9 +32,9 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 2 |
+| done | 3 |
 | in_progress | 1 |
-| planned | 19 |
+| planned | 18 |
 
 ## Workstream Counts
 
@@ -75,7 +75,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
 | 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
 | 20 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
-| 21 | PGSTAT-P0-021 | P0 | operations | planned | Document and validate live aggregate partition gap remediation | Keep as a follow-up runbook/documentation task unless partition insert failures recur. |
+| 21 | PGSTAT-P0-021 | P0 | operations | done | Validate live aggregate partition gap remediation | Closed; continue with PGSTAT-P0-002. |
 
 ## Dependency Map
 
