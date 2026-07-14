@@ -28,6 +28,7 @@ Related documents:
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
+- [pgstat Node Agent Requirements](pgstat-node-agent-requirements.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [pgdbaagent Contracts](pgdbaagent-contracts.md)
@@ -133,7 +134,7 @@ Current master capability map:
 | Insights WAL Spike | active | Insights code, data contracts | Feed write/replication/checkpoint findings |
 | Insights Cache Hit | active | Insights code, data contracts | Feed read/cache/index findings |
 | Insights Vacuum Lag | active/in_progress | Insights code, telemetry roadmap | Feed autovacuum/table-health findings |
-| Host/OS metrics | planned | Telemetry roadmap, execution plan | P0 ingestion contract for CPU, memory, disk, filesystem, and network context without target DB load |
+| Host/OS metrics and service health | planned | Telemetry roadmap, node agent requirements, execution plan | Optional pgstat-node-agent for CPU, memory, disk, filesystem, network, container, and PostgreSQL-related service health without target DB load |
 | Reports | active | Report code, governance | Keep export/audit/security rules explicit |
 | Alerts/Telegram | active | Alert code, governance | Keep command security and audit strict |
 | Security hardening | active | Governance, setup docs | Fail-fast config, secret hygiene, least privilege |

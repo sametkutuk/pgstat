@@ -59,6 +59,7 @@ As of 2026-07-14:
 | Contract review queue | active | `docs/generated/contract-review-queue.md` |
 | Project board | active | `docs/project-board.json` |
 | Generated project status | active | `docs/generated/project-status.md` |
+| pgstat node agent requirements | draft | `docs/pgstat-node-agent-requirements.md` |
 | pgdbaagent contracts | draft | `docs/pgdbaagent-contracts.md` |
 | Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints |
 
@@ -287,15 +288,16 @@ production bug or a user-approved urgent feature.
 | 8 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011 |
 | 9 | PGSTAT-P0-017 | P0 | telemetry | planned | Define OS/system metric ingestion contract | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
 | 10 | PGSTAT-P0-018 | P0 | telemetry | planned | Implement OS/system metric ingestion storage and API | PGSTAT-P0-017 |
-| 11 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011, PGSTAT-P0-017, PGSTAT-P0-018 |
-| 12 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 |
-| 13 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | PGSTAT-P0-007, PGSTAT-P0-010 |
-| 14 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | PGSTAT-P0-007, PGSTAT-P0-008 |
-| 15 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
-| 16 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
-| 17 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
-| 18 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
-| 19 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
+| 11 | PGSTAT-P0-019 | P0 | telemetry | planned | Implement pgstat-node-agent V1 | PGSTAT-P0-017, PGSTAT-P0-018 |
+| 12 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011, PGSTAT-P0-017, PGSTAT-P0-018 |
+| 13 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 14 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | PGSTAT-P0-007, PGSTAT-P0-010 |
+| 15 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | PGSTAT-P0-007, PGSTAT-P0-008 |
+| 16 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
+| 17 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
+| 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
+| 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
+| 20 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
 
 ## 6. Workstream Rules
 
@@ -470,3 +472,4 @@ available.
 | 2026-07-14 | Do not start broad pgdbaagent coding until pgstat evidence contracts and first evidence schemas are stable. |
 | 2026-07-14 | Keep clone/staging targets user-provided for now; automatic clone lifecycle is out of scope. |
 | 2026-07-14 | Use `docs/project-board.json` as the machine-readable task source of truth and `docs/generated/project-status.md` as the generated readable status. |
+| 2026-07-14 | Build optional first-party `pgstat-node-agent` as the official OS/service health path; keep exporter bridge support and SSH only as restricted fallback. |

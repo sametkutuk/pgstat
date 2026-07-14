@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 20 |
+| Total tasks | 21 |
 | Done tasks | 1 |
-| Remaining tasks | 19 |
+| Remaining tasks | 20 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | done | 1 |
 | in_progress | 1 |
-| planned | 18 |
+| planned | 19 |
 
 ## Workstream Counts
 
@@ -45,7 +45,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
-| telemetry | 6 |
+| telemetry | 7 |
 | ui | 1 |
 | validation | 3 |
 
@@ -64,15 +64,16 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | 8 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | Design after contract baseline and redaction policy. |
 | 9 | PGSTAT-P0-017 | P0 | telemetry | planned | Define OS/system metric ingestion contract | Define OS/system metric contract after core field contracts, redaction policy, and release checklist. |
 | 10 | PGSTAT-P0-018 | P0 | telemetry | planned | Implement OS/system metric ingestion storage and API | Implement only after OS/system metric contract is accepted. |
-| 11 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Define evidence schemas after pgstat evidence inputs, OS metrics, and redaction policy are stable. |
-| 12 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | Define validation contracts after evidence schemas, redaction policy, and release discipline. |
-| 13 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Start after evidence schemas and validation contracts. |
-| 14 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | Implement after schemas and registry are accepted. |
-| 15 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | Implement after evidence builders v1. |
-| 16 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | Start after deterministic finding engine is stable. |
-| 17 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
-| 18 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
-| 19 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
+| 11 | PGSTAT-P0-019 | P0 | telemetry | planned | Implement pgstat-node-agent V1 | Implement after OS/system metric contract and central ingestion storage/API are accepted. |
+| 12 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Define evidence schemas after pgstat evidence inputs, OS metrics, and redaction policy are stable. |
+| 13 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | Define validation contracts after evidence schemas, redaction policy, and release discipline. |
+| 14 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Start after evidence schemas and validation contracts. |
+| 15 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | Implement after schemas and registry are accepted. |
+| 16 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | Implement after evidence builders v1. |
+| 17 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | Start after deterministic finding engine is stable. |
+| 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
+| 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
+| 20 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
 
 ## Dependency Map
 
@@ -87,8 +88,9 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | PGSTAT-P0-004 | PGSTAT-P0-003, PGSTAT-P0-011 | PGSTAT-P0-007 |
 | PGSTAT-P0-005 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 | PGSTAT-P0-007 |
 | PGSTAT-P0-006 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011 | PGSTAT-P0-007 |
-| PGSTAT-P0-017 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-018, PGSTAT-P0-007 |
-| PGSTAT-P0-018 | PGSTAT-P0-017 | PGSTAT-P0-007 |
+| PGSTAT-P0-017 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-018, PGSTAT-P0-019, PGSTAT-P0-007 |
+| PGSTAT-P0-018 | PGSTAT-P0-017 | PGSTAT-P0-019, PGSTAT-P0-007 |
+| PGSTAT-P0-019 | PGSTAT-P0-017, PGSTAT-P0-018 | - |
 | PGSTAT-P0-007 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011, PGSTAT-P0-017, PGSTAT-P0-018 | PGSTAT-P0-010, PGSTAT-P0-008, PGSTAT-P0-013 |
 | PGSTAT-P0-010 | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-008, PGSTAT-P0-016 |
 | PGSTAT-P0-008 | PGSTAT-P0-007, PGSTAT-P0-010 | PGSTAT-P0-013 |

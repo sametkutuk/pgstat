@@ -154,7 +154,7 @@ The pgstat-side implementation order is defined in
 | Query plan history from production | Helps detect plan regressions without running tests | future pgdbaagent/pgstat contract | high |
 | Index definitions and column/predicate metadata | Required for precise index recommendations and write-cost modeling | pgstat collector | high |
 | Table statistics histograms | `pg_stats`/extended stats improve selectivity reasoning | pgstat collector | high |
-| Host OS metrics | CPU, memory, disk IOPS/latency, filesystem saturation are outside PostgreSQL views | optional node/exporter integration | high |
+| Host OS metrics and PostgreSQL-related service health | CPU, memory, disk IOPS/latency, filesystem saturation, container pressure, and PostgreSQL/PgBouncer service failure are outside PostgreSQL views | pgstat-node-agent official path; exporter bridge optional | high |
 | Full wait-event time accounting | Activity snapshots show current waits but not cumulative wait duration by query | future wait sampling integration | medium |
 | Full lock graph history | Current lock collection focuses on waiting locks; full blocker graph history is partial | pgstat collector | medium |
 | Exact bloat measurement | Current table/index health uses proxies; `pgstattuple` or similar is not collected | optional extension-based job | medium |

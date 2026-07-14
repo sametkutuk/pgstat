@@ -494,9 +494,24 @@ metric evidence and write only to the central pgstat store.
 pgstat should not require a host agent in the core product, but it must define a
 global ingestion contract.
 
+Decision:
+
+- Build an optional first-party `pgstat-node-agent` as the official V1 path.
+- Use mature OS libraries/native APIs for low-level counters instead of
+  re-inventing every parser.
+- Keep node_exporter/windows_exporter, Telegraf, and Prometheus as bridge
+  sources.
+- Keep SSH as a restricted fallback/onboarding path, not as the default
+  enterprise collection model.
+- Keep target PostgreSQL database load at zero for OS/service collection.
+
+Detailed agent requirements are maintained in
+[pgstat Node Agent Requirements](pgstat-node-agent-requirements.md).
+
 Sources:
 
 - manual/API metric ingestion
+- pgstat-node-agent push ingestion
 - optional node_exporter/windows_exporter scrape/import
 - optional Telegraf/Prometheus bridge
 - optional direct read-only OS user collection with an allowlisted source/command
@@ -508,6 +523,8 @@ Proposed storage:
 - `fact.host_metric_snapshot`
 - `dim.host_ref`
 - OS observation/history table to preserve OS family/distro changes over time
+- host/container to PostgreSQL instance binding history
+- PostgreSQL-related service inventory and service health snapshots
 
 Minimum metrics:
 
@@ -517,6 +534,18 @@ Minimum metrics:
 - filesystem bytes and inode usage
 - network throughput, errors, drops
 - optional PostgreSQL process CPU/memory where safely available from OS evidence
+
+Service health:
+
+- PostgreSQL server
+- PgBouncer
+- Patroni
+- pgpool-II
+- PostgreSQL traffic HAProxy/Keepalived when tagged or explicitly configured
+- container/Kubernetes equivalents
+
+Service health uses a faster heartbeat than OS metrics so stopped, failed,
+unhealthy, or restart-looping PostgreSQL-related services can alert quickly.
 
 Supported OS families:
 

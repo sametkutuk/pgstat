@@ -610,6 +610,7 @@
         "security review of direct OS collection model"
       ],
       "required_docs": [
+        "docs/pgstat-node-agent-requirements.md",
         "docs/pgstat-telemetry-completion-roadmap.md",
         "docs/pgstat-data-source-dictionary.md",
         "docs/data-contract-registry.md",
@@ -695,6 +696,7 @@
         "verify OS metrics path does not query target PostgreSQL databases"
       ],
       "required_docs": [
+        "docs/pgstat-node-agent-requirements.md",
         "docs/pgstat-telemetry-completion-roadmap.md",
         "docs/data-contract-registry.md",
         "docs/generated/project-status.md"
@@ -711,8 +713,95 @@
       "next_action": "Implement only after OS/system metric contract is accepted."
     },
     {
-      "id": "PGSTAT-P0-007",
+      "id": "PGSTAT-P0-019",
       "order": 11,
+      "priority": "P0",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Implement pgstat-node-agent V1",
+      "problem": "pgstat needs an optional, low-overhead host agent to collect OS metrics, host identity, container context, and PostgreSQL-related service health without querying or loading the monitored PostgreSQL database.",
+      "requirements": [
+        "Implement the official pgstat-node-agent path defined in docs/pgstat-node-agent-requirements.md.",
+        "Agent must not connect to the monitored PostgreSQL database, must not require DB credentials, and must not run diagnostic SQL.",
+        "Agent must collect host identity, OS observation, OS metrics, coverage state, and PostgreSQL-related service health.",
+        "Agent must support Linux host service deployment, Windows service deployment, and container/DaemonSet-style deployment according to the accepted contract.",
+        "Agent must push to central pgstat API using scoped ingest token and must mask secrets in logs.",
+        "Agent must support fast service heartbeat separately from heavier OS metric cadence.",
+        "Agent must not manage services. No start, stop, restart, or arbitrary shell execution in V1.",
+        "Docker socket access must be disabled by default and documented as optional high-privilege enrichment if ever enabled.",
+        "Missing, stale, partial, or unsupported metric coverage must be reported explicitly."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Agent produces valid host identity, OS metric, service heartbeat, and coverage payloads accepted by central pgstat API.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Agent runs without target PostgreSQL credentials and no target PostgreSQL query/load is introduced.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Linux service, Windows service, and container deployment paths are documented and smoke-tested or explicitly phased.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "PostgreSQL/PgBouncer/Patroni-style service health transitions are reported with fast heartbeat and central alert eligibility metadata.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Agent security model is verified: scoped token, secret masking, least privilege, no service management, no arbitrary command execution.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "Coverage state distinguishes missing, stale, partial, unsupported, and healthy data sources.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Create agent package after OS contract and central ingestion API are accepted.",
+        "Implement config, auth, TLS transport, bounded retry spool, and self-health first.",
+        "Implement host identity and coverage payloads before high-volume metrics.",
+        "Implement OS metrics in small metric-family increments with source and unit contracts.",
+        "Implement service health heartbeat and central alert transition payloads.",
+        "Add packaging/deployment docs for Linux, Windows, and container modes."
+      ],
+      "verification_plan": [
+        "agent build/test once package exists",
+        "central API ingestion smoke test",
+        "Linux-shaped sample payload smoke test",
+        "Windows-shaped sample payload smoke test",
+        "service heartbeat transition smoke test",
+        "verify no monitored PostgreSQL connection or query path exists",
+        "security review of token, logs, filesystem permissions, and optional Docker access"
+      ],
+      "required_docs": [
+        "docs/pgstat-node-agent-requirements.md",
+        "docs/pgstat-telemetry-completion-roadmap.md",
+        "docs/data-contract-registry.md",
+        "docs/project-execution-plan.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-017",
+        "PGSTAT-P0-018"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Implement after OS/system metric contract and central ingestion storage/API are accepted."
+    },
+    {
+      "id": "PGSTAT-P0-007",
+      "order": 12,
       "priority": "P0",
       "workstream": "pgdbaagent",
       "status": "planned",
@@ -775,7 +864,7 @@
     },
     {
       "id": "PGSTAT-P0-010",
-      "order": 12,
+      "order": 13,
       "priority": "P0",
       "workstream": "validation",
       "status": "planned",
@@ -833,7 +922,7 @@
     },
     {
       "id": "PGSTAT-P0-008",
-      "order": 13,
+      "order": 14,
       "priority": "P0",
       "workstream": "pgdbaagent",
       "status": "planned",
@@ -889,7 +978,7 @@
     },
     {
       "id": "PGSTAT-P0-013",
-      "order": 14,
+      "order": 15,
       "priority": "P0",
       "workstream": "pgdbaagent",
       "status": "planned",
@@ -946,7 +1035,7 @@
     },
     {
       "id": "PGSTAT-P0-014",
-      "order": 15,
+      "order": 16,
       "priority": "P0",
       "workstream": "pgdbaagent",
       "status": "planned",
@@ -1002,7 +1091,7 @@
     },
     {
       "id": "PGSTAT-P0-015",
-      "order": 16,
+      "order": 17,
       "priority": "P0",
       "workstream": "pgdbaagent",
       "status": "planned",
@@ -1058,7 +1147,7 @@
     },
     {
       "id": "PGSTAT-P0-016",
-      "order": 17,
+      "order": 18,
       "priority": "P0",
       "workstream": "validation",
       "status": "planned",
@@ -1114,7 +1203,7 @@
     },
     {
       "id": "PGSTAT-P1-004",
-      "order": 18,
+      "order": 19,
       "priority": "P1",
       "workstream": "validation",
       "status": "planned",
@@ -1171,7 +1260,7 @@
     },
     {
       "id": "PGSTAT-P1-001",
-      "order": 19,
+      "order": 20,
       "priority": "P1",
       "workstream": "ui",
       "status": "planned",
