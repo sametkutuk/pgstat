@@ -178,6 +178,11 @@ node scripts/install-git-hooks.mjs
 node scripts/check-doc-impact.mjs --staged
 ```
 
+Fresh clone rule: `core.hooksPath` is local Git config. On every new clone or
+new machine, run `node scripts/install-git-hooks.mjs` once. The `./pgstat`
+helper also checks this setting and installs the hooks automatically when Node
+is available; otherwise it prints the exact command.
+
 ## 7. Data Lifecycle Rules
 
 Collected data has a lifecycle:

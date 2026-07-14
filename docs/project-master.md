@@ -376,6 +376,10 @@ Automation phases:
 5. Documentation steward agent later.
 6. Scheduled documentation audit.
 
+Fresh clone reminder: `core.hooksPath` is local Git config, so every new clone
+or new machine must run `node scripts/install-git-hooks.mjs` once. `./pgstat`
+checks this at startup and auto-installs the hooks when Node is available.
+
 ## 12. Documentation Update Rule
 
 Documentation is part of implementation, not a follow-up task.

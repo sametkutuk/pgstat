@@ -82,6 +82,25 @@ ensure_generated_env() {
   fi
 }
 
+ensure_local_git_hooks() {
+  [ -d "$DIR/.git" ] || return 0
+  [ -d "$DIR/.githooks" ] || return 0
+  command -v git > /dev/null 2>&1 || return 0
+
+  local hooks_path
+  hooks_path="$(git -C "$DIR" config --get core.hooksPath 2>/dev/null || true)"
+  [ "$hooks_path" = ".githooks" ] && return 0
+
+  if command -v node > /dev/null 2>&1; then
+    if (cd "$DIR" && node scripts/install-git-hooks.mjs > /dev/null 2>&1); then
+      ok "Local git hooks kuruldu (docs auto-update aktif)"
+      return 0
+    fi
+  fi
+
+  warn "Local git hooks kurulu degil. Yeni clone/makine icin calistir: node scripts/install-git-hooks.mjs"
+}
+
 do_migrate() {
   if ! PGPASSWORD="$PGSTAT_DB_PASSWORD" psql \
       -h "$PGSTAT_DB_HOST" -p "$PGSTAT_DB_PORT" \
@@ -211,6 +230,8 @@ do_health() {
   done
   warn "API henüz hazır değil — logları kontrol edin: ./pgstat logs api"
 }
+
+ensure_local_git_hooks
 
 case "${1:-help}" in
 
