@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 13 |
+| Total tasks | 18 |
 | Done tasks | 1 |
-| Remaining tasks | 12 |
+| Remaining tasks | 17 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -24,7 +24,7 @@ Current task: **PGSTAT-P0-001 - Promote next critical data-family contracts**
 
 Status: `in_progress`
 
-Next action: Promote the next batch of data-family contracts and reduce the generated review queue.
+Next action: Promote the next batch of data-family contracts; this is the active critical-path task.
 
 Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the first 161**
 
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | done | 1 |
 | in_progress | 1 |
-| planned | 11 |
+| planned | 16 |
 
 ## Workstream Counts
 
@@ -42,30 +42,58 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | contracts | 2 |
 | governance | 1 |
-| pgdbaagent | 2 |
+| pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
 | telemetry | 4 |
 | ui | 1 |
-| validation | 1 |
+| validation | 3 |
 
 ## Task Board
 
 | Order | ID | Priority | Workstream | Status | Title | Next action |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | Promote the next batch of data-family contracts and reduce the generated review queue. |
+| 0 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Closed; continue with PGSTAT-P0-001. |
+| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | Promote the next batch of data-family contracts; this is the active critical-path task. |
 | 2 | PGSTAT-P0-002 | P0 | contracts | planned | Promote next field contracts beyond the first 161 | Start after the next data-family contract batch is stable. |
-| 3 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | Create capability card after contract promotion baseline. |
-| 4 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | Wait for catalog metadata contracts. |
-| 5 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | Design after core contract review batch. |
-| 6 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | Schedule after evidence contract baseline. |
-| 7 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Wait for core field promotion. |
-| 8 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Start after evidence package schemas v1. |
-| 9 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Closed; continue with PGSTAT-P0-001. |
-| 10 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | Start after evidence package schemas. |
-| 11 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until P0 governance is stable. |
-| 12 | PGSTAT-P1-002 | P1 | security | planned | Define AI/export redaction policy | Defer until promoted field set expands. |
-| 13 | PGSTAT-P1-003 | P1 | release | planned | Add release checklist and upgrade impact template | Defer until P0 governance is stable. |
+| 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | Define redaction policy before planner stats or AI evidence export. |
+| 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | Create release checklist before broad schema/collector implementation. |
+| 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | Start after contract baseline, redaction policy, and release checklist are stable. |
+| 6 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | Start after catalog metadata and redaction policy. |
+| 7 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | Design after contract baseline and release checklist. |
+| 8 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | Design after contract baseline and redaction policy. |
+| 9 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Define evidence schemas after pgstat evidence inputs and redaction policy are stable. |
+| 10 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | Define validation contracts after evidence schemas, redaction policy, and release discipline. |
+| 11 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Start after evidence schemas and validation contracts. |
+| 12 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | Implement after schemas and registry are accepted. |
+| 13 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | Implement after evidence builders v1. |
+| 14 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | Start after deterministic finding engine is stable. |
+| 15 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
+| 16 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
+| 17 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
+
+## Dependency Map
+
+| ID | Depends on | Blocks |
+| --- | --- | --- |
+| PGSTAT-P0-009 | - | PGSTAT-P0-001, PGSTAT-P0-012, PGSTAT-P1-001 |
+| PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007 |
+| PGSTAT-P0-002 | PGSTAT-P0-001 | PGSTAT-P0-011, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007 |
+| PGSTAT-P0-011 | PGSTAT-P0-002 | PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-006, PGSTAT-P0-007, PGSTAT-P0-010 |
+| PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-010, PGSTAT-P1-001 |
+| PGSTAT-P0-003 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-004, PGSTAT-P0-007 |
+| PGSTAT-P0-004 | PGSTAT-P0-003, PGSTAT-P0-011 | PGSTAT-P0-007 |
+| PGSTAT-P0-005 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 | PGSTAT-P0-007 |
+| PGSTAT-P0-006 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011 | PGSTAT-P0-007 |
+| PGSTAT-P0-007 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011 | PGSTAT-P0-010, PGSTAT-P0-008, PGSTAT-P0-013 |
+| PGSTAT-P0-010 | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-008, PGSTAT-P0-016 |
+| PGSTAT-P0-008 | PGSTAT-P0-007, PGSTAT-P0-010 | PGSTAT-P0-013 |
+| PGSTAT-P0-013 | PGSTAT-P0-007, PGSTAT-P0-008 | PGSTAT-P0-014 |
+| PGSTAT-P0-014 | PGSTAT-P0-013 | PGSTAT-P0-015, PGSTAT-P1-004 |
+| PGSTAT-P0-015 | PGSTAT-P0-014 | - |
+| PGSTAT-P0-016 | PGSTAT-P0-010 | PGSTAT-P1-004 |
+| PGSTAT-P1-004 | PGSTAT-P0-014, PGSTAT-P0-016 | - |
+| PGSTAT-P1-001 | PGSTAT-P0-009, PGSTAT-P0-012 | - |
 
 ## Closure Rules
 

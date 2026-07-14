@@ -58,7 +58,7 @@ function main() {
     if (ids.has(label)) fail(`${label}: duplicate id`);
     ids.add(label);
 
-    if (!Number.isInteger(task.order) || task.order < 1) fail(`${label}: order must be a positive integer`);
+    if (!Number.isInteger(task.order) || task.order < 0) fail(`${label}: order must be a non-negative integer`);
     if (!PRIORITIES.has(task.priority)) fail(`${label}: invalid priority`);
     if (!STATUSES.has(task.status)) fail(`${label}: invalid status`);
     if (task.status === 'in_progress') inProgress.push(label);
@@ -100,6 +100,37 @@ function main() {
 
   const max = Number(board.project?.max_in_progress ?? 1);
   if (inProgress.length > max) fail(`too many in_progress tasks: ${inProgress.join(', ')}; max=${max}`);
+
+  for (const task of board.tasks ?? []) {
+    for (const dep of task.dependencies ?? []) {
+      if (!ids.has(dep)) fail(`${task.id}: dependency does not exist: ${dep}`);
+    }
+  }
+
+  const byId = new Map((board.tasks ?? []).map((task) => [task.id, task]));
+  const visiting = new Set();
+  const visited = new Set();
+  function visit(task, path = []) {
+    if (visited.has(task.id)) return;
+    if (visiting.has(task.id)) {
+      fail(`dependency cycle detected: ${[...path, task.id].join(' -> ')}`);
+      return;
+    }
+    visiting.add(task.id);
+    for (const depId of task.dependencies ?? []) {
+      const dep = byId.get(depId);
+      if (dep) visit(dep, [...path, task.id]);
+    }
+    visiting.delete(task.id);
+    visited.add(task.id);
+  }
+  for (const task of board.tasks ?? []) visit(task);
+
+  for (const task of board.tasks ?? []) {
+    if (task.status !== 'in_progress') continue;
+    const openDeps = (task.dependencies ?? []).filter((depId) => byId.get(depId)?.status !== 'done');
+    if (openDeps.length) fail(`${task.id}: in_progress task has unfinished dependencies: ${openDeps.join(', ')}`);
+  }
 
   if (process.exitCode) return;
   console.log(`project-board: ok (${board.tasks.length} tasks, ${inProgress.length} in progress)`);

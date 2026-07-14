@@ -88,6 +88,16 @@ function main() {
     lines.push(`| ${task.order} | ${task.id} | ${task.priority} | ${esc(task.workstream)} | ${task.status} | ${esc(task.title)} | ${esc(task.next_action)} |`);
   }
   lines.push('');
+  lines.push('## Dependency Map');
+  lines.push('');
+  lines.push('| ID | Depends on | Blocks |');
+  lines.push('| --- | --- | --- |');
+  for (const task of tasks) {
+    const dependsOn = (task.dependencies ?? []).join(', ') || '-';
+    const blocks = tasks.filter((candidate) => (candidate.dependencies ?? []).includes(task.id)).map((candidate) => candidate.id).join(', ') || '-';
+    lines.push(`| ${task.id} | ${esc(dependsOn)} | ${esc(blocks)} |`);
+  }
+  lines.push('');
   lines.push('## Closure Rules');
   lines.push('');
   lines.push(`Automatic task close: **${board.closure_policy?.automatic_task_close ? 'yes' : 'no'}**`);

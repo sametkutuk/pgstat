@@ -272,21 +272,26 @@ not diverge from the board.
 Backlog priority is explicit. Work should not skip P0 items unless there is a
 production bug or a user-approved urgent feature.
 
-| ID | Priority | Workstream | Status | Task | Exit criteria |
-| --- | --- | --- | --- | --- | --- |
-| PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | Remaining high-value families have reviewed lifecycle, retention, consumers, and security notes |
-| PGSTAT-P0-002 | P0 | contracts | in_progress | Promote next field contracts beyond the first 161 | Review queue shrinks with exact source, since_pg, unsupported behavior, and consumers |
-| PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | Table/column/index/constraint data has source, schedule, retention, and UI/API usage |
-| PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | `pg_stats`/extended stats fields are classified and redacted before AI use |
-| PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | Events can explain metric changes and are retained/purged deliberately |
-| PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | Lock root-cause evidence supports UI and pgdbaagent findings |
-| PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Temp/WAL/cache/vacuum/lock packages have stable JSON schemas and field IDs |
-| PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Deterministic reasoning lives globally, not only inside UI components |
-| PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Checker blocks schema/collector/API/reasoning changes without required docs |
-| PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | User-provided clone/staging evidence has storage, API, retention, and audit model |
-| PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | Operators can see data coverage and docs/contract status |
-| PGSTAT-P1-002 | P1 | security | planned | Define AI/export redaction policy | Sensitive fields have allow/block/mask behavior before evidence export |
-| PGSTAT-P1-003 | P1 | release | planned | Add release checklist and upgrade impact template | Every release declares migrations, config, retention, and compatibility impact |
+| Order | ID | Priority | Workstream | Status | Task | Depends on |
+| ---: | --- | --- | --- | --- | --- | --- |
+| 0 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | - |
+| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | PGSTAT-P0-009 |
+| 2 | PGSTAT-P0-002 | P0 | contracts | planned | Promote next field contracts beyond the first 161 | PGSTAT-P0-001 |
+| 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | PGSTAT-P0-002 |
+| 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | PGSTAT-P0-009 |
+| 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 6 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | PGSTAT-P0-003, PGSTAT-P0-011 |
+| 7 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 |
+| 8 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011 |
+| 9 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011 |
+| 10 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 11 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | PGSTAT-P0-007, PGSTAT-P0-010 |
+| 12 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | PGSTAT-P0-007, PGSTAT-P0-008 |
+| 13 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
+| 14 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
+| 15 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
+| 16 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
+| 17 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
 
 ## 6. Workstream Rules
 

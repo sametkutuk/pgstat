@@ -25,314 +25,8 @@
   },
   "tasks": [
     {
-      "id": "PGSTAT-P0-001",
-      "order": 1,
-      "priority": "P0",
-      "workstream": "contracts",
-      "status": "in_progress",
-      "title": "Promote next critical data-family contracts",
-      "problem": "Many generated table/data-family contracts are still semantic scaffolds, so pgdbaagent could consume weak lifecycle evidence.",
-      "requirements": [
-        "Review the highest-value remaining data families from docs/generated/contract-review-queue.md.",
-        "Confirm lifecycle semantics, schedule, retention, purge owner, partitioning, rollup, consumers, and security classification.",
-        "Promote stable decisions into docs/data-contract-registry.md or generator hints where appropriate."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "At least the next 10 high-value data families have reviewed semantic contracts.", "status": "pending" },
-        { "id": "AC2", "text": "Each promoted family has retention and purge behavior documented.", "status": "pending" },
-        { "id": "AC3", "text": "Generated contract-review queue reflects the reduced review gap after regeneration.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Use contract-review-queue priority and consumer count to pick the next families.",
-        "Read migrations, collector repositories, PurgeEvaluator, PartitionManager, API routes, and UI references.",
-        "Update contract hints/manual registry and regenerate generated docs."
-      ],
-      "verification_plan": [
-        "node scripts/generate-doc-inventory.mjs",
-        "node scripts/check-doc-impact.mjs --staged",
-        "Review generated queue counts and promoted rows."
-      ],
-      "required_docs": [
-        "docs/data-contract-registry.md",
-        "docs/generated/data-family-contracts.md",
-        "docs/generated/contract-review-queue.md",
-        "docs/project-execution-plan.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": [],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Promote the next batch of data-family contracts and reduce the generated review queue."
-    },
-    {
-      "id": "PGSTAT-P0-002",
-      "order": 2,
-      "priority": "P0",
-      "workstream": "contracts",
-      "status": "planned",
-      "title": "Promote next field contracts beyond the first 161",
-      "problem": "924 fields still need exact source/version/unsupported/consumer review.",
-      "requirements": [
-        "Promote fields by evidence value, not by table order.",
-        "Start with fields required for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation.",
-        "Every promoted field must state source expression, since_pg, unsupported behavior, sensitivity, and consumers."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "At least 100 additional fields are promoted or explicitly marked out of pgdbaagent scope.", "status": "pending" },
-        { "id": "AC2", "text": "Sensitive field policies are recorded for promoted fields.", "status": "pending" },
-        { "id": "AC3", "text": "Generated field-contract review count decreases after regeneration.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Select fields from the first stable evidence packages.",
-        "Verify source SQL and PostgreSQL version matrix.",
-        "Update manual contracts/generator hints and regenerate docs."
-      ],
-      "verification_plan": [
-        "node scripts/generate-doc-inventory.mjs",
-        "node scripts/check-doc-impact.mjs --staged"
-      ],
-      "required_docs": [
-        "docs/data-contract-registry.md",
-        "docs/generated/field-contracts.md",
-        "docs/generated/contract-review-queue.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-001"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Start after the next data-family contract batch is stable."
-    },
-    {
-      "id": "PGSTAT-P0-003",
-      "order": 3,
-      "priority": "P0",
-      "workstream": "telemetry",
-      "status": "planned",
-      "title": "Add catalog metadata collection contracts",
-      "problem": "pgdbaagent needs table/column/index/constraint context to reason about query plans, index proposals, and write risk.",
-      "requirements": [
-        "Define source catalog queries for tables, columns, indexes, constraints, and relation ownership metadata.",
-        "Keep production collection read-only and version-aware.",
-        "Define retention, purge, and whether metadata is snapshot or slowly changing dimension."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Capability card exists before implementation.", "status": "pending" },
-        { "id": "AC2", "text": "Storage and retention model are documented.", "status": "pending" },
-        { "id": "AC3", "text": "API/UI/pgdbaagent consumers are mapped.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Write capability card.",
-        "Design schema and collector source queries.",
-        "Implement migrations, collector, API, and docs together."
-      ],
-      "verification_plan": [
-        "collector mvn compile",
-        "api npx tsc --noEmit if API changes",
-        "generated docs and docs-impact checks"
-      ],
-      "required_docs": [
-        "docs/pgstat-data-source-dictionary.md",
-        "docs/data-contract-registry.md",
-        "docs/pgstat-telemetry-completion-roadmap.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-001"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Create capability card after contract promotion baseline."
-    },
-    {
-      "id": "PGSTAT-P0-004",
-      "order": 4,
-      "priority": "P0",
-      "workstream": "telemetry",
-      "status": "planned",
-      "title": "Add safe planner stats metadata contracts",
-      "problem": "Planner statistics are needed for index/query reasoning, but can expose sensitive distribution metadata.",
-      "requirements": [
-        "Collect safe scalar metadata from pg_stats and extended stats without dumping sensitive values by default.",
-        "Classify histogram/MCV fields before any AI/export use.",
-        "Document unsupported-version and privilege behavior."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Safe/blocked/redacted field policy is explicit.", "status": "pending" },
-        { "id": "AC2", "text": "Retention and row-volume budget are documented.", "status": "pending" },
-        { "id": "AC3", "text": "pgdbaagent evidence usage is documented before exposure.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Define allowed scalar stats.",
-        "Exclude or redact raw value distributions unless explicitly approved.",
-        "Implement only after field security policy is accepted."
-      ],
-      "verification_plan": [
-        "security review of exported fields",
-        "collector compile",
-        "generated docs and docs-impact checks"
-      ],
-      "required_docs": [
-        "docs/pgstat-data-source-dictionary.md",
-        "docs/data-contract-registry.md",
-        "docs/pgdbaagent-contracts.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-003"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Wait for catalog metadata contracts."
-    },
-    {
-      "id": "PGSTAT-P0-005",
-      "order": 5,
-      "priority": "P0",
-      "workstream": "telemetry",
-      "status": "planned",
-      "title": "Add deploy/application event API",
-      "problem": "Metric changes need deploy/event context to separate workload changes from database regressions.",
-      "requirements": [
-        "Create an API for application/deploy events.",
-        "Events must be scoped to instance, database, service group, or application.",
-        "Retention, audit, and export behavior must be documented."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Events can be written through a documented API.", "status": "pending" },
-        { "id": "AC2", "text": "Insights can correlate event windows later without schema redesign.", "status": "pending" },
-        { "id": "AC3", "text": "Retention and audit paths are implemented.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Design event schema and API.",
-        "Add UI/import path only after API contract is stable.",
-        "Feed pgdbaagent evidence packages as contextual evidence."
-      ],
-      "verification_plan": [
-        "api npx tsc --noEmit",
-        "ui npx tsc --noEmit if UI changes",
-        "generated docs and docs-impact checks"
-      ],
-      "required_docs": [
-        "docs/data-contract-registry.md",
-        "docs/agentic-dba-platform-architecture.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-001"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Design after core contract review batch."
-    },
-    {
-      "id": "PGSTAT-P0-006",
-      "order": 6,
-      "priority": "P0",
-      "workstream": "telemetry",
-      "status": "planned",
-      "title": "Add full lock graph snapshot",
-      "problem": "Lock wait evidence needs blocker/waiter graph context, not just isolated wait rows.",
-      "requirements": [
-        "Capture waiters, blockers, lock modes, relation/database context, and query identity where safe.",
-        "Represent lock graph snapshots in a way pgdbaagent can use for root-cause findings.",
-        "Document data sensitivity and retention."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Lock graph evidence package can identify root blocker candidates.", "status": "pending" },
-        { "id": "AC2", "text": "Snapshot collection remains read-only and low overhead.", "status": "pending" },
-        { "id": "AC3", "text": "UI/API consumers and pgdbaagent usage are mapped.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Define capability card and schema.",
-        "Implement version-aware collector query.",
-        "Expose API/UI only after contract is stable."
-      ],
-      "verification_plan": [
-        "collector mvn compile",
-        "api/ui type checks if changed",
-        "generated docs and docs-impact checks"
-      ],
-      "required_docs": [
-        "docs/data-contract-registry.md",
-        "docs/pgdbaagent-contracts.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-001"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Schedule after evidence contract baseline."
-    },
-    {
-      "id": "PGSTAT-P0-007",
-      "order": 7,
-      "priority": "P0",
-      "workstream": "pgdbaagent",
-      "status": "planned",
-      "title": "Define evidence package schemas v1",
-      "problem": "pgdbaagent cannot reason safely until evidence packages are stable and field-backed.",
-      "requirements": [
-        "Define JSON schemas for temp_spill_query_v1, wal_spike_query_v1, cache_miss_query_v1, vacuum_lag_table_v1, and lock_wait_v1.",
-        "Each evidence field must reference a source field contract ID.",
-        "Missing context and sensitivity policy must be explicit."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Five evidence package schemas are documented.", "status": "pending" },
-        { "id": "AC2", "text": "Each package lists required and optional field contract IDs.", "status": "pending" },
-        { "id": "AC3", "text": "AI input boundaries are documented.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Start with docs/schema only.",
-        "Use promoted contracts from P0-001/P0-002.",
-        "Implement builders only after schema review."
-      ],
-      "verification_plan": [
-        "docs-impact check",
-        "schema consistency review against generated field contracts"
-      ],
-      "required_docs": [
-        "docs/pgdbaagent-contracts.md",
-        "docs/data-contract-registry.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-001", "PGSTAT-P0-002"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Wait for core field promotion."
-    },
-    {
-      "id": "PGSTAT-P0-008",
-      "order": 8,
-      "priority": "P0",
-      "workstream": "pgdbaagent",
-      "status": "planned",
-      "title": "Define signal/finding/recommendation registry",
-      "problem": "Reasoning is currently scattered between UI badges and design docs.",
-      "requirements": [
-        "Create a global deterministic rule registry.",
-        "Separate UI hints from durable pgdbaagent signals.",
-        "Define lifecycle and status transitions for findings and recommendations."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Signal, finding, and recommendation schemas are stable enough for v1 implementation.", "status": "pending" },
-        { "id": "AC2", "text": "At least the first Temp/WAL/Cache/Vacuum/Lock rules are listed.", "status": "pending" },
-        { "id": "AC3", "text": "Risk and confidence inputs are explicit.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Document registry first.",
-        "Map existing UI badge heuristics to candidate signals where appropriate.",
-        "Implement code after schema acceptance."
-      ],
-      "verification_plan": [
-        "docs-impact check",
-        "cross-check with pgdbaagent contracts"
-      ],
-      "required_docs": [
-        "docs/pgdbaagent-contracts.md",
-        "docs/agentic-dba-platform-architecture.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-007"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Start after evidence package schemas v1."
-    },
-    {
       "id": "PGSTAT-P0-009",
-      "order": 9,
+      "order": 0,
       "priority": "P0",
       "workstream": "governance",
       "status": "done",
@@ -345,9 +39,21 @@
         "Fail if too many tasks are in_progress."
       ],
       "acceptance_criteria": [
-        { "id": "AC1", "text": "Project board validator runs from local hooks.", "status": "done" },
-        { "id": "AC2", "text": "Generated project status is staged by pre-commit and checked by pre-push.", "status": "done" },
-        { "id": "AC3", "text": "Project execution plan documents the workflow.", "status": "done" }
+        {
+          "id": "AC1",
+          "text": "Project board validator runs from local hooks.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Generated project status is staged by pre-commit and checked by pre-push.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Project execution plan documents the workflow.",
+          "status": "done"
+        }
       ],
       "implementation_plan": [
         "Create docs/project-board.json.",
@@ -366,7 +72,11 @@
         "docs/project-execution-plan.md"
       ],
       "dependencies": [],
-      "customer_acceptance": { "required": false, "status": "not_required", "evidence": "Governance automation task for local project control." },
+      "customer_acceptance": {
+        "required": false,
+        "status": "not_required",
+        "evidence": "Governance automation task for local project control."
+      },
       "verification_evidence": [
         "Project board validator added.",
         "Generated project status added.",
@@ -375,6 +85,512 @@
       ],
       "completed_at": "2026-07-14",
       "next_action": "Closed; continue with PGSTAT-P0-001."
+    },
+    {
+      "id": "PGSTAT-P0-001",
+      "order": 1,
+      "priority": "P0",
+      "workstream": "contracts",
+      "status": "in_progress",
+      "title": "Promote next critical data-family contracts",
+      "problem": "Many generated table/data-family contracts are still semantic scaffolds, so pgdbaagent could consume weak lifecycle evidence.",
+      "requirements": [
+        "Review the highest-value remaining data families from docs/generated/contract-review-queue.md.",
+        "Confirm lifecycle semantics, schedule, retention, purge owner, partitioning, rollup, consumers, and security classification.",
+        "Promote stable decisions into docs/data-contract-registry.md or generator hints where appropriate."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "At least the next 10 high-value data families have reviewed semantic contracts.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Each promoted family has retention and purge behavior documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Generated contract-review queue reflects the reduced review gap after regeneration.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Use contract-review-queue priority and consumer count to pick the next families.",
+        "Read migrations, collector repositories, PurgeEvaluator, PartitionManager, API routes, and UI references.",
+        "Update contract hints/manual registry and regenerate generated docs."
+      ],
+      "verification_plan": [
+        "node scripts/generate-doc-inventory.mjs",
+        "node scripts/check-doc-impact.mjs --staged",
+        "Review generated queue counts and promoted rows."
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/generated/data-family-contracts.md",
+        "docs/generated/contract-review-queue.md",
+        "docs/project-execution-plan.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-009"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Promote the next batch of data-family contracts; this is the active critical-path task."
+    },
+    {
+      "id": "PGSTAT-P0-002",
+      "order": 2,
+      "priority": "P0",
+      "workstream": "contracts",
+      "status": "planned",
+      "title": "Promote next field contracts beyond the first 161",
+      "problem": "924 fields still need exact source/version/unsupported/consumer review.",
+      "requirements": [
+        "Promote fields by evidence value, not by table order.",
+        "Start with fields required for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation.",
+        "Every promoted field must state source expression, since_pg, unsupported behavior, sensitivity, and consumers."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "At least 100 additional fields are promoted or explicitly marked out of pgdbaagent scope.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Sensitive field policies are recorded for promoted fields.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Generated field-contract review count decreases after regeneration.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Select fields from the first stable evidence packages.",
+        "Verify source SQL and PostgreSQL version matrix.",
+        "Update manual contracts/generator hints and regenerate docs."
+      ],
+      "verification_plan": [
+        "node scripts/generate-doc-inventory.mjs",
+        "node scripts/check-doc-impact.mjs --staged"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/generated/field-contracts.md",
+        "docs/generated/contract-review-queue.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after the next data-family contract batch is stable."
+    },
+    {
+      "id": "PGSTAT-P0-011",
+      "order": 3,
+      "priority": "P0",
+      "workstream": "security",
+      "status": "planned",
+      "title": "Define AI/export redaction policy",
+      "problem": "Sensitive fields need explicit allow/block/mask rules before AI or export usage.",
+      "requirements": [
+        "Classify query text, application names, host metadata, settings, and event metadata.",
+        "Define defaults for UI, report, export, alert, and AI contexts.",
+        "Make pgdbaagent evidence builders enforce the policy."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Redaction policy is documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Sensitive generated field count has an owner and decision path.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Start with policy doc.",
+        "Add code enforcement when evidence builders are implemented."
+      ],
+      "verification_plan": [
+        "security review",
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/pgdbaagent-contracts.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-002"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Define redaction policy before planner stats or AI evidence export."
+    },
+    {
+      "id": "PGSTAT-P0-012",
+      "order": 4,
+      "priority": "P0",
+      "workstream": "release",
+      "status": "planned",
+      "title": "Add release checklist and upgrade impact template",
+      "problem": "Enterprise releases need explicit migration, config, retention, compatibility, and rollback notes.",
+      "requirements": [
+        "Create release checklist template.",
+        "Include migration/retention/config/security/UI/API impact sections.",
+        "Link checklist to project execution plan."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Release checklist template exists.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Checklist is referenced by governance docs.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Create docs/release-checklist-template.md.",
+        "Wire it into governance and project execution docs."
+      ],
+      "verification_plan": [
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/platform-governance-and-sdlc.md",
+        "docs/project-execution-plan.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-009"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Create release checklist before broad schema/collector implementation."
+    },
+    {
+      "id": "PGSTAT-P0-003",
+      "order": 5,
+      "priority": "P0",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Add catalog metadata collection contracts",
+      "problem": "pgdbaagent needs table/column/index/constraint context to reason about query plans, index proposals, and write risk.",
+      "requirements": [
+        "Define source catalog queries for tables, columns, indexes, constraints, and relation ownership metadata.",
+        "Keep production collection read-only and version-aware.",
+        "Define retention, purge, and whether metadata is snapshot or slowly changing dimension."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Capability card exists before implementation.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Storage and retention model are documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "API/UI/pgdbaagent consumers are mapped.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Write capability card.",
+        "Design schema and collector source queries.",
+        "Implement migrations, collector, API, and docs together."
+      ],
+      "verification_plan": [
+        "collector mvn compile",
+        "api npx tsc --noEmit if API changes",
+        "generated docs and docs-impact checks"
+      ],
+      "required_docs": [
+        "docs/pgstat-data-source-dictionary.md",
+        "docs/data-contract-registry.md",
+        "docs/pgstat-telemetry-completion-roadmap.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001",
+        "PGSTAT-P0-002",
+        "PGSTAT-P0-011",
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after contract baseline, redaction policy, and release checklist are stable."
+    },
+    {
+      "id": "PGSTAT-P0-004",
+      "order": 6,
+      "priority": "P0",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Add safe planner stats metadata contracts",
+      "problem": "Planner statistics are needed for index/query reasoning, but can expose sensitive distribution metadata.",
+      "requirements": [
+        "Collect safe scalar metadata from pg_stats and extended stats without dumping sensitive values by default.",
+        "Classify histogram/MCV fields before any AI/export use.",
+        "Document unsupported-version and privilege behavior."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Safe/blocked/redacted field policy is explicit.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Retention and row-volume budget are documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "pgdbaagent evidence usage is documented before exposure.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Define allowed scalar stats.",
+        "Exclude or redact raw value distributions unless explicitly approved.",
+        "Implement only after field security policy is accepted."
+      ],
+      "verification_plan": [
+        "security review of exported fields",
+        "collector compile",
+        "generated docs and docs-impact checks"
+      ],
+      "required_docs": [
+        "docs/pgstat-data-source-dictionary.md",
+        "docs/data-contract-registry.md",
+        "docs/pgdbaagent-contracts.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-003",
+        "PGSTAT-P0-011"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after catalog metadata and redaction policy."
+    },
+    {
+      "id": "PGSTAT-P0-005",
+      "order": 7,
+      "priority": "P0",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Add deploy/application event API",
+      "problem": "Metric changes need deploy/event context to separate workload changes from database regressions.",
+      "requirements": [
+        "Create an API for application/deploy events.",
+        "Events must be scoped to instance, database, service group, or application.",
+        "Retention, audit, and export behavior must be documented."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Events can be written through a documented API.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Insights can correlate event windows later without schema redesign.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Retention and audit paths are implemented.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Design event schema and API.",
+        "Add UI/import path only after API contract is stable.",
+        "Feed pgdbaagent evidence packages as contextual evidence."
+      ],
+      "verification_plan": [
+        "api npx tsc --noEmit",
+        "ui npx tsc --noEmit if UI changes",
+        "generated docs and docs-impact checks"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/agentic-dba-platform-architecture.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001",
+        "PGSTAT-P0-002",
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Design after contract baseline and release checklist."
+    },
+    {
+      "id": "PGSTAT-P0-006",
+      "order": 8,
+      "priority": "P0",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Add full lock graph snapshot",
+      "problem": "Lock wait evidence needs blocker/waiter graph context, not just isolated wait rows.",
+      "requirements": [
+        "Capture waiters, blockers, lock modes, relation/database context, and query identity where safe.",
+        "Represent lock graph snapshots in a way pgdbaagent can use for root-cause findings.",
+        "Document data sensitivity and retention."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Lock graph evidence package can identify root blocker candidates.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Snapshot collection remains read-only and low overhead.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "UI/API consumers and pgdbaagent usage are mapped.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Define capability card and schema.",
+        "Implement version-aware collector query.",
+        "Expose API/UI only after contract is stable."
+      ],
+      "verification_plan": [
+        "collector mvn compile",
+        "api/ui type checks if changed",
+        "generated docs and docs-impact checks"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/pgdbaagent-contracts.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001",
+        "PGSTAT-P0-002",
+        "PGSTAT-P0-011"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Design after contract baseline and redaction policy."
+    },
+    {
+      "id": "PGSTAT-P0-007",
+      "order": 9,
+      "priority": "P0",
+      "workstream": "pgdbaagent",
+      "status": "planned",
+      "title": "Define evidence package schemas v1",
+      "problem": "pgdbaagent cannot reason safely until evidence packages are stable and field-backed.",
+      "requirements": [
+        "Define JSON schemas for temp_spill_query_v1, wal_spike_query_v1, cache_miss_query_v1, vacuum_lag_table_v1, and lock_wait_v1.",
+        "Each evidence field must reference a source field contract ID.",
+        "Missing context and sensitivity policy must be explicit."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Five evidence package schemas are documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Each package lists required and optional field contract IDs.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "AI input boundaries are documented.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Start with docs/schema only.",
+        "Use promoted contracts from P0-001/P0-002.",
+        "Implement builders only after schema review."
+      ],
+      "verification_plan": [
+        "docs-impact check",
+        "schema consistency review against generated field contracts"
+      ],
+      "required_docs": [
+        "docs/pgdbaagent-contracts.md",
+        "docs/data-contract-registry.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001",
+        "PGSTAT-P0-002",
+        "PGSTAT-P0-003",
+        "PGSTAT-P0-004",
+        "PGSTAT-P0-005",
+        "PGSTAT-P0-006",
+        "PGSTAT-P0-011"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Define evidence schemas after pgstat evidence inputs and redaction policy are stable."
     },
     {
       "id": "PGSTAT-P0-010",
@@ -390,9 +606,21 @@
         "Define retention, audit, timeout, and concurrency policy."
       ],
       "acceptance_criteria": [
-        { "id": "AC1", "text": "Validation target schema is documented.", "status": "pending" },
-        { "id": "AC2", "text": "Validation result schema is documented.", "status": "pending" },
-        { "id": "AC3", "text": "No automatic clone lifecycle is implied.", "status": "pending" }
+        {
+          "id": "AC1",
+          "text": "Validation target schema is documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Validation result schema is documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "No automatic clone lifecycle is implied.",
+          "status": "pending"
+        }
       ],
       "implementation_plan": [
         "Design contracts first.",
@@ -409,14 +637,360 @@
         "docs/data-contract-registry.md",
         "docs/generated/project-status.md"
       ],
-      "dependencies": ["PGSTAT-P0-007"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
+      "dependencies": [
+        "PGSTAT-P0-007",
+        "PGSTAT-P0-011",
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
       "verification_evidence": [],
-      "next_action": "Start after evidence package schemas."
+      "next_action": "Define validation contracts after evidence schemas, redaction policy, and release discipline."
+    },
+    {
+      "id": "PGSTAT-P0-008",
+      "order": 11,
+      "priority": "P0",
+      "workstream": "pgdbaagent",
+      "status": "planned",
+      "title": "Define signal/finding/recommendation registry",
+      "problem": "Reasoning is currently scattered between UI badges and design docs.",
+      "requirements": [
+        "Create a global deterministic rule registry.",
+        "Separate UI hints from durable pgdbaagent signals.",
+        "Define lifecycle and status transitions for findings and recommendations."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Signal, finding, and recommendation schemas are stable enough for v1 implementation.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "At least the first Temp/WAL/Cache/Vacuum/Lock rules are listed.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Risk and confidence inputs are explicit.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Document registry first.",
+        "Map existing UI badge heuristics to candidate signals where appropriate.",
+        "Implement code after schema acceptance."
+      ],
+      "verification_plan": [
+        "docs-impact check",
+        "cross-check with pgdbaagent contracts"
+      ],
+      "required_docs": [
+        "docs/pgdbaagent-contracts.md",
+        "docs/agentic-dba-platform-architecture.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-007",
+        "PGSTAT-P0-010"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after evidence schemas and validation contracts."
+    },
+    {
+      "id": "PGSTAT-P0-013",
+      "order": 12,
+      "priority": "P0",
+      "workstream": "pgdbaagent",
+      "status": "planned",
+      "title": "Implement evidence package builders v1",
+      "problem": "Schemas alone are not enough; pgdbaagent needs deterministic builders that assemble field-backed evidence packages from pgstat APIs/contracts.",
+      "requirements": [
+        "Implement builders for temp_spill_query_v1, wal_spike_query_v1, cache_miss_query_v1, vacuum_lag_table_v1, and lock_wait_v1.",
+        "Each builder must include source field IDs, freshness, missing context, and sensitivity metadata.",
+        "Builders must not read undocumented raw fields."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Five evidence builders produce schema-valid packages from documented pgstat evidence.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Missing context and sensitivity metadata are populated.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Tests cover empty/missing/partial evidence cases.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Create evidence builder module in pgdbaagent or shared package.",
+        "Map builders to promoted field contracts.",
+        "Add fixtures for representative evidence packages."
+      ],
+      "verification_plan": [
+        "pgdbaagent tests when project exists locally",
+        "schema validation tests",
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/pgdbaagent-contracts.md",
+        "docs/data-contract-registry.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-007",
+        "PGSTAT-P0-008"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Implement after schemas and registry are accepted."
+    },
+    {
+      "id": "PGSTAT-P0-014",
+      "order": 13,
+      "priority": "P0",
+      "workstream": "pgdbaagent",
+      "status": "planned",
+      "title": "Implement deterministic signal/finding engine v1",
+      "problem": "Reasoning must be reusable and deterministic before AI explanation is layered on top.",
+      "requirements": [
+        "Implement global signal rules for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, and Lock Wait.",
+        "Generate findings from signals with severity, confidence, impact, and missing context.",
+        "Keep UI-only badges separate from durable findings unless backed by rules."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "First rule registry runs against evidence packages.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Findings include source evidence IDs and rule IDs.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Tests cover rule thresholds and missing evidence behavior.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Create deterministic rule registry.",
+        "Implement signal generation.",
+        "Implement finding generation and lifecycle seed states."
+      ],
+      "verification_plan": [
+        "unit tests",
+        "schema validation tests",
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/pgdbaagent-contracts.md",
+        "docs/agentic-dba-platform-architecture.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-013"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Implement after evidence builders v1."
+    },
+    {
+      "id": "PGSTAT-P0-015",
+      "order": 14,
+      "priority": "P0",
+      "workstream": "pgdbaagent",
+      "status": "planned",
+      "title": "Implement pgdbaagent Advice V1 and AI explanation boundary",
+      "problem": "AI explanation should summarize structured findings and recommendations, not invent advice from raw data.",
+      "requirements": [
+        "Create recommendation candidates from deterministic findings.",
+        "Prepare AI context only from approved evidence and redacted fields.",
+        "Generate DBA explanation, action plan, rollback plan, and observation plan."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Advice output separates evidence, inference, recommendation, risk, confidence, and missing context.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "AI context respects redaction policy.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "No production execution path exists.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Implement recommendation candidate generation.",
+        "Implement AI context builder.",
+        "Implement explanation output contract."
+      ],
+      "verification_plan": [
+        "unit tests",
+        "redaction tests",
+        "manual review with sample evidence packages"
+      ],
+      "required_docs": [
+        "docs/pgdbaagent-contracts.md",
+        "docs/agentic-dba-platform-architecture.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-014"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after deterministic finding engine is stable."
+    },
+    {
+      "id": "PGSTAT-P0-016",
+      "order": 15,
+      "priority": "P0",
+      "workstream": "validation",
+      "status": "planned",
+      "title": "Implement validation target/result storage and API",
+      "problem": "Validation contracts need storage and API before clone/staging before-after evidence can be attached to recommendations.",
+      "requirements": [
+        "Implement user-provided validation target registry.",
+        "Implement validation result storage for EXPLAIN and optional EXPLAIN ANALYZE outputs.",
+        "Include audit, timeout, retention, and sensitivity controls."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Validation targets can be registered without automatic clone provisioning.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Validation results can be stored and linked to recommendations.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Retention/audit/security behavior is documented and implemented.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Add migrations for validation target/result tables.",
+        "Add API routes and service layer.",
+        "Wire retention and generated contracts."
+      ],
+      "verification_plan": [
+        "api npx tsc --noEmit",
+        "migration review",
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/pgdbaagent-contracts.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-010"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Implement after validation contracts are accepted."
+    },
+    {
+      "id": "PGSTAT-P1-004",
+      "order": 16,
+      "priority": "P1",
+      "workstream": "validation",
+      "status": "planned",
+      "title": "Implement user-provided clone validation execution jobs",
+      "problem": "After target/result storage exists, pgdbaagent needs controlled EXPLAIN and before-after validation jobs against user-provided clone/staging databases.",
+      "requirements": [
+        "Run controlled EXPLAIN and optional EXPLAIN ANALYZE against user-provided clone/staging targets.",
+        "Apply timeout, concurrency, approval, and audit policies.",
+        "Store before/after evidence without touching production."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Validation jobs run only against registered non-production targets.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Before/after evidence is linked to recommendation candidates.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Timeout and audit behavior are tested.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Implement job queue and worker policy.",
+        "Implement EXPLAIN capture.",
+        "Add before/after comparison outputs."
+      ],
+      "verification_plan": [
+        "integration tests against a local clone/staging DB",
+        "security review",
+        "docs-impact check"
+      ],
+      "required_docs": [
+        "docs/agentic-dba-platform-architecture.md",
+        "docs/pgdbaagent-contracts.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-014",
+        "PGSTAT-P0-016"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after validation storage/API and deterministic reasoning are stable."
     },
     {
       "id": "PGSTAT-P1-001",
-      "order": 11,
+      "order": 17,
       "priority": "P1",
       "workstream": "ui",
       "status": "planned",
@@ -428,8 +1002,16 @@
         "Use generated project status as the source."
       ],
       "acceptance_criteria": [
-        { "id": "AC1", "text": "Admin UI can surface project/contract status or link to docs.", "status": "pending" },
-        { "id": "AC2", "text": "No sensitive data is exposed.", "status": "pending" }
+        {
+          "id": "AC1",
+          "text": "Admin UI can surface project/contract status or link to docs.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "No sensitive data is exposed.",
+          "status": "pending"
+        }
       ],
       "implementation_plan": [
         "Decide whether this belongs in product UI or docs-only first.",
@@ -443,79 +1025,17 @@
         "docs/project-execution-plan.md",
         "docs/generated/project-status.md"
       ],
-      "dependencies": ["PGSTAT-P0-009"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
+      "dependencies": [
+        "PGSTAT-P0-009",
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
       "verification_evidence": [],
-      "next_action": "Defer until P0 governance is stable."
-    },
-    {
-      "id": "PGSTAT-P1-002",
-      "order": 12,
-      "priority": "P1",
-      "workstream": "security",
-      "status": "planned",
-      "title": "Define AI/export redaction policy",
-      "problem": "Sensitive fields need explicit allow/block/mask rules before AI or export usage.",
-      "requirements": [
-        "Classify query text, application names, host metadata, settings, and event metadata.",
-        "Define defaults for UI, report, export, alert, and AI contexts.",
-        "Make pgdbaagent evidence builders enforce the policy."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Redaction policy is documented.", "status": "pending" },
-        { "id": "AC2", "text": "Sensitive generated field count has an owner and decision path.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Start with policy doc.",
-        "Add code enforcement when evidence builders are implemented."
-      ],
-      "verification_plan": [
-        "security review",
-        "docs-impact check"
-      ],
-      "required_docs": [
-        "docs/data-contract-registry.md",
-        "docs/pgdbaagent-contracts.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-002"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Defer until promoted field set expands."
-    },
-    {
-      "id": "PGSTAT-P1-003",
-      "order": 13,
-      "priority": "P1",
-      "workstream": "release",
-      "status": "planned",
-      "title": "Add release checklist and upgrade impact template",
-      "problem": "Enterprise releases need explicit migration, config, retention, compatibility, and rollback notes.",
-      "requirements": [
-        "Create release checklist template.",
-        "Include migration/retention/config/security/UI/API impact sections.",
-        "Link checklist to project execution plan."
-      ],
-      "acceptance_criteria": [
-        { "id": "AC1", "text": "Release checklist template exists.", "status": "pending" },
-        { "id": "AC2", "text": "Checklist is referenced by governance docs.", "status": "pending" }
-      ],
-      "implementation_plan": [
-        "Create docs/release-checklist-template.md.",
-        "Wire it into governance and project execution docs."
-      ],
-      "verification_plan": [
-        "docs-impact check"
-      ],
-      "required_docs": [
-        "docs/platform-governance-and-sdlc.md",
-        "docs/project-execution-plan.md",
-        "docs/generated/project-status.md"
-      ],
-      "dependencies": ["PGSTAT-P0-009"],
-      "customer_acceptance": { "required": true, "status": "pending", "evidence": "" },
-      "verification_evidence": [],
-      "next_action": "Defer until P0 governance is stable."
+      "next_action": "Defer until governance and release checklist are stable."
     }
   ]
 }
