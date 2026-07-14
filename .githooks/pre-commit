@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+set -eu
+
+echo "[pgstat-docs] regenerating generated documentation"
+node scripts/generate-doc-inventory.mjs
+
+echo "[pgstat-docs] staging generated documentation"
+git add \
+  docs/generated/project-inventory.md \
+  docs/generated/data-lifecycle-matrix.md \
+  docs/generated/data-family-contracts.md \
+  docs/generated/field-contracts.md \
+  docs/generated/contract-review-queue.md
+
+echo "[pgstat-docs] checking staged documentation impact"
+node scripts/check-doc-impact.mjs --staged

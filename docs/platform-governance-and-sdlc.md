@@ -151,8 +151,8 @@ code diff
 Implementation options:
 
 - PR checklist enforced manually in early phase
-- CI script that detects migrations, collector SQL, API routes, and UI insight
-  changes
+- local git hooks that regenerate generated docs and reject stale docs before
+  commit/push
 - documentation steward agent that reviews every feature branch and proposes doc
   updates
 - scheduled documentation audit
@@ -174,6 +174,7 @@ docs/generated/contract-review-queue.md.
 Run the local documentation impact checker before commit:
 
 ```text
+node scripts/install-git-hooks.mjs
 node scripts/check-doc-impact.mjs --staged
 ```
 
@@ -326,5 +327,5 @@ Required next documents or tools:
 3. PR checklist template
 4. Evidence package schema v1 hardening
 5. Recommendation schema v1 validation tests
-6. Documentation impact checker CI wiring after repository token/workflow scope is available
+6. Documentation impact checker rule hardening
 7. Documentation steward agent workflow

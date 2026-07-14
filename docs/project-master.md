@@ -139,7 +139,7 @@ Current master capability map:
 | pgdbaagent evidence packages | planned | Architecture, future schema docs | Define v1 schemas before broad reasoning |
 | Findings/recommendations | planned | Architecture, future schema docs | Deterministic first, AI explanation second |
 | Clone/staging validation | planned | Architecture | User-provided targets first, no automatic clone lifecycle yet |
-| Documentation automation | planned | Governance, this document | Add docs impact checker and steward workflow |
+| Documentation automation | active | Governance, local git hooks | Keep generated docs current before commit/push |
 
 When a capability is added, changed, deprecated, or removed, this ledger or a
 more detailed linked capability registry must be updated.
@@ -367,11 +367,14 @@ Triggers that must be detected:
 
 Automation phases:
 
-1. Manual PR checklist now.
-2. Scripted docs impact checker via `node scripts/check-doc-impact.mjs --staged`.
-3. Documentation steward agent after the checker is stable.
-4. CI blocking for missing required docs after repository token/workflow scope is available.
-5. Scheduled documentation audit.
+1. Local hook install: `node scripts/install-git-hooks.mjs`.
+2. Pre-commit hook regenerates generated docs, stages them, and runs
+   `node scripts/check-doc-impact.mjs --staged`.
+3. Pre-push hook rejects generated documentation drift and checks branch impact
+   against upstream.
+4. Manual PR checklist remains required for semantic review.
+5. Documentation steward agent later.
+6. Scheduled documentation audit.
 
 ## 12. Documentation Update Rule
 
