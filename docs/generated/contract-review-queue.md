@@ -13,9 +13,9 @@ node scripts/generate-doc-inventory.mjs
 
 | Queue | Count | Action |
 | --- | --- | --- |
-| Table/data-family contracts needing semantic review | 56 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 924 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 561 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Table/data-family contracts needing semantic review | 46 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
+| Field contracts needing exact source/version review | 904 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 598 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 7 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -33,16 +33,6 @@ node scripts/generate-doc-inventory.mjs
 
 | Table | Semantics | Columns | Retention | API consumers | UI consumers | Reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| agg.pg_activity_hourly | aggregate | 10 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_archiver_hourly | aggregate | 7 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_lock_hourly | aggregate | 6 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_replication_hourly | aggregate | 6 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_slru_hourly | aggregate | 8 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_table_stat_hourly | aggregate | 23 | control.retention_policy.hourly_retention_days/hourly_retention_months | api/src/routes/insights.ts (21 routes) | ui/src/pages/Insights.tsx | generated default; needs review |
-| agg.pg_wal_daily | aggregate | 6 | referenced by PurgeEvaluator; verify policy mapping | not detected | not detected | generated default; needs review |
-| agg.pg_wal_hourly | aggregate | 10 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes) | ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx | generated default; needs review |
-| agg.pgss_daily | aggregate | 9 | control.retention_policy.daily_retention_days/daily_retention_months | api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
-| agg.pgss_hourly | aggregate | 15 | control.retention_policy.hourly_retention_days/hourly_retention_months | api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
 | control.alert_message_template | control/config | 6 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_notification | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
 | control.alert_rule | control/config | 33 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
@@ -94,15 +84,52 @@ node scripts/generate-doc-inventory.mjs
 
 | Field ID | Sensitivity | AI context | pgdbaagent usage | Status |
 | --- | --- | --- | --- | --- |
-| agg.pg_activity_hourly.max_query_duration_seconds | query text or query identity | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_archiver_hourly.archived_count_max | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_archiver_hourly.last_archived_wal | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_wal_daily.wal_directory_size_avg | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_wal_daily.wal_file_count_avg | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_wal_hourly.wal_directory_size_avg | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pg_wal_hourly.wal_file_count_avg | filesystem/WAL metadata | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pgss_daily.statement_series_id | query text or query identity | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
-| agg.pgss_hourly.statement_series_id | query text or query identity | conditional; redact or allowlist | historical trend and baseline evidence | needs field-level review |
+| agg.pg_activity_hourly.active_count_max | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.hour_ts | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | family contract inherited |
+| agg.pg_activity_hourly.idle_count_max | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.idle_in_tx_count_max | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.instance_pk | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | family contract inherited |
+| agg.pg_activity_hourly.max_query_duration_seconds | query text or query identity | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.max_xact_duration_seconds | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.sample_count | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.total_sessions_max | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_activity_hourly.waiting_count_max | session state counts and max query/xact duration; raw query text is not stored in this aggregate | conditional; redact or allowlist | historical activity, session pressure, long-running query, and idle-in-transaction context | needs field-level review |
+| agg.pg_archiver_hourly.archived_count_max | filesystem/WAL metadata | conditional; redact or allowlist | archive backlog/failure trend and WAL retention risk evidence | needs field-level review |
+| agg.pg_archiver_hourly.last_archived_wal | filesystem/WAL metadata | conditional; redact or allowlist | archive backlog/failure trend and WAL retention risk evidence | needs field-level review |
+| agg.pg_lock_hourly.granted_locks_max | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | needs field-level review |
+| agg.pg_lock_hourly.hour_ts | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | family contract inherited |
+| agg.pg_lock_hourly.instance_pk | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | family contract inherited |
+| agg.pg_lock_hourly.max_wait_seconds | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | needs field-level review |
+| agg.pg_lock_hourly.sample_count | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | needs field-level review |
+| agg.pg_lock_hourly.waiting_locks_max | lock counts and wait duration, no query text | conditional; redact or allowlist | historical lock pressure and incident-context evidence | needs field-level review |
+| agg.pg_wal_daily.wal_directory_size_avg | filesystem/WAL metadata | conditional; redact or allowlist | long-range WAL growth, archive pressure, and capacity trend evidence | needs field-level review |
+| agg.pg_wal_daily.wal_file_count_avg | filesystem/WAL metadata | conditional; redact or allowlist | long-range WAL growth, archive pressure, and capacity trend evidence | needs field-level review |
+| agg.pg_wal_hourly.wal_directory_size_avg | filesystem/WAL metadata | conditional; redact or allowlist | WAL Spike, write amplification, FPI, replication pressure, and WAL capacity trend evidence | needs field-level review |
+| agg.pg_wal_hourly.wal_file_count_avg | filesystem/WAL metadata | conditional; redact or allowlist | WAL Spike, write amplification, FPI, replication pressure, and WAL capacity trend evidence | needs field-level review |
+| agg.pgss_daily.bucket_start | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | family contract inherited |
+| agg.pgss_daily.calls_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.exec_time_ms_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.instance_pk | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | family contract inherited |
+| agg.pgss_daily.rows_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.shared_blks_hit_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.shared_blks_read_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.statement_series_id | query text or query identity | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_daily.temp_blks_written_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | daily long-range query workload and report trend evidence | needs field-level review |
+| agg.pgss_hourly.avg_exec_time_ms | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.bucket_start | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | family contract inherited |
+| agg.pgss_hourly.calls_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.exec_time_ms_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.instance_pk | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | family contract inherited |
+| agg.pgss_hourly.max_exec_time_ms | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.min_exec_time_ms | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.rows_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.shared_blks_hit_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.shared_blks_read_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.statement_series_id | query text or query identity | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.temp_blks_written_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.wal_bytes_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.wal_fpi_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
+| agg.pgss_hourly.wal_records_sum | query identity via statement_series_id; no query text stored here | conditional; redact or allowlist | hourly query workload trend, latency, temp, cache, WAL, and throughput history | needs field-level review |
 | control.alert_message_template.alert_code | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_message_template.description | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_message_template.is_system | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

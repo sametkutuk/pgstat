@@ -91,7 +91,7 @@
       "order": 1,
       "priority": "P0",
       "workstream": "contracts",
-      "status": "in_progress",
+      "status": "customer_validation",
       "title": "Promote next critical data-family contracts",
       "problem": "Many generated table/data-family contracts are still semantic scaffolds, so pgdbaagent could consume weak lifecycle evidence.",
       "requirements": [
@@ -103,17 +103,17 @@
         {
           "id": "AC1",
           "text": "At least the next 10 high-value data families have reviewed semantic contracts.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC2",
           "text": "Each promoted family has retention and purge behavior documented.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC3",
           "text": "Generated contract-review queue reflects the reduced review gap after regeneration.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -140,10 +140,16 @@
       "customer_acceptance": {
         "required": true,
         "status": "pending",
-        "evidence": ""
+        "evidence": "Customer validation requested after Codex verification."
       },
-      "verification_evidence": [],
-      "next_action": "Execute the P0-001 work order: promote the selected 10 aggregate data-family contracts."
+      "verification_evidence": [
+        "Promoted 10 aggregate data-family contracts: agg.pgss_hourly, agg.pgss_daily, agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pg_wal_daily, agg.pg_activity_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_archiver_hourly.",
+        "docs/generated/data-family-contracts.md seeded semantic contracts increased to 46; generated defaults needing review decreased to 46.",
+        "docs/generated/contract-review-queue.md table/data-family contracts needing semantic review decreased to 46.",
+        "docs/generated/data-lifecycle-matrix.md purge-referenced tables requiring policy verification decreased to 3 after retention mapping for snapshot-derived aggregate families.",
+        "node scripts/generate-doc-inventory.mjs completed."
+      ],
+      "next_action": "Customer validation: review P0-001 promoted aggregate contracts before marking done."
     },
     {
       "id": "PGSTAT-P0-002",
@@ -152,7 +158,7 @@
       "workstream": "contracts",
       "status": "planned",
       "title": "Promote next field contracts beyond the first 161",
-      "problem": "924 fields still need exact source/version/unsupported/consumer review.",
+      "problem": "904 fields still need exact source/version/unsupported/consumer review.",
       "requirements": [
         "Promote fields by evidence value, not by table order.",
         "Start with fields required for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation.",

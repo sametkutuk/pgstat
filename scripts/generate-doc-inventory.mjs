@@ -572,6 +572,15 @@ function buildLifecycleRows({ schema, collector }) {
     if (tableName === 'fact.pg_table_freeze_snapshot') return 'control.retention_policy.table_freeze_retention_days';
     if (hourlyAgg.has(tableName)) return 'control.retention_policy.hourly_retention_days/hourly_retention_months';
     if (tableName === 'agg.pgss_daily') return 'control.retention_policy.daily_retention_days/daily_retention_months';
+    if ([
+      'agg.pg_wal_hourly',
+      'agg.pg_archiver_hourly',
+      'agg.pg_activity_hourly',
+      'agg.pg_lock_hourly',
+      'agg.pg_replication_hourly',
+      'agg.pg_slru_hourly',
+    ].includes(tableName)) return 'control.retention_policy.hourly_snapshot_retention_days';
+    if (tableName === 'agg.pg_wal_daily') return 'control.retention_policy.daily_snapshot_retention_days';
     if (tableName === 'ops.audit_log') return 'control.retention_policy.audit_log_retention_days';
     if (tableName === 'ops.alert') return 'control.retention_policy.alert_retention_days (resolved alerts only)';
     if (tableName === 'ops.job_run' || tableName === 'ops.job_run_instance') return 'control.retention_policy.job_run_retention_days';
@@ -618,6 +627,96 @@ function buildLifecycleRows({ schema, collector }) {
 }
 
 const CONTRACT_HINTS = {
+  'agg.pgss_hourly': {
+    job: 'rollup: AggRepository.rollupHourly',
+    schedule: 'control.schedule_profile.hourly_rollup_interval_seconds; rolls the last completed hour',
+    source: 'fact.pgss_delta',
+    pgVersion: 'not source-PG specific; inherits fact.pgss_delta pg_stat_statements coverage',
+    unsupported: 'rollup row is absent when source fact evidence is absent; unsupported source columns remain null/zero before aggregation',
+    sensitivity: 'query identity via statement_series_id; no query text stored here',
+    pgdbaagent: 'hourly query workload trend, latency, temp, cache, WAL, and throughput history',
+  },
+  'agg.pgss_daily': {
+    job: 'rollup: AggRepository.rollupDaily',
+    schedule: 'UTC daily maintenance; rolls yesterday from agg.pgss_hourly',
+    source: 'agg.pgss_hourly',
+    pgVersion: 'not source-PG specific; inherits fact.pgss_delta pg_stat_statements coverage through hourly rollup',
+    unsupported: 'daily row is absent when hourly source evidence is absent',
+    sensitivity: 'query identity via statement_series_id; no query text stored here',
+    pgdbaagent: 'daily long-range query workload and report trend evidence',
+  },
+  'agg.pg_table_stat_hourly': {
+    job: 'rollup: AggRepository.rollupTableStatHourly',
+    schedule: 'control.schedule_profile.hourly_rollup_interval_seconds; rolls the last completed hour',
+    source: 'fact.pg_table_stat_delta',
+    pgVersion: 'not source-PG specific; inherits fact.pg_table_stat_delta pg_stat_user_tables/statio coverage',
+    unsupported: 'rollup row is absent when source table-stat evidence is absent; unsupported source fields remain null/zero before aggregation',
+    sensitivity: 'schema/table names and table activity counters',
+    pgdbaagent: 'Vacuum Lag, table health, autovacuum/analyze activity, and table-change trend evidence',
+  },
+  'agg.pg_wal_hourly': {
+    job: 'rollup: AggRepository.rollupWalHourly and PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'hourly pgss WAL rollup plus UTC daily snapshot rollup over the last 26 hours',
+    source: 'fact.pgss_delta and fact.pg_wal_snapshot',
+    pgVersion: 'not source-PG specific; inherits fact.pgss_delta and fact.pg_wal_snapshot coverage',
+    unsupported: 'pgss WAL columns may be null/zero on older pg_stat_statements sources; snapshot columns absent when WAL snapshot source is missing',
+    sensitivity: 'WAL volume, WAL directory size, file count, and query-derived WAL counters',
+    pgdbaagent: 'WAL Spike, write amplification, FPI, replication pressure, and WAL capacity trend evidence',
+  },
+  'agg.pg_wal_daily': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly WAL daily phase',
+    schedule: 'UTC daily maintenance; rolls recent agg.pg_wal_hourly rows into daily buckets',
+    source: 'agg.pg_wal_hourly',
+    pgVersion: 'not source-PG specific; inherits WAL hourly source coverage',
+    unsupported: 'daily row is absent when hourly WAL source evidence is absent',
+    sensitivity: 'WAL volume and directory-size history',
+    pgdbaagent: 'long-range WAL growth, archive pressure, and capacity trend evidence',
+  },
+  'agg.pg_activity_hourly': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'UTC daily maintenance; rolls fact.pg_activity_snapshot samples older than 1 hour over a 26 hour window',
+    source: 'fact.pg_activity_snapshot',
+    pgVersion: 'not source-PG specific; inherits pg_stat_activity coverage',
+    unsupported: 'rollup row is absent when source activity snapshots are absent; only client backend samples are summarized',
+    sensitivity: 'session state counts and max query/xact duration; raw query text is not stored in this aggregate',
+    pgdbaagent: 'historical activity, session pressure, long-running query, and idle-in-transaction context',
+  },
+  'agg.pg_lock_hourly': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'UTC daily maintenance; rolls fact.pg_lock_snapshot samples older than 1 hour over a 26 hour window',
+    source: 'fact.pg_lock_snapshot',
+    pgVersion: 'not source-PG specific; inherits pg_locks/pg_stat_activity coverage',
+    unsupported: 'rollup row is absent when lock snapshot evidence is absent; wait duration depends on source waitstart availability',
+    sensitivity: 'lock counts and wait duration, no query text',
+    pgdbaagent: 'historical lock pressure and incident-context evidence',
+  },
+  'agg.pg_replication_hourly': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'UTC daily maintenance; rolls fact.pg_replication_snapshot samples older than 1 hour over a 26 hour window',
+    source: 'fact.pg_replication_snapshot',
+    pgVersion: 'not source-PG specific; inherits primary-only pg_stat_replication coverage',
+    unsupported: 'row is absent on standby or when no replication snapshot source exists',
+    sensitivity: 'replication user/application/client-derived lag metadata summarized to counts and max lag',
+    pgdbaagent: 'replication lag and standby-count trend evidence',
+  },
+  'agg.pg_slru_hourly': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'UTC daily maintenance; rolls fact.pg_slru_snapshot samples older than 1 hour over a 26 hour window',
+    source: 'fact.pg_slru_snapshot',
+    pgVersion: 'not source-PG specific; inherits PG13+ pg_stat_slru coverage',
+    unsupported: 'row is absent when pg_stat_slru is unsupported or source snapshots are absent',
+    sensitivity: 'SLRU area names and cache/read/write/flush counters',
+    pgdbaagent: 'SLRU pressure, transaction/checkpoint context, and cache efficiency trend evidence',
+  },
+  'agg.pg_archiver_hourly': {
+    job: 'rollup: PurgeEvaluator.rollupSnapshotsHourly',
+    schedule: 'UTC daily maintenance; rolls fact.pg_archiver_snapshot samples older than 1 hour over a 26 hour window',
+    source: 'fact.pg_archiver_snapshot',
+    pgVersion: 'not source-PG specific; inherits pg_stat_archiver coverage',
+    unsupported: 'rollup row is absent when archiver snapshot source evidence is absent',
+    sensitivity: 'WAL archive file names and archive/failure counters',
+    pgdbaagent: 'archive backlog/failure trend and WAL retention risk evidence',
+  },
   'fact.pgss_delta': {
     job: 'statements',
     schedule: 'control.schedule_profile.statements_interval_seconds',

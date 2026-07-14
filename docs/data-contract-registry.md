@@ -226,7 +226,39 @@ sensitivity classification, and AI-context policy in generated docs.
 Exact consumer usage is still route/file-level unless a field is separately
 registered below as a durable API/UI/alert/report contract.
 
-## 9. Initial High-Value Contracts
+## 9. Promoted Data-Family Contracts
+
+Data-family promotion means the table family has reviewed operational
+semantics, source family, schedule, retention, purge owner, partition/rollup
+role, consumer class, sensitivity, unsupported behavior, and pgdbaagent
+relevance. It does not replace field-level contracts.
+
+### P0-001 Aggregate History Batch
+
+The P0-001 aggregate batch promotes long-range query, table, WAL, activity,
+lock, replication, SLRU, and archiver history families. These families are
+generated from repository schema plus maintained contract rules in
+`scripts/generate-doc-inventory.mjs` and are marked as `seeded semantic
+contract` in [Generated pgstat Data Family Contracts](generated/data-family-contracts.md).
+
+| Table | Source family | Retention policy | Purge owner | Partition | Primary evidence use |
+| --- | --- | --- | --- | --- | --- |
+| `agg.pgss_hourly` | `fact.pgss_delta` | `control.retention_policy.hourly_retention_days/hourly_retention_months` | `PurgeEvaluator.purgeHourlyAgg` | monthly by `PartitionManager` | hourly query workload, latency, temp, cache, WAL, and throughput trend |
+| `agg.pgss_daily` | `agg.pgss_hourly` | `control.retention_policy.daily_retention_days/daily_retention_months` | `PurgeEvaluator.purgeDailyAgg` | yearly by `PartitionManager` | daily long-range query workload trend |
+| `agg.pg_table_stat_hourly` | `fact.pg_table_stat_delta` | `control.retention_policy.hourly_retention_days/hourly_retention_months` | `PurgeEvaluator.purgeHourlyAgg` | monthly by `PartitionManager` | Vacuum Lag, table health, autovacuum/analyze trend |
+| `agg.pg_wal_hourly` | `fact.pg_wal_snapshot`, `fact.pgss_delta` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | monthly by `PartitionManager` | WAL Spike, write amplification, FPI, replication pressure, WAL capacity |
+| `agg.pg_wal_daily` | `agg.pg_wal_hourly` | `control.retention_policy.daily_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | long-range WAL growth and capacity trend |
+| `agg.pg_activity_hourly` | `fact.pg_activity_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | session pressure, long-running query, idle-in-transaction history |
+| `agg.pg_lock_hourly` | `fact.pg_lock_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | historical lock pressure and incident context |
+| `agg.pg_replication_hourly` | `fact.pg_replication_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | replication lag and standby-count history |
+| `agg.pg_slru_hourly` | `fact.pg_slru_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | SLRU pressure and cache/read/write/flush trend |
+| `agg.pg_archiver_hourly` | `fact.pg_archiver_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | archive backlog/failure and WAL retention risk trend |
+
+These promoted families remain generated from code and hints. If rollup SQL,
+retention fields, purge ownership, partitioning, or consumers change, update
+the generator hints and regenerate the generated contract docs.
+
+## 10. Initial High-Value Contracts
 
 The full registry must be built incrementally. The first fields to formalize are
 the ones required by DBA recommendations.
@@ -353,7 +385,7 @@ Primary consumers:
 - audit log
 - post-apply observation
 
-## 10. Required Automation
+## 11. Required Automation
 
 The registry should eventually be checked automatically.
 
