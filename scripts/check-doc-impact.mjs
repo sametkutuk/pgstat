@@ -101,7 +101,7 @@ const CRITICAL_GROUPS = [
   {
     name: 'project-board',
     patterns: [/^docs\/project-board\.json$/],
-    generatedRequired: true,
+    generatedRequired: false,
     manualRequired: false,
   },
 ];

@@ -545,6 +545,7 @@
         "OS collection must not query or load the target PostgreSQL database. Only central pgstat storage may be written.",
         "Direct OS collection must use least privilege. Default design should work with a read-only OS user and command/source allowlist; no root/sudo requirement by default.",
         "Define host identity and OS change history so a machine can move from Windows to Linux, RHEL to Ubuntu, or similar without corrupting historical evidence.",
+        "Define PostgreSQL instance to host/container binding: automatic evidence-based matching, explicit manual override, binding confidence, ambiguity handling, valid_from/valid_to history, and no AI high-confidence use when binding is missing or low-confidence.",
         "Define minimum metrics: CPU/load/iowait/steal, memory/swap, disk IOPS/throughput/latency/utilization, filesystem bytes/inodes, network throughput/errors/drops, and optional PostgreSQL process CPU/memory where safely available.",
         "Define missing/stale/partial coverage behavior. Missing OS metrics must never be silently treated as zero or healthy evidence.",
         "Define schedule, retention, purge, partition, rollup, units, security, export, and AI evidence policy."
@@ -567,16 +568,21 @@
         },
         {
           "id": "AC4",
-          "text": "Minimum metric list includes units, cadence, retention, purge, partition, and rollup decisions.",
+          "text": "Instance-host/container binding model is documented with automatic evidence sources, manual override, confidence levels, ambiguity behavior, and historical validity ranges.",
           "status": "pending"
         },
         {
           "id": "AC5",
-          "text": "Missing/stale/partial metrics behavior is documented and blocks high-confidence findings when needed.",
+          "text": "Minimum metric list includes units, cadence, retention, purge, partition, and rollup decisions.",
           "status": "pending"
         },
         {
           "id": "AC6",
+          "text": "Missing/stale/partial metrics behavior is documented and blocks high-confidence findings when needed.",
+          "status": "pending"
+        },
+        {
+          "id": "AC7",
           "text": "pgdbaagent optional evidence usage is documented without making OS metrics silently mandatory.",
           "status": "pending"
         }
@@ -584,7 +590,8 @@
       "implementation_plan": [
         "Write the OS/system metric capability card and contract first.",
         "Choose source adapter priority: API/import first, exporter bridge second, direct read-only OS user third unless customer accepts host access design.",
-        "Define dim.host_ref, OS observation history, metric naming, units, and retention before migration work.",
+        "Define dim.host_ref, host observation history, container observation history, instance_host_binding, metric naming, units, and retention before migration work.",
+        "Define binding precedence: manual binding, explicit agent claim, container/Kubernetes label, listener/process match, cloud tag, then unbound/ambiguous.",
         "Document that OS collection must not add load to target PostgreSQL databases."
       ],
       "verification_plan": [
