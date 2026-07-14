@@ -91,7 +91,7 @@
       "order": 1,
       "priority": "P0",
       "workstream": "contracts",
-      "status": "customer_validation",
+      "status": "done",
       "title": "Promote next critical data-family contracts",
       "problem": "Many generated table/data-family contracts are still semantic scaffolds, so pgdbaagent could consume weak lifecycle evidence.",
       "requirements": [
@@ -139,8 +139,8 @@
       ],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": "Customer validation requested after Codex verification."
+        "status": "accepted",
+        "evidence": "Customer reported live partition remediation was deployed and Opus verified it on 2026-07-14; aggregate contracts accepted with partition remediation tracked separately."
       },
       "verification_evidence": [
         "Promoted 10 aggregate data-family contracts: agg.pgss_hourly, agg.pgss_daily, agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pg_wal_daily, agg.pg_activity_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_archiver_hourly.",
@@ -149,16 +149,18 @@
         "docs/generated/data-lifecycle-matrix.md purge-referenced tables requiring policy verification decreased to 3 after retention mapping for snapshot-derived aggregate families.",
         "Live pg_get_partkeydef validation confirmed agg.pgss_hourly, agg.pgss_daily, and agg.pg_table_stat_hourly are partitioned; agg.pg_wal_hourly and snapshot-derived hourly aggregates are not partitioned.",
         "Live validation exposed existing mixed timezone partition bounds in agg.pgss_hourly and agg.pg_table_stat_hourly; remediation is tracked separately as PGSTAT-P0-021.",
+        "Customer reported live partition remediation was deployed and Opus verified it.",
         "node scripts/generate-doc-inventory.mjs completed."
       ],
-      "next_action": "Customer validation: review P0-001 promoted aggregate contracts before marking done."
+      "completed_at": "2026-07-14",
+      "next_action": "Closed; continue with PGSTAT-P0-002."
     },
     {
       "id": "PGSTAT-P0-002",
       "order": 2,
       "priority": "P0",
       "workstream": "contracts",
-      "status": "planned",
+      "status": "in_progress",
       "title": "Promote next field contracts beyond the first 161",
       "problem": "904 fields still need exact source/version/unsupported/consumer review.",
       "requirements": [
@@ -207,7 +209,7 @@
         "evidence": ""
       },
       "verification_evidence": [],
-      "next_action": "Start after the next data-family contract batch is stable."
+      "next_action": "Execute the first field-level contract batch for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation evidence fields."
     },
     {
       "id": "PGSTAT-P0-011",
@@ -1323,7 +1325,7 @@
       "workstream": "operations",
       "status": "planned",
       "title": "Document and validate live aggregate partition gap remediation",
-      "problem": "Live schema validation found mixed timezone partition bounds in existing agg.pgss_hourly and agg.pg_table_stat_hourly partitions, leaving possible 3 hour gaps after older local-midnight partitions.",
+      "problem": "Live schema validation found mixed timezone partition bounds in existing agg.pgss_hourly and agg.pg_table_stat_hourly partitions. Live remediation was handled separately and verified by Opus; a written operations runbook is still useful for recurrence.",
       "requirements": [
         "Provide a safe detection query for partition gaps and overlaps.",
         "Provide a manual remediation runbook that does not delete existing partitions without operator approval.",
@@ -1370,8 +1372,10 @@
         "status": "pending",
         "evidence": ""
       },
-      "verification_evidence": [],
-      "next_action": "Plan after P0-002 unless live partition inserts fail again and this becomes urgent operational repair."
+      "verification_evidence": [
+        "Customer reported live partition remediation was deployed and Opus verified it on 2026-07-14."
+      ],
+      "next_action": "Keep as a follow-up runbook/documentation task unless partition insert failures recur."
     }
   ]
 }

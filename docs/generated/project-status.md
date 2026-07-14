@@ -14,27 +14,27 @@ node scripts/generate-project-status.mjs
 | Metric | Value |
 | --- | ---: |
 | Total tasks | 22 |
-| Done tasks | 1 |
-| Remaining tasks | 21 |
+| Done tasks | 2 |
+| Remaining tasks | 20 |
 | Max in progress | 1 |
 
 ## Current Focus
 
-Current task: **PGSTAT-P0-001 - Promote next critical data-family contracts**
+Current task: **PGSTAT-P0-002 - Promote next field contracts beyond the first 161**
 
-Status: `customer_validation`
+Status: `in_progress`
 
-Next action: Customer validation: review P0-001 promoted aggregate contracts before marking done.
+Next action: Execute the first field-level contract batch for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation evidence fields.
 
-Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the first 161**
+Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| customer_validation | 1 |
-| done | 1 |
-| planned | 20 |
+| done | 2 |
+| in_progress | 1 |
+| planned | 19 |
 
 ## Workstream Counts
 
@@ -55,8 +55,8 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | Order | ID | Priority | Workstream | Status | Title | Next action |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 0 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Closed; continue with PGSTAT-P0-001. |
-| 1 | PGSTAT-P0-001 | P0 | contracts | customer_validation | Promote next critical data-family contracts | Customer validation: review P0-001 promoted aggregate contracts before marking done. |
-| 2 | PGSTAT-P0-002 | P0 | contracts | planned | Promote next field contracts beyond the first 161 | Start after the next data-family contract batch is stable. |
+| 1 | PGSTAT-P0-001 | P0 | contracts | done | Promote next critical data-family contracts | Closed; continue with PGSTAT-P0-002. |
+| 2 | PGSTAT-P0-002 | P0 | contracts | in_progress | Promote next field contracts beyond the first 161 | Execute the first field-level contract batch for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation evidence fields. |
 | 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | Define redaction policy before planner stats or AI evidence export. |
 | 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | Create release checklist before broad schema/collector implementation. |
 | 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | Start after contract baseline, redaction policy, and release checklist are stable. |
@@ -75,7 +75,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
 | 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
 | 20 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
-| 21 | PGSTAT-P0-021 | P0 | operations | planned | Document and validate live aggregate partition gap remediation | Plan after P0-002 unless live partition inserts fail again and this becomes urgent operational repair. |
+| 21 | PGSTAT-P0-021 | P0 | operations | planned | Document and validate live aggregate partition gap remediation | Keep as a follow-up runbook/documentation task unless partition insert failures recur. |
 
 ## Dependency Map
 
