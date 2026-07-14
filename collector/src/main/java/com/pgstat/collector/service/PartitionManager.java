@@ -63,8 +63,7 @@ public class PartitionManager {
     /** Aylik partition gerektiren hourly aggregate tablolari */
     private static final String[] MONTHLY_AGG_TABLES = {
         "agg.pgss_hourly",
-        "agg.pg_table_stat_hourly",
-        "agg.pg_wal_hourly"
+        "agg.pg_table_stat_hourly"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -222,8 +221,14 @@ public class PartitionManager {
         String parentName = parentParts[1];
         String fullPartitionName = schema + "." + partitionName.replace(schema + "_", "");
 
+        if (hasCoveringPartition(schema, parentName, bounds)) {
+            log.debug("Partition range mevcut partition tarafindan kapsandigi icin atlandi: {} [{} -> {})",
+                fullPartitionName, bounds.lowerText(), bounds.upperText());
+            return;
+        }
+
         if (hasOverlappingPartition(schema, parentName, bounds)) {
-            log.debug("Partition range mevcut partition ile cakistigi icin atlandi: {} [{} -> {})",
+            log.debug("Partition range mevcut partition ile kismen cakistigi icin atlandi: {} [{} -> {})",
                 fullPartitionName, bounds.lowerText(), bounds.upperText());
             return;
         }
@@ -265,21 +270,18 @@ public class PartitionManager {
     }
 
     private PartitionBounds queryBounds(String truncUnit, String intervalUnit, int offset) {
-        // ONEMLI: Bound'lar UTC midnight hizasinda uretilir (date_trunc 'utc'
-        // zaman diliminde). Aksi halde session timezone (orn. Europe/Istanbul,
-        // +03) ile date_trunc Istanbul-midnight (00:00+03) uretir; mevcut
-        // partition'lar ise UTC-midnight (00:00 UTC = 03:00+03). Iki farkli hiza
-        // CAKISIR ve aradaki gun partition'i olusturulamaz (delik + alert).
-        // 'now() at time zone utc' UTC duvar saatini verir, date_trunc UTC gunune
-        // hizalar; sonra geri timestamptz'ye cast edilir.
+        // Bound'lar DB session timezone'unda uretilir. Europe/Istanbul icin
+        // ay/gun/yil baslangici 00:00+03 olur; farkli kurulumlarda ilgili DB
+        // timezone midnight'i kullanilir. UTC hardcode kullanmak eski local
+        // midnight partition'larla 3 saatlik gap olusturabilir.
         String sql = String.format("""
             select quote_literal(lower_bound) as lower_literal,
                    quote_literal(upper_bound) as upper_literal,
                    lower_bound::text as lower_text,
                    upper_bound::text as upper_text
             from (
-                select (date_trunc('%s', (now() at time zone 'UTC') + (cast(? as int) * interval '%s')) at time zone 'UTC') as lower_bound,
-                       (date_trunc('%s', (now() at time zone 'UTC') + ((cast(? as int) + 1) * interval '%s')) at time zone 'UTC') as upper_bound
+                select date_trunc('%s', now() + (cast(? as int) * interval '%s')) as lower_bound,
+                       date_trunc('%s', now() + ((cast(? as int) + 1) * interval '%s')) as upper_bound
             ) b
             """, truncUnit, intervalUnit, truncUnit, intervalUnit);
 
@@ -290,6 +292,38 @@ public class PartitionManager {
             String.valueOf(row.get("lower_text")),
             String.valueOf(row.get("upper_text"))
         );
+    }
+
+    /**
+     * CREATE denemeden once ayni parent altinda istenen range'i tamamen
+     * kapsayan bir partition var mi bakar.
+     */
+    private boolean hasCoveringPartition(String schema, String parentName, PartitionBounds bounds) {
+        try {
+            Integer count = jdbc.queryForObject("""
+                select count(*)
+                from (
+                    select regexp_match(
+                               pg_get_expr(child.relpartbound, child.oid),
+                               'FROM \\(''([^'']+)''\\) TO \\(''([^'']+)''\\)'
+                           ) as bound_match
+                    from pg_inherits i
+                    join pg_class parent on parent.oid = i.inhparent
+                    join pg_class child on child.oid = i.inhrelid
+                    join pg_namespace ns on ns.oid = parent.relnamespace
+                    where ns.nspname = ?
+                      and parent.relname = ?
+                ) p
+                where p.bound_match is not null
+                  and (p.bound_match)[1]::timestamptz <= ?::timestamptz
+                  and (p.bound_match)[2]::timestamptz >= ?::timestamptz
+                """, Integer.class, schema, parentName, bounds.lowerText(), bounds.upperText());
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.debug("Partition covering pre-check atlandi: {}.{} [{} -> {}) - {}",
+                schema, parentName, bounds.lowerText(), bounds.upperText(), e.getMessage());
+            return false;
+        }
     }
 
     /**
