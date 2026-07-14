@@ -19,5 +19,5 @@ execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { stdio: 'inherit
 
 console.log('install-git-hooks: core.hooksPath=.githooks');
 console.log('install-git-hooks: run this once after every fresh clone or new machine');
-console.log('install-git-hooks: pre-commit regenerates generated docs and checks staged docs impact');
-console.log('install-git-hooks: pre-push rejects generated docs drift');
+console.log('install-git-hooks: pre-commit regenerates generated docs/project status and checks staged docs impact');
+console.log('install-git-hooks: pre-push rejects generated docs/project status drift');

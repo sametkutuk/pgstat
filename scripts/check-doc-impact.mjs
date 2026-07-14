@@ -46,11 +46,13 @@ const GENERATED_DOCS = [
   'docs/generated/data-family-contracts.md',
   'docs/generated/field-contracts.md',
   'docs/generated/contract-review-queue.md',
+  'docs/generated/project-status.md',
 ];
 
 const MANUAL_CONTRACT_DOCS = [
   /^docs\/project-master\.md$/,
   /^docs\/project-execution-plan\.md$/,
+  /^docs\/project-board\.json$/,
   /^docs\/pgstat-data-source-dictionary\.md$/,
   /^docs\/data-contract-registry\.md$/,
   /^docs\/pgstat-telemetry-completion-roadmap\.md$/,
@@ -95,6 +97,12 @@ const CRITICAL_GROUPS = [
     patterns: [/^pgdbaagent\//, /^agent\//, /^docs\/pgdbaagent-contracts\.md$/],
     generatedRequired: false,
     manualRequired: true,
+  },
+  {
+    name: 'project-board',
+    patterns: [/^docs\/project-board\.json$/],
+    generatedRequired: true,
+    manualRequired: false,
   },
 ];
 

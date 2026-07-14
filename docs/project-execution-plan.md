@@ -57,6 +57,8 @@ As of 2026-07-14:
 | Data family contracts | scaffolded | `docs/generated/data-family-contracts.md` |
 | Field contracts | scaffolded plus core promotions | `docs/generated/field-contracts.md` |
 | Contract review queue | active | `docs/generated/contract-review-queue.md` |
+| Project board | active | `docs/project-board.json` |
+| Generated project status | active | `docs/generated/project-status.md` |
 | pgdbaagent contracts | draft | `docs/pgdbaagent-contracts.md` |
 | Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints |
 
@@ -83,7 +85,63 @@ The project is no longer in an unknown-state phase. It has a generated map and
 a known review queue. The next phase is contract hardening before broad
 pgdbaagent coding.
 
-## 3. Milestone Roadmap
+## 3. Project Management Model
+
+The project board source of truth is:
+
+```text
+docs/project-board.json
+```
+
+The generated readable status is:
+
+```text
+docs/generated/project-status.md
+```
+
+Rules:
+
+- `docs/project-board.json` owns task status, requirements, acceptance
+  criteria, implementation plan, verification plan, dependencies, and customer
+  acceptance gate.
+- `docs/generated/project-status.md` is generated. Do not edit it manually.
+- Local hooks regenerate project status before commit and reject drift before
+  push.
+- `scripts/check-project-board.mjs` validates board shape, required fields,
+  missing docs, max in-progress count, and done-task closure rules.
+- A task is not `done` only because code exists. It must have Codex
+  verification evidence and either customer acceptance or a documented
+  `not_required` customer gate.
+- The customer can ask for product outcomes. Codex owns project management,
+  product decomposition, implementation, and first-pass verification. Customer
+  validation remains a gate where required.
+
+Task lifecycle:
+
+```text
+planned
+-> in_progress
+-> codex_verified
+-> customer_validation
+-> done
+```
+
+Exceptional state:
+
+```text
+blocked
+```
+
+Sequential execution rule:
+
+- The board default is `max_in_progress = 1`.
+- When a task is completed, update its acceptance criteria and verification
+  evidence, move it to the correct next status, then start the next highest
+  priority planned task.
+- If parallel work is intentionally needed, update `max_in_progress` with a
+  reason in this document.
+
+## 4. Milestone Roadmap
 
 ### M0 - Program Control And Contract Baseline
 
@@ -205,7 +263,11 @@ Primary scope:
 - self-hosted/server-side docs checks if GitHub billing remains unavailable
 - operational runbooks
 
-## 4. Active Backlog
+## 5. Active Backlog
+
+The canonical backlog is `docs/project-board.json`; the readable snapshot is
+`docs/generated/project-status.md`. The table below is a human summary and must
+not diverge from the board.
 
 Backlog priority is explicit. Work should not skip P0 items unless there is a
 production bug or a user-approved urgent feature.
@@ -220,13 +282,13 @@ production bug or a user-approved urgent feature.
 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | Lock root-cause evidence supports UI and pgdbaagent findings |
 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | Temp/WAL/cache/vacuum/lock packages have stable JSON schemas and field IDs |
 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | Deterministic reasoning lives globally, not only inside UI components |
-| PGSTAT-P0-009 | P0 | governance | planned | Harden docs impact checker rules | Checker blocks schema/collector/API/reasoning changes without required docs |
+| PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | Checker blocks schema/collector/API/reasoning changes without required docs |
 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | User-provided clone/staging evidence has storage, API, retention, and audit model |
 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | Operators can see data coverage and docs/contract status |
 | PGSTAT-P1-002 | P1 | security | planned | Define AI/export redaction policy | Sensitive fields have allow/block/mask behavior before evidence export |
 | PGSTAT-P1-003 | P1 | release | planned | Add release checklist and upgrade impact template | Every release declares migrations, config, retention, and compatibility impact |
 
-## 5. Workstream Rules
+## 6. Workstream Rules
 
 ### Contracts
 
@@ -283,7 +345,7 @@ Out of scope for now:
 - automatic production DDL
 - AI-initiated execution
 
-## 6. Capability Card Gate
+## 7. Capability Card Gate
 
 Before coding any meaningful feature, create or update a capability card in the
 relevant design/roadmap doc using the template in
@@ -306,7 +368,7 @@ Minimum fields:
 If a task has no capability card, it is not ready for implementation unless it
 is a narrow bug fix.
 
-## 7. Definition Of Done
+## 8. Definition Of Done
 
 ### Any pgstat Core Change
 
@@ -317,6 +379,8 @@ is a narrow bug fix.
 - retention and purge impact documented
 - security/export/AI sensitivity considered
 - capability ledger updated if user-visible behavior changed
+- project board status and generated project status updated if task scope,
+  acceptance, status, or priority changed
 
 ### Any pgdbaagent-Facing Change
 
@@ -326,6 +390,7 @@ is a narrow bug fix.
 - sensitive fields have redaction/allow/block behavior
 - validation requirement documented
 - AI prompt/context boundary documented
+- project board status and generated project status updated
 
 ### Any New Data Family
 
@@ -339,8 +404,18 @@ is a narrow bug fix.
 - rollup decision
 - API/UI/report/alert/pgdbaagent consumer map
 - generated inventory refreshed
+- project board acceptance criteria updated
 
-## 8. Operating Rhythm
+### Any Project Task Closure
+
+- all acceptance criteria are `done` or `not_required`
+- Codex verification evidence is recorded
+- customer acceptance is `accepted` if required, otherwise `not_required`
+- `completed_at` is set
+- generated project status is refreshed
+- next task is moved to `in_progress` when appropriate
+
+## 9. Operating Rhythm
 
 Recommended working rhythm:
 
@@ -350,8 +425,12 @@ Recommended working rhythm:
 4. Implement the narrowest code change.
 5. Run compile/tests.
 6. Run generated docs and docs impact checks.
-7. Update this execution plan if status, scope, or priority changes.
-8. Commit and push.
+7. Update `docs/project-board.json` if status, scope, priority, requirements,
+   acceptance criteria, or verification evidence changed.
+8. Regenerate `docs/generated/project-status.md`.
+9. Update this execution plan if rules, milestones, or project direction
+   change.
+10. Commit and push.
 
 Local automation:
 
@@ -363,7 +442,7 @@ This is local Git config. It must be run once per fresh clone or new machine.
 The `./pgstat` helper checks it and installs hooks automatically when Node is
 available.
 
-## 9. Current Open Risks
+## 10. Current Open Risks
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
@@ -373,7 +452,7 @@ available.
 | Sensitive fields may enter AI/export context | Security/privacy risk | Define redaction and allowlist policy before evidence export |
 | Clone lifecycle is manual | Validation UX is less automated than PostgresAI | Treat as explicit early-phase boundary; focus on evidence quality first |
 
-## 10. Decision Log
+## 11. Decision Log
 
 | Date | Decision |
 | --- | --- |
@@ -381,3 +460,4 @@ available.
 | 2026-07-14 | Use this execution plan as the living project board for current state, next work, and gaps. |
 | 2026-07-14 | Do not start broad pgdbaagent coding until pgstat evidence contracts and first evidence schemas are stable. |
 | 2026-07-14 | Keep clone/staging targets user-provided for now; automatic clone lifecycle is out of scope. |
+| 2026-07-14 | Use `docs/project-board.json` as the machine-readable task source of truth and `docs/generated/project-status.md` as the generated readable status. |

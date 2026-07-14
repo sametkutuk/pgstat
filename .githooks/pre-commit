@@ -3,6 +3,7 @@ set -eu
 
 echo "[pgstat-docs] regenerating generated documentation"
 node scripts/generate-doc-inventory.mjs
+node scripts/generate-project-status.mjs
 
 echo "[pgstat-docs] staging generated documentation"
 git add \
@@ -10,7 +11,11 @@ git add \
   docs/generated/data-lifecycle-matrix.md \
   docs/generated/data-family-contracts.md \
   docs/generated/field-contracts.md \
-  docs/generated/contract-review-queue.md
+  docs/generated/contract-review-queue.md \
+  docs/generated/project-status.md
+
+echo "[pgstat-docs] validating project board"
+node scripts/check-project-board.mjs
 
 echo "[pgstat-docs] checking staged documentation impact"
 node scripts/check-doc-impact.mjs --staged

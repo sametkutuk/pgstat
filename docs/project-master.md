@@ -307,6 +307,8 @@ docs:
 | --- | --- |
 | Product-wide scope, capability ledger, master rules | This document |
 | Current status, milestones, backlog, and execution gates | `project-execution-plan.md` |
+| Machine-readable task board | `project-board.json` |
+| Generated readable project status | `generated/project-status.md` |
 | Architecture and pgstat/pgdbaagent boundaries | `agentic-dba-platform-architecture.md` |
 | SDLC and change governance | `platform-governance-and-sdlc.md` |
 | Current and planned pgstat telemetry | `pgstat-telemetry-completion-roadmap.md` |
@@ -319,6 +321,7 @@ docs:
 | Generated data family contracts | [Generated pgstat Data Family Contracts](generated/data-family-contracts.md) |
 | Generated field contract scaffold | [Generated pgstat Field Contracts](generated/field-contracts.md) |
 | Generated contract review queue | [Generated pgstat Contract Review Queue](generated/contract-review-queue.md) |
+| Generated project status | [Generated pgstat Project Status](generated/project-status.md) |
 
 The master document should not duplicate every field or SQL detail. It keeps
 the project-wide map, product boundaries, capability ledger, and non-negotiable
@@ -333,6 +336,7 @@ changes:
 
 ```text
 node scripts/generate-doc-inventory.mjs
+node scripts/generate-project-status.mjs
 # or on systems with make: make docs-inventory
 ```
 
@@ -370,10 +374,10 @@ Triggers that must be detected:
 Automation phases:
 
 1. Local hook install: `node scripts/install-git-hooks.mjs`.
-2. Pre-commit hook regenerates generated docs, stages them, and runs
+2. Pre-commit hook regenerates generated docs/project status, stages them, and runs
    `node scripts/check-doc-impact.mjs --staged`.
-3. Pre-push hook rejects generated documentation drift and checks branch impact
-   against upstream.
+3. Pre-push hook rejects generated documentation/project status drift and
+   checks branch impact against upstream.
 4. Manual PR checklist remains required for semantic review.
 5. Documentation steward agent later.
 6. Scheduled documentation audit.
