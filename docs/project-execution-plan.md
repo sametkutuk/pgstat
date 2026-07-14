@@ -290,8 +290,10 @@ production bug or a user-approved urgent feature.
 | 13 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
 | 14 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
 | 15 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
-| 16 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
-| 17 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
+| 16 | PGSTAT-P1-002 | P1 | telemetry | planned | Define OS/system metric ingestion contract | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 17 | PGSTAT-P1-003 | P1 | telemetry | planned | Implement OS/system metric ingestion storage and API | PGSTAT-P1-002 |
+| 18 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
+| 19 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
 
 ## 6. Workstream Rules
 

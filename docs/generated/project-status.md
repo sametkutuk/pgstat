@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 18 |
+| Total tasks | 20 |
 | Done tasks | 1 |
-| Remaining tasks | 17 |
+| Remaining tasks | 19 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | done | 1 |
 | in_progress | 1 |
-| planned | 16 |
+| planned | 18 |
 
 ## Workstream Counts
 
@@ -45,7 +45,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
-| telemetry | 4 |
+| telemetry | 6 |
 | ui | 1 |
 | validation | 3 |
 
@@ -69,18 +69,20 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | 13 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | Implement after evidence builders v1. |
 | 14 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | Start after deterministic finding engine is stable. |
 | 15 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
-| 16 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
-| 17 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
+| 16 | PGSTAT-P1-002 | P1 | telemetry | planned | Define OS/system metric ingestion contract | Define OS/system metric contract after core field contracts, redaction policy, and release checklist. |
+| 17 | PGSTAT-P1-003 | P1 | telemetry | planned | Implement OS/system metric ingestion storage and API | Implement only after OS/system metric contract is accepted. |
+| 18 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
+| 19 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
 
 ## Dependency Map
 
 | ID | Depends on | Blocks |
 | --- | --- | --- |
 | PGSTAT-P0-009 | - | PGSTAT-P0-001, PGSTAT-P0-012, PGSTAT-P1-001 |
-| PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007 |
-| PGSTAT-P0-002 | PGSTAT-P0-001 | PGSTAT-P0-011, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007 |
-| PGSTAT-P0-011 | PGSTAT-P0-002 | PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-006, PGSTAT-P0-007, PGSTAT-P0-010 |
-| PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-010, PGSTAT-P1-001 |
+| PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007, PGSTAT-P1-002 |
+| PGSTAT-P0-002 | PGSTAT-P0-001 | PGSTAT-P0-011, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-007, PGSTAT-P1-002 |
+| PGSTAT-P0-011 | PGSTAT-P0-002 | PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-006, PGSTAT-P0-007, PGSTAT-P0-010, PGSTAT-P1-002 |
+| PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-010, PGSTAT-P1-002, PGSTAT-P1-001 |
 | PGSTAT-P0-003 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-004, PGSTAT-P0-007 |
 | PGSTAT-P0-004 | PGSTAT-P0-003, PGSTAT-P0-011 | PGSTAT-P0-007 |
 | PGSTAT-P0-005 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 | PGSTAT-P0-007 |
@@ -92,6 +94,8 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | PGSTAT-P0-014 | PGSTAT-P0-013 | PGSTAT-P0-015, PGSTAT-P1-004 |
 | PGSTAT-P0-015 | PGSTAT-P0-014 | - |
 | PGSTAT-P0-016 | PGSTAT-P0-010 | PGSTAT-P1-004 |
+| PGSTAT-P1-002 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P1-003 |
+| PGSTAT-P1-003 | PGSTAT-P1-002 | - |
 | PGSTAT-P1-004 | PGSTAT-P0-014, PGSTAT-P0-016 | - |
 | PGSTAT-P1-001 | PGSTAT-P0-009, PGSTAT-P0-012 | - |
 

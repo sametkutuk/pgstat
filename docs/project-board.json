@@ -932,8 +932,138 @@
       "next_action": "Implement after validation contracts are accepted."
     },
     {
-      "id": "PGSTAT-P1-004",
+      "id": "PGSTAT-P1-002",
       "order": 16,
+      "priority": "P1",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Define OS/system metric ingestion contract",
+      "problem": "PostgreSQL views cannot prove whether a bottleneck is CPU, memory, disk, filesystem, or network, but pgstat should not require a host agent in the core product without an explicit contract.",
+      "requirements": [
+        "Define supported OS metric source models: optional node exporter scrape/import, optional Telegraf/Prometheus bridge, and manual/API ingestion.",
+        "Define minimum metrics: CPU/load, memory/swap, disk IOPS, disk latency, filesystem usage, network throughput/errors.",
+        "Define host identity mapping between PostgreSQL instances and OS hosts.",
+        "Define schedule, retention, purge, partition, security, export, and pgdbaagent evidence behavior."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "OS metric source model and non-goals are documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Minimum metric list, units, cadence, retention, and purge behavior are documented.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Security/export/AI sensitivity policy is documented before implementation.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "pgdbaagent optional evidence usage is documented without making OS metrics mandatory for v1 advice.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Write capability card and contract first.",
+        "Decide whether pgstat reads from external metric systems or accepts pushed metrics first.",
+        "Document host_ref mapping and retention model before any migration."
+      ],
+      "verification_plan": [
+        "docs-impact check",
+        "project-board validation",
+        "manual review against pgstat-telemetry-completion-roadmap.md section 5.7"
+      ],
+      "required_docs": [
+        "docs/pgstat-telemetry-completion-roadmap.md",
+        "docs/pgstat-data-source-dictionary.md",
+        "docs/data-contract-registry.md",
+        "docs/project-execution-plan.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001",
+        "PGSTAT-P0-002",
+        "PGSTAT-P0-011",
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Define OS/system metric contract after core field contracts, redaction policy, and release checklist."
+    },
+    {
+      "id": "PGSTAT-P1-003",
+      "order": 17,
+      "priority": "P1",
+      "workstream": "telemetry",
+      "status": "planned",
+      "title": "Implement OS/system metric ingestion storage and API",
+      "problem": "Once the OS metric contract is accepted, pgstat needs storage/API ingestion so host pressure can be correlated with PostgreSQL evidence.",
+      "requirements": [
+        "Implement dim.host_ref and OS metric fact/snapshot storage according to the accepted contract.",
+        "Implement API ingestion/import path without making a host agent mandatory.",
+        "Wire retention, purge, generated contracts, and optional UI/API exposure."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "OS metric storage exists with documented retention and purge.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "API/import path accepts documented metrics with units and timestamps.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Generated inventory and field contracts include OS metric tables.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "No source host agent is required by default.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Add migrations after contract acceptance.",
+        "Add API ingestion/import route and validation.",
+        "Add purge/retention wiring and generated docs.",
+        "Expose UI only if a focused read-only view is accepted."
+      ],
+      "verification_plan": [
+        "api npx tsc --noEmit",
+        "migration review",
+        "generated docs and docs-impact checks",
+        "manual ingestion smoke test with sample metrics"
+      ],
+      "required_docs": [
+        "docs/pgstat-telemetry-completion-roadmap.md",
+        "docs/data-contract-registry.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P1-002"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Implement only after OS/system metric contract is accepted."
+    },
+    {
+      "id": "PGSTAT-P1-004",
+      "order": 18,
       "priority": "P1",
       "workstream": "validation",
       "status": "planned",
@@ -990,7 +1120,7 @@
     },
     {
       "id": "PGSTAT-P1-001",
-      "order": 17,
+      "order": 19,
       "priority": "P1",
       "workstream": "ui",
       "status": "planned",
