@@ -63,8 +63,7 @@ public class PartitionManager {
     /** Aylik partition gerektiren hourly aggregate tablolari */
     private static final String[] MONTHLY_AGG_TABLES = {
         "agg.pgss_hourly",
-        "agg.pg_table_stat_hourly",
-        "agg.pg_wal_hourly"
+        "agg.pg_table_stat_hourly"
     };
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
@@ -220,30 +219,41 @@ public class PartitionManager {
         String[] parentParts = parentTable.split("\\.", 2);
         String schema = parentParts[0];
         String parentName = parentParts[1];
-        String fullPartitionName = schema + "." + partitionName.replace(schema + "_", "");
 
-        if (hasOverlappingPartition(schema, parentName, bounds)) {
-            log.debug("Partition range mevcut partition ile cakistigi icin atlandi: {} [{} -> {})",
-                fullPartitionName, bounds.lowerText(), bounds.upperText());
+        List<PartitionBounds> missingSegments = findMissingPartitionSegments(schema, parentName, bounds);
+        if (missingSegments.isEmpty()) {
+            log.debug("Partition range zaten mevcut partition'lar tarafindan kapsaniyor: {} [{} -> {})",
+                parentTable, bounds.lowerText(), bounds.upperText());
             return;
         }
 
-        String ddl = String.format(
-            "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%s) TO (%s)",
-            fullPartitionName, parentTable, bounds.lowerLiteral(), bounds.upperLiteral()
-        );
+        for (PartitionBounds segment : missingSegments) {
+            String relName = partitionRelName(schema, partitionName, bounds, segment);
+            String fullPartitionName = schema + "." + relName;
 
-        try {
-            jdbc.execute(ddl);
-            log.info("Partition olusturuldu: {} [{} -> {})",
-                fullPartitionName, bounds.lowerText(), bounds.upperText());
-        } catch (Exception e) {
-            Throwable cause = e;
-            while (cause.getCause() != null && cause.getCause() != cause) {
-                cause = cause.getCause();
+            if (hasOverlappingPartition(schema, parentName, segment)) {
+                log.debug("Partition segment mevcut partition ile cakistigi icin atlandi: {} [{} -> {})",
+                    fullPartitionName, segment.lowerText(), segment.upperText());
+                continue;
             }
-            log.warn("Partition olusturma hatasi: {} - {} (gercek neden: {})",
-                fullPartitionName, e.getMessage(), cause.getMessage());
+
+            String ddl = String.format(
+                "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%s) TO (%s)",
+                fullPartitionName, parentTable, segment.lowerLiteral(), segment.upperLiteral()
+            );
+
+            try {
+                jdbc.execute(ddl);
+                log.info("Partition olusturuldu: {} [{} -> {})",
+                    fullPartitionName, segment.lowerText(), segment.upperText());
+            } catch (Exception e) {
+                Throwable cause = e;
+                while (cause.getCause() != null && cause.getCause() != cause) {
+                    cause = cause.getCause();
+                }
+                log.warn("Partition olusturma hatasi: {} - {} (gercek neden: {})",
+                    fullPartitionName, e.getMessage(), cause.getMessage());
+            }
         }
     }
 
@@ -265,21 +275,18 @@ public class PartitionManager {
     }
 
     private PartitionBounds queryBounds(String truncUnit, String intervalUnit, int offset) {
-        // ONEMLI: Bound'lar UTC midnight hizasinda uretilir (date_trunc 'utc'
-        // zaman diliminde). Aksi halde session timezone (orn. Europe/Istanbul,
-        // +03) ile date_trunc Istanbul-midnight (00:00+03) uretir; mevcut
-        // partition'lar ise UTC-midnight (00:00 UTC = 03:00+03). Iki farkli hiza
-        // CAKISIR ve aradaki gun partition'i olusturulamaz (delik + alert).
-        // 'now() at time zone utc' UTC duvar saatini verir, date_trunc UTC gunune
-        // hizalar; sonra geri timestamptz'ye cast edilir.
+        // Bound'lar DB session timezone'unda uretilir. Europe/Istanbul icin
+        // ay/gun/yil baslangici 00:00+03 olur; farkli kurulumlarda ilgili DB
+        // timezone midnight'i kullanilir. UTC hardcode kullanmak eski local
+        // midnight partition'larla 3 saatlik gap olusturabilir.
         String sql = String.format("""
             select quote_literal(lower_bound) as lower_literal,
                    quote_literal(upper_bound) as upper_literal,
                    lower_bound::text as lower_text,
                    upper_bound::text as upper_text
             from (
-                select (date_trunc('%s', (now() at time zone 'UTC') + (cast(? as int) * interval '%s')) at time zone 'UTC') as lower_bound,
-                       (date_trunc('%s', (now() at time zone 'UTC') + ((cast(? as int) + 1) * interval '%s')) at time zone 'UTC') as upper_bound
+                select date_trunc('%s', now() + (cast(? as int) * interval '%s')) as lower_bound,
+                       date_trunc('%s', now() + ((cast(? as int) + 1) * interval '%s')) as upper_bound
             ) b
             """, truncUnit, intervalUnit, truncUnit, intervalUnit);
 
@@ -290,6 +297,109 @@ public class PartitionManager {
             String.valueOf(row.get("lower_text")),
             String.valueOf(row.get("upper_text"))
         );
+    }
+
+    /**
+     * Istenen range icinde mevcut partition'lar tarafindan kapsanmayan
+     * segmentleri bulur. Kismi overlap varsa yalnizca bos kalan parcayi
+     * dondurur; boylece eski UTC-bound partition'dan local-bound hizaya
+     * geciste yeni ayin tamami skip edilmez.
+     */
+    private List<PartitionBounds> findMissingPartitionSegments(String schema, String parentName, PartitionBounds bounds) {
+        try {
+            return jdbc.query("""
+                with desired as (
+                    select ?::timestamptz as lower_bound,
+                           ?::timestamptz as upper_bound
+                ),
+                raw_bounds as (
+                    select
+                        regexp_match(
+                            pg_get_expr(child.relpartbound, child.oid),
+                            'FROM \\(''([^'']+)''\\) TO \\(''([^'']+)''\\)'
+                        ) as bound_match
+                    from pg_inherits i
+                    join pg_class parent on parent.oid = i.inhparent
+                    join pg_class child on child.oid = i.inhrelid
+                    join pg_namespace ns on ns.oid = parent.relnamespace
+                    where ns.nspname = ?
+                      and parent.relname = ?
+                ),
+                existing as (
+                    select
+                        greatest((bound_match)[1]::timestamptz, d.lower_bound) as lower_bound,
+                        least((bound_match)[2]::timestamptz, d.upper_bound) as upper_bound
+                    from raw_bounds
+                    cross join desired d
+                    where bound_match is not null
+                      and (bound_match)[1]::timestamptz < d.upper_bound
+                      and (bound_match)[2]::timestamptz > d.lower_bound
+                ),
+                points as (
+                    select lower_bound as point from desired
+                    union
+                    select upper_bound from desired
+                    union
+                    select lower_bound from existing
+                    union
+                    select upper_bound from existing
+                ),
+                ordered_points as (
+                    select point as lower_bound,
+                           lead(point) over (order by point) as upper_bound
+                    from points
+                ),
+                missing as (
+                    select p.lower_bound, p.upper_bound
+                    from ordered_points p
+                    cross join desired d
+                    where p.upper_bound is not null
+                      and p.lower_bound < p.upper_bound
+                      and p.lower_bound >= d.lower_bound
+                      and p.upper_bound <= d.upper_bound
+                      and not exists (
+                          select 1
+                          from existing e
+                          where e.lower_bound <= p.lower_bound
+                            and e.upper_bound >= p.upper_bound
+                      )
+                )
+                select quote_literal(lower_bound) as lower_literal,
+                       quote_literal(upper_bound) as upper_literal,
+                       lower_bound::text as lower_text,
+                       upper_bound::text as upper_text
+                from missing
+                order by lower_bound
+                """,
+                (rs, rowNum) -> new PartitionBounds(
+                    rs.getString("lower_literal"),
+                    rs.getString("upper_literal"),
+                    rs.getString("lower_text"),
+                    rs.getString("upper_text")
+                ),
+                bounds.lowerText(), bounds.upperText(), schema, parentName);
+        } catch (Exception e) {
+            log.debug("Partition eksik segment pre-check atlandi: {}.{} [{} -> {}) - {}",
+                schema, parentName, bounds.lowerText(), bounds.upperText(), e.getMessage());
+            return List.of(bounds);
+        }
+    }
+
+    private String partitionRelName(String schema, String partitionName, PartitionBounds requested, PartitionBounds segment) {
+        String baseName = partitionName.replace(schema + "_", "");
+        if (requested.lowerText().equals(segment.lowerText()) && requested.upperText().equals(segment.upperText())) {
+            return baseName;
+        }
+
+        String suffix = boundToken(segment.lowerText()) + "_" + boundToken(segment.upperText());
+        int maxBaseLen = Math.max(1, 63 - "_seg_".length() - suffix.length());
+        String trimmedBase = baseName.length() > maxBaseLen ? baseName.substring(0, maxBaseLen) : baseName;
+        return trimmedBase + "_seg_" + suffix;
+    }
+
+    private String boundToken(String value) {
+        String digits = value == null ? "" : value.replaceAll("\\D", "");
+        return digits.length() > 12 ? digits.substring(0, 12) : digits;
     }
 
     /**
