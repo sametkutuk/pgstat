@@ -60,9 +60,9 @@ clone/staging validation target, not to the production collector.
 | P0 | Catalog metadata for tables/indexes/columns | Required for index advice and write-risk scoring |
 | P0 | Safe column/statistics metadata | Required for selectivity/cardinality reasoning |
 | P0 | Validation storage contracts | Required before pgdbaagent can write explain/validation evidence back |
-| P1 | Lock graph and wait context | Required for blocking/root-cause findings |
-| P1 | Deploy/application context | Required to correlate metric changes with releases |
-| P1 | OS metric ingestion contract | Required to separate PostgreSQL from host bottlenecks |
+| P0 | Lock graph and wait context | Required for blocking/root-cause findings |
+| P0 | Deploy/application context | Required to correlate metric changes with releases |
+| P0 | OS metric ingestion contract | Required to separate PostgreSQL from host bottlenecks without loading the target DB |
 | P2 | Optional exact bloat checks | Useful, but should be extension-gated and throttled |
 | P2 | Optional wait sampling integration | Useful if `pg_wait_sampling` exists; not core dependency |
 | P3 | Production plan history | Useful, but risky/noisy; keep explicit and off by default |
@@ -486,29 +486,66 @@ Problem:
 PostgreSQL views cannot prove whether the bottleneck is CPU, memory, disk,
 filesystem, or network.
 
-pgstat should not require a host agent in the core product, but it should define
-an ingestion contract.
+pgstat must correlate PostgreSQL evidence with host pressure without adding
+load to the monitored PostgreSQL database. OS metric collection must not run
+extra diagnostic SQL on the target DB. It should use OS-level or external
+metric evidence and write only to the central pgstat store.
+
+pgstat should not require a host agent in the core product, but it must define a
+global ingestion contract.
 
 Sources:
 
-- optional node exporter scrape/import
-- optional Telegraf/Prometheus bridge
 - manual/API metric ingestion
+- optional node_exporter/windows_exporter scrape/import
+- optional Telegraf/Prometheus bridge
+- optional direct read-only OS user collection with an allowlisted source/command
+  model
 
 Proposed storage:
 
 - `fact.host_metric_delta`
 - `fact.host_metric_snapshot`
 - `dim.host_ref`
+- OS observation/history table to preserve OS family/distro changes over time
 
 Minimum metrics:
 
-- CPU usage and load
-- memory available, swap usage
-- disk read/write IOPS
-- disk read/write latency
-- filesystem usage
-- network throughput/errors
+- CPU usage, load, iowait, steal, core count
+- memory total/available, swap usage
+- disk read/write bytes, IOPS, latency, utilization, queue depth where available
+- filesystem bytes and inode usage
+- network throughput, errors, drops
+- optional PostgreSQL process CPU/memory where safely available from OS evidence
+
+Supported OS families:
+
+- Linux generic through procfs/sysfs or exporter/import data
+- RHEL/Rocky/Alma/CentOS/Fedora family
+- Ubuntu/Debian family
+- SUSE family
+- Windows Server through windows_exporter, Performance Counters, WMI/CIM, or
+  import data
+
+OS changes:
+
+- A host can change from Windows to Linux, from RHEL to Ubuntu, or to another
+  derivative. pgstat must preserve point-in-time OS identity/history instead of
+  overwriting old evidence.
+- Host identity must be separate from OS family/version observation.
+- Unsupported or partially supported OS evidence must be recorded as a coverage
+  gap, not silently treated as zero or healthy.
+
+Security and load rules:
+
+- Target PostgreSQL database load for OS metric collection must be zero.
+- Direct OS collection should work with a read-only OS user where possible.
+- No root/sudo requirement by default.
+- Missing/stale/partial OS metrics must be visible in coverage state and should
+  reduce finding confidence when host context is needed.
+- OS metrics follow the same retention/purge model as comparable database
+  metric families where practical; high-volume tables should be timestamp
+  partitioned.
 
 Consumers:
 

@@ -170,6 +170,7 @@ Primary scope:
 - safe `pg_stats` and extended statistics scalar metadata
 - deploy/application event API
 - full lock graph snapshot
+- OS/system metric ingestion without target PostgreSQL database load
 - validation target and validation result storage contracts
 - exact retention and purge rules for new data families
 
@@ -283,15 +284,15 @@ production bug or a user-approved urgent feature.
 | 6 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | PGSTAT-P0-003, PGSTAT-P0-011 |
 | 7 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 |
 | 8 | PGSTAT-P0-006 | P0 | telemetry | planned | Add full lock graph snapshot | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011 |
-| 9 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011 |
-| 10 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 |
-| 11 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | PGSTAT-P0-007, PGSTAT-P0-010 |
-| 12 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | PGSTAT-P0-007, PGSTAT-P0-008 |
-| 13 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
-| 14 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
-| 15 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
-| 16 | PGSTAT-P1-002 | P1 | telemetry | planned | Define OS/system metric ingestion contract | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
-| 17 | PGSTAT-P1-003 | P1 | telemetry | planned | Implement OS/system metric ingestion storage and API | PGSTAT-P1-002 |
+| 9 | PGSTAT-P0-017 | P0 | telemetry | planned | Define OS/system metric ingestion contract | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 10 | PGSTAT-P0-018 | P0 | telemetry | planned | Implement OS/system metric ingestion storage and API | PGSTAT-P0-017 |
+| 11 | PGSTAT-P0-007 | P0 | pgdbaagent | planned | Define evidence package schemas v1 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-011, PGSTAT-P0-017, PGSTAT-P0-018 |
+| 12 | PGSTAT-P0-010 | P0 | validation | planned | Define validation target and result contracts | PGSTAT-P0-007, PGSTAT-P0-011, PGSTAT-P0-012 |
+| 13 | PGSTAT-P0-008 | P0 | pgdbaagent | planned | Define signal/finding/recommendation registry | PGSTAT-P0-007, PGSTAT-P0-010 |
+| 14 | PGSTAT-P0-013 | P0 | pgdbaagent | planned | Implement evidence package builders v1 | PGSTAT-P0-007, PGSTAT-P0-008 |
+| 15 | PGSTAT-P0-014 | P0 | pgdbaagent | planned | Implement deterministic signal/finding engine v1 | PGSTAT-P0-013 |
+| 16 | PGSTAT-P0-015 | P0 | pgdbaagent | planned | Implement pgdbaagent Advice V1 and AI explanation boundary | PGSTAT-P0-014 |
+| 17 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
 | 18 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
 | 19 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
 

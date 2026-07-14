@@ -133,7 +133,7 @@ Current master capability map:
 | Insights WAL Spike | active | Insights code, data contracts | Feed write/replication/checkpoint findings |
 | Insights Cache Hit | active | Insights code, data contracts | Feed read/cache/index findings |
 | Insights Vacuum Lag | active/in_progress | Insights code, telemetry roadmap | Feed autovacuum/table-health findings |
-| Host/OS metrics | planned | Telemetry roadmap, execution plan | Optional ingestion contract for CPU, memory, disk, filesystem, and network context |
+| Host/OS metrics | planned | Telemetry roadmap, execution plan | P0 ingestion contract for CPU, memory, disk, filesystem, and network context without target DB load |
 | Reports | active | Report code, governance | Keep export/audit/security rules explicit |
 | Alerts/Telegram | active | Alert code, governance | Keep command security and audit strict |
 | Security hardening | active | Governance, setup docs | Fail-fast config, secret hygiene, least privilege |
