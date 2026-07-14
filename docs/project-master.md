@@ -24,6 +24,7 @@ The purpose of this document is to answer:
 
 Related documents:
 
+- [Project Execution Plan](project-execution-plan.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
@@ -305,6 +306,7 @@ docs:
 | Concern | Source of truth |
 | --- | --- |
 | Product-wide scope, capability ledger, master rules | This document |
+| Current status, milestones, backlog, and execution gates | `project-execution-plan.md` |
 | Architecture and pgstat/pgdbaagent boundaries | `agentic-dba-platform-architecture.md` |
 | SDLC and change governance | `platform-governance-and-sdlc.md` |
 | Current and planned pgstat telemetry | `pgstat-telemetry-completion-roadmap.md` |
@@ -437,6 +439,10 @@ additional enterprise rules:
 ## 14. Near-Term Project Work
 
 Immediate documentation and platform work:
+
+Current execution is managed in
+[Project Execution Plan](project-execution-plan.md). Immediate documentation
+and platform work:
 
 1. Promote field-level contracts for query workload, temp spill, WAL, cache,
    vacuum/table health, and settings evidence.

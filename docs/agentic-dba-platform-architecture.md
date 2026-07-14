@@ -7,6 +7,7 @@ Owner: pgstat / pgdbaagent product direction
 Related documents:
 
 - [pgstat Project Master Document](project-master.md)
+- [Project Execution Plan](project-execution-plan.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [pgdbaagent Contracts](pgdbaagent-contracts.md)

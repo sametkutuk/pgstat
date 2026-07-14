@@ -50,6 +50,7 @@ const GENERATED_DOCS = [
 
 const MANUAL_CONTRACT_DOCS = [
   /^docs\/project-master\.md$/,
+  /^docs\/project-execution-plan\.md$/,
   /^docs\/pgstat-data-source-dictionary\.md$/,
   /^docs\/data-contract-registry\.md$/,
   /^docs\/pgstat-telemetry-completion-roadmap\.md$/,

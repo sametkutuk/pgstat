@@ -7,6 +7,7 @@ Scope: evidence packages, reasoning model, findings, recommendations, and valida
 Related documents:
 
 - [pgstat Project Master Document](project-master.md)
+- [Project Execution Plan](project-execution-plan.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Data Contract Registry](data-contract-registry.md)
 - [Generated pgstat Field Contracts](generated/field-contracts.md)
