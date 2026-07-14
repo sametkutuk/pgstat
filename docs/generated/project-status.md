@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 21 |
+| Total tasks | 22 |
 | Done tasks | 1 |
-| Remaining tasks | 20 |
+| Remaining tasks | 21 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | customer_validation | 1 |
 | done | 1 |
-| planned | 19 |
+| planned | 20 |
 
 ## Workstream Counts
 
@@ -42,6 +42,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | --- | ---: |
 | contracts | 2 |
 | governance | 1 |
+| operations | 1 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -74,13 +75,14 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | Implement after validation contracts are accepted. |
 | 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
 | 20 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
+| 21 | PGSTAT-P0-021 | P0 | operations | planned | Document and validate live aggregate partition gap remediation | Plan after P0-002 unless live partition inserts fail again and this becomes urgent operational repair. |
 
 ## Dependency Map
 
 | ID | Depends on | Blocks |
 | --- | --- | --- |
 | PGSTAT-P0-009 | - | PGSTAT-P0-001, PGSTAT-P0-012, PGSTAT-P1-001 |
-| PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007 |
+| PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007, PGSTAT-P0-021 |
 | PGSTAT-P0-002 | PGSTAT-P0-001 | PGSTAT-P0-011, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007 |
 | PGSTAT-P0-011 | PGSTAT-P0-002 | PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007, PGSTAT-P0-010 |
 | PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-017, PGSTAT-P0-010, PGSTAT-P1-001 |
@@ -100,6 +102,7 @@ Next planned task: **PGSTAT-P0-002 - Promote next field contracts beyond the fir
 | PGSTAT-P0-016 | PGSTAT-P0-010 | PGSTAT-P1-004 |
 | PGSTAT-P1-004 | PGSTAT-P0-014, PGSTAT-P0-016 | - |
 | PGSTAT-P1-001 | PGSTAT-P0-009, PGSTAT-P0-012 | - |
+| PGSTAT-P0-021 | PGSTAT-P0-001 | - |
 
 ## Closure Rules
 

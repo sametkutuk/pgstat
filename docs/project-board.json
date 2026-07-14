@@ -147,6 +147,8 @@
         "docs/generated/data-family-contracts.md seeded semantic contracts increased to 46; generated defaults needing review decreased to 46.",
         "docs/generated/contract-review-queue.md table/data-family contracts needing semantic review decreased to 46.",
         "docs/generated/data-lifecycle-matrix.md purge-referenced tables requiring policy verification decreased to 3 after retention mapping for snapshot-derived aggregate families.",
+        "Live pg_get_partkeydef validation confirmed agg.pgss_hourly, agg.pgss_daily, and agg.pg_table_stat_hourly are partitioned; agg.pg_wal_hourly and snapshot-derived hourly aggregates are not partitioned.",
+        "Live validation exposed existing mixed timezone partition bounds in agg.pgss_hourly and agg.pg_table_stat_hourly; remediation is tracked separately as PGSTAT-P0-021.",
         "node scripts/generate-doc-inventory.mjs completed."
       ],
       "next_action": "Customer validation: review P0-001 promoted aggregate contracts before marking done."
@@ -1313,6 +1315,63 @@
       },
       "verification_evidence": [],
       "next_action": "Defer until governance and release checklist are stable."
+    },
+    {
+      "id": "PGSTAT-P0-021",
+      "order": 21,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "planned",
+      "title": "Document and validate live aggregate partition gap remediation",
+      "problem": "Live schema validation found mixed timezone partition bounds in existing agg.pgss_hourly and agg.pg_table_stat_hourly partitions, leaving possible 3 hour gaps after older local-midnight partitions.",
+      "requirements": [
+        "Provide a safe detection query for partition gaps and overlaps.",
+        "Provide a manual remediation runbook that does not delete existing partitions without operator approval.",
+        "Document that PartitionManager creates future partitions only and does not repair historical live partition ranges.",
+        "Separate code behavior verification from live data repair."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Runbook includes pre-check, backup/export guidance, repair steps, and post-check SQL.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Runbook covers agg.pgss_hourly and agg.pg_table_stat_hourly monthly partition gaps caused by mixed 00:00 and 03:00 local bounds.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Docs clearly state that current code skips non-partitioned agg.pg_wal_hourly despite the stale PartitionManager list entry.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Create an operations runbook for aggregate partition gap detection and repair.",
+        "Reference the live validation output and current PartitionManager guard behavior.",
+        "Regenerate project status and run docs-impact checks."
+      ],
+      "verification_plan": [
+        "node scripts/check-project-board.mjs",
+        "node scripts/generate-project-status.mjs",
+        "node scripts/check-doc-impact.mjs --staged"
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/project-execution-plan.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-001"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Plan after P0-002 unless live partition inserts fail again and this becomes urgent operational repair."
     }
   ]
 }

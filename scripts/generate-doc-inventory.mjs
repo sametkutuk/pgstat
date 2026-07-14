@@ -591,11 +591,13 @@ function buildLifecycleRows({ schema, collector }) {
     return 'not detected';
   }
 
-  function partitionPolicy(tableName) {
-    if (dailyFacts.has(tableName)) return 'daily partitions by PartitionManager';
-    if (monthlyAgg.has(tableName)) return 'monthly partitions by PartitionManager';
-    if (yearlyAgg.has(tableName)) return 'yearly partitions by PartitionManager';
-    if (partitionRefs.has(tableName)) return 'referenced by PartitionManager; verify group';
+  function partitionPolicy(table) {
+    const tableName = table.name;
+    const skipReason = 'listed in PartitionManager but table is not schema-partitioned; skipped by isPartitionedTable';
+    if (dailyFacts.has(tableName)) return table.partitioned ? 'daily partitions by PartitionManager' : skipReason;
+    if (monthlyAgg.has(tableName)) return table.partitioned ? 'monthly partitions by PartitionManager' : skipReason;
+    if (yearlyAgg.has(tableName)) return table.partitioned ? 'yearly partitions by PartitionManager' : skipReason;
+    if (partitionRefs.has(tableName)) return table.partitioned ? 'referenced by PartitionManager; verify group' : skipReason;
     return 'not detected';
   }
 
@@ -615,7 +617,7 @@ function buildLifecycleRows({ schema, collector }) {
       columns: table.columns.size,
       timestamps: timestampColumns(table).join(', ') || 'none detected',
       schemaPartitioned: table.partitioned ? `yes (${table.partitionKey})` : 'no',
-      partitionPolicy: partitionPolicy(table.name),
+      partitionPolicy: partitionPolicy(table),
       retention: retention(table.name),
       purgeOwner: purgeRefs.has(table.name) ? 'yes' : 'no',
       rollup: rollupRole(table.name),

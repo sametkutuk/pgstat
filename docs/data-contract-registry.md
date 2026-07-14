@@ -246,7 +246,7 @@ contract` in [Generated pgstat Data Family Contracts](generated/data-family-cont
 | `agg.pgss_hourly` | `fact.pgss_delta` | `control.retention_policy.hourly_retention_days/hourly_retention_months` | `PurgeEvaluator.purgeHourlyAgg` | monthly by `PartitionManager` | hourly query workload, latency, temp, cache, WAL, and throughput trend |
 | `agg.pgss_daily` | `agg.pgss_hourly` | `control.retention_policy.daily_retention_days/daily_retention_months` | `PurgeEvaluator.purgeDailyAgg` | yearly by `PartitionManager` | daily long-range query workload trend |
 | `agg.pg_table_stat_hourly` | `fact.pg_table_stat_delta` | `control.retention_policy.hourly_retention_days/hourly_retention_months` | `PurgeEvaluator.purgeHourlyAgg` | monthly by `PartitionManager` | Vacuum Lag, table health, autovacuum/analyze trend |
-| `agg.pg_wal_hourly` | `fact.pg_wal_snapshot`, `fact.pgss_delta` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | monthly by `PartitionManager` | WAL Spike, write amplification, FPI, replication pressure, WAL capacity |
+| `agg.pg_wal_hourly` | `fact.pg_wal_snapshot`, `fact.pgss_delta` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned; `PartitionManager` currently lists it but skips it because the table is not schema-partitioned | WAL Spike, write amplification, FPI, replication pressure, WAL capacity |
 | `agg.pg_wal_daily` | `agg.pg_wal_hourly` | `control.retention_policy.daily_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | long-range WAL growth and capacity trend |
 | `agg.pg_activity_hourly` | `fact.pg_activity_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | session pressure, long-running query, idle-in-transaction history |
 | `agg.pg_lock_hourly` | `fact.pg_lock_snapshot` | `control.retention_policy.hourly_snapshot_retention_days` | `PurgeEvaluator.rollupSnapshotsHourly` | not partitioned | historical lock pressure and incident context |
@@ -257,6 +257,14 @@ contract` in [Generated pgstat Data Family Contracts](generated/data-family-cont
 These promoted families remain generated from code and hints. If rollup SQL,
 retention fields, purge ownership, partitioning, or consumers change, update
 the generator hints and regenerate the generated contract docs.
+
+Live schema validation on 2026-07-14 confirmed that `agg.pgss_hourly`,
+`agg.pgss_daily`, and `agg.pg_table_stat_hourly` are partitioned, while
+`agg.pg_wal_hourly` and the snapshot-derived hourly aggregates are not
+partitioned. The same validation exposed existing mixed timezone partition
+bounds in live `agg.pgss_hourly` and `agg.pg_table_stat_hourly` partitions;
+that is an operational remediation item, not a data-family contract closure
+condition.
 
 ## 10. Initial High-Value Contracts
 
