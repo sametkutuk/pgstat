@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+set -eu
+
+echo "[pgstat-docs] verifying generated documentation is current"
+node scripts/generate-doc-inventory.mjs
+node scripts/generate-project-status.mjs
+
+if ! git diff --quiet -- \
+  docs/generated/project-inventory.md \
+  docs/generated/data-lifecycle-matrix.md \
+  docs/generated/data-family-contracts.md \
+  docs/generated/field-contracts.md \
+  docs/generated/contract-review-queue.md \
+  docs/generated/project-status.md; then
+  echo "[pgstat-docs] generated documentation is out of date"
+  echo "[pgstat-docs] run: node scripts/generate-doc-inventory.mjs && node scripts/generate-project-status.mjs"
+  echo "[pgstat-docs] then commit the generated docs"
+  exit 1
+fi
+
+echo "[pgstat-docs] validating project board"
+node scripts/check-project-board.mjs
+
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+if [ -n "$upstream" ]; then
+  echo "[pgstat-docs] checking documentation impact against $upstream"
+  node scripts/check-doc-impact.mjs --base="$upstream"
+else
+  echo "[pgstat-docs] no upstream configured; checking local working tree impact"
+  node scripts/check-doc-impact.mjs
+fi
+
+echo "[pgstat-gates] running layer quality gates"
+if [ -n "$upstream" ]; then
+  node scripts/check-quality-gates.mjs --base="$upstream"
+else
+  node scripts/check-quality-gates.mjs
+fi

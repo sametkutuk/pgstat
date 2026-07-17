@@ -4,7 +4,7 @@
 # =============================================================================
 
 .PHONY: deploy upgrade stop start restart logs logs-collector logs-api \
-        status health migrate build backup-db restore-db clean
+        status health migrate build backup-db restore-db docs-inventory verify clean
 
 # --- Full deploy: migrate + build + up + health check ---
 deploy:
@@ -69,6 +69,16 @@ restore-db:
 	else \
 		echo "İptal edildi."; \
 	fi
+
+# --- Docs inventory ---
+docs-inventory:
+	@node scripts/generate-doc-inventory.mjs
+
+# --- Tüm kalite kapıları (local CI): board + docs + collector/api/ui ---
+verify:
+	@node scripts/check-project-board.mjs
+	@node scripts/check-doc-impact.mjs
+	@node scripts/check-quality-gates.mjs --all
 
 # --- Temizlik (container + image sil, volume KORUNUR) ---
 clean:
