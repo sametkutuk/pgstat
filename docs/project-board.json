@@ -265,7 +265,7 @@
       "order": 4,
       "priority": "P0",
       "workstream": "release",
-      "status": "planned",
+      "status": "done",
       "title": "Add release checklist and upgrade impact template",
       "problem": "Enterprise releases need explicit migration, config, retention, compatibility, and rollback notes.",
       "requirements": [
@@ -277,12 +277,12 @@
         {
           "id": "AC1",
           "text": "Release checklist template exists.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC2",
           "text": "Checklist is referenced by governance docs.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -302,11 +302,15 @@
       ],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer instructed on 2026-07-17 to complete the missing SDLC items; the checklist template was delivered in the same session."
       },
-      "verification_evidence": [],
-      "next_action": "Create release checklist before broad schema/collector implementation."
+      "verification_evidence": [
+        "docs/release-checklist-template.md created with migration/retention/collector/contract/API/UI/config/security/testing/docs/upgrade/rollback sections and the semver VERSION rule.",
+        "Referenced from docs/platform-governance-and-sdlc.md Section 11 and the project execution plan."
+      ],
+      "completed_at": "2026-07-17",
+      "next_action": "Closed; releases now complete docs/release-checklist-template.md."
     },
     {
       "id": "PGSTAT-P0-003",
@@ -1473,6 +1477,201 @@
       ],
       "completed_at": "2026-06-02",
       "next_action": "Closed; recorded retroactively from the .kiro spec workflow."
+    },
+    {
+      "id": "PGSTAT-P0-020",
+      "order": 24,
+      "priority": "P0",
+      "workstream": "governance",
+      "status": "done",
+      "title": "Define project test strategy",
+      "problem": "Governance Section 9 listed testing gates but there was no project-wide test strategy: no honest coverage baseline, no per-layer commands, no fixture locations, no gap roadmap. Enterprise SDLC requires testing to be a defined process, not an aspiration.",
+      "requirements": [
+        "Document the honest current test baseline per layer (collector, API, UI, migrations, docs tooling).",
+        "Define per-layer requirements and commands for changes to count as done.",
+        "Define fixture locations and the integration environment.",
+        "Map known gaps to board tasks or explicit adoption triggers."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "docs/test-strategy.md exists with baseline, per-layer gates, fixtures, integration environment, and gap roadmap.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Governance Section 9 references the test strategy.",
+          "status": "done"
+        }
+      ],
+      "implementation_plan": [
+        "Inventory existing tests (4 collector JUnit classes; API/UI type-check only).",
+        "Write docs/test-strategy.md and wire it into governance."
+      ],
+      "verification_plan": [
+        "node scripts/check-project-board.mjs",
+        "node scripts/check-doc-impact.mjs --staged"
+      ],
+      "required_docs": [
+        "docs/test-strategy.md",
+        "docs/platform-governance-and-sdlc.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "accepted",
+        "evidence": "Customer instructed on 2026-07-17 to complete the missing SDLC items; the test strategy was delivered in the same session."
+      },
+      "verification_evidence": [
+        "docs/test-strategy.md created; baseline verified against the actual repo (collector/src/test has 4 test classes, api and ui have no runtime tests).",
+        "Linked from docs/platform-governance-and-sdlc.md Section 9."
+      ],
+      "completed_at": "2026-07-17",
+      "next_action": "Closed; API vitest and UI render tests are adopted with the first qualifying PR per the strategy."
+    },
+    {
+      "id": "PGSTAT-P1-005",
+      "order": 25,
+      "priority": "P1",
+      "workstream": "governance",
+      "status": "done",
+      "title": "Adopt ADR practice with template and founding ADR",
+      "problem": "Governance Section 12 required ADRs but there was no ADR directory, template, or index; decisions lived only in the master document's decision-log table, which does not scale.",
+      "requirements": [
+        "Create docs/adr/ with a template and index.",
+        "Backfill the founding product-family decisions as ADR-0001."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "docs/adr/ contains README index, ADR-template.md, and ADR-0001 recording the product boundary and collection rules.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Governance Section 12 references the ADR directory.",
+          "status": "done"
+        }
+      ],
+      "implementation_plan": [
+        "Create docs/adr/README.md, ADR-template.md, ADR-0001-product-family-baseline.md."
+      ],
+      "verification_plan": [
+        "node scripts/check-project-board.mjs",
+        "node scripts/check-doc-impact.mjs --staged"
+      ],
+      "required_docs": [
+        "docs/adr/README.md",
+        "docs/platform-governance-and-sdlc.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "accepted",
+        "evidence": "Customer instructed on 2026-07-17 to complete the missing SDLC items; the ADR practice was delivered in the same session."
+      },
+      "verification_evidence": [
+        "docs/adr/ created with README index, template, and ADR-0001 backfilling the 2026-07-13 boundary/collection decisions.",
+        "Linked from docs/platform-governance-and-sdlc.md Section 12."
+      ],
+      "completed_at": "2026-07-17",
+      "next_action": "Closed; future boundary/contract/AI/validation decisions get a numbered ADR."
+    },
+    {
+      "id": "PGSTAT-P1-006",
+      "order": 26,
+      "priority": "P1",
+      "workstream": "governance",
+      "status": "planned",
+      "title": "Restore server-side CI quality gates",
+      "problem": "GitHub Actions is off due to billing, so every quality gate (board check, doc impact, generated-doc drift, builds, tests) is enforced only by local hooks. A contributor without hooks installed can push unchecked work; enterprise SDLC needs a server-side gate.",
+      "requirements": [
+        "Decide the CI provider or workaround (restore Actions billing, self-hosted runner, or alternative).",
+        "Enforce at minimum: board check, doc impact, generated-doc drift, mvn test, api/ui type checks.",
+        "Document the CI stance in governance."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A server-side pipeline runs the quality gates on push/PR.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Governance and test strategy CI notes are updated.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Resolve the billing/provider decision with the customer.",
+        "Add the pipeline definition and align it with .githooks checks."
+      ],
+      "verification_plan": [
+        "A test PR shows the pipeline failing on an intentional violation."
+      ],
+      "required_docs": [
+        "docs/platform-governance-and-sdlc.md",
+        "docs/test-strategy.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Blocked on the GitHub Actions billing decision; revisit when the customer decides the CI provider."
+    },
+    {
+      "id": "PGSTAT-P1-007",
+      "order": 27,
+      "priority": "P1",
+      "workstream": "operations",
+      "status": "planned",
+      "title": "Write deployment and operations runbook",
+      "problem": "Deployment knowledge (deploy.sh flow, service management, backup/restore, upgrade steps, incident basics) is spread across scripts and memory. Enterprise SDLC requires a written runbook so operations do not depend on one person.",
+      "requirements": [
+        "Document install, upgrade, rollback, backup/restore, and service management for collector/API/UI/central DB.",
+        "Document health checks and the first-response steps for common failures.",
+        "Align with the release checklist rollback section."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A runbook document covers install, upgrade, rollback, backup/restore, and service management.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Runbook is linked from governance and the release checklist.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Consolidate deploy.sh, Makefile targets, docker-compose files, and operations-guide.md into one authoritative runbook.",
+        "Review against a real deploy cycle."
+      ],
+      "verification_plan": [
+        "Dry-run the runbook steps on a staging deploy."
+      ],
+      "required_docs": [
+        "docs/operations-guide.md",
+        "docs/platform-governance-and-sdlc.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-012"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook."
     }
   ]
 }

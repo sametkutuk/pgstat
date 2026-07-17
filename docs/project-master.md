@@ -27,6 +27,9 @@ Related documents:
 - [Project Execution Plan](project-execution-plan.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)
+- [Test Strategy](test-strategy.md)
+- [Release Checklist Template](release-checklist-template.md)
+- [Architecture Decision Records](adr/README.md)
 - [pgstat Telemetry Completion Roadmap](pgstat-telemetry-completion-roadmap.md)
 - [pgstat Node Agent Requirements](pgstat-node-agent-requirements.md)
 - [pgstat Data Source Dictionary](pgstat-data-source-dictionary.md)
@@ -313,6 +316,9 @@ docs:
 | Generated readable project status | `generated/project-status.md` |
 | Architecture and pgstat/pgdbaagent boundaries | `agentic-dba-platform-architecture.md` |
 | SDLC and change governance | `platform-governance-and-sdlc.md` |
+| Test strategy and per-layer quality gates | `test-strategy.md` |
+| Release checklist and versioning rule | `release-checklist-template.md` |
+| Architecture decision records | `adr/README.md` |
 | Current and planned pgstat telemetry | `pgstat-telemetry-completion-roadmap.md` |
 | Source-level collection inventory | `pgstat-data-source-dictionary.md` |
 | Field-level contracts and consumers | `data-contract-registry.md` |
@@ -471,3 +477,5 @@ and platform work:
 | 2026-07-13 | New telemetry must be PostgreSQL-version aware and column aware. |
 | 2026-07-13 | New telemetry must have retention, purge, partition, and rollup/no-rollup decisions before implementation is complete. |
 | 2026-07-13 | Documentation must be maintained as a project artifact and eventually checked automatically. |
+| 2026-07-17 | SDLC right side hardened: test strategy (`test-strategy.md`), release checklist with semver rule (`release-checklist-template.md`), and ADR practice (`adr/`) adopted; server-side CI restoration and operations runbook tracked as PGSTAT-P1-006/P1-007. |
+| 2026-07-17 | Features shipped via the legacy .kiro spec workflow are recorded retroactively on the project board; the board is the single task source going forward. |

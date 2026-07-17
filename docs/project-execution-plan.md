@@ -62,7 +62,10 @@ As of 2026-07-14:
 | P0-001 work order | closed (done 2026-07-14) | `docs/work-orders/PGSTAT-P0-001-critical-data-family-contracts.md` |
 | pgstat node agent requirements | draft | `docs/pgstat-node-agent-requirements.md` |
 | pgdbaagent contracts | draft | `docs/pgdbaagent-contracts.md` |
-| Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints |
+| Test strategy | active | `docs/test-strategy.md` |
+| Release checklist template | active | `docs/release-checklist-template.md` |
+| ADR practice | active | `docs/adr/README.md` |
+| Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints; restoration tracked as PGSTAT-P1-006 |
 
 Current generated inventory baseline:
 
@@ -282,7 +285,7 @@ production bug or a user-approved urgent feature.
 | 1 | PGSTAT-P0-001 | P0 | contracts | done | Promote next critical data-family contracts | PGSTAT-P0-009 |
 | 2 | PGSTAT-P0-002 | P0 | contracts | in_progress | Promote next field contracts beyond the first 161 | PGSTAT-P0-001 |
 | 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | PGSTAT-P0-002 |
-| 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | PGSTAT-P0-009 |
+| 4 | PGSTAT-P0-012 | P0 | release | done | Add release checklist and upgrade impact template | PGSTAT-P0-009 |
 | 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
 | 6 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | PGSTAT-P0-003, PGSTAT-P0-011 |
 | 7 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 |
@@ -302,6 +305,10 @@ production bug or a user-approved urgent feature.
 | 21 | PGSTAT-P0-021 | P0 | operations | done | Validate live aggregate partition gap remediation | PGSTAT-P0-001 |
 | 22 | PGSTAT-P1-002 | P1 | ui | done | Table freeze insights (delivered via .kiro spec before the board existed) | - |
 | 23 | PGSTAT-P1-003 | P1 | ui | done | Vacuum lag split activity chart (delivered via .kiro spec before the board existed) | - |
+| 24 | PGSTAT-P0-020 | P0 | governance | done | Define project test strategy | - |
+| 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | - |
+| 26 | PGSTAT-P1-006 | P1 | governance | planned | Restore server-side CI quality gates | - |
+| 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | PGSTAT-P0-012 |
 
 ## 6. Workstream Rules
 

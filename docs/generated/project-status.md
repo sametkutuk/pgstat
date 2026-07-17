@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 24 |
-| Done tasks | 5 |
-| Remaining tasks | 19 |
+| Total tasks | 28 |
+| Done tasks | 8 |
+| Remaining tasks | 20 |
 | Max in progress | 1 |
 
 ## Current Focus
@@ -32,17 +32,17 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 5 |
+| done | 8 |
 | in_progress | 1 |
-| planned | 18 |
+| planned | 19 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
 | contracts | 2 |
-| governance | 1 |
-| operations | 1 |
+| governance | 4 |
+| operations | 2 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -58,7 +58,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 1 | PGSTAT-P0-001 | P0 | contracts | done | Promote next critical data-family contracts | Closed; continue with PGSTAT-P0-002. |
 | 2 | PGSTAT-P0-002 | P0 | contracts | in_progress | Promote next field contracts beyond the first 161 | Execute the first field-level contract batch for Temp Spill, WAL Spike, Cache Hit, Vacuum Lag, Lock Wait, settings, and validation evidence fields. |
 | 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | Define redaction policy before planner stats or AI evidence export. |
-| 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | Create release checklist before broad schema/collector implementation. |
+| 4 | PGSTAT-P0-012 | P0 | release | done | Add release checklist and upgrade impact template | Closed; releases now complete docs/release-checklist-template.md. |
 | 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | Start after contract baseline, redaction policy, and release checklist are stable. |
 | 6 | PGSTAT-P0-004 | P0 | telemetry | planned | Add safe planner stats metadata contracts | Start after catalog metadata and redaction policy. |
 | 7 | PGSTAT-P0-005 | P0 | telemetry | planned | Add deploy/application event API | Design after contract baseline and release checklist. |
@@ -78,6 +78,10 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 21 | PGSTAT-P0-021 | P0 | operations | done | Validate live aggregate partition gap remediation | Closed; continue with PGSTAT-P0-002. |
 | 22 | PGSTAT-P1-002 | P1 | ui | done | Table freeze insights (delivered via .kiro spec) | Closed; recorded retroactively from the .kiro spec workflow. |
 | 23 | PGSTAT-P1-003 | P1 | ui | done | Vacuum lag split activity chart (delivered via .kiro spec) | Closed; recorded retroactively from the .kiro spec workflow. |
+| 24 | PGSTAT-P0-020 | P0 | governance | done | Define project test strategy | Closed; API vitest and UI render tests are adopted with the first qualifying PR per the strategy. |
+| 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | Closed; future boundary/contract/AI/validation decisions get a numbered ADR. |
+| 26 | PGSTAT-P1-006 | P1 | governance | planned | Restore server-side CI quality gates | Blocked on the GitHub Actions billing decision; revisit when the customer decides the CI provider. |
+| 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook. |
 
 ## Dependency Map
 
@@ -87,7 +91,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-001 | PGSTAT-P0-009 | PGSTAT-P0-002, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007, PGSTAT-P0-021 |
 | PGSTAT-P0-002 | PGSTAT-P0-001 | PGSTAT-P0-011, PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007 |
 | PGSTAT-P0-011 | PGSTAT-P0-002 | PGSTAT-P0-003, PGSTAT-P0-004, PGSTAT-P0-006, PGSTAT-P0-017, PGSTAT-P0-007, PGSTAT-P0-010 |
-| PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-017, PGSTAT-P0-010, PGSTAT-P1-001 |
+| PGSTAT-P0-012 | PGSTAT-P0-009 | PGSTAT-P0-003, PGSTAT-P0-005, PGSTAT-P0-017, PGSTAT-P0-010, PGSTAT-P1-001, PGSTAT-P1-007 |
 | PGSTAT-P0-003 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 | PGSTAT-P0-004, PGSTAT-P0-007 |
 | PGSTAT-P0-004 | PGSTAT-P0-003, PGSTAT-P0-011 | PGSTAT-P0-007 |
 | PGSTAT-P0-005 | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-012 | PGSTAT-P0-007 |
@@ -107,6 +111,10 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-021 | PGSTAT-P0-001 | - |
 | PGSTAT-P1-002 | - | - |
 | PGSTAT-P1-003 | - | - |
+| PGSTAT-P0-020 | - | - |
+| PGSTAT-P1-005 | - | - |
+| PGSTAT-P1-006 | - | - |
+| PGSTAT-P1-007 | PGSTAT-P0-012 | - |
 
 ## Closure Rules
 

@@ -242,7 +242,9 @@ Rules:
 
 ## 9. Testing Gates
 
-Enterprise-grade changes require tests at the correct layer.
+Enterprise-grade changes require tests at the correct layer. The concrete
+strategy — current baseline, per-layer commands, fixtures, and gap roadmap —
+is in [Test Strategy](test-strategy.md).
 
 | Layer | Required tests |
 | --- | --- |
@@ -272,6 +274,10 @@ Required for every feature:
 
 ## 11. Release Discipline
 
+Every release completes the
+[Release Checklist Template](release-checklist-template.md). Versioning
+follows semver via the `VERSION` file as defined in that template.
+
 Every release must include:
 
 - migration list
@@ -284,6 +290,9 @@ Every release must include:
 - known compatibility limits
 
 ## 12. ADR Requirement
+
+Architecture Decision Records live in [docs/adr/](adr/README.md), one file
+per decision, written from [the ADR template](adr/ADR-template.md).
 
 Architecture Decision Records are required for:
 
@@ -328,9 +337,10 @@ A feature is done only when:
 
 Required next documents or tools:
 
-1. Data contract registry
-2. ADR template
-3. PR checklist template
+1. Data contract registry (done: `data-contract-registry.md`)
+2. ADR template (done: `adr/ADR-template.md`, 2026-07-17)
+3. PR checklist template (release checklist covers releases:
+   `release-checklist-template.md`, 2026-07-17; per-PR checklist still open)
 4. Evidence package schema v1 hardening
 5. Recommendation schema v1 validation tests
 6. Documentation impact checker rule hardening
