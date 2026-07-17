@@ -320,17 +320,19 @@ Required fields:
 
 A candidate is a possible fix or mitigation. It is not necessarily validated.
 
-Candidate types:
+Candidate types match the recommendation `action_type` enum in
+[pgdbaagent Contracts](pgdbaagent-contracts.md):
 
-- create index
-- change query shape
-- session-level setting
-- server parameter change
-- vacuum/analyze action
-- autovacuum parameter adjustment
-- partitioning plan
-- replication/slot cleanup
-- capacity action
+- `create_index`
+- `drop_index`
+- `alter_setting` (server or autovacuum parameter change)
+- `session_setting`
+- `vacuum_analyze`
+- `query_rewrite`
+- `partitioning`
+- `replication_slot_cleanup`
+- `capacity_change`
+- `investigate`
 
 ### Validation Result
 

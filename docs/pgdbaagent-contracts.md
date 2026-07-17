@@ -152,7 +152,7 @@ A recommendation proposes an action and its risk.
 | --- | --- | --- | --- |
 | recommendation_id | string | yes | Stable ID |
 | finding_id | string | yes | Parent finding |
-| action_type | enum | yes | `create_index`, `drop_index`, `alter_setting`, `session_setting`, `vacuum_analyze`, `query_rewrite`, `partitioning`, `capacity_change`, `investigate` |
+| action_type | enum | yes | `create_index`, `drop_index`, `alter_setting`, `session_setting`, `vacuum_analyze`, `query_rewrite`, `partitioning`, `replication_slot_cleanup`, `capacity_change`, `investigate` |
 | status | enum | yes | Recommendation lifecycle state |
 | proposed_change | object | yes | SQL, parameter, or action plan |
 | expected_benefit | object | yes | Estimated benefit and unit |

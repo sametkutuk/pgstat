@@ -59,7 +59,7 @@ As of 2026-07-14:
 | Contract review queue | active | `docs/generated/contract-review-queue.md` |
 | Project board | active | `docs/project-board.json` |
 | Generated project status | active | `docs/generated/project-status.md` |
-| Active P0-001 work order | ready | `docs/work-orders/PGSTAT-P0-001-critical-data-family-contracts.md` |
+| P0-001 work order | closed (done 2026-07-14) | `docs/work-orders/PGSTAT-P0-001-critical-data-family-contracts.md` |
 | pgstat node agent requirements | draft | `docs/pgstat-node-agent-requirements.md` |
 | pgdbaagent contracts | draft | `docs/pgdbaagent-contracts.md` |
 | Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints |
@@ -77,10 +77,10 @@ Current contract state:
 
 | Item | Count | Meaning |
 | --- | ---: | --- |
-| Manual core field contracts | 161 | First critical fields promoted from generated scaffold |
-| Field contracts needing exact review | 924 | Source/version/unsupported/consumer details still need confirmation |
-| Data-family contracts needing review | 56 | Table-level lifecycle semantics still need human promotion |
-| Sensitive or conditional AI fields | 561 | Need redaction, allowlist, or block policy before pgdbaagent use |
+| Manual core field contracts | 160 | First critical fields promoted from generated scaffold |
+| Field contracts needing exact review | 904 | Source/version/unsupported/consumer details still need confirmation |
+| Data-family contracts needing review | 46 | Table-level lifecycle semantics still need human promotion |
+| Sensitive or conditional AI fields | 598 | Need redaction, allowlist, or block policy before pgdbaagent use |
 | Fact/aggregate families needing retention confirmation | 7 | Need purge mapping or durable-retention exception |
 
 The project is no longer in an unknown-state phase. It has a generated map and
@@ -279,8 +279,8 @@ production bug or a user-approved urgent feature.
 | Order | ID | Priority | Workstream | Status | Task | Depends on |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 0 | PGSTAT-P0-009 | P0 | governance | done | Harden docs impact checker rules | - |
-| 1 | PGSTAT-P0-001 | P0 | contracts | in_progress | Promote next critical data-family contracts | PGSTAT-P0-009 |
-| 2 | PGSTAT-P0-002 | P0 | contracts | planned | Promote next field contracts beyond the first 161 | PGSTAT-P0-001 |
+| 1 | PGSTAT-P0-001 | P0 | contracts | done | Promote next critical data-family contracts | PGSTAT-P0-009 |
+| 2 | PGSTAT-P0-002 | P0 | contracts | in_progress | Promote next field contracts beyond the first 161 | PGSTAT-P0-001 |
 | 3 | PGSTAT-P0-011 | P0 | security | planned | Define AI/export redaction policy | PGSTAT-P0-002 |
 | 4 | PGSTAT-P0-012 | P0 | release | planned | Add release checklist and upgrade impact template | PGSTAT-P0-009 |
 | 5 | PGSTAT-P0-003 | P0 | telemetry | planned | Add catalog metadata collection contracts | PGSTAT-P0-001, PGSTAT-P0-002, PGSTAT-P0-011, PGSTAT-P0-012 |
@@ -299,6 +299,9 @@ production bug or a user-approved urgent feature.
 | 18 | PGSTAT-P0-016 | P0 | validation | planned | Implement validation target/result storage and API | PGSTAT-P0-010 |
 | 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | PGSTAT-P0-014, PGSTAT-P0-016 |
 | 20 | PGSTAT-P1-001 | P1 | UI | planned | Add project status view or docs link in admin UI | PGSTAT-P0-009, PGSTAT-P0-012 |
+| 21 | PGSTAT-P0-021 | P0 | operations | done | Validate live aggregate partition gap remediation | PGSTAT-P0-001 |
+| 22 | PGSTAT-P1-002 | P1 | ui | done | Table freeze insights (delivered via .kiro spec before the board existed) | - |
+| 23 | PGSTAT-P1-003 | P1 | ui | done | Vacuum lag split activity chart (delivered via .kiro spec before the board existed) | - |
 
 ## 6. Workstream Rules
 

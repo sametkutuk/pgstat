@@ -13,8 +13,8 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 22 |
-| Done tasks | 3 |
+| Total tasks | 24 |
+| Done tasks | 5 |
 | Remaining tasks | 19 |
 | Max in progress | 1 |
 
@@ -32,7 +32,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 3 |
+| done | 5 |
 | in_progress | 1 |
 | planned | 18 |
 
@@ -47,7 +47,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | release | 1 |
 | security | 1 |
 | telemetry | 7 |
-| ui | 1 |
+| ui | 3 |
 | validation | 3 |
 
 ## Task Board
@@ -76,6 +76,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 19 | PGSTAT-P1-004 | P1 | validation | planned | Implement user-provided clone validation execution jobs | Start after validation storage/API and deterministic reasoning are stable. |
 | 20 | PGSTAT-P1-001 | P1 | ui | planned | Add project status view or docs link in admin UI | Defer until governance and release checklist are stable. |
 | 21 | PGSTAT-P0-021 | P0 | operations | done | Validate live aggregate partition gap remediation | Closed; continue with PGSTAT-P0-002. |
+| 22 | PGSTAT-P1-002 | P1 | ui | done | Table freeze insights (delivered via .kiro spec) | Closed; recorded retroactively from the .kiro spec workflow. |
+| 23 | PGSTAT-P1-003 | P1 | ui | done | Vacuum lag split activity chart (delivered via .kiro spec) | Closed; recorded retroactively from the .kiro spec workflow. |
 
 ## Dependency Map
 
@@ -103,6 +105,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-004 | PGSTAT-P0-014, PGSTAT-P0-016 | - |
 | PGSTAT-P1-001 | PGSTAT-P0-009, PGSTAT-P0-012 | - |
 | PGSTAT-P0-021 | PGSTAT-P0-001 | - |
+| PGSTAT-P1-002 | - | - |
+| PGSTAT-P1-003 | - | - |
 
 ## Closure Rules
 
