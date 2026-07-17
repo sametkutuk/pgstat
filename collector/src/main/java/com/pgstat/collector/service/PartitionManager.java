@@ -51,6 +51,15 @@ public class PartitionManager {
         "fact.pg_recovery_prefetch_snapshot",
         "fact.pg_user_function_snapshot",
         "fact.pg_sequence_io_snapshot",
+        // V067: wal receiver + progress snapshot tablolari (migration sadece 30 gunluk
+        // partition olusturmustu; 2026-06-16'da tukenince insert'ler durdu — P0-022)
+        "fact.pg_wal_receiver_snapshot",
+        "fact.pg_progress_vacuum_snapshot",
+        "fact.pg_progress_analyze_snapshot",
+        "fact.pg_progress_create_index_snapshot",
+        "fact.pg_progress_basebackup_snapshot",
+        "fact.pg_progress_copy_snapshot",
+        "fact.pg_progress_cluster_snapshot",
         // V039: Gece snapshot tablolari
         "fact.pg_settings_snapshot",
         "fact.pg_relation_size_snapshot",

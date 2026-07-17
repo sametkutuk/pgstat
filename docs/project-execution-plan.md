@@ -140,6 +140,10 @@ blocked
 Sequential execution rule:
 
 - The board default is `max_in_progress = 1`.
+- 2026-07-17: `max_in_progress` temporarily raised to 2 because PGSTAT-P0-022
+  is a live production bug (V067 snapshot tables lost their partitions on
+  2026-06-16) running in parallel with PGSTAT-P0-002. Restore to 1 when
+  P0-022 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -309,7 +313,7 @@ production bug or a user-approved urgent feature.
 | 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | - |
 | 26 | PGSTAT-P1-006 | P1 | governance | done | Enforce quality gates locally (CI replacement, no GitHub Actions) | - |
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | PGSTAT-P0-012 |
-| 28 | PGSTAT-P0-022 | P0 | operations | planned | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
+| 28 | PGSTAT-P0-022 | P0 | operations | in_progress | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
 
 ## 6. Workstream Rules

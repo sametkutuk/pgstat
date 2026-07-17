@@ -16,7 +16,7 @@ node scripts/generate-project-status.mjs
 | Total tasks | 30 |
 | Done tasks | 9 |
 | Remaining tasks | 21 |
-| Max in progress | 1 |
+| Max in progress | 2 |
 
 ## Current Focus
 
@@ -33,8 +33,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 9 |
-| in_progress | 1 |
-| planned | 20 |
+| in_progress | 2 |
+| planned | 19 |
 
 ## Workstream Counts
 
@@ -82,7 +82,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | Closed; future boundary/contract/AI/validation decisions get a numbered ADR. |
 | 26 | PGSTAT-P1-006 | P1 | governance | done | Enforce quality gates locally (CI replacement, no GitHub Actions) | Closed; revisit ADR-0002 if the team grows beyond one developer. |
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook. |
-| 28 | PGSTAT-P0-022 | P0 | operations | planned | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator | Production bug: verify live impact, then apply the two-array fix and backfill partitions. |
+| 28 | PGSTAT-P0-022 | P0 | operations | in_progress | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator | Deploy collector; verify partitions are created (dun+14 gun) and inserts resume, then record the 2026-06-16..deploy data gap and close. |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | Start after the P0-022 production fix; the table classification from 2026-07-17 is recorded in this task. |
 
 ## Dependency Map

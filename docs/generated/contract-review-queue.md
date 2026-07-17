@@ -16,7 +16,7 @@ node scripts/generate-doc-inventory.mjs
 | Table/data-family contracts needing semantic review | 46 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
 | Field contracts needing exact source/version review | 904 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
 | Sensitive or conditional AI fields | 598 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
-| Fact/aggregate families without detected retention mapping | 7 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
+| Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
 
@@ -687,10 +687,3 @@ node scripts/generate-doc-inventory.mjs
 
 | Table | Semantics | Partition | Rollup | Action |
 | --- | --- | --- | --- | --- |
-| fact.pg_progress_analyze_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_progress_basebackup_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_progress_cluster_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_progress_copy_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_progress_create_index_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_progress_vacuum_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |
-| fact.pg_wal_receiver_snapshot | snapshot fact | not detected | not detected | verify retention policy or document exception |

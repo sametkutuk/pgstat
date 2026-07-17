@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 1,
+    "max_in_progress": 2,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1640,7 +1640,7 @@
       "order": 28,
       "priority": "P0",
       "workstream": "operations",
-      "status": "planned",
+      "status": "in_progress",
       "title": "Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator",
       "problem": "V067 (deployed 2026-05-17) created 7 daily-partitioned fact tables (pg_wal_receiver_snapshot, pg_progress_vacuum/analyze/create_index/basebackup/copy/cluster_snapshot) with only 30 days of partitions created inline. None of them are in PartitionManager.DAILY_FACT_TABLES or PurgeEvaluator.SNAPSHOT_FACT_TABLES (both still list only the legacy fact.pg_progress_snapshot). Partitions ran out around 2026-06-16, so collector inserts into these tables have likely been failing for about a month, and the tables have no purge path. This is a live production bug and may jump the queue per the backlog rules.",
       "requirements": [
@@ -1687,8 +1687,11 @@
         "status": "pending",
         "evidence": ""
       },
-      "verification_evidence": [],
-      "next_action": "Production bug: verify live impact, then apply the two-array fix and backfill partitions."
+      "verification_evidence": [
+        "Live verified by customer on 2026-07-17: last partitions are *_20260616 for all 7 tables; max(sample_ts) stops at 2026-06-16 (progress_vacuum 1514 rows, progress_analyze 397 rows, wal_receiver 0 rows); collector logs show repeated 'no partition of relation ... found for row' errors.",
+        "Fix applied 2026-07-17: the 7 tables added to PartitionManager.DAILY_FACT_TABLES and PurgeEvaluator.SNAPSHOT_FACT_TABLES; mvn test passed. Awaiting deploy and post-deploy live verification."
+      ],
+      "next_action": "Deploy collector; verify partitions are created (dun+14 gun) and inserts resume, then record the 2026-06-16..deploy data gap and close."
     },
     {
       "id": "PGSTAT-P0-023",
