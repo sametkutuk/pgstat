@@ -309,6 +309,8 @@ production bug or a user-approved urgent feature.
 | 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | - |
 | 26 | PGSTAT-P1-006 | P1 | governance | done | Enforce quality gates locally (CI replacement, no GitHub Actions) | - |
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | PGSTAT-P0-012 |
+| 28 | PGSTAT-P0-022 | P0 | operations | planned | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
+| 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
 
 ## 6. Workstream Rules
 

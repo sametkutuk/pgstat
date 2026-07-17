@@ -1636,6 +1636,117 @@
       "next_action": "Closed; revisit ADR-0002 if the team grows beyond one developer."
     },
     {
+      "id": "PGSTAT-P0-022",
+      "order": 28,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "planned",
+      "title": "Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator",
+      "problem": "V067 (deployed 2026-05-17) created 7 daily-partitioned fact tables (pg_wal_receiver_snapshot, pg_progress_vacuum/analyze/create_index/basebackup/copy/cluster_snapshot) with only 30 days of partitions created inline. None of them are in PartitionManager.DAILY_FACT_TABLES or PurgeEvaluator.SNAPSHOT_FACT_TABLES (both still list only the legacy fact.pg_progress_snapshot). Partitions ran out around 2026-06-16, so collector inserts into these tables have likely been failing for about a month, and the tables have no purge path. This is a live production bug and may jump the queue per the backlog rules.",
+      "requirements": [
+        "Verify live impact: partition existence after 2026-06-16 and collector error logs for these 7 tables.",
+        "Add the 7 tables to PartitionManager.DAILY_FACT_TABLES so future partitions are created.",
+        "Add the 7 tables to PurgeEvaluator.SNAPSHOT_FACT_TABLES (hourly/snapshot retention class).",
+        "Backfill missing partitions from 2026-06-16 to now if data collection should resume seamlessly.",
+        "Confirm whether ~1 month of lost snapshot data needs any remediation note in contracts."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "PartitionManager creates daily partitions for all 7 V067 tables.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "PurgeEvaluator purges the 7 tables under the snapshot retention policy.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Live verification confirms inserts succeed again and the data gap window is documented.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Add table names to the two arrays in PartitionManager and PurgeEvaluator.",
+        "Deploy; PartitionManager run creates missing partitions (verify it backfills current date).",
+        "Record the data gap window in the data source dictionary / contracts."
+      ],
+      "verification_plan": [
+        "mvn test",
+        "Live: select count(*) from new partitions after a collection cycle; collector logs clean."
+      ],
+      "required_docs": [
+        "docs/pgstat-data-source-dictionary.md",
+        "docs/generated/data-lifecycle-matrix.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Production bug: verify live impact, then apply the two-array fix and backfill partitions."
+    },
+    {
+      "id": "PGSTAT-P0-023",
+      "order": 29,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "planned",
+      "title": "Wire retention for growing control/dim tables",
+      "problem": "Static analysis (2026-07-17) found append-only tables with no purge path anywhere in the code, violating the 'nothing is kept forever by accident' rule: control.alert_notification, control.database_action_log, control.pgss_reset_history, the trigger/command queues (collector_command, baseline_trigger, db_objects_trigger, nightly_snapshot_trigger, report_trigger), expired control.alert_snooze rows, and superseded baseline versions (control.baseline_version + control.metric_baseline + control.metric_baseline_query have INSERTs but no DELETEs). dim.query_text also grows unboundedly with no orphan pruning.",
+      "requirements": [
+        "Decide per table: permanent config (documented exception) vs retention days.",
+        "Add PurgeEvaluator rules for the growing tables (notification/log/history/queues/expired snoozes/superseded baselines).",
+        "Decide dim.query_text orphan pruning policy (only prune texts no longer referenced by fact/agg rows).",
+        "Record decisions in the data contract registry retention notes."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Every growing control table has either a purge rule or a documented durable-retention exception.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Superseded baseline versions are cleaned up.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "dim.query_text pruning decision is recorded (implemented or explicitly deferred with volume estimate).",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Classify the 48 no-retention tables (analysis done 2026-07-17: ~12 grow, rest are bounded config).",
+        "Add retention policy fields or fixed windows for the growing set; implement PurgeEvaluator rules.",
+        "Update lifecycle matrix expectations and contract registry."
+      ],
+      "verification_plan": [
+        "mvn test",
+        "Live: row counts stop growing after purge cycle; no FK/orphan breakage for dim pruning."
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/generated/data-lifecycle-matrix.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-022"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Start after the P0-022 production fix; the table classification from 2026-07-17 is recorded in this task."
+    },
+    {
       "id": "PGSTAT-P1-007",
       "order": 27,
       "priority": "P1",
