@@ -138,9 +138,13 @@ any change        -> pre-commit hooks (board check, doc impact, generated docs)
 release           -> release checklist template completed
 ```
 
-CI note: GitHub Actions is intentionally off (billing). Until server-side CI
-is restored, these gates are enforced by local hooks and the release
-checklist. Restoring server-side enforcement is tracked on the project board.
+CI note: GitHub Actions will not be used (see
+[ADR-0002](adr/ADR-0002-local-quality-gates-no-github-actions.md)). Gates are
+enforced locally: the pre-push hook runs `scripts/check-quality-gates.mjs`,
+which detects changed layers in the pushed range and runs their gates
+(collector -> `mvn test`, api -> `tsc --noEmit`, ui -> `tsc -b` + `eslint`).
+`make verify` runs every gate unconditionally. `PGSTAT_SKIP_GATES=1` is the
+emergency-only escape hatch.
 
 ## 7. Roadmap Alignment
 
@@ -148,6 +152,6 @@ checklist. Restoring server-side enforcement is tracked on the project board.
 | --- | --- |
 | API runtime tests | First route-shape PR after adoption introduces vitest |
 | UI render tests | First critical-workflow UI PR after adoption |
-| Migration automation | Release checklist manual step now; automation with CI restoration |
-| Server-side CI | Tracked as a board task; blocked on Actions billing |
+| Migration automation | Release checklist manual step; revisit if the team grows |
+| CI enforcement | Solved locally per ADR-0002 (pre-push layer gates + `make verify`) |
 | pgdbaagent/evidence/validation tests | Bundled into PGSTAT-P0-013/P0-014/P0-016 acceptance criteria |

@@ -479,3 +479,4 @@ and platform work:
 | 2026-07-13 | Documentation must be maintained as a project artifact and eventually checked automatically. |
 | 2026-07-17 | SDLC right side hardened: test strategy (`test-strategy.md`), release checklist with semver rule (`release-checklist-template.md`), and ADR practice (`adr/`) adopted; server-side CI restoration and operations runbook tracked as PGSTAT-P1-006/P1-007. |
 | 2026-07-17 | Features shipped via the legacy .kiro spec workflow are recorded retroactively on the project board; the board is the single task source going forward. |
+| 2026-07-17 | GitHub Actions will not be used; quality gates are enforced locally via pre-push layer gates and `make verify` (ADR-0002). |

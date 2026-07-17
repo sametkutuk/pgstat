@@ -20,3 +20,4 @@ Rules:
 | ADR | Title | Status |
 | --- | --- | --- |
 | [ADR-0001](ADR-0001-product-family-baseline.md) | Product family baseline: pgstat Core + pgdbaagent boundary and collection rules | accepted |
+| [ADR-0002](ADR-0002-local-quality-gates-no-github-actions.md) | Quality gates are enforced locally; GitHub Actions will not be used | accepted |

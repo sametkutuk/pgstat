@@ -1584,46 +1584,56 @@
       "order": 26,
       "priority": "P1",
       "workstream": "governance",
-      "status": "planned",
-      "title": "Restore server-side CI quality gates",
-      "problem": "GitHub Actions is off due to billing, so every quality gate (board check, doc impact, generated-doc drift, builds, tests) is enforced only by local hooks. A contributor without hooks installed can push unchecked work; enterprise SDLC needs a server-side gate.",
+      "status": "done",
+      "title": "Enforce quality gates locally (CI replacement, no GitHub Actions)",
+      "problem": "GitHub Actions will not be used (customer decision, 2026-07-17; ADR-0002). Quality gates for builds and tests were manual: only documentation checks ran in hooks, so collector tests and api/ui type checks could be skipped silently.",
       "requirements": [
-        "Decide the CI provider or workaround (restore Actions billing, self-hosted runner, or alternative).",
-        "Enforce at minimum: board check, doc impact, generated-doc drift, mvn test, api/ui type checks.",
-        "Document the CI stance in governance."
+        "Enforce layer gates (collector mvn test, api tsc, ui tsc+eslint) at push time, scoped to changed layers.",
+        "Provide a full unconditional run command.",
+        "Document the decision as an ADR and update test strategy CI notes."
       ],
       "acceptance_criteria": [
         {
           "id": "AC1",
-          "text": "A server-side pipeline runs the quality gates on push/PR.",
-          "status": "pending"
+          "text": "pre-push runs scripts/check-quality-gates.mjs with layer detection over the pushed range.",
+          "status": "done"
         },
         {
           "id": "AC2",
-          "text": "Governance and test strategy CI notes are updated.",
-          "status": "pending"
+          "text": "make verify runs board check, doc impact, and all layer gates unconditionally.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "ADR-0002 records the no-GitHub-Actions decision; test strategy and execution plan CI notes updated.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
-        "Resolve the billing/provider decision with the customer.",
-        "Add the pipeline definition and align it with .githooks checks."
+        "Add scripts/check-quality-gates.mjs (layer detection, toolchain check, PGSTAT_SKIP_GATES escape hatch).",
+        "Wire into .githooks/pre-push and add Makefile verify target.",
+        "Write ADR-0002 and update CI notes."
       ],
       "verification_plan": [
-        "A test PR shows the pipeline failing on an intentional violation."
+        "Run the script with no changes (skips), with an api change (runs tsc), and via --all."
       ],
       "required_docs": [
-        "docs/platform-governance-and-sdlc.md",
+        "docs/adr/ADR-0002-local-quality-gates-no-github-actions.md",
         "docs/test-strategy.md",
         "docs/generated/project-status.md"
       ],
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer decided on 2026-07-17 that GitHub Actions will not be used and instructed solving CI locally; delivered in the same session."
       },
-      "verification_evidence": [],
-      "next_action": "Blocked on the GitHub Actions billing decision; revisit when the customer decides the CI provider."
+      "verification_evidence": [
+        "Verified: no-change run skips gates; a test api/src edit triggered tsc --noEmit which passed; Maven 3.9.6 confirmed on PATH for the collector gate.",
+        "scripts/check-quality-gates.mjs wired into .githooks/pre-push; make verify added; ADR-0002 written."
+      ],
+      "completed_at": "2026-07-17",
+      "next_action": "Closed; revisit ADR-0002 if the team grows beyond one developer."
     },
     {
       "id": "PGSTAT-P1-007",

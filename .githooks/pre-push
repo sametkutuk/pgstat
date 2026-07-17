@@ -29,3 +29,10 @@ else
   echo "[pgstat-docs] no upstream configured; checking local working tree impact"
   node scripts/check-doc-impact.mjs
 fi
+
+echo "[pgstat-gates] running layer quality gates"
+if [ -n "$upstream" ]; then
+  node scripts/check-quality-gates.mjs --base="$upstream"
+else
+  node scripts/check-quality-gates.mjs
+fi

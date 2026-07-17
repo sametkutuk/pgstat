@@ -65,7 +65,7 @@ As of 2026-07-14:
 | Test strategy | active | `docs/test-strategy.md` |
 | Release checklist template | active | `docs/release-checklist-template.md` |
 | ADR practice | active | `docs/adr/README.md` |
-| Server-side docs CI | intentionally off | GitHub Actions disabled due billing constraints; restoration tracked as PGSTAT-P1-006 |
+| Quality gates | local (ADR-0002) | GitHub Actions will not be used; pre-push runs `scripts/check-quality-gates.mjs`, full run via `make verify` |
 
 Current generated inventory baseline:
 
@@ -307,7 +307,7 @@ production bug or a user-approved urgent feature.
 | 23 | PGSTAT-P1-003 | P1 | ui | done | Vacuum lag split activity chart (delivered via .kiro spec before the board existed) | - |
 | 24 | PGSTAT-P0-020 | P0 | governance | done | Define project test strategy | - |
 | 25 | PGSTAT-P1-005 | P1 | governance | done | Adopt ADR practice with template and founding ADR | - |
-| 26 | PGSTAT-P1-006 | P1 | governance | planned | Restore server-side CI quality gates | - |
+| 26 | PGSTAT-P1-006 | P1 | governance | done | Enforce quality gates locally (CI replacement, no GitHub Actions) | - |
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | PGSTAT-P0-012 |
 
 ## 6. Workstream Rules
