@@ -319,6 +319,7 @@ docs:
 | Test strategy and per-layer quality gates | `test-strategy.md` |
 | Release checklist and versioning rule | `release-checklist-template.md` |
 | Architecture decision records | `adr/README.md` |
+| Daily work summaries | `worklog/README.md` |
 | Current and planned pgstat telemetry | `pgstat-telemetry-completion-roadmap.md` |
 | Source-level collection inventory | `pgstat-data-source-dictionary.md` |
 | Field-level contracts and consumers | `data-contract-registry.md` |
