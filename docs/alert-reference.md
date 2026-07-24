@@ -30,6 +30,7 @@ varsa global degerin onune gecer.
 | `job_partial_failure` | Job run'da bazi instance'lar fail olursa | Failed/total sayisi | Esik yok | Job orchestrator | Sonraki basarili job/manuel |
 | `job_failed` | Job tamamen fail olursa veya genel job exception olursa | Job error | Esik yok | Job orchestrator | Sonraki basarili job/manuel |
 | `advisory_lock_skip` | Ayni job icin advisory lock alinamazsa | Lock skip olayi | Esik yok | Job orchestrator | Sonraki job akisi/manuel |
+| `system_instance_unreachable` | (a) `consecutive_failures >= 3` olan instance'lar icin `SystemHealthEvaluator` tarafindan periyodik (5 dk); (b) daha once `ready` olan bir instance connect/auth hatasi (ornegin pg_hba.conf yetkisinin kaldirilmasi) yuzunden `degraded`'a dusunce `JobOrchestrator.handleSecretOrAuthError` tarafindan aninda (P0-024, 2026-07-17) | `consecutive_failures` esigi (a) / degrade anlik (b) | 3 basarisizlik (a) | `control.instance_state` (a) / cluster-statements job hatasi (b) | (a) `consecutive_failures` sifirlaninca; (b) instance tekrar `bootstrap_state='ready'`'ye donunce `BootstrapHandler` auto-resolve |
 
 ## Custom Rule Template'leri
 

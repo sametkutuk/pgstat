@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 30 |
+| Total tasks | 31 |
 | Done tasks | 10 |
-| Remaining tasks | 20 |
-| Max in progress | 1 |
+| Remaining tasks | 21 |
+| Max in progress | 2 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 10 |
-| in_progress | 1 |
+| in_progress | 2 |
 | planned | 19 |
 
 ## Workstream Counts
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 4 |
-| operations | 4 |
+| operations | 5 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -84,6 +84,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook. |
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator | Closed; max_in_progress restored to 1. Continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked. |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | Start after the P0-022 production fix; the table classification from 2026-07-17 is recorded in this task. |
+| 30 | PGSTAT-P0-024 | P0 | operations | in_progress | Raise a system alert when a ready instance loses pg_hba access (degrades silently today) | Deploy to production; live-verify by revoking pg_hba access for a test instance and confirming a Telegram alert fires, then restoring access and confirming auto-resolve. Close AC3 and this task after that verification. |
 
 ## Dependency Map
 
@@ -119,6 +120,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-007 | PGSTAT-P0-012 | - |
 | PGSTAT-P0-022 | - | PGSTAT-P0-023 |
 | PGSTAT-P0-023 | PGSTAT-P0-022 | - |
+| PGSTAT-P0-024 | - | - |
 
 ## Closure Rules
 

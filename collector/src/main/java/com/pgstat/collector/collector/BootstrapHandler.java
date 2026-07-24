@@ -4,6 +4,7 @@ import com.pgstat.collector.model.InstanceCapability;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.InventoryRepository;
 import com.pgstat.collector.repository.StateRepository;
+import com.pgstat.collector.service.AlertService;
 import com.pgstat.collector.service.SecretResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,13 +32,16 @@ public class BootstrapHandler {
     private final DiscoveryCollector discoveryCollector;
     private final InventoryRepository inventoryRepo;
     private final StateRepository stateRepo;
+    private final AlertService alertService;
 
     public BootstrapHandler(DiscoveryCollector discoveryCollector,
                             InventoryRepository inventoryRepo,
-                            StateRepository stateRepo) {
+                            StateRepository stateRepo,
+                            AlertService alertService) {
         this.discoveryCollector = discoveryCollector;
         this.inventoryRepo = inventoryRepo;
         this.stateRepo = stateRepo;
+        this.alertService = alertService;
     }
 
     /**
@@ -136,4 +140,13 @@ public class BootstrapHandler {
         // Simdilik state gecisini yap.
         inventoryRepo.updateBootstrapState(instance.instancePk(), "ready");
         log.info("Bootstrap tamamlandi, ready: {}", instance.instanceId());
-    }}
+
+        // Instance daha once (steady-state'te) connect/auth hatasi yuzunden degraded'a
+        // dusup buraya geri donmusse, JobOrchestrator.handleSecretOrAuthError'da acilan
+        // SYSTEM_INSTANCE_UNREACHABLE alert'ini burada kapatiyoruz (P0-024).
+        try {
+            alertService.resolveSystemAlert(
+                "system.instance_unreachable:instance=" + instance.instancePk());
+        } catch (Exception ignore) {}
+    }
+}

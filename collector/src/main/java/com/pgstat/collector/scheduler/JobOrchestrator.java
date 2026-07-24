@@ -345,6 +345,14 @@ public class JobOrchestrator {
      * Steady-state queue artik bu instance'i cekmez (V035 sonrasi findDueInstances
      * sadece 'ready' aliyor) ve JOB_PARTIAL_FAILURE her cycle tekrar tetiklenmez.
      * SECRET_REF_ERROR alert'i bootstrap'tan zaten gelir.
+     *
+     * Instance daha once 'ready' idi ve sonradan (ornegin pg_hba.conf'tan yetkisi
+     * kaldirilinca) buraya dusuyorsa, findDueInstances bootstrap_state='ready'
+     * arayan sorgudan bu instance'i bir sonraki cycle'da tamamen disliyor —
+     * consecutive_failures bir daha artmiyor ve SystemHealthEvaluator'in
+     * consecutive_failures>=3 esigine hic ulasilmiyor (P0-024). Bu yuzden burada
+     * dogrudan SYSTEM_INSTANCE_UNREACHABLE alert'ini aciyoruz; instance tekrar
+     * 'ready'ye donunce BootstrapHandler bu alert'i resolve eder.
      */
     private void handleSecretOrAuthError(InstanceInfo instance, Exception e) {
         String em = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
@@ -355,6 +363,30 @@ public class JobOrchestrator {
                 log.info("Instance degraded'a cekildi (secret/auth/connect hatasi): {}",
                     instance.instanceId());
             } catch (Exception ignore) {}
+
+            String alertKey = "system.instance_unreachable:instance=" + instance.instancePk();
+            String details = new com.pgstat.collector.service.AlertDetailsBuilder()
+                .setKind("system_health")
+                .addContext("instance_pk", instance.instancePk())
+                .addContext("instance_id", instance.instanceId())
+                .addContext("reason", "degraded_after_ready")
+                .addContext("last_error", truncate(e.getMessage()))
+                .build();
+            try {
+                alertService.upsertSystemAlert(
+                    AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getCode(),
+                    alertKey,
+                    AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getDefaultSeverity(),
+                    instance.instancePk(),
+                    "Instance unreachable",
+                    "Instance was degraded after a connect/auth failure (possible pg_hba.conf access loss): "
+                        + truncate(e.getMessage()),
+                    details
+                );
+            } catch (Exception alertEx) {
+                log.error("SYSTEM_INSTANCE_UNREACHABLE alert acilamadi: {} — {}",
+                    instance.instanceId(), alertEx.getMessage());
+            }
         }
     }
 

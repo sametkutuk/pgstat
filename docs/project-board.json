@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 1,
+    "max_in_progress": 2,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1799,6 +1799,63 @@
       },
       "verification_evidence": [],
       "next_action": "Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook."
+    },
+    {
+      "id": "PGSTAT-P0-024",
+      "order": 30,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Raise a system alert when a ready instance loses pg_hba access (degrades silently today)",
+      "problem": "Customer-reported bug (2026-07-17), root-caused via systematic debugging: when a previously working instance loses its pg_hba.conf entry (or otherwise fails auth/connect), JobOrchestrator.processClusterInstance/processStatementsInstance catch the exception, call stateRepo.updateAfterFailure (consecutive_failures++), then call handleSecretOrAuthError which matches the message on 'connect'/'authentication'/'password'/'secret_ref' and calls inventoryRepo.scheduleBootstrapRetry — this flips instance_inventory.bootstrap_state to 'degraded'. findDueInstances only selects bootstrap_state='ready' (InventoryRepository.java:155), so the instance drops out of the collection queue on the very next cycle and consecutive_failures freezes (usually at 1). SystemHealthEvaluator.checkInstanceUnreachable only opens SYSTEM_INSTANCE_UNREACHABLE when consecutive_failures >= 3 (SystemHealthEvaluator.java:195), so the threshold is never reached. BootstrapHandler then silently retries the degraded instance on a backoff schedule (1min/5min/15min/1hour) with no alert at any point. Net effect: an instance can sit unmonitored indefinitely with zero Telegram/system alert, only an INFO log line ('Instance degraded'a cekildi').",
+      "requirements": [
+        "Raise a system alert (reuse AlertCode.SYSTEM_INSTANCE_UNREACHABLE, critical) the moment an instance is pushed to degraded by handleSecretOrAuthError, including the classified error detail (pg_hba / auth / connect) in the alert message.",
+        "Auto-resolve that alert when the instance successfully returns to bootstrap_state='ready' (BootstrapHandler.handleEnriching).",
+        "Do not touch the existing bootstrap-time secret_ref_error alert path (BootstrapHandler catch blocks) — this fix targets only the post-ready degrade path in JobOrchestrator.",
+        "Keep the fix minimal: no new alert code, no new migration, no new UI — reuse existing AlertService/AlertCode/notification plumbing."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "handleSecretOrAuthError raises system_instance_unreachable with the classified error detail when it degrades an instance.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The alert auto-resolves once the instance reaches bootstrap_state='ready' again.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn test passes; a manual/live check confirms the alert fires end-to-end to Telegram for a real pg_hba revocation.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Inject AlertService into JobOrchestrator's handleSecretOrAuthError (or a small helper) and call alertService.upsertSystemAlert with AlertCode.SYSTEM_INSTANCE_UNREACHABLE, alert_key 'system.instance_unreachable:instance=<pk>', including the raw exception detail.",
+        "Inject AlertService into BootstrapHandler and call alertService.resolveSystemAlert on the same alert_key inside handleEnriching right after the state flips to 'ready'.",
+        "Add/extend a unit test asserting the alert is raised on the degrade path and resolved on the ready transition."
+      ],
+      "verification_plan": [
+        "mvn test",
+        "Live: revoke pg_hba access for a test instance, confirm system_instance_unreachable opens and a Telegram message is sent; restore access, confirm the alert auto-resolves."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Root cause confirmed 2026-07-17 via systematic debugging (5 hypothesis-testing steps tracing JobOrchestrator -> InventoryRepository.findDueInstances -> SystemHealthEvaluator threshold -> BootstrapHandler retry loop).",
+        "Fix applied: JobOrchestrator.handleSecretOrAuthError now raises AlertCode.SYSTEM_INSTANCE_UNREACHABLE (alert_key system.instance_unreachable:instance=<pk>) with the classified error detail; BootstrapHandler.handleEnriching resolves the same alert_key once the instance reaches bootstrap_state='ready'. AlertService injected into BootstrapHandler (constructor change only, no new bean wiring needed in JobOrchestrator — already present).",
+        "mvn compile and mvn test both passed with no regressions (existing 4 test classes unaffected; this code path has no existing unit test coverage per docs/test-strategy.md known gaps)."
+      ],
+      "next_action": "Deploy to production; live-verify by revoking pg_hba access for a test instance and confirming a Telegram alert fires, then restoring access and confirming auto-resolve. Close AC3 and this task after that verification."
     }
   ]
 }
