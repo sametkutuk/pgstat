@@ -224,12 +224,31 @@ public class SystemHealthEvaluator {
         String status = unreachableCount == 0 ? "ok" : (unreachableCount == 1 ? "warning" : "critical");
         recordHealthState("instance_unreachable", status, "Unreachable instance: " + unreachableCount);
 
+        // NOT: system_instance_unreachable artik iki farkli yoldan acilabiliyor
+        // (P0-024): (a) burada, consecutive_failures>=3 esigiyle; (b) BootstrapHandler
+        // discovery basarisiz oldugunda, ki o yolda consecutive_failures hic
+        // artmaz. Bu yuzden "consecutive_failures==0 ise resolve et" kurali (b)
+        // yolundan acilan bir alert'i, instance hala gercekten erisilemezken
+        // yanlislikla kapatiyordu. Dogru kural: instance bootstrap_state='ready'
+        // olana kadar (yani gercekten calisir duruma donene kadar) acik kalsin.
+        // 'ready' donusu zaten BootstrapHandler.handleEnriching'de resolve ediliyor;
+        // burada sadece consecutive_failures yoluyla acilip DEGRADED/DISCOVERING
+        // olmayan (yani bu evaluator'in hic bilmedigi bicimde) instance'lar icin
+        // ek bir guvenlik agi olarak bootstrap_state kontrolu ekleniyor.
         for (Map<String, Object> open : openAlerts(INSTANCE_UNREACHABLE)) {
             Long instancePk = toLong(open.get("instance_pk"));
-            if (instancePk != null && getConsecutiveFailures(instancePk) == 0) {
+            if (instancePk != null && getConsecutiveFailures(instancePk) == 0
+                    && isBootstrapReady(instancePk)) {
                 alertService.resolveSystemAlert(String.valueOf(open.get("alert_key")));
             }
         }
+    }
+
+    private boolean isBootstrapReady(long instancePk) {
+        String state = jdbc.queryForObject("""
+            select bootstrap_state from control.instance_inventory where instance_pk = ?
+            """, String.class, instancePk);
+        return "ready".equals(state);
     }
 
     private void checkCollectorStale() {
