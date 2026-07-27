@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 2,
+    "max_in_progress": 1,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1805,7 +1805,7 @@
       "order": 30,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI",
       "problem": "Customer-reported bug (2026-07-17), root-caused via systematic debugging: when a previously working instance loses its pg_hba.conf entry (or otherwise fails auth/connect), JobOrchestrator.processClusterInstance/processStatementsInstance catch the exception, call stateRepo.updateAfterFailure (consecutive_failures++), then call handleSecretOrAuthError which matches the message on 'connect'/'authentication'/'password'/'secret_ref' and calls inventoryRepo.scheduleBootstrapRetry — this flips instance_inventory.bootstrap_state to 'degraded'. findDueInstances only selects bootstrap_state='ready' (InventoryRepository.java:155), so the instance drops out of the collection queue on the very next cycle and consecutive_failures freezes (usually at 1). SystemHealthEvaluator.checkInstanceUnreachable only opens SYSTEM_INSTANCE_UNREACHABLE when consecutive_failures >= 3 (SystemHealthEvaluator.java:195), so the threshold is never reached. BootstrapHandler then silently retries the degraded instance on a backoff schedule (1min/5min/15min/1hour) with no alert at any point. Net effect: an instance could sit unmonitored indefinitely with zero Telegram/system alert, only an INFO log line ('Instance degraded'a cekildi'). Follow-up (2026-07-27): once the alert did fire, the customer reported it was uninterpretable in Telegram ('Instance unreachable ... The connection attempt failed.' with no host name anywhere) and the UI's InstanceDetail degraded-reason banner didn't recognize this alert code either.",
       "requirements": [
@@ -1840,7 +1840,7 @@
         {
           "id": "AC5",
           "text": "mvn test and ui tsc pass; a live check confirms the Telegram message names the host and the InstanceDetail banner shows the reason for a real pg_hba revocation, and both clear on restore.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -1862,8 +1862,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed 2026-07-27 ('oldu tamam') after live-testing the full cycle: revoked pg_hba access, alert opened and named the host, stayed open across multiple 5-minute SystemHealthEvaluator cycles without access being restored (no premature auto-resolve), then closed correctly once access was restored."
       },
       "verification_evidence": [
         "Root cause confirmed 2026-07-17 via systematic debugging (5 hypothesis-testing steps tracing JobOrchestrator -> InventoryRepository.findDueInstances -> SystemHealthEvaluator threshold -> BootstrapHandler retry loop).",
@@ -1877,9 +1877,11 @@
         "mvn compile, mvn test, and ui tsc --noEmit all passed again after the message/UI cleanup, no regressions.",
         "Customer reported 2026-07-27 (without having restored pg_hba access) that Telegram sent a 'Cozuldu' (resolved) notification for the same alert. Root cause #3: SystemHealthEvaluator.checkInstanceUnreachable() runs every 5 minutes and has a long-standing auto-resolve loop over ALL open SYSTEM_INSTANCE_UNREACHABLE alerts that closes any alert whose instance_state.consecutive_failures == 0 — regardless of why the alert was opened. The new BootstrapHandler.raiseUnreachableAlert() path (root cause #2's fix) never increments consecutive_failures (only JobOrchestrator.updateAfterFailure does), so any alert it opened had consecutive_failures==0 from the start and was auto-resolved by this unrelated 5-minute job within one cycle, while the instance was still genuinely unreachable.",
         "Fix applied 2026-07-27: SystemHealthEvaluator.checkInstanceUnreachable()'s auto-resolve loop now also requires bootstrap_state == 'ready' (new isBootstrapReady() helper querying control.instance_inventory), not just consecutive_failures == 0, before closing a system_instance_unreachable alert. This makes the auto-resolve correct for both alert-opening paths: it no longer fires early for instances still stuck in 'degraded'/'discovering'.",
-        "mvn compile and mvn test passed again after this third fix, no regressions."
+        "mvn compile and mvn test passed again after this third fix, no regressions.",
+        "Customer live-verified 2026-07-27 the full fix set end to end and confirmed with 'oldu tamam': alert opens with host name, stays open while pg_hba access remains revoked (survives multiple SystemHealthEvaluator 5-minute cycles without premature auto-resolve), and clears correctly once access is restored."
       ],
-      "next_action": "Deploy to production; live-verify by revoking pg_hba access again and confirming the alert stays open (does not auto-resolve within 5 minutes) while access remains revoked, the Telegram message is short/readable, the InstanceDetail banner renders, and the Alerts page shows one readable panel plus a collapsed raw-JSON toggle; then restore access and confirm the alert and banner both clear once the instance reaches 'ready'. Close AC5 and this task after that verification."
+      "completed_at": "2026-07-27",
+      "next_action": "Closed. Restore max_in_progress to 1; continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked."
     }
   ]
 }
