@@ -379,8 +379,8 @@ public class JobOrchestrator {
                     AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getDefaultSeverity(),
                     instance.instancePk(),
                     "Instance unreachable",
-                    "Instance was degraded after a connect/auth failure (possible pg_hba.conf access loss): "
-                        + truncate(e.getMessage()),
+                    "Instance was degraded after a connect/auth failure — pg_hba.conf access may "
+                        + "have been revoked. See error detail below.",
                     details
                 );
             } catch (Exception alertEx) {

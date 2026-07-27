@@ -144,8 +144,8 @@ public class BootstrapHandler {
                 AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getDefaultSeverity(),
                 instance.instancePk(),
                 "Instance unreachable",
-                "Discovery failed (possible pg_hba.conf access loss or auth failure): "
-                    + (errorDetail != null ? errorDetail : "unknown error"),
+                "Discovery failed — pg_hba.conf access may have been revoked, or an "
+                    + "authentication failure occurred. See error detail below.",
                 details
             );
         } catch (Exception e) {

@@ -421,7 +421,11 @@ function AlertDetails({ details }: { details: any }) {
                     <div className="text-xs font-semibold text-[#475569] mb-2">Detay</div>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
                         {Object.entries(ctx).map(([k, v]) => (
-                            <Metric key={k} label={k.replace(/_/g, ' ')} value={String(v ?? '-')} />
+                            <Metric
+                                key={k}
+                                label={k === 'reason' ? 'Sebep' : k.replace(/_/g, ' ')}
+                                value={k === 'reason' ? reasonLabel(String(v)) : String(v ?? '-')}
+                            />
                         ))}
                     </div>
                 </div>
@@ -551,12 +555,30 @@ function AlertDetails({ details }: { details: any }) {
                 </div>
             )}
 
-            {/* Fallback: tanınmayan format — ham JSON */}
-            {!hasRecords && !details.baseline_avg && (
-                <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
-                    {JSON.stringify(details, null, 2)}
-                </pre>
-            )}
+            {/* Ham JSON — sadece hiçbir okunur panel (kind context, baseline, records)
+                gösterilmediyse görünür; aksi halde aynı bilgiyi tekrarlamamak için
+                katlanabilir "Ham veriyi göster" bağlantısının arkasına saklanır. */}
+            {(() => {
+                const hasReadablePanel =
+                    (kind && Object.keys(ctx).length > 0) || details.baseline_avg != null || hasRecords;
+                if (!hasReadablePanel) {
+                    return (
+                        <pre className="text-xs bg-[#F8FAFC] p-3 rounded overflow-x-auto">
+                            {JSON.stringify(details, null, 2)}
+                        </pre>
+                    );
+                }
+                return (
+                    <details className="text-xs">
+                        <summary className="cursor-pointer text-[#94A3B8] hover:text-[#64748B] select-none">
+                            Ham veriyi göster
+                        </summary>
+                        <pre className="mt-2 bg-[#F8FAFC] p-3 rounded overflow-x-auto">
+                            {JSON.stringify(details, null, 2)}
+                        </pre>
+                    </details>
+                );
+            })()}
         </div>
     );
 }
@@ -578,6 +600,15 @@ function fmtBytes(value: any): string {
     if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${bytes.toLocaleString()} B`;
+}
+
+/** context.reason değerlerini okunur Türkçe etikete çevirir; bilinmeyen değer olduğu gibi döner. */
+function reasonLabel(reason: string): string {
+    const labels: Record<string, string> = {
+        discovery_failed: 'Discovery başarısız (bağlantı/yetki hatası)',
+        degraded_after_ready: 'Daha önce çalışıyordu, bağlantı/yetki hatasıyla düştü',
+    };
+    return labels[reason] ?? reason;
 }
 
 function hasPrevVal(records: any[]): boolean {
