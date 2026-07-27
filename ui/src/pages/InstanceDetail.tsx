@@ -1588,21 +1588,26 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
  *   - standalone: bağlantı yok
  */
 /**
- * Bootstrap sorunu banner'ı — degraded instance için açık alert'lerden
+ * Bootstrap sorunu banner'ı — henüz 'ready' olmayan (degraded, veya pg_hba/auth
+ * hatasıyla 'discovering'de takılı kalan) instance için açık alert'lerden
  * EXTENSION_MISSING / BOOTSTRAP_FAILED / SECRET_REF_ERROR / AUTHENTICATION_FAILURE
  * / PERMISSION_DENIED / SYSTEM_INSTANCE_UNREACHABLE yakalar, mesajını + çözümünü
- * görünür şekilde gösterir. SYSTEM_INSTANCE_UNREACHABLE, daha önce 'ready' olan
- * bir instance'ın connect/auth hatasıyla (örn. pg_hba.conf erişimi kaldırılınca)
- * degraded'a düştüğü durumu kapsar (P0-024/P0-025).
+ * görünür şekilde gösterir. SYSTEM_INSTANCE_UNREACHABLE iki yoldan açılabilir:
+ * (a) daha önce 'ready' olan bir instance connect/auth hatasıyla degraded'a
+ * düşerse (P0-024), (b) degraded instance otomatik retry ile 'pending' ->
+ * 'discovering'e döner ve discovery yine aynı hatayı alırsa — bu durumda
+ * instance 'degraded' değil 'discovering'de kalmaya devam eder, bu yüzden
+ * banner sadece degraded'a değil ready-olmayan tüm state'lere bakar (P0-026).
  */
 function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; instanceId: string }) {
+    const notReady = inst?.bootstrap_state && inst.bootstrap_state !== 'ready';
     const alertsQ = useQuery({
         queryKey: ['inst-bootstrap-alerts', instanceId],
         queryFn: () => apiGet<any[]>(`/alerts?status=open&instance_pk=${instanceId}&limit=20`),
-        enabled: inst?.bootstrap_state === 'degraded',
+        enabled: notReady,
     });
 
-    if (inst?.bootstrap_state !== 'degraded') return null;
+    if (!notReady) return null;
 
     const bootstrapCodes = ['extension_missing', 'bootstrap_failed', 'secret_ref_error',
         'authentication_failure', 'permission_denied', 'connection_failure',

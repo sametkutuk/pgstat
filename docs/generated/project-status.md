@@ -84,7 +84,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 27 | PGSTAT-P1-007 | P1 | operations | planned | Write deployment and operations runbook | Schedule after PGSTAT-P0-002; consolidate existing operations-guide.md into a full runbook. |
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator | Closed; max_in_progress restored to 1. Continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked. |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | Start after the P0-022 production fix; the table classification from 2026-07-17 is recorded in this task. |
-| 30 | PGSTAT-P0-024 | P0 | operations | in_progress | Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI | Deploy to production; live-verify by revoking pg_hba access for a test instance and confirming the Telegram message names the host and the InstanceDetail banner shows the reason, then restoring access and confirming both clear. Close AC5 and this task after that verification. |
+| 30 | PGSTAT-P0-024 | P0 | operations | in_progress | Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI | Deploy to production; live-verify by revoking pg_hba access again for the same test instance and confirming (a) the Telegram message fires and names the host even while the instance is stuck in 'discovering', and (b) the InstanceDetail banner renders for that state; restore access, confirm both clear once the instance reaches 'ready'. Close AC5 and this task after that verification. |
 
 ## Dependency Map
 

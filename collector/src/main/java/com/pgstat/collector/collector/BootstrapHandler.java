@@ -1,9 +1,11 @@
 package com.pgstat.collector.collector;
 
+import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.InstanceCapability;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.InventoryRepository;
 import com.pgstat.collector.repository.StateRepository;
+import com.pgstat.collector.service.AlertDetailsBuilder;
 import com.pgstat.collector.service.AlertService;
 import com.pgstat.collector.service.SecretResolver;
 import org.slf4j.Logger;
@@ -100,8 +102,18 @@ public class BootstrapHandler {
     private void handleDiscovering(InstanceInfo instance) {
         InstanceCapability cap = discoveryCollector.discover(instance);
         if (cap == null) {
-            // Discovery basarisiz — state discovering'de kalir, retry edilir
+            // Discovery basarisiz — state discovering'de kalir, retry edilir.
+            // Bu, daha once 'ready' olup connect/auth hatasi (orn. pg_hba.conf
+            // erisiminin kaldirilmasi) yuzunden degraded'a dusup buraya geri
+            // donen instance'lari da kapsar: BootstrapHandler.processBootstrapStep
+            // degraded'i otomatik olarak pending -> discovering'e cekiyor, ve
+            // discovery burada tekrar basarisiz olursa instance sessizce
+            // 'discovering' state'inde donup durabiliyordu — hicbir alert
+            // acilmiyordu (P0-024 sadece steady-state ready->degraded gecisini
+            // kapsiyordu). Burada da SYSTEM_INSTANCE_UNREACHABLE aciyoruz ki
+            // discovery tekrar basarisiz oldukca alert acik kalsin/guncellensin.
             log.warn("Discovery basarisiz, retry edilecek: {}", instance.instanceId());
+            raiseUnreachableAlert(instance, stateRepo.getLastError(instance.instancePk()));
             return;
         }
 
@@ -114,6 +126,32 @@ public class BootstrapHandler {
 
         inventoryRepo.updateBootstrapState(instance.instancePk(), "baselining");
         log.info("Discovery tamamlandi, baselining'e geciliyor: {}", instance.instanceId());
+    }
+
+    private void raiseUnreachableAlert(InstanceInfo instance, String errorDetail) {
+        String alertKey = "system.instance_unreachable:instance=" + instance.instancePk();
+        String details = new AlertDetailsBuilder()
+            .setKind("system_health")
+            .addContext("instance_pk", instance.instancePk())
+            .addContext("instance_id", instance.instanceId())
+            .addContext("reason", "discovery_failed")
+            .addContext("last_error", errorDetail)
+            .build();
+        try {
+            alertService.upsertSystemAlert(
+                AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getCode(),
+                alertKey,
+                AlertCode.SYSTEM_INSTANCE_UNREACHABLE.getDefaultSeverity(),
+                instance.instancePk(),
+                "Instance unreachable",
+                "Discovery failed (possible pg_hba.conf access loss or auth failure): "
+                    + (errorDetail != null ? errorDetail : "unknown error"),
+                details
+            );
+        } catch (Exception e) {
+            log.error("SYSTEM_INSTANCE_UNREACHABLE alert acilamadi: {} — {}",
+                instance.instanceId(), e.getMessage());
+        }
     }
 
     /**

@@ -114,6 +114,16 @@ public class StateRepository {
         updateAfterFailure(instancePk, null);
     }
 
+    /** instance_state.last_error okur (satir yoksa veya bos ise null doner). */
+    public String getLastError(long instancePk) {
+        return jdbc.query("""
+            select last_error from control.instance_state where instance_pk = ?
+            """,
+            rs -> rs.next() ? rs.getString("last_error") : null,
+            instancePk
+        );
+    }
+
     /** Sadece last_error kaydeder — satir yoksa olusturur (discovery oncesi hata icin). */
     public void updateLastError(long instancePk, String errorMessage) {
         jdbc.update("""
