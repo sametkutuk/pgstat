@@ -44,6 +44,17 @@ function changedFiles() {
 }
 
 // Layer definitions: which paths trigger which command.
+// ui (eslint) only lints the changed files (see buildLayerCommands) and is
+// non-blocking (see `blocking: false` below): the UI has substantial
+// pre-existing lint debt (mostly @typescript-eslint/no-explicit-any and a
+// react-hooks/purity rule) accumulated file-by-file before this gate existed.
+// ESLint reports per-file, not per-line-of-diff, so touching one line in an
+// already-noisy file still surfaces that file's full pre-existing error count.
+// Blocking on that would make unrelated one-line changes unpushable until the
+// whole file's debt is paid down. tsc stays blocking (type errors are a
+// correctness signal, not accumulated style debt) and mvn test stays blocking.
+// Track paying down the eslint debt as its own board task, not as a side
+// effect of unrelated pushes.
 const LAYERS = [
   {
     name: 'collector (mvn test)',
@@ -51,6 +62,7 @@ const LAYERS = [
     cwd: 'collector',
     tool: 'mvn',
     cmd: ['mvn', '-q', 'test'],
+    blocking: true,
   },
   {
     name: 'api (tsc --noEmit)',
@@ -58,6 +70,7 @@ const LAYERS = [
     cwd: 'api',
     tool: 'npx',
     cmd: ['npx', 'tsc', '--noEmit'],
+    blocking: true,
   },
   {
     name: 'ui (tsc -b)',
@@ -65,15 +78,30 @@ const LAYERS = [
     cwd: 'ui',
     tool: 'npx',
     cmd: ['npx', 'tsc', '-b'],
+    blocking: true,
   },
   {
-    name: 'ui (eslint)',
-    match: /^ui\/(src\/|package\.json|eslint)/,
+    name: 'ui (eslint changed files)',
+    match: /^ui\/src\/.*\.(ts|tsx)$/,
     cwd: 'ui',
     tool: 'npx',
-    cmd: ['npx', 'eslint', '.'],
+    cmd: null, // built per-run from the matched files, see buildLayerCommands
+    blocking: false,
   },
 ];
+
+// ui (eslint changed files) needs the actual matched file list, not a fixed
+// cmd array — build it here instead of hardcoding `eslint .` above.
+// --all has no changed-file list, so it falls back to linting the whole tree
+// (that's the "full check" contract of --all / `make verify`).
+function buildLayerCommands(layer, files) {
+  if (layer.name !== 'ui (eslint changed files)') return layer.cmd;
+  if (!files) return ['npx', 'eslint', '.'];
+  const uiFiles = files
+    .filter((f) => layer.match.test(f))
+    .map((f) => f.replace(/^ui\//, ''));
+  return ['npx', 'eslint', ...uiFiles];
+}
 
 function toolAvailable(tool) {
   const probe = spawnSync(tool, ['--version'], { shell: true, stdio: 'ignore' });
@@ -98,11 +126,16 @@ for (const layer of toRun) {
     failed = true;
     continue;
   }
+  const cmd = buildLayerCommands(layer, files);
   console.log(`[quality-gates] running ${layer.name}`);
-  const result = spawnSync(layer.cmd[0], layer.cmd.slice(1), { cwd, shell: true, stdio: 'inherit' });
+  const result = spawnSync(cmd[0], cmd.slice(1), { cwd, shell: true, stdio: 'inherit' });
   if (result.status !== 0) {
-    console.error(`[quality-gates] FAIL ${layer.name}`);
-    failed = true;
+    if (layer.blocking) {
+      console.error(`[quality-gates] FAIL ${layer.name}`);
+      failed = true;
+    } else {
+      console.warn(`[quality-gates] WARN ${layer.name} (non-blocking, pre-existing debt) — not blocking this push`);
+    }
   }
 }
 
