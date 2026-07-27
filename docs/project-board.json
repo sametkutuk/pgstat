@@ -1806,13 +1806,15 @@
       "priority": "P0",
       "workstream": "operations",
       "status": "in_progress",
-      "title": "Raise a system alert when a ready instance loses pg_hba access (degrades silently today)",
-      "problem": "Customer-reported bug (2026-07-17), root-caused via systematic debugging: when a previously working instance loses its pg_hba.conf entry (or otherwise fails auth/connect), JobOrchestrator.processClusterInstance/processStatementsInstance catch the exception, call stateRepo.updateAfterFailure (consecutive_failures++), then call handleSecretOrAuthError which matches the message on 'connect'/'authentication'/'password'/'secret_ref' and calls inventoryRepo.scheduleBootstrapRetry — this flips instance_inventory.bootstrap_state to 'degraded'. findDueInstances only selects bootstrap_state='ready' (InventoryRepository.java:155), so the instance drops out of the collection queue on the very next cycle and consecutive_failures freezes (usually at 1). SystemHealthEvaluator.checkInstanceUnreachable only opens SYSTEM_INSTANCE_UNREACHABLE when consecutive_failures >= 3 (SystemHealthEvaluator.java:195), so the threshold is never reached. BootstrapHandler then silently retries the degraded instance on a backoff schedule (1min/5min/15min/1hour) with no alert at any point. Net effect: an instance can sit unmonitored indefinitely with zero Telegram/system alert, only an INFO log line ('Instance degraded'a cekildi').",
+      "title": "Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI",
+      "problem": "Customer-reported bug (2026-07-17), root-caused via systematic debugging: when a previously working instance loses its pg_hba.conf entry (or otherwise fails auth/connect), JobOrchestrator.processClusterInstance/processStatementsInstance catch the exception, call stateRepo.updateAfterFailure (consecutive_failures++), then call handleSecretOrAuthError which matches the message on 'connect'/'authentication'/'password'/'secret_ref' and calls inventoryRepo.scheduleBootstrapRetry — this flips instance_inventory.bootstrap_state to 'degraded'. findDueInstances only selects bootstrap_state='ready' (InventoryRepository.java:155), so the instance drops out of the collection queue on the very next cycle and consecutive_failures freezes (usually at 1). SystemHealthEvaluator.checkInstanceUnreachable only opens SYSTEM_INSTANCE_UNREACHABLE when consecutive_failures >= 3 (SystemHealthEvaluator.java:195), so the threshold is never reached. BootstrapHandler then silently retries the degraded instance on a backoff schedule (1min/5min/15min/1hour) with no alert at any point. Net effect: an instance could sit unmonitored indefinitely with zero Telegram/system alert, only an INFO log line ('Instance degraded'a cekildi'). Follow-up (2026-07-27): once the alert did fire, the customer reported it was uninterpretable in Telegram ('Instance unreachable ... The connection attempt failed.' with no host name anywhere) and the UI's InstanceDetail degraded-reason banner didn't recognize this alert code either.",
       "requirements": [
         "Raise a system alert (reuse AlertCode.SYSTEM_INSTANCE_UNREACHABLE, critical) the moment an instance is pushed to degraded by handleSecretOrAuthError, including the classified error detail (pg_hba / auth / connect) in the alert message.",
         "Auto-resolve that alert when the instance successfully returns to bootstrap_state='ready' (BootstrapHandler.handleEnriching).",
+        "Every instance-scoped system alert (not just this one) must show which host/instance is affected in the title, since Telegram/email only carry plain title+message text.",
+        "The UI's existing degraded-reason banner (InstanceDetail's BootstrapBanner) must also recognize this alert code, not just bootstrap-time codes.",
         "Do not touch the existing bootstrap-time secret_ref_error alert path (BootstrapHandler catch blocks) — this fix targets only the post-ready degrade path in JobOrchestrator.",
-        "Keep the fix minimal: no new alert code, no new migration, no new UI — reuse existing AlertService/AlertCode/notification plumbing."
+        "Keep the fix minimal: no new alert code, no new migration — reuse existing AlertService/AlertCode/notification plumbing and the existing BootstrapBanner UI component."
       ],
       "acceptance_criteria": [
         {
@@ -1827,18 +1829,31 @@
         },
         {
           "id": "AC3",
-          "text": "mvn test passes; a manual/live check confirms the alert fires end-to-end to Telegram for a real pg_hba revocation.",
+          "text": "AlertService.upsertSystemAlert automatically appends the instance's display_name and host:port to the alert title when instancePk is provided, so this and every other instance-scoped system alert is readable in Telegram without opening the UI.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "InstanceDetail's BootstrapBanner recognizes system_instance_unreachable and shows the same clear degraded-reason banner as the other bootstrap-failure codes.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn test and ui tsc pass; a live check confirms the Telegram message names the host and the InstanceDetail banner shows the reason for a real pg_hba revocation, and both clear on restore.",
           "status": "pending"
         }
       ],
       "implementation_plan": [
         "Inject AlertService into JobOrchestrator's handleSecretOrAuthError (or a small helper) and call alertService.upsertSystemAlert with AlertCode.SYSTEM_INSTANCE_UNREACHABLE, alert_key 'system.instance_unreachable:instance=<pk>', including the raw exception detail.",
         "Inject AlertService into BootstrapHandler and call alertService.resolveSystemAlert on the same alert_key inside handleEnriching right after the state flips to 'ready'.",
-        "Add/extend a unit test asserting the alert is raised on the degrade path and resolved on the ready transition."
+        "Add AlertService.withInstanceLabel(title, instancePk): looks up control.instance_inventory (display_name, host, port) and appends '— <display_name> (<host>:<port>)' to the title; fails soft if lookup errors. Call it from upsertSystemAlert before insert/update.",
+        "Add 'system_instance_unreachable' to InstanceDetail.tsx's bootstrapCodes array so the existing BootstrapBanner picks it up.",
+        "Add/extend a unit test asserting the alert is raised on the degrade path and resolved on the ready transition (tracked as a known test-coverage gap alongside the rest of this code path)."
       ],
       "verification_plan": [
         "mvn test",
-        "Live: revoke pg_hba access for a test instance, confirm system_instance_unreachable opens and a Telegram message is sent; restore access, confirm the alert auto-resolves."
+        "cd ui && npx tsc --noEmit",
+        "Live: revoke pg_hba access for a test instance, confirm system_instance_unreachable opens with the host named in the Telegram message and the InstanceDetail banner shows the reason; restore access, confirm the alert auto-resolves and the banner clears."
       ],
       "required_docs": [
         "docs/alert-reference.md",
@@ -1852,10 +1867,11 @@
       },
       "verification_evidence": [
         "Root cause confirmed 2026-07-17 via systematic debugging (5 hypothesis-testing steps tracing JobOrchestrator -> InventoryRepository.findDueInstances -> SystemHealthEvaluator threshold -> BootstrapHandler retry loop).",
-        "Fix applied: JobOrchestrator.handleSecretOrAuthError now raises AlertCode.SYSTEM_INSTANCE_UNREACHABLE (alert_key system.instance_unreachable:instance=<pk>) with the classified error detail; BootstrapHandler.handleEnriching resolves the same alert_key once the instance reaches bootstrap_state='ready'. AlertService injected into BootstrapHandler (constructor change only, no new bean wiring needed in JobOrchestrator — already present).",
-        "mvn compile and mvn test both passed with no regressions (existing 4 test classes unaffected; this code path has no existing unit test coverage per docs/test-strategy.md known gaps)."
+        "Fix applied 2026-07-17: JobOrchestrator.handleSecretOrAuthError now raises AlertCode.SYSTEM_INSTANCE_UNREACHABLE (alert_key system.instance_unreachable:instance=<pk>) with the classified error detail; BootstrapHandler.handleEnriching resolves the same alert_key once the instance reaches bootstrap_state='ready'.",
+        "Customer-reported unreadable Telegram alert 2026-07-27 (no host name) led to a discussion and a centralized fix: AlertService.withInstanceLabel() added and wired into upsertSystemAlert; InstanceDetail.tsx bootstrapCodes now includes system_instance_unreachable.",
+        "mvn compile, mvn test, and ui tsc --noEmit all passed with no regressions (existing 4 collector test classes unaffected; this code path has no existing unit test coverage per docs/test-strategy.md known gaps)."
       ],
-      "next_action": "Deploy to production; live-verify by revoking pg_hba access for a test instance and confirming a Telegram alert fires, then restoring access and confirming auto-resolve. Close AC3 and this task after that verification."
+      "next_action": "Deploy to production; live-verify by revoking pg_hba access for a test instance and confirming the Telegram message names the host and the InstanceDetail banner shows the reason, then restoring access and confirming both clear. Close AC5 and this task after that verification."
     }
   ]
 }

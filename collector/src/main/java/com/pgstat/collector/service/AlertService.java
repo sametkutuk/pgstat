@@ -192,6 +192,7 @@ public class AlertService {
     public void upsertSystemAlert(String alertCode, String alertKey, String severity,
                                   Long instancePk, String title, String message,
                                   String detailsJson) {
+        title = withInstanceLabel(title, instancePk);
         List<Map<String, Object>> previousRows = jdbc.queryForList("""
             select alert_id, severity, status
             from ops.alert
@@ -228,6 +229,36 @@ public class AlertService {
 
         if (notificationService != null && shouldNotifySystemOpen(severity, previousSeverity, previousStatus)) {
             notificationService.notifyIfNeeded(alertId, alertKey, alertCode, severity, instancePk, title, message);
+        }
+    }
+
+    /**
+     * Title'a instance display_name/host bilgisini ekler ("Instance unreachable"
+     * -> "Instance unreachable — db-prod-03 (10.0.1.15:5432)"). Telegram/e-posta
+     * gibi kanallarda sadece title+message duz metin gittigi icin, hangi host'un
+     * etkilendigi bu satirda gorunur olmali (P0-025). instancePk null ise veya
+     * instance bulunamazsa title degismeden doner.
+     */
+    private String withInstanceLabel(String title, Long instancePk) {
+        if (instancePk == null || title == null) return title;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList("""
+                select display_name, host, port
+                from control.instance_inventory
+                where instance_pk = ?
+                """, instancePk);
+            if (rows.isEmpty()) return title;
+            Map<String, Object> row = rows.get(0);
+            String label = String.valueOf(row.get("display_name"));
+            String host = row.get("host") == null ? null : String.valueOf(row.get("host"));
+            Object port = row.get("port");
+            String hostPart = host != null ? host + (port != null ? ":" + port : "") : null;
+            return hostPart != null
+                ? title + " — " + label + " (" + hostPart + ")"
+                : title + " — " + label;
+        } catch (Exception e) {
+            log.warn("Instance label eklenemedi (alert title fallback kullanildi): {}", e.getMessage());
+            return title;
         }
     }
 

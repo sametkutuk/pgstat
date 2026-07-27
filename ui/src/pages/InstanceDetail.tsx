@@ -1590,7 +1590,10 @@ function IndexStatsTab({ instancePk, initialDbid, range }: { instancePk: number;
 /**
  * Bootstrap sorunu banner'ı — degraded instance için açık alert'lerden
  * EXTENSION_MISSING / BOOTSTRAP_FAILED / SECRET_REF_ERROR / AUTHENTICATION_FAILURE
- * / PERMISSION_DENIED yakalar, mesajını + çözümünü görünür şekilde gösterir.
+ * / PERMISSION_DENIED / SYSTEM_INSTANCE_UNREACHABLE yakalar, mesajını + çözümünü
+ * görünür şekilde gösterir. SYSTEM_INSTANCE_UNREACHABLE, daha önce 'ready' olan
+ * bir instance'ın connect/auth hatasıyla (örn. pg_hba.conf erişimi kaldırılınca)
+ * degraded'a düştüğü durumu kapsar (P0-024/P0-025).
  */
 function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; instanceId: string }) {
     const alertsQ = useQuery({
@@ -1602,7 +1605,8 @@ function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; insta
     if (inst?.bootstrap_state !== 'degraded') return null;
 
     const bootstrapCodes = ['extension_missing', 'bootstrap_failed', 'secret_ref_error',
-        'authentication_failure', 'permission_denied', 'connection_failure'];
+        'authentication_failure', 'permission_denied', 'connection_failure',
+        'system_instance_unreachable'];
     const issue = (alertsQ.data || []).find((a: any) => bootstrapCodes.includes(a.alert_code));
 
     // Alert yoksa generic uyarı (örn. capability flag'lere göre)
