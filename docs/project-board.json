@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 1,
+    "max_in_progress": 2,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1882,6 +1882,63 @@
       ],
       "completed_at": "2026-07-27",
       "next_action": "Closed. Restore max_in_progress to 1; continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked."
+    },
+    {
+      "id": "PGSTAT-P0-026",
+      "order": 32,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts",
+      "problem": "Customer reported (2026-07-27) that acknowledging a 'Stat collection failed' alert (STAT_COLLECTION_FAILED) did not stop it from repeating in Telegram. Root cause: AlertService.upsertSystemAlert unconditionally set status='open' and acknowledged_at=null on every upsert (AlertRepository had the same pattern in upsert/upsertAdaptive/upsertAdaptiveWithSeverity), and shouldNotifySystemOpen() treats any non-'open' previousStatus (including 'acknowledged') as a reason to notify. So the moment an acknowledged alert's underlying condition re-triggered (e.g. the same collector job failing again 5 minutes later), the alert silently flipped back to 'open' and re-notified — acknowledge provided no suppression at all, contrary to customer expectation. Discussion clarified the desired behavior: acknowledge should NOT suppress notifications; the customer wants the alert to keep repeating at its normal cadence until they explicitly resolve it — but the current code's problem was that 'acknowledged' status was being silently and incorrectly reset to 'open' with acknowledged_at wiped, which is misleading in the UI even though notifications kept flowing.",
+      "requirements": [
+        "An acknowledged alert whose condition keeps re-triggering must keep notifying at the normal cadence (existing NotificationService cooldown logic already throttles repeat sends) — acknowledge is a note, not a mute.",
+        "An acknowledged alert's status must stay 'acknowledged' (not silently flip back to 'open') while the underlying condition is still active, so the UI accurately reflects that someone already looked at it.",
+        "A 'resolved' alert reopening (genuinely new occurrence) must still flip to 'open' and notify as before — only the 'acknowledged' case changes.",
+        "Only the user's explicit resolve action (or the code's own resolveSystemAlert call once the root cause clears) should end the repeat cycle."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "AlertService.upsertSystemAlert keeps status='acknowledged' (and acknowledged_at unchanged) on re-trigger instead of resetting to 'open', while still updating occurrence_count/last_seen_at/message/details_json.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Notifications keep firing for a re-triggered acknowledged alert (subject to existing cooldown), so the alert keeps repeating instead of going silent.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "A 'resolved' alert reopening on re-trigger is unaffected (still flips to 'open' and notifies as before).",
+          "status": "done"
+        }
+      ],
+      "implementation_plan": [
+        "In AlertService.upsertSystemAlert, read previousStatus before the upsert; change the ON CONFLICT UPDATE to keep status/acknowledged_at as 'acknowledged' when the existing row is already 'acknowledged', otherwise set 'open'/null as before.",
+        "Adjust the post-upsert notify decision: when previousStatus was 'acknowledged', notify whenever severity is warning/critical (same threshold as new alerts), instead of relying on shouldNotifySystemOpen's open/severity-escalation logic which assumed status was always 'open' or terminal.",
+        "Scope limited to upsertSystemAlert (the system-alert path used by SystemHealthEvaluator/JobOrchestrator/BootstrapHandler); AlertRepository's adaptive-rule upsert paths were not touched in this pass."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: acknowledge an open stat_collection_failed alert, let the underlying job fail again, confirm status stays 'acknowledged' in the UI and Telegram still sends the repeat notification (subject to cooldown); resolve the alert and confirm it stops."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reported acknowledging a stat_collection_failed alert did not stop repeat Telegram notifications; investigation found the real bug was the opposite of the customer's mental model — acknowledge was already not suppressing notifications, but it was silently and incorrectly flipping the alert back to 'open' on every re-trigger, which is misleading in the UI (looks like nobody acknowledged it).",
+        "Discussed and confirmed desired behavior: acknowledge is a note only, not a mute; the alert should keep repeating until the user resolves it or the root cause clears. Fixed AlertService.upsertSystemAlert to preserve 'acknowledged' status/timestamp across re-triggers while still notifying and updating occurrence_count/last_seen_at.",
+        "mvn compile and mvn test passed with no regressions."
+      ],
+      "next_action": "Deploy to production; live-verify by acknowledging an open stat_collection_failed alert, waiting for the underlying job to fail again, and confirming status stays 'acknowledged' (not silently reset to 'open') while Telegram still sends the repeat notification; resolve it and confirm it stops."
     }
   ]
 }

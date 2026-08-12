@@ -148,7 +148,10 @@ Sequential execution rule:
   another live production bug running in parallel with PGSTAT-P0-002.
   PGSTAT-P0-024 closed 2026-07-27 after customer live-verification of three
   fix rounds (missed alert on degrade, missed alert on stuck-discovery,
-  premature auto-resolve); the limit is restored to 1.
+  premature auto-resolve); the limit was restored to 1, then raised to 2
+  again the same day for PGSTAT-P0-026 (acknowledged alerts silently
+  reopening to 'open' on re-trigger), another live production bug running
+  in parallel with PGSTAT-P0-002. Restore to 1 when P0-026 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -321,6 +324,7 @@ production bug or a user-approved urgent feature.
 | 30 | PGSTAT-P0-024 | P0 | operations | done | Raise a system alert when a ready instance loses pg_hba access (production bug) | - |
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
+| 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts (production bug) | - |
 
 ## 6. Workstream Rules
 

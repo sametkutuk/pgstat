@@ -202,6 +202,15 @@ public class AlertService {
         String previousSeverity = previous == null ? null : String.valueOf(previous.get("severity"));
         String previousStatus = previous == null ? null : String.valueOf(previous.get("status"));
 
+        // 'acknowledged' bir susturma degil, sadece "gorüldü" notudur: kok neden
+        // devam ettikce (ayni alert_key tekrar tetiklendikce) occurrence_count/
+        // last_seen_at guncellenir ve bildirim gitmeye devam eder, status
+        // 'acknowledged' olarak kalir. Sadece kullanicinin 'Coz' (resolve) islemi
+        // veya kok nedenin gercekten duzelip resolveSystemAlert cagrilmasi
+        // alert'i durdurur. 'resolved' durumundan reopen ise hala yeni bir olay
+        // sayilir ve 'open'a doner.
+        boolean wasAcknowledged = "acknowledged".equals(previousStatus);
+
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
               alert_key, alert_code, severity, status, source_component, alert_source,
@@ -211,8 +220,8 @@ public class AlertService {
             values (?, ?, ?, 'open', 'system', 'system', ?, now(), now(), 1, ?, ?, ?::jsonb)
             on conflict (alert_key) do update
             set severity = excluded.severity,
-                status = 'open',
-                acknowledged_at = null,
+                status = case when ops.alert.status = 'acknowledged' then 'acknowledged' else 'open' end,
+                acknowledged_at = case when ops.alert.status = 'acknowledged' then ops.alert.acknowledged_at else null end,
                 instance_pk = coalesce(excluded.instance_pk, ops.alert.instance_pk),
                 last_seen_at = now(),
                 title = excluded.title,
@@ -227,7 +236,11 @@ public class AlertService {
             alertKey, alertCode, severity, instancePk, title, message, detailsJson
         );
 
-        if (notificationService != null && shouldNotifySystemOpen(severity, previousSeverity, previousStatus)) {
+        boolean shouldNotify = wasAcknowledged
+            ? "warning".equals(severity) || "critical".equals(severity)
+            : shouldNotifySystemOpen(severity, previousSeverity, previousStatus);
+
+        if (notificationService != null && shouldNotify) {
             notificationService.notifyIfNeeded(alertId, alertKey, alertCode, severity, instancePk, title, message);
         }
     }
