@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 2,
+    "max_in_progress": 3,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1939,6 +1939,61 @@
         "mvn compile and mvn test passed with no regressions."
       ],
       "next_action": "Deploy to production; live-verify by acknowledging an open stat_collection_failed alert, waiting for the underlying job to fail again, and confirming status stays 'acknowledged' (not silently reset to 'open') while Telegram still sends the repeat notification; resolve it and confirm it stops."
+    },
+    {
+      "id": "PGSTAT-P1-008",
+      "order": 33,
+      "priority": "P1",
+      "workstream": "governance",
+      "status": "in_progress",
+      "title": "Domain-by-domain behavior specification program for a from-scratch rewrite",
+      "problem": "Customer wants to rewrite pgstat from scratch but with every behavior fully specified on paper first ('noktasi virgulune kadar') so no behavior is lost. The codebase is too large to spec in one pass: 92 tables/1148 columns, ~20,159 lines of Java collector, ~205 API routes (~13,500 lines TS), ~18,740 lines of React UI, 91 migrations. A domain map, sequencing, and a per-domain spec template were designed via three parallel discovery agents (collector+data model, API, UI+alerting) plus a synthesis/design agent, approved as a plan on 2026-08-12.",
+      "requirements": [
+        "Produce one specification document per domain under docs/spec/, in the approved sequence, each detailed enough to re-implement the domain's behavior without referring back to the old code.",
+        "Follow the approved 9-section template per domain: scope, data sources, business/computation rules, storage/lifecycle, API contract, UI behavior, cross-domain interfaces, acceptance criteria, open questions.",
+        "Do not silently canonicalize undocumented/ambiguous behavior (duplicate migration numbers V021/054-057/084, dead code, TODOs) — flag it explicitly in each domain's 'open questions' section.",
+        "Each domain document requires customer review/approval before starting the next domain (sequential, not parallel, per customer instruction)."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Domain map with 12 domains (15 documents counting the 4 Alerting sub-phases 8a-8d) and dependency-driven sequencing is recorded (this task) and matches the approved plan.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "docs/spec/01-data-model-and-storage-lifecycle.md exists, approved by customer.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Each subsequent domain (02 through 12, with 08a-08d as four documents) is completed and customer-approved in sequence before the next begins.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Sequence: 01 Data Model & Storage Lifecycle -> 02 Instance/Cluster Discovery & Registration -> 03 Core Cluster Metrics Collection -> 04 Query Statements -> 05 Database Object Inventory & Health -> 06 Nightly Snapshot & Reporting -> 07 Scheduler & Job Orchestration -> 08a Alerting (Static Rules) -> 08b Alerting (Adaptive Baseline) -> 08c Alerting (Lifecycle Subscriptions) -> 08d Notifications & Delivery -> 09 System Health & Self-Monitoring -> 10 Platform (Auth/Preferences/Audit/Instance Groups) -> 11 Grafana Integration -> 12 Insights & Ad-hoc Analysis.",
+        "pgdbaagent is explicitly out of scope for this program (already has dedicated docs: pgdbaagent-contracts.md, agentic-dba-platform-architecture.md).",
+        "Insights.tsx/insights.ts and instances.ts are known multi-domain 'god files' that get split across their owning domains rather than spec'd as single documents (see plan file for detail).",
+        "Full plan and rationale: C:\\Users\\samet.kutuk\\.claude\\plans\\gentle-bubbling-turing.md"
+      ],
+      "verification_plan": [
+        "Each domain spec is reviewed by the customer against the actual running system (code read and, where needed, live query) before being marked approved."
+      ],
+      "required_docs": [
+        "docs/spec/README.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Domain map produced by three parallel discovery agents (collector+data model: 91 migrations, 7 collector classes, ~20,159 lines; API: 205 routes across 20 files, ~13,500 lines, instances.ts and insights.ts identified as oversized multi-domain files; UI+alerting: 23 pages ~18,740 lines, AlertRuleEvaluator 3564 lines, only Telegram concretely implemented) plus a synthesis/design agent that reconciled all three into one 12-domain, dependency-ordered sequence with a 9-section spec template. Plan approved by customer 2026-08-12."
+      ],
+      "next_action": "Write docs/spec/01-data-model-and-storage-lifecycle.md (schema V001-008, PartitionManager, PurgeEvaluator, AggRepository, retention V022) for customer review."
     }
   ]
 }

@@ -151,7 +151,12 @@ Sequential execution rule:
   premature auto-resolve); the limit was restored to 1, then raised to 2
   again the same day for PGSTAT-P0-026 (acknowledged alerts silently
   reopening to 'open' on re-trigger), another live production bug running
-  in parallel with PGSTAT-P0-002. Restore to 1 when P0-026 closes.
+  in parallel with PGSTAT-P0-002.
+- 2026-08-12: `max_in_progress` raised to 3 to start PGSTAT-P1-008 (domain
+  behavior specification program for a from-scratch rewrite) alongside
+  PGSTAT-P0-002 and PGSTAT-P0-026 (the latter only awaiting customer live
+  verification, no active engineering work competing for attention).
+  Restore to 2 then 1 as P0-026 and P0-002 close.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -325,6 +330,7 @@ production bug or a user-approved urgent feature.
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
 | 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts (production bug) | - |
+| 33 | PGSTAT-P1-008 | P1 | governance | in_progress | Domain-by-domain behavior specification program for a from-scratch rewrite | - |
 
 ## 6. Workstream Rules
 
