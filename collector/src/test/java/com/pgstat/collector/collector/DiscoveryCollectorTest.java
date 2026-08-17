@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DiscoveryCollectorTest {
 
     private final DiscoveryCollector collector = new DiscoveryCollector(
-            null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, null);
 
     @Test
     void buildErrorDetailDistinguishesPgHbaFailureFromBadPassword() {

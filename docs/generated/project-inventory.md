@@ -1984,7 +1984,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | --- | --- |
 | collector/src/main/java/com/pgstat/collector/collector/ClusterCollector.java | fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_snapshot, fact.pg_replication_snapshot |
 | collector/src/main/java/com/pgstat/collector/collector/DbObjectsCollector.java | dim.relation_ref, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_table_stat_delta |
-| collector/src/main/java/com/pgstat/collector/collector/DiscoveryCollector.java | control.database_state, control.instance_capability, control.instance_state, dim.database_ref |
+| collector/src/main/java/com/pgstat/collector/collector/DiscoveryCollector.java | control.database_action_log, control.database_state, control.instance_capability, control.instance_state, dim.database_ref |
 | collector/src/main/java/com/pgstat/collector/collector/NightlySnapshotCollector.java | fact.pg_database_freeze_snapshot, fact.pg_relation_size_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_table_freeze_snapshot |
 | collector/src/main/java/com/pgstat/collector/collector/StatementsCollector.java | dim.role_ref, dim.statement_series, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/collector/TextEnricher.java | dim.query_text, dim.statement_series |

@@ -1912,16 +1912,23 @@
           "id": "AC3",
           "text": "A 'resolved' alert reopening on re-trigger is unaffected (still flips to 'open' and notifies as before).",
           "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Dropping a database no longer causes stat_collection_failed to repeat forever: DiscoveryCollector auto-deactivates dim.database_ref rows that disappear from the source database list, logs the action, and resolves the instance's open/acknowledged stat_collection_failed alert.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
         "In AlertService.upsertSystemAlert, read previousStatus before the upsert; change the ON CONFLICT UPDATE to keep status/acknowledged_at as 'acknowledged' when the existing row is already 'acknowledged', otherwise set 'open'/null as before.",
         "Adjust the post-upsert notify decision: when previousStatus was 'acknowledged', notify whenever severity is warning/critical (same threshold as new alerts), instead of relying on shouldNotifySystemOpen's open/severity-escalation logic which assumed status was always 'open' or terminal.",
-        "Scope limited to upsertSystemAlert (the system-alert path used by SystemHealthEvaluator/JobOrchestrator/BootstrapHandler); AlertRepository's adaptive-rule upsert paths were not touched in this pass."
+        "Scope limited to upsertSystemAlert (the system-alert path used by SystemHealthEvaluator/JobOrchestrator/BootstrapHandler); AlertRepository's adaptive-rule upsert paths were not touched in this pass.",
+        "AC4 (2026-08-12 follow-up): DiscoveryCollector.discoverDatabases() now collects the dbids seen in the source database list and calls a new deactivateMissingDatabases() helper, which sets dim.database_ref.is_active=false + disabled_at/disabled_reason for any previously-active row whose dbid was not seen, logs to control.database_action_log (same pattern as the manual /database-cleanup/disable endpoint), and calls alertService.resolveSystemAlert() for that instance's system.stat_collection_failed key. resolveSystemAlert widened from status='open' to status in ('open','acknowledged') since a genuinely-cleared root cause should close an acknowledged alert too."
       ],
       "verification_plan": [
         "mvn compile && mvn test",
-        "Live: acknowledge an open stat_collection_failed alert, let the underlying job fail again, confirm status stays 'acknowledged' in the UI and Telegram still sends the repeat notification (subject to cooldown); resolve the alert and confirm it stops."
+        "Live: acknowledge an open stat_collection_failed alert, let the underlying job fail again, confirm status stays 'acknowledged' in the UI and Telegram still sends the repeat notification (subject to cooldown); resolve the alert and confirm it stops.",
+        "Live (AC4): drop a database on a monitored instance, confirm stat_collection_failed opens; wait for the next discovery/rediscovery cycle, confirm dim.database_ref for that db flips to is_active=false with a database_action_log row, and confirm the alert auto-resolves without deploying any manual database-cleanup action."
       ],
       "required_docs": [
         "docs/alert-reference.md",
@@ -1936,9 +1943,11 @@
       "verification_evidence": [
         "Customer reported acknowledging a stat_collection_failed alert did not stop repeat Telegram notifications; investigation found the real bug was the opposite of the customer's mental model — acknowledge was already not suppressing notifications, but it was silently and incorrectly flipping the alert back to 'open' on every re-trigger, which is misleading in the UI (looks like nobody acknowledged it).",
         "Discussed and confirmed desired behavior: acknowledge is a note only, not a mute; the alert should keep repeating until the user resolves it or the root cause clears. Fixed AlertService.upsertSystemAlert to preserve 'acknowledged' status/timestamp across re-triggers while still notifying and updating occurrence_count/last_seen_at.",
-        "mvn compile and mvn test passed with no regressions."
+        "mvn compile and mvn test passed with no regressions.",
+        "Customer follow-up 2026-08-12: dropped a database on instance 'moneasy-test-167.50', acknowledged and later resolved the resulting stat_collection_failed alert manually, but it kept reopening. Root cause #2: DiscoveryCollector.discoverDatabases() only ever upserts (adds) database rows — it never deactivates a dim.database_ref row whose database was dropped from the source, so the db_objects job kept retrying the missing database forever, re-triggering SystemHealthEvaluator.checkStatCollectionFailures() every cycle. The existing manual 'Database Cleanup' UI (databaseCleanup.ts) could not have helped either — it only scans job_failed/job_partial_failure/connection_failure/permission_denied alert messages for 'does not exist', and stat_collection_failed is a separate, instance-level-aggregated alert code that was never in that scan list.",
+        "Fix applied 2026-08-12: DiscoveryCollector now auto-deactivates dim.database_ref rows missing from the live database list (same schema/audit pattern as the existing manual disable endpoint) and auto-resolves the instance's stat_collection_failed alert once the stale database is deactivated. mvn compile and mvn test passed (DiscoveryCollectorTest constructor call updated for the new AlertService dependency)."
       ],
-      "next_action": "Deploy to production; live-verify by acknowledging an open stat_collection_failed alert, waiting for the underlying job to fail again, and confirming status stays 'acknowledged' (not silently reset to 'open') while Telegram still sends the repeat notification; resolve it and confirm it stops."
+      "next_action": "Deploy to production; live-verify AC1-AC3 (acknowledge/resolve cadence) as previously planned, plus AC4: confirm a dropped database's stat_collection_failed alert auto-clears on the next discovery cycle without any manual database-cleanup step."
     },
     {
       "id": "PGSTAT-P1-008",

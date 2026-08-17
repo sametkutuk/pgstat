@@ -5,6 +5,7 @@ import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.CapabilityRepository;
 import com.pgstat.collector.repository.DimensionRepository;
 import com.pgstat.collector.repository.StateRepository;
+import com.pgstat.collector.service.AlertService;
 import com.pgstat.collector.service.PgStatStatementsExtensionResolver;
 import com.pgstat.collector.service.PgStatStatementsExtensionResolver.PgStatStatementsExtension;
 import com.pgstat.collector.service.SecretResolver;
@@ -20,7 +21,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Kaynak PostgreSQL instance'inin yeteneklerini kesfeder.
@@ -49,6 +53,7 @@ public class DiscoveryCollector {
     private final DimensionRepository dimensionRepo;
     private final PgStatStatementsExtensionResolver pgssResolver;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final AlertService alertService;
 
     public DiscoveryCollector(SourceConnectionFactory connectionFactory,
                               SqlFamilyResolver familyResolver,
@@ -56,7 +61,8 @@ public class DiscoveryCollector {
                               StateRepository stateRepo,
                               DimensionRepository dimensionRepo,
                               PgStatStatementsExtensionResolver pgssResolver,
-                              org.springframework.jdbc.core.JdbcTemplate jdbc) {
+                              org.springframework.jdbc.core.JdbcTemplate jdbc,
+                              AlertService alertService) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.capabilityRepo = capabilityRepo;
@@ -64,6 +70,7 @@ public class DiscoveryCollector {
         this.dimensionRepo = dimensionRepo;
         this.pgssResolver = pgssResolver;
         this.jdbc = jdbc;
+        this.alertService = alertService;
     }
 
     /**
@@ -329,15 +336,23 @@ public class DiscoveryCollector {
 
     /**
      * Kaynak PG'deki database listesini kesfeder ve merkezi DB'ye yazar.
+     * Ayrica, kaynakta artik gorulmeyen (drop edilmis) ama dim.database_ref'te
+     * hala is_active=true olan database'leri otomatik olarak takipten cikarir
+     * (bkz. discoverDatabases sonrasi deactivateMissingDatabases cagrisi) —
+     * aksi halde collector o database'e sonsuza kadar baglanmaya calisip
+     * her denemede system_stat_collection_failed alert'i acardi (musteri
+     * raporu, 2026-08-12).
      */
     private void discoverDatabases(Connection conn, SourceQueries queries,
                                    long instancePk) throws Exception {
+        List<Long> seenDbids = new ArrayList<>();
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.databaseListQuery())) {
             while (rs.next()) {
                 long dbid = rs.getLong("dbid");
                 String datname = rs.getString("datname");
                 boolean isTemplate = rs.getBoolean("is_template");
+                seenDbids.add(dbid);
 
                 // dim.database_ref upsert
                 dimensionRepo.upsertDatabaseRef(instancePk, dbid, datname, isTemplate);
@@ -346,5 +361,52 @@ public class DiscoveryCollector {
                 stateRepo.upsertDatabaseState(instancePk, dbid);
             }
         }
+        deactivateMissingDatabases(instancePk, seenDbids);
+    }
+
+    /**
+     * dim.database_ref'te is_active=true olup, kaynak PG'nin guncel database
+     * listesinde (seenDbids) artik gorulmeyen satirlari otomatik pasife ceker.
+     * Manuel "Database Cleanup" (databaseCleanup.ts /disable) ile ayni deseni
+     * (is_active, disabled_at, disabled_reason, database_action_log) kullanir,
+     * boylece iki yol da ayni audit izini birakir.
+     */
+    private void deactivateMissingDatabases(long instancePk, List<Long> seenDbids) {
+        List<Map<String, Object>> stale = jdbc.queryForList("""
+            select dbid, datname
+            from dim.database_ref
+            where instance_pk = ? and is_active
+              and not (dbid = any(?))
+            """,
+            instancePk, seenDbids.toArray(new Long[0])
+        );
+        if (stale.isEmpty()) return;
+
+        for (Map<String, Object> row : stale) {
+            long dbid = ((Number) row.get("dbid")).longValue();
+            String datname = String.valueOf(row.get("datname"));
+            try {
+                jdbc.update("""
+                    update dim.database_ref
+                    set is_active = false, disabled_at = now(),
+                        disabled_reason = 'auto: source database no longer exists'
+                    where instance_pk = ? and dbid = ?
+                    """, instancePk, dbid);
+                jdbc.update("""
+                    insert into control.database_action_log
+                        (instance_pk, dbid, datname, action, reason, actioned_by)
+                    values (?, ?, ?, 'disabled', 'auto: source database no longer exists', 'collector')
+                    """, instancePk, dbid, datname);
+                log.info("Database takipten otomatik cikarildi (kaynakta bulunamadi): instance_pk={} dbid={} datname={}",
+                    instancePk, dbid, datname);
+            } catch (Exception e) {
+                log.warn("Database otomatik disable hatasi: instance_pk={} dbid={} — {}",
+                    instancePk, dbid, e.getMessage());
+            }
+        }
+
+        try {
+            alertService.resolveSystemAlert("system.stat_collection_failed:instance=" + instancePk);
+        } catch (Exception ignore) {}
     }
 }

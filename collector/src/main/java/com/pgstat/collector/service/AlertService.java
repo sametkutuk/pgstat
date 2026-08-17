@@ -276,10 +276,14 @@ public class AlertService {
     }
 
     public void resolveSystemAlert(String alertKey) {
+        // 'acknowledged' da dahil: acknowledge sadece "goruldu" notudur, susturma
+        // degildir (bkz. upsertSystemAlert yorumu) — kok neden gercekten duzelip
+        // buraya gelindiginde acknowledged alert de kapanmalidir, sonsuza kadar
+        // acik/acknowledged kalmamalidir.
         List<Map<String, Object>> rows = jdbc.queryForList("""
             select alert_id, alert_code, severity, instance_pk, title
             from ops.alert
-            where alert_key = ? and status = 'open'
+            where alert_key = ? and status in ('open', 'acknowledged')
             """, alertKey);
         if (rows.isEmpty()) return;
         Map<String, Object> previous = rows.get(0);
@@ -289,7 +293,7 @@ public class AlertService {
             set status = 'resolved',
                 resolved_at = now(),
                 last_seen_at = now()
-            where alert_key = ? and status = 'open'
+            where alert_key = ? and status in ('open', 'acknowledged')
             """, alertKey);
 
         if (updated > 0 && notificationService != null
