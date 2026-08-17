@@ -116,8 +116,8 @@ public class AggRepository {
               instance_pk,
               dbid,
               relid,
-              schemaname,
-              relname,
+              (array_agg(schemaname order by sample_ts desc))[1] as schemaname,
+              (array_agg(relname order by sample_ts desc))[1] as relname,
               sum(coalesce(n_tup_ins_delta, 0)) as n_tup_ins_sum,
               sum(coalesce(n_tup_upd_delta, 0)) as n_tup_upd_sum,
               sum(coalesce(n_tup_del_delta, 0)) as n_tup_del_sum,
@@ -138,9 +138,11 @@ public class AggRepository {
             from fact.pg_table_stat_delta
             where sample_ts >= date_trunc('hour', now() - interval '1 hour')
               and sample_ts <  date_trunc('hour', now())
-            group by date_trunc('hour', sample_ts), instance_pk, dbid, relid, schemaname, relname
+            group by date_trunc('hour', sample_ts), instance_pk, dbid, relid
             on conflict (bucket_start, instance_pk, dbid, relid) do update
-              set n_tup_ins_sum = excluded.n_tup_ins_sum,
+              set schemaname = excluded.schemaname,
+                  relname = excluded.relname,
+                  n_tup_ins_sum = excluded.n_tup_ins_sum,
                   n_tup_upd_sum = excluded.n_tup_upd_sum,
                   n_tup_del_sum = excluded.n_tup_del_sum,
                   n_tup_hot_upd_sum = excluded.n_tup_hot_upd_sum,

@@ -23,6 +23,12 @@ public class CapabilityRepository {
      * ON CONFLICT ile idempotent — ayni instance_pk icin tekrar calistirilabilir.
      */
     public void upsert(InstanceCapability cap) {
+        // last_error_text burada "erisilemezlik hatasi" anlaminda degil, discovery
+        // basarili olsa da not edilmesi gereken bir coverage bulgusu icin kullanilir
+        // (orn. pg_stat_statements admin DB disinda kurulu — bkz. DiscoveryCollector
+        // pgssNote). Basarili discovery'de her zaman guncellenir: eski not gecerliligini
+        // korumuyorsa (orn. extension artik admin DB'de kuruldu) bir sonraki
+        // discovery'de null'a donup temizlenir.
         jdbc.update("""
             insert into control.instance_capability (
               instance_pk,
@@ -37,9 +43,10 @@ public class CapabilityRepository {
               has_pg_stat_io,
               has_pg_stat_checkpointer,
               compute_query_id_mode,
-              last_discovered_at
+              last_discovered_at,
+              last_error_text
             )
-            values (?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?, ?, now())
+            values (?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?, ?, now(), ?)
             on conflict (instance_pk) do update
             set server_version_num          = excluded.server_version_num,
                 pg_major                    = excluded.pg_major,
@@ -52,7 +59,8 @@ public class CapabilityRepository {
                 has_pg_stat_io              = excluded.has_pg_stat_io,
                 has_pg_stat_checkpointer    = excluded.has_pg_stat_checkpointer,
                 compute_query_id_mode       = excluded.compute_query_id_mode,
-                last_discovered_at          = now()
+                last_discovered_at          = now(),
+                last_error_text             = excluded.last_error_text
             """,
             cap.instancePk(),
             cap.serverVersionNum(),
@@ -64,7 +72,8 @@ public class CapabilityRepository {
             cap.hasPgStatStatementsInfo(),
             cap.hasPgStatIo(),
             cap.hasPgStatCheckpointer(),
-            cap.computeQueryIdMode()
+            cap.computeQueryIdMode(),
+            cap.lastErrorText()
         );
     }
 

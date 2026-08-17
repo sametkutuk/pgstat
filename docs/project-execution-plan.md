@@ -156,7 +156,13 @@ Sequential execution rule:
   behavior specification program for a from-scratch rewrite) alongside
   PGSTAT-P0-002 and PGSTAT-P0-026 (the latter only awaiting customer live
   verification, no active engineering work competing for attention).
-  Restore to 2 then 1 as P0-026 and P0-002 close.
+- 2026-08-17: customer upgraded and reported two more issues in the same
+  session (agg.pg_table_stat_hourly rollup crash, and a stuck bootstrap
+  loop caused by pg_stat_statements being installed in the wrong database).
+  Both root-caused and fixed same-day as PGSTAT-P0-027 and PGSTAT-P0-029,
+  running in parallel with the three already-open in_progress tasks;
+  `max_in_progress` raised to 5. Restore down to 1 as each of P0-026,
+  P0-027, P0-029, and P1-008 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -331,6 +337,9 @@ production bug or a user-approved urgent feature.
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
 | 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts (production bug) | - |
 | 33 | PGSTAT-P1-008 | P1 | governance | in_progress | Domain-by-domain behavior specification program for a from-scratch rewrite | - |
+| 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables (production bug) | - |
+| 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | - |
+| 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
 
 ## 6. Workstream Rules
 

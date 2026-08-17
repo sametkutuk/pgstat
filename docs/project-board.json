@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 3,
+    "max_in_progress": 5,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2003,6 +2003,161 @@
         "Domain map produced by three parallel discovery agents (collector+data model: 91 migrations, 7 collector classes, ~20,159 lines; API: 205 routes across 20 files, ~13,500 lines, instances.ts and insights.ts identified as oversized multi-domain files; UI+alerting: 23 pages ~18,740 lines, AlertRuleEvaluator 3564 lines, only Telegram concretely implemented) plus a synthesis/design agent that reconciled all three into one 12-domain, dependency-ordered sequence with a 9-section spec template. Plan approved by customer 2026-08-12."
       ],
       "next_action": "Write docs/spec/01-data-model-and-storage-lifecycle.md (schema V001-008, PartitionManager, PurgeEvaluator, AggRepository, retention V022) for customer review."
+    },
+    {
+      "id": "PGSTAT-P0-027",
+      "order": 34,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables",
+      "problem": "Customer-reported (2026-08-17) after the P0-026 upgrade: collector logs showed 'Rollup job hatasi: ... bad SQL grammar [insert into agg.pg_table_stat_hourly ...] Caused by: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time'. Root cause: AggRepository.rollupTableStatHourly()'s GROUP BY included schemaname/relname in addition to the ON CONFLICT target (bucket_start, instance_pk, dbid, relid). If the same relid appears with two different schemaname/relname values within the same hourly window (table renamed, or OID reused after a drop+create), the GROUP BY produces two rows that the ON CONFLICT target treats as one, and PostgreSQL rejects the double-affect. rollupHourly() (pgss) does not have this bug because its GROUP BY already matches its ON CONFLICT target exactly.",
+      "requirements": [
+        "GROUP BY must match the ON CONFLICT target exactly so a single relid never produces more than one row per hourly window.",
+        "schemaname/relname must still reflect a real observed value (not dropped) — use the same 'last observed in window' pattern already used for n_live_tup_last/n_dead_tup_last/n_mod_since_analyze_last in the same query.",
+        "No new migration, no new alert code — pure SQL fix inside the existing rollup method."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "rollupTableStatHourly()'s GROUP BY is (bucket_start, instance_pk, dbid, relid) only, matching the ON CONFLICT target.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "schemaname/relname are selected via array_agg(... order by sample_ts desc)[1], same pattern as the existing 'last' columns, and are also updated in the ON CONFLICT DO UPDATE clause.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn test passes; live verification confirms the rollup job no longer throws this exception after deploy.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Move schemaname/relname out of GROUP BY into the SELECT list as (array_agg(schemaname order by sample_ts desc))[1] and same for relname.",
+        "Add schemaname = excluded.schemaname, relname = excluded.relname to the ON CONFLICT DO UPDATE SET clause so a rename is still reflected on the next hour's upsert."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: watch collector logs after deploy for at least one full hourly rollup cycle, confirm no more 'ON CONFLICT DO UPDATE command cannot affect row a second time' errors."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer shared collector logs 2026-08-17 showing the BadSqlGrammarException/ON CONFLICT error on every rollup cycle since the P0-026 deploy (pre-existing bug, unrelated to that deploy, just first noticed then).",
+        "Root cause confirmed by comparing rollupTableStatHourly() against the structurally-correct rollupHourly() (pgss) sibling method in the same file — GROUP BY vs ON CONFLICT target mismatch.",
+        "Fix applied: schemaname/relname moved out of GROUP BY, selected via the same array_agg 'last observed' pattern as the other snapshot-style columns, added to the ON CONFLICT UPDATE clause. mvn compile and mvn test pass with no regressions."
+      ],
+      "next_action": "Deploy to production; live-verify no more ON CONFLICT errors appear in collector logs across at least one hourly rollup cycle."
+    },
+    {
+      "id": "PGSTAT-P0-028",
+      "order": 35,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "planned",
+      "title": "Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir)",
+      "problem": "Customer-shared logs 2026-08-17 show a recurring WARN on instance samet-ets-01: 'WAL snapshot hatasi: samet-ets-01 — ERROR: permission denied for function pg_ls_waldir'. This is handled gracefully today (try/catch around collectWalSnapshot skips just that sub-step, no crash, no alert), so it is not urgent, but it is a real coverage gap: WAL directory size is not being collected for this instance because the collector's PostgreSQL role lacks EXECUTE on pg_ls_waldir (typically requires pg_monitor membership or superuser).",
+      "requirements": [
+        "Confirm whether this is expected (customer intentionally scoped the collector role narrowly on this instance) or an oversight in the role grant script/runbook.",
+        "If unintentional, document (or fix via a GRANT) the required privilege for full WAL snapshot coverage.",
+        "If intentional/acceptable, no code change — just confirm the degraded coverage is visible to the customer somewhere (not just a WARN buried in logs) so it doesn't look like silent data loss."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Root cause (missing pg_monitor grant vs. intentional restriction) confirmed with the customer.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Ask the customer whether pg_ls_waldir coverage matters for samet-ets-01 and whether they want to grant pg_monitor to the collector role there."
+      ],
+      "verification_plan": [
+        "None yet — pending customer input."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [],
+      "next_action": "Ask customer whether this WAL directory coverage gap on samet-ets-01 needs a privilege grant or is acceptable as-is."
+    },
+    {
+      "id": "PGSTAT-P0-029",
+      "order": 36,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner",
+      "problem": "Customer reported (2026-08-17) instance db1.dc-etstur.com-test stuck retrying bootstrap forever ('pending' -> 'degraded' loop, pg_stat_statements bulunamadi). Customer clarified pg_stat_statements WAS installed — but in the etstur application database, not in the instance's admin_dbname (postgres). DiscoveryCollector already detects and logs this exact distinction internally (pgssInPreload flag, 'admin DB'de yok ama shared_preload_libraries'de var' log line) but never surfaced it past the log — InstanceDetail's BootstrapBanner always showed the same generic 4-step fix ('add to shared_preload_libraries, restart PostgreSQL, CREATE EXTENSION, retry'), which is actively wrong advice when the extension is already preloaded and just needs CREATE EXTENSION in the correct database — telling the customer to edit postgresql.conf and restart production PostgreSQL for a problem that doesn't require it.",
+      "requirements": [
+        "When the root cause is 'preloaded but not created in admin_dbname', the banner must name the actual admin_dbname and give only the one relevant step (CREATE EXTENSION in that database + retry), not the full reinstall procedure.",
+        "The generic 4-step reinstall message must remain for the genuine 'not installed at all' case.",
+        "No new migration/column if avoidable — reuse existing capability plumbing.",
+        "Fix must not regress the existing degraded-reason banner behavior for other bootstrap failure codes (secret_ref_error, authentication_failure, etc.)."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "CapabilityRepository.upsert() persists last_error_text on successful discovery (previously only markUnreachable wrote it, so a same-discovery-cycle note was always dropped).",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "DiscoveryCollector writes a machine-parseable note ('pg_stat_statements_in_preload_but_missing_in_admin_db:<admin_dbname>') to last_error_text whenever hasPgss=false and the extension is in shared_preload_libraries.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "InstanceDetail's BootstrapBanner parses that note and, when present, shows the admin_dbname and a single-step CREATE EXTENSION instruction with an explicit 'no restart needed' note, instead of the generic 4-step reinstall guidance.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: db1.dc-etstur.com-test's banner names 'postgres' as the admin DB and gives the one-step fix; after running CREATE EXTENSION there and retrying, the instance reaches 'ready'.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "CapabilityRepository.upsert(): add last_error_text to the INSERT column list and ON CONFLICT UPDATE SET clause (was previously write-only from markUnreachable).",
+        "DiscoveryCollector.discover(): compute pgssNote = 'pg_stat_statements_in_preload_but_missing_in_admin_db:' + instance.adminDbname() when !hasPgss && pgssInPreload, pass as capability.lastErrorText().",
+        "InstanceDetail.tsx BootstrapBanner: parse cap.last_error_text with a regex for the note prefix; when matched, render the admin-DB-specific one-step message; otherwise fall back to the existing generic 4-step message."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "cd ui && npx tsc --noEmit",
+        "Live: confirm db1.dc-etstur.com-test's InstanceDetail banner now names 'postgres' and shows the one-step fix; run CREATE EXTENSION pg_stat_statements in postgres there, retry, confirm bootstrap_state reaches 'ready'."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reported db1.dc-etstur.com-test stuck in a pending/degraded bootstrap loop; logs confirmed DiscoveryCollector already logs 'pg_stat_statements admin DB'de (postgres) yok ama shared_preload_libraries'de var' — the distinction existed internally but was invisible to the customer/UI.",
+        "Customer clarified pg_stat_statements was installed in the etstur database, confirming the root cause is admin_dbname mismatch, not a missing extension — validating that the generic reinstall message the UI was showing was actively incorrect for this case.",
+        "Fix applied: CapabilityRepository.upsert() now writes last_error_text on every successful discovery (previously dropped); DiscoveryCollector writes a structured note when this exact scenario is detected; InstanceDetail's BootstrapBanner renders a scenario-specific one-step fix (CREATE EXTENSION in the named admin DB, no restart) instead of the generic 4-step reinstall guidance when the note is present.",
+        "mvn compile, mvn test, and ui tsc --noEmit all pass with no regressions."
+      ],
+      "next_action": "Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there."
     }
   ]
 }

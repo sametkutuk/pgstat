@@ -1616,6 +1616,15 @@ function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; insta
 
     // Alert yoksa generic uyarı (örn. capability flag'lere göre)
     const noPgss = cap && cap.has_pg_stat_statements === false;
+    // DiscoveryCollector bu notu sadece extension preload'da olup admin DB'de
+    // CREATE EXTENSION yapılmamışsa yazar (bkz. DiscoveryCollector.java pgssNote) —
+    // extension hiç kurulu değilse bu alan null kalır, aşağıdaki iki senaryo
+    // birbirine karışmasın (2026-08-17 müşteri raporu: yanlış senaryonun
+    // gösterilmesi "postgresql.conf'a ekle + restart et" gibi gereksiz adımlar
+    // önerdi, oysa extension başka bir database'de zaten kuruluydu).
+    const preloadNoteMatch = typeof cap?.last_error_text === 'string'
+        && cap.last_error_text.match(/^pg_stat_statements_in_preload_but_missing_in_admin_db:(.+)$/);
+    const adminDbNameFromNote = preloadNoteMatch ? preloadNoteMatch[1] : null;
 
     if (!issue && !noPgss) return null;
 
@@ -1632,7 +1641,25 @@ function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; insta
                             {issue.message}
                         </pre>
                     )}
-                    {!issue && noPgss && (
+                    {!issue && noPgss && adminDbNameFromNote && (
+                        <div className="mt-2 text-sm text-amber-900 space-y-1">
+                            <p>
+                                Bu instance <strong>degraded</strong> durumda — <code className="bg-amber-100 px-1 rounded">pg_stat_statements</code>
+                                {' '}extension'ı <code className="bg-amber-100 px-1 rounded">{adminDbNameFromNote}</code> (admin DB) database'inde kurulu değil.
+                                pgstat sadece admin DB'ye bağlanır, extension başka bir database'de kurulu olsa bile bunu göremez.
+                            </p>
+                            <p className="font-semibold mt-2">Çözüm (extension zaten yüklenmiş, sadece bu database'de eksik):</p>
+                            <ol className="list-decimal ml-5 space-y-1">
+                                <li>
+                                    <code className="bg-amber-100 px-1 rounded">{adminDbNameFromNote}</code> database'ine bağlan ve çalıştır:{' '}
+                                    <code className="bg-amber-100 px-1 rounded">CREATE EXTENSION pg_stat_statements;</code>
+                                </li>
+                                <li>Instance'da "↺ Yeniden Dene" butonuna tıkla</li>
+                            </ol>
+                            <p className="text-xs text-amber-700 mt-1">Restart gerekmez — shared_preload_libraries zaten ayarlı.</p>
+                        </div>
+                    )}
+                    {!issue && noPgss && !adminDbNameFromNote && (
                         <div className="mt-2 text-sm text-amber-900 space-y-1">
                             <p>Bu instance <strong>degraded</strong> durumda — istatistik toplama yapılamıyor.</p>
                             <p className="font-semibold mt-2">Çözüm:</p>

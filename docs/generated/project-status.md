@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 33 |
+| Total tasks | 36 |
 | Done tasks | 11 |
-| Remaining tasks | 22 |
-| Max in progress | 3 |
+| Remaining tasks | 25 |
+| Max in progress | 5 |
 
 ## Current Focus
 
@@ -33,8 +33,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 11 |
-| in_progress | 3 |
-| planned | 19 |
+| in_progress | 5 |
+| planned | 20 |
 
 ## Workstream Counts
 
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 5 |
-| operations | 6 |
+| operations | 9 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -87,6 +87,9 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 30 | PGSTAT-P0-024 | P0 | operations | done | Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI | Closed. Restore max_in_progress to 1; continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked. |
 | 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts | Deploy to production; live-verify AC1-AC3 (acknowledge/resolve cadence) as previously planned, plus AC4: confirm a dropped database's stat_collection_failed alert auto-clears on the next discovery cycle without any manual database-cleanup step. |
 | 33 | PGSTAT-P1-008 | P1 | governance | in_progress | Domain-by-domain behavior specification program for a from-scratch rewrite | Write docs/spec/01-data-model-and-storage-lifecycle.md (schema V001-008, PartitionManager, PurgeEvaluator, AggRepository, retention V022) for customer review. |
+| 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables | Deploy to production; live-verify no more ON CONFLICT errors appear in collector logs across at least one hourly rollup cycle. |
+| 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | Ask customer whether this WAL directory coverage gap on samet-ets-01 needs a privilege grant or is acceptable as-is. |
+| 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there. |
 
 ## Dependency Map
 
@@ -125,6 +128,9 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-024 | - | - |
 | PGSTAT-P0-026 | - | - |
 | PGSTAT-P1-008 | - | - |
+| PGSTAT-P0-027 | - | - |
+| PGSTAT-P0-028 | - | - |
+| PGSTAT-P0-029 | - | - |
 
 ## Closure Rules
 

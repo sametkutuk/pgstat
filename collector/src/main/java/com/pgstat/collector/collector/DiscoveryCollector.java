@@ -228,7 +228,18 @@ public class DiscoveryCollector {
                 }
             }
 
-            // 6. Capability olustur ve kaydet
+            // 6. Capability olustur ve kaydet.
+            // pgssInPreload && !hasPgss: extension shared_preload_libraries'de var ama
+            // admin_dbname'de (collector'un baglandigi DB) CREATE EXTENSION yapilmamis —
+            // bu, "extension hic kurulu degil" senaryosundan tamamen farkli bir kok neden
+            // (muhtemelen baska bir database'de kurulu, orn. uygulama DB'si). UI'nin
+            // yanlislikla "shared_preload_libraries'e ekle + restart et" adimlarini
+            // onermemesi icin bu ayrimi lastErrorText'e not dusuyoruz (musteri raporu,
+            // 2026-08-17: db1.dc-etstur.com-test — pg_stat_statements etstur DB'sinde
+            // kuruluydu ama admin_dbname=postgres'te degildi).
+            String pgssNote = (!hasPgss && pgssInPreload)
+                ? "pg_stat_statements_in_preload_but_missing_in_admin_db:" + instance.adminDbname()
+                : null;
             InstanceCapability capability = new InstanceCapability(
                 instance.instancePk(),
                 serverVersionNum,
@@ -246,7 +257,7 @@ public class DiscoveryCollector {
                 pgssStatsResetAt,
                 OffsetDateTime.now(), // lastDiscoveredAt
                 null, // lastErrorAt
-                null  // lastErrorText
+                pgssNote  // lastErrorText
             );
 
             capabilityRepo.upsert(capability);
