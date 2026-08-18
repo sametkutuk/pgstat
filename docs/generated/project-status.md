@@ -14,9 +14,9 @@ node scripts/generate-project-status.mjs
 | Metric | Value |
 | --- | ---: |
 | Total tasks | 37 |
-| Done tasks | 11 |
-| Remaining tasks | 26 |
-| Max in progress | 6 |
+| Done tasks | 15 |
+| Remaining tasks | 22 |
+| Max in progress | 2 |
 
 ## Current Focus
 
@@ -32,8 +32,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 11 |
-| in_progress | 6 |
+| done | 15 |
+| in_progress | 2 |
 | planned | 20 |
 
 ## Workstream Counts
@@ -85,12 +85,12 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator | Closed; max_in_progress restored to 1. Continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked. |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | Start after the P0-022 production fix; the table classification from 2026-07-17 is recorded in this task. |
 | 30 | PGSTAT-P0-024 | P0 | operations | done | Raise a system alert when a ready instance loses pg_hba access, readable in Telegram and UI | Closed. Restore max_in_progress to 1; continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked. |
-| 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts | Deploy to production; live-verify AC1-AC3 (acknowledge/resolve cadence) as previously planned, plus AC4: confirm a dropped database's stat_collection_failed alert auto-clears on the next discovery cycle without any manual database-cleanup step. |
+| 32 | PGSTAT-P0-026 | P0 | operations | done | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts | Closed. |
 | 33 | PGSTAT-P1-008 | P1 | governance | in_progress | Domain-by-domain behavior specification program for a from-scratch rewrite | Write docs/spec/01-data-model-and-storage-lifecycle.md (schema V001-008, PartitionManager, PurgeEvaluator, AggRepository, retention V022) for customer review. |
-| 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables | Deploy to production; live-verify no more ON CONFLICT errors appear in collector logs across at least one hourly rollup cycle. |
+| 34 | PGSTAT-P0-027 | P0 | operations | done | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables | Closed. |
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | Ask customer whether this WAL directory coverage gap on samet-ets-01 needs a privilege grant or is acceptable as-is. |
-| 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there. |
-| 37 | PGSTAT-P0-030 | P0 | operations | in_progress | Editing an instance without entering a password silently wipes its secret_ref | Deploy to production; live-verify by editing an instance with the password field left blank and confirming secret_ref is untouched and the collector keeps connecting successfully. |
+| 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Closed. |
+| 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref | Closed. |
 
 ## Dependency Map
 

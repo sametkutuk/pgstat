@@ -165,8 +165,11 @@ Sequential execution rule:
 - 2026-08-18: customer found one more issue (editing an instance with a
   blank password field silently wiped its secret_ref, breaking the
   collector's credentials). Fixed same-day as PGSTAT-P0-030;
-  `max_in_progress` raised to 6. Restore down to 1 as each of P0-026,
-  P0-027, P0-029, P0-030, and P1-008 closes.
+  `max_in_progress` raised to 6. Customer live-verified all four
+  same-week production bugs (P0-026, P0-027, P0-029, P0-030) together
+  ("hepsi ok") the same day; all four closed. `max_in_progress` restored
+  to 2 (PGSTAT-P0-002 and PGSTAT-P1-008 remain the only two long-running
+  in_progress tasks); restore to 1 as either closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -339,12 +342,12 @@ production bug or a user-approved urgent feature.
 | 30 | PGSTAT-P0-024 | P0 | operations | done | Raise a system alert when a ready instance loses pg_hba access (production bug) | - |
 | 28 | PGSTAT-P0-022 | P0 | operations | done | Fix V067 snapshot tables missing from PartitionManager and PurgeEvaluator (production bug) | - |
 | 29 | PGSTAT-P0-023 | P0 | operations | planned | Wire retention for growing control/dim tables | PGSTAT-P0-022 |
-| 32 | PGSTAT-P0-026 | P0 | operations | in_progress | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts (production bug) | - |
+| 32 | PGSTAT-P0-026 | P0 | operations | done | Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts (production bug) | - |
 | 33 | PGSTAT-P1-008 | P1 | governance | in_progress | Domain-by-domain behavior specification program for a from-scratch rewrite | - |
-| 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables (production bug) | - |
+| 34 | PGSTAT-P0-027 | P0 | operations | done | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables (production bug) | - |
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | - |
-| 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
-| 37 | PGSTAT-P0-030 | P0 | operations | in_progress | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
+| 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
+| 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
 
 ## 6. Workstream Rules
 

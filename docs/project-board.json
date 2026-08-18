@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 6,
+    "max_in_progress": 2,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -1888,7 +1888,7 @@
       "order": 32,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Stop AlertService.upsertSystemAlert from reopening and re-notifying acknowledged alerts",
       "problem": "Customer reported (2026-07-27) that acknowledging a 'Stat collection failed' alert (STAT_COLLECTION_FAILED) did not stop it from repeating in Telegram. Root cause: AlertService.upsertSystemAlert unconditionally set status='open' and acknowledged_at=null on every upsert (AlertRepository had the same pattern in upsert/upsertAdaptive/upsertAdaptiveWithSeverity), and shouldNotifySystemOpen() treats any non-'open' previousStatus (including 'acknowledged') as a reason to notify. So the moment an acknowledged alert's underlying condition re-triggered (e.g. the same collector job failing again 5 minutes later), the alert silently flipped back to 'open' and re-notified — acknowledge provided no suppression at all, contrary to customer expectation. Discussion clarified the desired behavior: acknowledge should NOT suppress notifications; the customer wants the alert to keep repeating at its normal cadence until they explicitly resolve it — but the current code's problem was that 'acknowledged' status was being silently and incorrectly reset to 'open' with acknowledged_at wiped, which is misleading in the UI even though notifications kept flowing.",
       "requirements": [
@@ -1937,17 +1937,19 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed 2026-08-18 ('hepsi ok') after live-testing acknowledge/resolve cadence and the dropped-database auto-clear behavior together with the other same-day fixes."
       },
       "verification_evidence": [
         "Customer reported acknowledging a stat_collection_failed alert did not stop repeat Telegram notifications; investigation found the real bug was the opposite of the customer's mental model — acknowledge was already not suppressing notifications, but it was silently and incorrectly flipping the alert back to 'open' on every re-trigger, which is misleading in the UI (looks like nobody acknowledged it).",
         "Discussed and confirmed desired behavior: acknowledge is a note only, not a mute; the alert should keep repeating until the user resolves it or the root cause clears. Fixed AlertService.upsertSystemAlert to preserve 'acknowledged' status/timestamp across re-triggers while still notifying and updating occurrence_count/last_seen_at.",
         "mvn compile and mvn test passed with no regressions.",
         "Customer follow-up 2026-08-12: dropped a database on instance 'moneasy-test-167.50', acknowledged and later resolved the resulting stat_collection_failed alert manually, but it kept reopening. Root cause #2: DiscoveryCollector.discoverDatabases() only ever upserts (adds) database rows — it never deactivates a dim.database_ref row whose database was dropped from the source, so the db_objects job kept retrying the missing database forever, re-triggering SystemHealthEvaluator.checkStatCollectionFailures() every cycle. The existing manual 'Database Cleanup' UI (databaseCleanup.ts) could not have helped either — it only scans job_failed/job_partial_failure/connection_failure/permission_denied alert messages for 'does not exist', and stat_collection_failed is a separate, instance-level-aggregated alert code that was never in that scan list.",
-        "Fix applied 2026-08-12: DiscoveryCollector now auto-deactivates dim.database_ref rows missing from the live database list (same schema/audit pattern as the existing manual disable endpoint) and auto-resolves the instance's stat_collection_failed alert once the stale database is deactivated. mvn compile and mvn test passed (DiscoveryCollectorTest constructor call updated for the new AlertService dependency)."
+        "Fix applied 2026-08-12: DiscoveryCollector now auto-deactivates dim.database_ref rows missing from the live database list (same schema/audit pattern as the existing manual disable endpoint) and auto-resolves the instance's stat_collection_failed alert once the stale database is deactivated. mvn compile and mvn test passed (DiscoveryCollectorTest constructor call updated for the new AlertService dependency).",
+        "Customer live-verified 2026-08-18: acknowledge/resolve cadence works as designed and dropped-database auto-clear confirmed."
       ],
-      "next_action": "Deploy to production; live-verify AC1-AC3 (acknowledge/resolve cadence) as previously planned, plus AC4: confirm a dropped database's stat_collection_failed alert auto-clears on the next discovery cycle without any manual database-cleanup step."
+      "completed_at": "2026-08-18",
+      "next_action": "Closed."
     },
     {
       "id": "PGSTAT-P1-008",
@@ -2009,7 +2011,7 @@
       "order": 34,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables",
       "problem": "Customer-reported (2026-08-17) after the P0-026 upgrade: collector logs showed 'Rollup job hatasi: ... bad SQL grammar [insert into agg.pg_table_stat_hourly ...] Caused by: ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time'. Root cause: AggRepository.rollupTableStatHourly()'s GROUP BY included schemaname/relname in addition to the ON CONFLICT target (bucket_start, instance_pk, dbid, relid). If the same relid appears with two different schemaname/relname values within the same hourly window (table renamed, or OID reused after a drop+create), the GROUP BY produces two rows that the ON CONFLICT target treats as one, and PostgreSQL rejects the double-affect. rollupHourly() (pgss) does not have this bug because its GROUP BY already matches its ON CONFLICT target exactly.",
       "requirements": [
@@ -2031,7 +2033,7 @@
         {
           "id": "AC3",
           "text": "mvn test passes; live verification confirms the rollup job no longer throws this exception after deploy.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2048,15 +2050,17 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed 2026-08-18 ('hepsi ok') after live-verifying no more ON CONFLICT errors across at least one hourly rollup cycle."
       },
       "verification_evidence": [
         "Customer shared collector logs 2026-08-17 showing the BadSqlGrammarException/ON CONFLICT error on every rollup cycle since the P0-026 deploy (pre-existing bug, unrelated to that deploy, just first noticed then).",
         "Root cause confirmed by comparing rollupTableStatHourly() against the structurally-correct rollupHourly() (pgss) sibling method in the same file — GROUP BY vs ON CONFLICT target mismatch.",
-        "Fix applied: schemaname/relname moved out of GROUP BY, selected via the same array_agg 'last observed' pattern as the other snapshot-style columns, added to the ON CONFLICT UPDATE clause. mvn compile and mvn test pass with no regressions."
+        "Fix applied: schemaname/relname moved out of GROUP BY, selected via the same array_agg 'last observed' pattern as the other snapshot-style columns, added to the ON CONFLICT UPDATE clause. mvn compile and mvn test pass with no regressions.",
+        "Customer live-verified 2026-08-18: no more ON CONFLICT errors in collector logs."
       ],
-      "next_action": "Deploy to production; live-verify no more ON CONFLICT errors appear in collector logs across at least one hourly rollup cycle."
+      "completed_at": "2026-08-18",
+      "next_action": "Closed."
     },
     {
       "id": "PGSTAT-P0-028",
@@ -2101,7 +2105,7 @@
       "order": 36,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner",
       "problem": "Customer reported (2026-08-17) instance db1.dc-etstur.com-test stuck retrying bootstrap forever ('pending' -> 'degraded' loop, pg_stat_statements bulunamadi). Customer clarified pg_stat_statements WAS installed — but in the etstur application database, not in the instance's admin_dbname (postgres). DiscoveryCollector already detects and logs this exact distinction internally (pgssInPreload flag, 'admin DB'de yok ama shared_preload_libraries'de var' log line) but never surfaced it past the log — InstanceDetail's BootstrapBanner always showed the same generic 4-step fix ('add to shared_preload_libraries, restart PostgreSQL, CREATE EXTENSION, retry'), which is actively wrong advice when the extension is already preloaded and just needs CREATE EXTENSION in the correct database — telling the customer to edit postgresql.conf and restart production PostgreSQL for a problem that doesn't require it.",
       "requirements": [
@@ -2129,7 +2133,7 @@
         {
           "id": "AC4",
           "text": "Live verification: db1.dc-etstur.com-test's banner names 'postgres' as the admin DB and gives the one-step fix; after running CREATE EXTENSION there and retrying, the instance reaches 'ready'.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2148,23 +2152,25 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed 2026-08-18 ('hepsi ok') after live-verifying the banner and running CREATE EXTENSION on the admin DB."
       },
       "verification_evidence": [
         "Customer reported db1.dc-etstur.com-test stuck in a pending/degraded bootstrap loop; logs confirmed DiscoveryCollector already logs 'pg_stat_statements admin DB'de (postgres) yok ama shared_preload_libraries'de var' — the distinction existed internally but was invisible to the customer/UI.",
         "Customer clarified pg_stat_statements was installed in the etstur database, confirming the root cause is admin_dbname mismatch, not a missing extension — validating that the generic reinstall message the UI was showing was actively incorrect for this case.",
         "Fix applied: CapabilityRepository.upsert() now writes last_error_text on every successful discovery (previously dropped); DiscoveryCollector writes a structured note when this exact scenario is detected; InstanceDetail's BootstrapBanner renders a scenario-specific one-step fix (CREATE EXTENSION in the named admin DB, no restart) instead of the generic 4-step reinstall guidance when the note is present.",
-        "mvn compile, mvn test, and ui tsc --noEmit all pass with no regressions."
+        "mvn compile, mvn test, and ui tsc --noEmit all pass with no regressions.",
+        "Customer live-verified 2026-08-18: banner named the correct admin DB, one-step fix worked, instance reached 'ready'."
       ],
-      "next_action": "Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there."
+      "completed_at": "2026-08-18",
+      "next_action": "Closed."
     },
     {
       "id": "PGSTAT-P0-030",
       "order": 37,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Editing an instance without entering a password silently wipes its secret_ref",
       "problem": "Customer reported (2026-08-18): editing an instance on the Instances tab and leaving the password field empty (whether or not other fields were changed) produces a 'Secret hatasi: secret_ref bos veya null' error on the next collector connection attempt. Root cause: InstanceForm.tsx's handleSubmit always sends secret_ref='' when authMode==='password' (even in edit mode with an empty password field, by design — the form's own validate() correctly allows an empty password on edit). The PUT /api/instances/:id route's UPDATE used 'secret_ref = coalesce($9, secret_ref)', which only preserves the existing value when the incoming value is SQL NULL — an empty string is not NULL, so coalesce treated it as 'user wants to clear this' and overwrote the real secret_ref with an empty string, breaking the instance's credentials on the very next scheduled connection.",
       "requirements": [
@@ -2187,12 +2193,12 @@
         {
           "id": "AC3",
           "text": "Entering a new password on edit still re-encrypts and updates secret_ref as before (regression check).",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC4",
           "text": "Live verification: edit an instance with the password field empty, confirm secret_ref is unchanged in the database and the next collector connection succeeds.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2208,15 +2214,17 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed 2026-08-18 ('hepsi ok') after live-verifying secret_ref preservation and re-encryption on password change."
       },
       "verification_evidence": [
         "Customer reported the 'Secret hatasi: secret_ref bos veya null' error appearing after editing an instance without entering a password.",
         "Root cause confirmed by reading InstanceForm.tsx (handleSubmit always sends secret_ref='' in password auth mode, by design, even on edit with a blank password) and the PUT /api/instances/:id route (coalesce($9, secret_ref) only guards against SQL NULL, not empty string).",
-        "Fix applied: PUT route now normalizes an empty/whitespace secret_ref to null before the coalesce, matching the customer's expected behavior ('if I don't enter a password, keep using the old one'). npx tsc --noEmit passes."
+        "Fix applied: PUT route now normalizes an empty/whitespace secret_ref to null before the coalesce, matching the customer's expected behavior ('if I don't enter a password, keep using the old one'). npx tsc --noEmit passes.",
+        "Customer live-verified 2026-08-18: secret_ref untouched when password left blank, collector kept connecting; secret_ref correctly updated when a new password was entered."
       ],
-      "next_action": "Deploy to production; live-verify by editing an instance with the password field left blank and confirming secret_ref is untouched and the collector keeps connecting successfully."
+      "completed_at": "2026-08-18",
+      "next_action": "Closed."
     }
   ]
 }
