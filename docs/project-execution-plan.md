@@ -161,8 +161,12 @@ Sequential execution rule:
   loop caused by pg_stat_statements being installed in the wrong database).
   Both root-caused and fixed same-day as PGSTAT-P0-027 and PGSTAT-P0-029,
   running in parallel with the three already-open in_progress tasks;
-  `max_in_progress` raised to 5. Restore down to 1 as each of P0-026,
-  P0-027, P0-029, and P1-008 closes.
+  `max_in_progress` raised to 5.
+- 2026-08-18: customer found one more issue (editing an instance with a
+  blank password field silently wiped its secret_ref, breaking the
+  collector's credentials). Fixed same-day as PGSTAT-P0-030;
+  `max_in_progress` raised to 6. Restore down to 1 as each of P0-026,
+  P0-027, P0-029, P0-030, and P1-008 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -340,6 +344,7 @@ production bug or a user-approved urgent feature.
 | 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables (production bug) | - |
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | - |
 | 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
+| 37 | PGSTAT-P0-030 | P0 | operations | in_progress | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
 
 ## 6. Workstream Rules
 

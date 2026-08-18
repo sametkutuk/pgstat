@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 36 |
+| Total tasks | 37 |
 | Done tasks | 11 |
-| Remaining tasks | 25 |
-| Max in progress | 5 |
+| Remaining tasks | 26 |
+| Max in progress | 6 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 11 |
-| in_progress | 5 |
+| in_progress | 6 |
 | planned | 20 |
 
 ## Workstream Counts
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 5 |
-| operations | 9 |
+| operations | 10 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -90,6 +90,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 34 | PGSTAT-P0-027 | P0 | operations | in_progress | Fix agg.pg_table_stat_hourly rollup ON CONFLICT crash on renamed/OID-reused tables | Deploy to production; live-verify no more ON CONFLICT errors appear in collector logs across at least one hourly rollup cycle. |
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | Ask customer whether this WAL directory coverage gap on samet-ets-01 needs a privilege grant or is acceptable as-is. |
 | 36 | PGSTAT-P0-029 | P0 | operations | in_progress | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there. |
+| 37 | PGSTAT-P0-030 | P0 | operations | in_progress | Editing an instance without entering a password silently wipes its secret_ref | Deploy to production; live-verify by editing an instance with the password field left blank and confirming secret_ref is untouched and the collector keeps connecting successfully. |
 
 ## Dependency Map
 
@@ -131,6 +132,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-027 | - | - |
 | PGSTAT-P0-028 | - | - |
 | PGSTAT-P0-029 | - | - |
+| PGSTAT-P0-030 | - | - |
 
 ## Closure Rules
 

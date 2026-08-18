@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 5,
+    "max_in_progress": 6,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2158,6 +2158,65 @@
         "mvn compile, mvn test, and ui tsc --noEmit all pass with no regressions."
       ],
       "next_action": "Deploy to production; live-verify the banner on db1.dc-etstur.com-test names 'postgres' and gives the one-step fix, then confirm the instance reaches 'ready' after running CREATE EXTENSION there."
+    },
+    {
+      "id": "PGSTAT-P0-030",
+      "order": 37,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Editing an instance without entering a password silently wipes its secret_ref",
+      "problem": "Customer reported (2026-08-18): editing an instance on the Instances tab and leaving the password field empty (whether or not other fields were changed) produces a 'Secret hatasi: secret_ref bos veya null' error on the next collector connection attempt. Root cause: InstanceForm.tsx's handleSubmit always sends secret_ref='' when authMode==='password' (even in edit mode with an empty password field, by design — the form's own validate() correctly allows an empty password on edit). The PUT /api/instances/:id route's UPDATE used 'secret_ref = coalesce($9, secret_ref)', which only preserves the existing value when the incoming value is SQL NULL — an empty string is not NULL, so coalesce treated it as 'user wants to clear this' and overwrote the real secret_ref with an empty string, breaking the instance's credentials on the very next scheduled connection.",
+      "requirements": [
+        "Saving an instance edit with an empty password field must leave the existing secret_ref untouched — 'no password entered' must mean 'keep using the current credential', not 'clear the credential'.",
+        "Entering a password on edit must still re-encrypt and replace secret_ref as before.",
+        "Switching to secret_ref auth mode and entering a real secret_ref value must still work as before.",
+        "The POST /api/instances (create) route is unaffected — it already rejects an empty secret_ref/password combination with a 400, this fix is scoped to the PUT (update) route only."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "PUT /api/instances/:id treats an empty/whitespace-only secret_ref in the request body as 'unchanged' (passes SQL NULL to the coalesce), not as a value to write.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Editing any other field on an instance while leaving the password blank no longer touches its secret_ref.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Entering a new password on edit still re-encrypts and updates secret_ref as before (regression check).",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: edit an instance with the password field empty, confirm secret_ref is unchanged in the database and the next collector connection succeeds.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "In the PUT /api/instances/:id handler, change 'let finalSecretRef = secret_ref' to 'let finalSecretRef = secret_ref && secret_ref.trim() ? secret_ref : null' before the password re-encryption check, so a blank secret_ref field resolves to null (preserved by coalesce) instead of '' (which coalesce treats as a real value)."
+      ],
+      "verification_plan": [
+        "cd api && npx tsc --noEmit",
+        "Live: edit an instance's display_name only (leave password blank), confirm secret_ref in control.instance_inventory is unchanged and the collector's next connection to that instance still succeeds; then edit again entering a new password and confirm secret_ref does change and the new credential works."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reported the 'Secret hatasi: secret_ref bos veya null' error appearing after editing an instance without entering a password.",
+        "Root cause confirmed by reading InstanceForm.tsx (handleSubmit always sends secret_ref='' in password auth mode, by design, even on edit with a blank password) and the PUT /api/instances/:id route (coalesce($9, secret_ref) only guards against SQL NULL, not empty string).",
+        "Fix applied: PUT route now normalizes an empty/whitespace secret_ref to null before the coalesce, matching the customer's expected behavior ('if I don't enter a password, keep using the old one'). npx tsc --noEmit passes."
+      ],
+      "next_action": "Deploy to production; live-verify by editing an instance with the password field left blank and confirming secret_ref is untouched and the collector keeps connecting successfully."
     }
   ]
 }

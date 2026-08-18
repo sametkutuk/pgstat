@@ -414,8 +414,11 @@ router.put('/:id', async (req, res, next) => {
       schedule_profile_id, retention_policy_id, collector_group, notes
     } = req.body;
 
-    // Şifre değiştirilmişse yeniden encrypt et
-    let finalSecretRef = secret_ref;
+    // Şifre değiştirilmişse yeniden encrypt et. secret_ref/password boş string
+    // olarak gelirse (form her zaman ikisini de gönderir, kullanıcı bir şey
+    // yazmasa da) "değişmedi" anlamına gelmeli — coalesce'e boş string değil
+    // null geçirilmeli, aksi halde mevcut secret_ref sessizce boşaltılır.
+    let finalSecretRef = secret_ref && secret_ref.trim() ? secret_ref : null;
     if (password && password.trim()) {
       // instance_id'yi DB'den al
       const existing = await pool.query('select instance_id from control.instance_inventory where instance_pk = $1', [id]);
