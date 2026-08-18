@@ -419,7 +419,8 @@ router.put('/:id', async (req, res, next) => {
     // yazmasa da) "değişmedi" anlamına gelmeli — coalesce'e boş string değil
     // null geçirilmeli, aksi halde mevcut secret_ref sessizce boşaltılır.
     let finalSecretRef = secret_ref && secret_ref.trim() ? secret_ref : null;
-    if (password && password.trim()) {
+    const passwordChanged = Boolean(password && password.trim());
+    if (passwordChanged) {
       // instance_id'yi DB'den al
       const existing = await pool.query('select instance_id from control.instance_inventory where instance_pk = $1', [id]);
       if (existing.rows.length > 0) {
@@ -450,6 +451,33 @@ router.put('/:id', async (req, res, next) => {
       res.status(404).json({ error: 'Instance not found' });
       return;
     }
+
+    // Şifre değiştiyse "Yeniden Dene" ile aynı sıfırlamayı otomatik yap —
+    // kullanıcı ayrıca retry butonuna basmak zorunda kalmasın (musteri
+    // raporu, 2026-08-18: sifre guncellemesi discovery'i kendiliginden
+    // tetiklemiyordu, backoff/retry sayaci da eski hataya gore kalmis
+    // olabilirdi). bootstrap_state zaten 'ready' ise de yeniden discovery
+    // gecmesi dogru: yeni sifreyle capability/pgss durumu degismis olabilir.
+    if (passwordChanged) {
+      const colsRes = await pool.query(
+        `select column_name from information_schema.columns
+         where table_schema='control' and table_name='instance_inventory'
+           and column_name in ('bootstrap_retry_count','next_bootstrap_retry_at')`
+      );
+      const hasRetryCols = colsRes.rows.length === 2;
+      const setSql = hasRetryCols
+        ? `bootstrap_state = 'pending', bootstrap_retry_count = 0, next_bootstrap_retry_at = null, updated_at = now()`
+        : `bootstrap_state = 'pending', updated_at = now()`;
+      await pool.query(`update control.instance_inventory set ${setSql} where instance_pk = $1`, [id]);
+      await pool.query(`
+        update control.instance_state
+        set last_error = null, last_error_at = null,
+            consecutive_failures = 0, backoff_until = null
+        where instance_pk = $1
+      `, [id]);
+      result.rows[0].bootstrap_state = 'pending';
+    }
+
     const row = { ...result.rows[0], secret_ref: maskSecretRef(result.rows[0].secret_ref) };
     res.json(row);
   } catch (err: any) {

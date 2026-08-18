@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 2,
+    "max_in_progress": 3,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2225,6 +2225,61 @@
       ],
       "completed_at": "2026-08-18",
       "next_action": "Closed."
+    },
+    {
+      "id": "PGSTAT-P0-031",
+      "order": 38,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Updating an instance's password does not auto-trigger a bootstrap retry",
+      "problem": "Customer reported (2026-08-18): after entering a new password on an instance and clicking Update, the instance does not automatically retry bootstrap/discovery with the new credential — the customer has to separately click the 'Yeniden Dene' (retry) button. Root cause: PUT /api/instances/:id re-encrypts and saves the new secret_ref, but never resets bootstrap_state, bootstrap_retry_count, next_bootstrap_retry_at, or instance_state.consecutive_failures/backoff_until the way the dedicated PATCH /:id/retry endpoint does — so a degraded instance stays degraded (and may sit behind a stale backoff window) until the customer manually retries, and even a 'ready' instance's next reconnect still uses the same in-memory connection state rather than being forced to re-discover with the new password right away.",
+      "requirements": [
+        "Saving an instance edit that includes a real password change must automatically kick off the same reset the manual retry button performs (pending state, retry counters cleared, backoff cleared), so the customer never has to click retry separately after a password update.",
+        "Editing an instance WITHOUT changing the password must not touch bootstrap_state/retry counters — this fix is scoped strictly to the password-changed case.",
+        "Must not regress PGSTAT-P0-030 (blank password on edit still preserves the existing secret_ref and does nothing to bootstrap state)."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "PUT /api/instances/:id, when password is non-blank (a real change), resets bootstrap_state to 'pending', clears bootstrap_retry_count/next_bootstrap_retry_at (when those columns exist), and clears instance_state.last_error/consecutive_failures/backoff_until — the same reset PATCH /:id/retry performs.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Editing an instance with a blank password field does not touch bootstrap_state or retry counters (no regression vs P0-030).",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Live verification: change an instance's password and click Update (without touching the retry button); confirm the instance moves through pending/discovering on its own within the next poll cycle and reaches 'ready' if the new credential is correct.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "In the PUT /api/instances/:id handler, track passwordChanged = Boolean(password && password.trim()) before the encryption step.",
+        "After the UPDATE query succeeds, if passwordChanged, run the same bootstrap_state='pending'/retry-counter-reset/instance_state-reset SQL already used by PATCH /:id/retry, and reflect bootstrap_state='pending' in the response row so the UI's post-save invalidation shows the new state immediately."
+      ],
+      "verification_plan": [
+        "cd api && npx tsc --noEmit",
+        "Live: on a degraded instance, enter a new (correct) password and click Update without touching retry; confirm bootstrap_state flips to 'pending' immediately and the instance reaches 'ready' within the next poll cycles without any manual retry click.",
+        "Regression: edit an instance leaving the password blank; confirm bootstrap_state and instance_state retry fields are untouched."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reported having to manually click 'Yeniden Dene' after updating an instance's password, expecting the retry to happen automatically.",
+        "Root cause confirmed by comparing PUT /api/instances/:id (only re-encrypts secret_ref) against PATCH /api/instances/:id/retry (resets bootstrap_state/retry counters/backoff) — the two were never linked.",
+        "Fix applied: PUT route now performs the same reset as the retry endpoint whenever a real password change is detected, scoped so a blank-password edit (P0-030's case) is unaffected. npx tsc --noEmit passes."
+      ],
+      "next_action": "Deploy to production; live-verify that updating an instance's password alone (no manual retry click) is enough to move it through pending/discovering to ready."
     }
   ]
 }

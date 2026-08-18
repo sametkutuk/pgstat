@@ -169,7 +169,12 @@ Sequential execution rule:
   same-week production bugs (P0-026, P0-027, P0-029, P0-030) together
   ("hepsi ok") the same day; all four closed. `max_in_progress` restored
   to 2 (PGSTAT-P0-002 and PGSTAT-P1-008 remain the only two long-running
-  in_progress tasks); restore to 1 as either closes.
+  in_progress tasks).
+- 2026-08-18 (same day, follow-up): customer found updating an instance's
+  password does not auto-trigger a bootstrap retry (manual "Yeniden Dene"
+  click still required). Fixed as PGSTAT-P0-031, running alongside
+  PGSTAT-P0-002 and PGSTAT-P1-008; `max_in_progress` raised to 3. Restore
+  to 1 as each closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -348,6 +353,7 @@ production bug or a user-approved urgent feature.
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | - |
 | 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
+| 38 | PGSTAT-P0-031 | P0 | operations | in_progress | Updating an instance's password does not auto-trigger a bootstrap retry (production bug) | - |
 
 ## 6. Workstream Rules
 

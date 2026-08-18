@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 37 |
+| Total tasks | 38 |
 | Done tasks | 15 |
-| Remaining tasks | 22 |
-| Max in progress | 2 |
+| Remaining tasks | 23 |
+| Max in progress | 3 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 15 |
-| in_progress | 2 |
+| in_progress | 3 |
 | planned | 20 |
 
 ## Workstream Counts
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 5 |
-| operations | 10 |
+| operations | 11 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -91,6 +91,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 35 | PGSTAT-P0-028 | P0 | operations | planned | Investigate ClusterCollector WAL snapshot permission gap on samet-ets-01 (pg_ls_waldir) | Ask customer whether this WAL directory coverage gap on samet-ets-01 needs a privilege grant or is acceptable as-is. |
 | 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Closed. |
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref | Closed. |
+| 38 | PGSTAT-P0-031 | P0 | operations | in_progress | Updating an instance's password does not auto-trigger a bootstrap retry | Deploy to production; live-verify that updating an instance's password alone (no manual retry click) is enough to move it through pending/discovering to ready. |
 
 ## Dependency Map
 
@@ -133,6 +134,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-028 | - | - |
 | PGSTAT-P0-029 | - | - |
 | PGSTAT-P0-030 | - | - |
+| PGSTAT-P0-031 | - | - |
 
 ## Closure Rules
 
