@@ -176,8 +176,12 @@ Sequential execution rule:
   PGSTAT-P0-002 and PGSTAT-P1-008; `max_in_progress` raised to 3.
   Customer live-verified 2026-08-18 ("olmuş tamamdır"); PGSTAT-P0-031
   closed same day, `max_in_progress` restored to 2 (PGSTAT-P0-002 and
-  PGSTAT-P1-008 remain the only two long-running in_progress tasks);
-  restore to 1 as either closes.
+  PGSTAT-P1-008 remain the only two long-running in_progress tasks).
+- 2026-08-19: customer reported nightly long-running-query alerts on
+  pgstat's own central database (ops.job_run purge batches taking
+  5-20 minutes due to a missing started_at index). Fixed as PGSTAT-P0-032
+  (migration-only, V088); `max_in_progress` raised to 3. Restore to 1 as
+  each of P0-002, P1-008, P0-032 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -357,6 +361,7 @@ production bug or a user-approved urgent feature.
 | 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner (production bug) | - |
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
 | 38 | PGSTAT-P0-031 | P0 | operations | done | Updating an instance's password does not auto-trigger a bootstrap retry (production bug) | - |
+| 39 | PGSTAT-P0-032 | P0 | operations | in_progress | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index (production bug) | - |
 
 ## 6. Workstream Rules
 

@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 38 |
+| Total tasks | 39 |
 | Done tasks | 16 |
-| Remaining tasks | 22 |
-| Max in progress | 2 |
+| Remaining tasks | 23 |
+| Max in progress | 3 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 16 |
-| in_progress | 2 |
+| in_progress | 3 |
 | planned | 20 |
 
 ## Workstream Counts
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 5 |
-| operations | 11 |
+| operations | 12 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -92,6 +92,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Closed. |
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref | Closed. |
 | 38 | PGSTAT-P0-031 | P0 | operations | done | Updating an instance's password does not auto-trigger a bootstrap retry | Closed. |
+| 39 | PGSTAT-P0-032 | P0 | operations | in_progress | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index | Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements. |
 
 ## Dependency Map
 
@@ -135,6 +136,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-029 | - | - |
 | PGSTAT-P0-030 | - | - |
 | PGSTAT-P0-031 | - | - |
+| PGSTAT-P0-032 | - | - |
 
 ## Closure Rules
 

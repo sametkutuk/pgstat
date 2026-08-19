@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 2,
+    "max_in_progress": 3,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2282,6 +2282,66 @@
       ],
       "completed_at": "2026-08-18",
       "next_action": "Closed."
+    },
+    {
+      "id": "PGSTAT-P0-032",
+      "order": 39,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index",
+      "problem": "Customer reported (2026-08-19) a run of 'Uzun suren sorgu' (long-running query) WARN alerts between 05:00-06:05 on the pgstat central database itself, all the same statement: 'delete from ops.job_run where ctid in (select ctid from ops.job_run where started_at < now() - $1::interval limit 10000)' — this is PurgeEvaluator.purgeJobRunHistory()'s own nightly batched delete. Root cause confirmed live: ops.job_run has 1,023,900 rows (225 MB) but only 9,503 (~1%) are older than the 30-day retention window; ops.job_run_instance has 2,237,533 rows (518 MB). Neither table has an index with started_at as the leading column — ix_job_run_type_started and ix_job_run_status_started both lead with job_type/status, so PostgreSQL sequential-scans the full ~1M/~2.2M row tables on every 10k-row batch iteration of the purge loop, taking 5-20 minutes per batch instead of milliseconds.",
+      "requirements": [
+        "Add a started_at-leading index on both ops.job_run and ops.job_run_instance so the nightly purge's WHERE started_at < ... scan uses an index instead of a full table scan.",
+        "Index creation must not lock the tables for writes in production — use CREATE INDEX CONCURRENTLY.",
+        "While reviewing this pattern, check sibling daily-purge queries (purgeAlerts, purgeAuditLog, purgeReportsAndNotifications) for the same started_at/resolved_at-leading-index gap; audit_log and report_history already have one, ops.alert.resolved_at did not — add it preventively even though no alert has fired for it yet (smaller tables today, same growth risk later)."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "New migration V088 adds ix_job_run_started_at and ix_job_run_instance_started_at via CREATE INDEX CONCURRENTLY.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Same migration preventively adds ix_alert_resolved_at (partial, where resolved_at is not null) since ops.alert.resolved_at had the identical gap.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn test passes (no code change, migration-only, but confirms nothing else broke).",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: after running ./pgstat migrate, the next nightly purge cycle (02:00 UTC) completes the job_run/job_run_instance batched deletes in a fraction of the previous time, and no more long-running-query alerts fire for this statement.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations/V088__job_run_started_at_index.sql: CREATE INDEX CONCURRENTLY IF NOT EXISTS on ops.job_run(started_at), ops.job_run_instance(started_at), and ops.alert(resolved_at) WHERE resolved_at IS NOT NULL.",
+        "CONCURRENTLY requires no surrounding transaction block; verified ./pgstat's do_migrate runs each migration file via `psql -f` (no Flyway-style auto-transaction wrapping), so this is safe to run as a normal migration file.",
+        "No Java/API/UI change needed — PurgeEvaluator's existing query already matches the new index shape exactly."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: run ./pgstat migrate, confirm the two new indexes plus ix_alert_resolved_at exist via \\d ops.job_run / \\d ops.job_run_instance / \\d ops.alert; watch the next nightly purge cycle (or trigger checkPurge manually if there's an admin path) and confirm no 'Uzun suren sorgu' alert fires for the ops.job_run/job_run_instance delete statements."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer shared a batch of 'Uzun suren sorgu' WARN alerts (05:00-06:05, 2026-08-19) all showing the same ops.job_run purge DELETE statement running 5-20 minutes.",
+        "Live-confirmed with the customer: ops.job_run has 1,023,900 rows (225 MB), only 9,503 older than 30 days; ops.job_run_instance has 2,237,533 rows (518 MB); pg_indexes confirmed neither table has a started_at-leading index (both existing indexes lead with job_type/status).",
+        "Fix applied: V088 migration adds CREATE INDEX CONCURRENTLY on job_run(started_at), job_run_instance(started_at), and preventively alert(resolved_at) partial index (audit_log/report_history already had their equivalent). No Java code change — the existing PurgeEvaluator query already matches the new index shape. mvn test passes."
+      ],
+      "next_action": "Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements."
     }
   ]
 }
