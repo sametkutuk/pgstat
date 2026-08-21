@@ -2375,16 +2375,33 @@
         {
           "id": "AC4",
           "text": "Live verification: after deploying, the two source instances that were producing temp-file WARN log lines every ~1 minute stop producing them (or shrink dramatically, proportional to batchSize instead of total tracked statement count).",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "SourceConnectionFactory.configureSession() sets work_mem to 32MB on every ephemeral source-instance connection, addressing the separate/larger root cause found via fleet-wide analysis: pg_stat_statements(false)'s own set-returning-function materialization (used by StatementsCollector's per-cycle pgssStatsQuery(), not just TextEnricher) exceeds a small source-side work_mem on instances with thousands of tracked statements, independent of any WHERE filter (this query legitimately needs every tracked statement, so it can't be narrowed the way pgssTextQuery was).",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "mvn compile && mvn test pass with the work_mem session-level fix.",
+          "status": "done"
+        },
+        {
+          "id": "AC7",
+          "text": "Live verification: fleet-wide query against fact.pgss_delta joined to dim.query_text confirms the highest-volume instances (etscore-dev-test-253.50, emh-dev-test-142.80, archdb-dev-142.49, moneasy-dev-147.50, moneasy-test-167.50, and others) stop accumulating temp_blks_written for both the pgssStatsQuery CTE and any lingering unfiltered pgssTextQuery calls.",
           "status": "pending"
         }
       ],
       "implementation_plan": [
         "Pg11_12Queries.pgssTextQuery(): 'select queryid, query from %s(true) where queryid = any(?)'.",
-        "TextEnricher.enrich(): build Long[] pendingQueryIds from queryIdToSeriesId.keySet() (guaranteed non-empty since pendingSeries.isEmpty() already short-circuits earlier), switch the query execution to conn.prepareStatement(...) + stmt.setArray(1, conn.createArrayOf(\"bigint\", pendingQueryIds)), keep the same row-processing loop inside the try-with-resources ResultSet block."
+        "TextEnricher.enrich(): build Long[] pendingQueryIds from queryIdToSeriesId.keySet() (guaranteed non-empty since pendingSeries.isEmpty() already short-circuits earlier), switch the query execution to conn.prepareStatement(...) + stmt.setArray(1, conn.createArrayOf(\"bigint\", pendingQueryIds)), keep the same row-processing loop inside the try-with-resources ResultSet block.",
+        "SourceConnectionFactory.configureSession(): add 'SET work_mem = ''32MB''' alongside the existing statement_timeout/lock_timeout SETs — applies to every ephemeral source connection (StatementsCollector, TextEnricher, and any other collector using SourceConnectionFactory.connect()), scoped to the connection's own session only, does not touch the source instance's persistent configuration."
       ],
       "verification_plan": [
         "mvn compile && mvn test",
-        "Live: on the two affected source instances, watch postgres logs (log_temp_files is already on) for at least 10-15 minutes after deploy and confirm the pgstats_collector temp-file lines from TextEnricher's statement no longer appear (or are much smaller, bounded by batch size)."
+        "Live: on the two originally affected source instances, watch postgres logs (log_temp_files is already on) for at least 10-15 minutes after deploy and confirm the pgstats_collector temp-file lines from TextEnricher's statement no longer appear (or are much smaller, bounded by batch size).",
+        "Live: fleet-wide, query fact.pgss_delta/dim.statement_series/dim.query_text on the central pgstat database for temp_blks_written_delta > 0 rows where query_text ilike '%pg_stat_statements%', across all instances, for several days post-deploy — confirm the volume trends toward zero for both the pgssStatsQuery CTE pattern and any unfiltered pgssTextQuery pattern."
       ],
       "required_docs": [
         "docs/generated/project-status.md"
@@ -2401,9 +2418,11 @@
         "Root cause confirmed by code read: pgssTextQuery() had no WHERE clause, so pg_stat_statements(true) materializes query text for every actively tracked statement on the instance, not just the queryids TextEnricher's current batch needs.",
         "Fix applied: pgssTextQuery() now takes 'where queryid = any(?)'; TextEnricher switched from Statement to PreparedStatement with a bigint array bind of the pending queryids. mvn compile and mvn test pass with no regressions.",
         "Second root cause found after deploy (2026-08-21): customer reported temp files still appearing ~14 minutes after deploying commit 6f92a78. docker inspect showed the collector image's Created timestamp was recent (matching the deploy), but the running jar was still executing the old unfiltered query — a Docker build-layer cache inconsistency (the COPY layer hash did not invalidate even though the compiled jar content changed). Customer ran `docker compose build --no-cache collector && docker compose up -d --force-recreate collector` manually on the server and confirmed temp files stopped appearing in the logs.",
-        "Preventive fix applied to ./pgstat's upgrade command: the UI-only --no-cache rebuild was extended to also force --no-cache for the collector service, so future deploys can't silently keep a stale jar behind a fresh-looking image. api is not yet covered by this protection (same risk theoretically possible, not reported so far) — flagged for follow-up if a similar symptom recurs there."
+        "Preventive fix applied to ./pgstat's upgrade command: the UI-only --no-cache rebuild was extended to also force --no-cache for the collector service, so future deploys can't silently keep a stale jar behind a fresh-looking image. api is not yet covered by this protection (same risk theoretically possible, not reported so far) — flagged for follow-up if a similar symptom recurs there.",
+        "Third, larger root cause found via fleet-wide analysis (2026-08-21, after re-checking a specific source instance that still showed 9.5MB temp files post-deploy): querying fact.pgss_delta centrally across all monitored instances for query_text ilike '%pg_stat_statements%' with temp_blks_written_delta > 0 revealed the dominant temp-file producer was NOT TextEnricher's pgssTextQuery at all, but StatementsCollector's per-cycle pgssStatsQuery() CTE (the one wrapping pg_stat_statements(false), used for stats collection, no query text) — accounting for 20-24MB of accumulated temp per high-traffic instance over 3 days on 5+ instances (etscore-dev-test-253.50, emh-dev-test-142.80, archdb-dev-142.49, moneasy-dev-147.50, moneasy-test-167.50, and others), dwarfing the original TextEnricher issue. EXPLAIN (ANALYZE, BUFFERS) on the highest-volume instance confirmed the temp write originates in the pg_stat_statements(false) Function Scan itself (4758 rows, before to_jsonb/CTE even runs) — this query cannot be narrowed with a WHERE filter since it legitimately needs every tracked statement's stats every cycle, unlike pgssTextQuery. Also separately confirmed (unrelated false alarm during this same investigation): a handful of unfiltered pgssTextQuery calls (old query shape) were still showing up fleet-wide with recent timestamps in the same result set, alongside the new filtered shape — worth continued monitoring but not the dominant contributor.",
+        "Fix applied for the pgssStatsQuery/SRF-materialization cause: SourceConnectionFactory.configureSession() now also sets work_mem='32MB' on every ephemeral source connection (alongside the existing statement_timeout/lock_timeout SETs), scoped to the collector's own session only. mvn compile and mvn test pass."
       ],
-      "next_action": "Live-verify in production that the --no-cache collector rebuild in ./pgstat upgrade is deployed and the next scheduled upgrade run doesn't reintroduce the stale-jar symptom; keep watching the two originally-affected source instances for a few more days before formally closing AC4."
+      "next_action": "Deploy to production (./pgstat upgrade); monitor postgres logs on the two originally-affected instances plus the newly-identified high-volume instances (etscore-dev-test-253.50 etc.) for several days; re-run the fleet-wide fact.pgss_delta query periodically to confirm temp_blks_written trends to zero fleet-wide before closing AC7 and the overall task."
     },
     {
       "id": "PGSTAT-P0-034",

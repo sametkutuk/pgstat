@@ -31,6 +31,14 @@ public class SourceConnectionFactory {
     private static final int MAX_RETRY = 1;
     private static final long RETRY_DELAY_MS = 5_000L;
 
+    // pg_stat_statements(false) set-returning function'i, cok sayida tracked
+    // statement'li instance'larda (musteri raporu 2026-08-21: 4758 satir) kendi
+    // materialization'inda instance'in varsayilan work_mem'ini (2-4MB) asip temp
+    // file'a dokuluyor — sorgu WHERE ile filtrelenemez (tum satirlar toplanmali),
+    // bu yuzden collector'in kendi session'inda work_mem'i yukseltiyoruz. Instance'in
+    // kalici ayarini degistirmez, sadece bu ephemeral baglanti icin gecerli.
+    private static final int SOURCE_SESSION_WORK_MEM_MB = 32;
+
     private final SecretResolver secretResolver;
 
     public SourceConnectionFactory(SecretResolver secretResolver) {
@@ -183,6 +191,7 @@ public class SourceConnectionFactory {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute(String.format("SET statement_timeout = %d", safeStatementTimeout));
             stmt.execute(String.format("SET lock_timeout = %d", safeLockTimeout));
+            stmt.execute(String.format("SET work_mem = '%dMB'", SOURCE_SESSION_WORK_MEM_MB));
         }
     }
 }
