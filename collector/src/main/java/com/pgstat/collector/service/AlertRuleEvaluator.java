@@ -1809,8 +1809,18 @@ public class AlertRuleEvaluator {
             boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
 
             if (exceeding.isEmpty()) {
-                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
-                updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                // exceeding bos olmasi iki sebepten olabilir: (A) gercekten esigi
+                // asan kayit yok — sorun duzelmis, resolve edilmeli, ya da (B) bu
+                // instance'in normal toplama araligindaki boslukta evaluator
+                // calisti, pencerede henuz hic ornek yok — bu durumda resolve
+                // ETMEMELI, bir sonraki cycle'i beklemeli (musteri raporu
+                // 2026-08-21: instance hala %99 bloat'liydi ama toplama araligi
+                // bosluguna denk gelince yanlislikla resolve edildi).
+                boolean hasData = hasRecentData(instancePk, metricType, windowMinutes);
+                if (hasData && prevSeverity != null && autoResolve) {
+                    resolveAlert(alertKey, rule, instancePk);
+                    updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
+                }
                 continue;
             }
 
@@ -2406,6 +2416,39 @@ public class AlertRuleEvaluator {
         if (d >= 1_000_000) return String.format("%.1fM", d / 1_000_000);
         if (d >= 1_000) return String.format("%.1fK", d / 1_000);
         return String.format("%.0f", d);
+    }
+
+    /**
+     * Bir instance'in ilgili fact tablosunda, verilen pencerede HIC satir olup
+     * olmadigini kontrol eder — "esigi asan kayit yok" ile "toplama araligi
+     * nedeniyle bu pencerede hic veri gelmedi" durumlarini ayirt etmek icin.
+     *
+     * Musteri raporu (2026-08-21): findBloatedTables() (ve benzer per-record
+     * sorgular) sample_ts > now() - windowMinutes filtresi kullaniyor; eger
+     * evaluator, bir instance'in normal toplama araligindaki (orn. 15-30dk)
+     * bosluga denk gelen bir anda calisirsa, sorgu GECICI olarak bos doner —
+     * bu, "sorun duzeldi" ile ayni gorunur ve yanlislikla auto-resolve tetikler.
+     * Gercekte tablo hala %99 bloat'liydi, sadece bir sonraki ornek henuz
+     * toplanmamisti. Bu kontrol, resolve'u sadece GERCEKTEN veri varken ve
+     * esigi asmiyorken yapar; veri yoksa evaluator bir sonraki cycle'i bekler.
+     */
+    private boolean hasRecentData(long instancePk, String metricType, int windowMinutes) {
+        try {
+            String table = switch (metricType) {
+                case "statement_metric" -> "fact.pgss_delta";
+                case "table_metric"     -> "fact.pg_table_stat_delta";
+                case "index_metric"     -> "fact.pg_index_stat_delta";
+                default -> null;
+            };
+            if (table == null) return true; // bilinmeyen tip icin eski davranis (her zaman resolve edebilir)
+            Integer count = jdbc.queryForObject(
+                "select count(*) from " + table + " where instance_pk = ? and sample_ts > now() - ?::interval limit 1",
+                Integer.class, instancePk, windowMinutes + " minutes");
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.warn("hasRecentData kontrolu hatasi metricType={} instance={}: {}", metricType, instancePk, e.getMessage());
+            return false; // hata durumunda resolve etmeyi engelle (guvenli taraf)
+        }
     }
 
     /** Esigi asan top-N kaydi (per-record) granular metric tipinde */
