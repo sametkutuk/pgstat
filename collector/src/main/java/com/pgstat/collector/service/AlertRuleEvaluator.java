@@ -1760,8 +1760,6 @@ public class AlertRuleEvaluator {
             String serviceGroup = (String) target.get("service_group");
             String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
 
-            if (isInCooldown(ruleId, instancePk, cooldownMinutes)) continue;
-
             // Esigi asan kayitlari bul (max threshold = warning, critical varsa hari)
             BigDecimal probeThreshold = warningThreshold != null ? warningThreshold : criticalThreshold;
             if (probeThreshold == null) continue;
@@ -1780,6 +1778,14 @@ public class AlertRuleEvaluator {
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
+            // Cooldown, YENI alert tetiklemeyi/severity yukseltmeyi geciktirir —
+            // ama sorun zaten duzelmisse (exceeding bos veya severity null) resolve
+            // her zaman calismali, cooldown'dan bagimsiz. Eskiden cooldown kontrolu
+            // buradan once (tum mantigi atlayarak) yapiliyordu — bu, cooldown suresi
+            // boyunca (varsayilan 60dk) manuel duzeltmelerin (orn. VACUUM) alert'i
+            // resolve etmesini de blokluyordu (musteri raporu 2026-08-21).
+            boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
+
             if (exceeding.isEmpty()) {
                 if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
@@ -1795,6 +1801,7 @@ public class AlertRuleEvaluator {
                 updateLastEval(ruleId, instancePk, currentVal, null);
                 continue;
             }
+            if (inCooldown) continue;
             BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
 
             Map<String, Object> ctx = baseContext(rule, instancePk, severity);
