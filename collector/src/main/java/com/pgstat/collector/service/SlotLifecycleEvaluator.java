@@ -105,8 +105,14 @@ public class SlotLifecycleEvaluator {
             }
 
             if (state.tombstoneAt != null) {
-                alertRepo.resolve(key("slot_active_deleted", subscription.instancePk(), slot.slotName()));
-                alertRepo.resolve(key("slot_inactive_deleted", subscription.instancePk(), slot.slotName()));
+                alertRepo.resolveAndNotify(
+                    key("slot_active_deleted", subscription.instancePk(), slot.slotName()),
+                    "Aktif slot silindi: " + slot.slotName() + " — " + subscription.label(),
+                    "Slot tekrar goruldu, silinme durumu sona erdi.");
+                alertRepo.resolveAndNotify(
+                    key("slot_inactive_deleted", subscription.instancePk(), slot.slotName()),
+                    "Pasif slot silindi: " + slot.slotName() + " — " + subscription.label(),
+                    "Slot tekrar goruldu, silinme durumu sona erdi.");
                 upsertSlotAlert(
                     AlertCode.SLOT_RECREATED,
                     key("slot_recreated", subscription.instancePk(), slot.slotName()),
@@ -159,7 +165,10 @@ public class SlotLifecycleEvaluator {
             }
             if (slot.active()) {
                 state.inactiveSince = null;
-                alertRepo.resolve(key("slot_inactive_long", subscription.instancePk(), slot.slotName()));
+                alertRepo.resolveAndNotify(
+                    key("slot_inactive_long", subscription.instancePk(), slot.slotName()),
+                    "Slot uzun suredir pasif: " + slot.slotName() + " — " + subscription.label(),
+                    "Slot tekrar aktif oldu.");
                 continue;
             }
             if (subscription.notifyOnInactive() && state.inactiveSince != null) {
@@ -187,8 +196,14 @@ public class SlotLifecycleEvaluator {
     private void handleDeletedSlot(Subscription subscription, MutableSlotState state, OffsetDateTime now) {
         if (state.tombstoneAt == null) {
             // Slot artik yok — varsa eski slot_inactive_long ve slot_lost alert'lerini resolve et
-            alertRepo.resolve(key("slot_inactive_long", subscription.instancePk(), state.slotName));
-            alertRepo.resolve(key("slot_lost", subscription.instancePk(), state.slotName));
+            alertRepo.resolveAndNotify(
+                key("slot_inactive_long", subscription.instancePk(), state.slotName),
+                "Slot uzun suredir pasif: " + state.slotName + " — " + subscription.label(),
+                "Slot artik snapshot'ta yok.");
+            alertRepo.resolveAndNotify(
+                key("slot_lost", subscription.instancePk(), state.slotName),
+                "Replication slot kayboldu: " + state.slotName + " — " + subscription.label(),
+                "Slot artik snapshot'ta yok.");
 
             if (Boolean.TRUE.equals(state.lastActive) && subscription.notifyOnActiveDeleted()) {
                 upsertDeletedAlert(AlertCode.SLOT_ACTIVE_DELETED, subscription, state,

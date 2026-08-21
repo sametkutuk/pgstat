@@ -15,6 +15,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -237,8 +238,8 @@ public class LongRunningQueryEvaluator {
     }
 
     private void resolveFinishedAlerts(long instancePk, Set<String> activeAlertKeys) {
-        List<String> openKeys = jdbc.query("""
-            select alert_key
+        List<Map<String, Object>> openRows = jdbc.queryForList("""
+            select alert_key, title
             from ops.alert
             where instance_pk = ?
               and status = 'open'
@@ -247,10 +248,11 @@ public class LongRunningQueryEvaluator {
                 'idle_in_transaction_long',
                 'idle_in_transaction_aborted'
               )
-            """, (rs, rowNum) -> rs.getString("alert_key"), instancePk);
-        for (String alertKey : openKeys) {
+            """, instancePk);
+        for (Map<String, Object> row : openRows) {
+            String alertKey = (String) row.get("alert_key");
             if (!activeAlertKeys.contains(alertKey)) {
-                alertRepo.resolve(alertKey);
+                alertRepo.resolveAndNotify(alertKey, String.valueOf(row.get("title")), "Sorgu/oturum artik aktif degil.");
             }
         }
     }

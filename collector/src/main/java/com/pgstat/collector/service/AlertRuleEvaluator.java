@@ -71,6 +71,28 @@ public class AlertRuleEvaluator {
         }
     }
 
+    /**
+     * Bir alert'i cozuldu olarak isaretler VE bildirim kanalina "Resolved: ..."
+     * mesaji gonderir. Eskiden alertRepo.resolve(alertKey) sadece DB durumunu
+     * guncelliyordu, hicbir yerde bildirim gitmiyordu — musteri raporu
+     * (2026-08-21): dead_tuple_ratio alert'i dogru sekilde resolve oluyordu
+     * ama Telegram'a "cozuldu" bildirimi hic gelmiyordu, sadece yeni WARNING/
+     * CRITICAL bildirimleri goruluyordu. Title/message, tam olarak orijinal
+     * alert'in son mesajini yeniden uretmeye calismaz (context her cagri
+     * yerinde farkli/eksik olabilir) — jenerik ama tanimlayici bir ozet
+     * yeterli, cunku resolveAndNotify zaten "Resolved: " onekini otomatik
+     * ekliyor.
+     */
+    private void resolveAlert(String alertKey, Map<String, Object> rule, long instancePk) {
+        String ruleName = (String) rule.get("rule_name");
+        String metricType = (String) rule.get("metric_type");
+        String metricName = (String) rule.get("metric_name");
+        String instanceName = lookupInstanceName(instancePk);
+        String title = String.format("%s - %s", instanceName, ruleName);
+        String message = String.format("Metrik %s.%s tekrar normal seviyede.", metricType, metricName);
+        alertRepo.resolveAndNotify(alertKey, title, message);
+    }
+
     /** Bir kuralın değerlendirmesinde kullanılan ortak context alanlarını doldurur. */
     private Map<String, Object> baseContext(Map<String, Object> rule, long instancePk,
                                              String severity) {
@@ -377,7 +399,7 @@ public class AlertRuleEvaluator {
                 }
                 updateLastEval(ruleId, instancePk, current, severity);
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, current, null);
             } else {
                 updateLastEval(ruleId, instancePk, current, null);
@@ -762,7 +784,7 @@ public class AlertRuleEvaluator {
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
 
             if (anomalies.isEmpty()) {
-                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 continue;
             }
@@ -962,7 +984,7 @@ public class AlertRuleEvaluator {
 
             if (isInCooldown(ruleId, instancePk, cooldownMinutes)) {
                 if (autoResolve && determineSeverity(value, operator, warningThreshold, criticalThreshold) == null) {
-                    alertRepo.resolve(alertKey);
+                    resolveAlert(alertKey, rule, instancePk);
                     updateLastEval(ruleId, instancePk, value, null);
                 }
                 continue;
@@ -997,7 +1019,7 @@ public class AlertRuleEvaluator {
                     severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId, detailsJson);
                 updateLastEval(ruleId, instancePk, value, severity);
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, value, null);
             } else {
                 updateLastEval(ruleId, instancePk, value, null);
@@ -1093,7 +1115,7 @@ public class AlertRuleEvaluator {
                 }
                 updateLastEval(ruleId, instancePk, currentValue, "warning");
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, currentValue, null);
             } else {
                 updateLastEval(ruleId, instancePk, currentValue, null);
@@ -1195,7 +1217,7 @@ public class AlertRuleEvaluator {
                 }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, changePct, null);
             } else {
                 updateLastEval(ruleId, instancePk, changePct, null);
@@ -1344,7 +1366,7 @@ public class AlertRuleEvaluator {
                 }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, changePct, null);
             } else {
                 updateLastEval(ruleId, instancePk, changePct, null);
@@ -1428,7 +1450,7 @@ public class AlertRuleEvaluator {
                     }
                 }
 
-                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 continue;
             }
@@ -1787,7 +1809,7 @@ public class AlertRuleEvaluator {
             boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
 
             if (exceeding.isEmpty()) {
-                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 continue;
             }
@@ -1797,7 +1819,7 @@ public class AlertRuleEvaluator {
             BigDecimal currentVal = toBDSafe(top.get("current_val"));
             String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
             if (severity == null) {
-                if (prevSeverity != null && autoResolve) alertRepo.resolve(alertKey);
+                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, currentVal, null);
                 continue;
             }
@@ -2683,7 +2705,7 @@ public class AlertRuleEvaluator {
                         "critical", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
                     updateLastEval(ruleId, instancePk, mx, "critical");
                 } else if (!isFlatline && prevSeverity != null && autoResolve) {
-                    alertRepo.resolve(alertKey);
+                    resolveAlert(alertKey, rule, instancePk);
                     updateLastEval(ruleId, instancePk, mx, null);
                 } else {
                     updateLastEval(ruleId, instancePk, mx != null ? mx : BigDecimal.ZERO, null);
@@ -2818,7 +2840,7 @@ public class AlertRuleEvaluator {
                 }
                 updateLastEval(ruleId, instancePk, changePct, severity);
             } else if (prevSeverity != null && autoResolve) {
-                alertRepo.resolve(alertKey);
+                resolveAlert(alertKey, rule, instancePk);
                 updateLastEval(ruleId, instancePk, changePct, null);
             } else {
                 updateLastEval(ruleId, instancePk, changePct, null);

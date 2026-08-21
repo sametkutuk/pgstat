@@ -118,12 +118,17 @@ public class AlertService {
     }
 
     /**
-     * Instance bazli alert'i resolve eder.
+     * Instance bazli alert'i resolve eder VE bildirim gonderir.
+     * Musteri raporu (2026-08-21): alertRepo.resolve() sadece DB durumunu
+     * guncelliyordu, hicbir bildirim kanalina "cozuldu" mesaji gitmiyordu.
+     * Mevcut alert satirindan title okunup "Resolved: " oneki ile bildirilir.
      */
     public void resolveInstanceAlert(AlertCode code, long instancePk) {
         String alertKey = buildInstanceAlertKey(code, instancePk);
         try {
-            alertRepo.resolve(alertKey);
+            String title = fetchOpenAlertTitle(alertKey);
+            if (title == null) return; // zaten resolved veya hic olmamis
+            alertRepo.resolveAndNotify(alertKey, title, "Sorun cozuldu.");
             log.debug("Alert resolve edildi: {}", alertKey);
         } catch (Exception e) {
             log.error("Alert resolve hatasi: {} — {}", alertKey, e.getMessage());
@@ -174,12 +179,14 @@ public class AlertService {
     }
 
     /**
-     * Job bazli alert'i resolve eder.
+     * Job bazli alert'i resolve eder VE bildirim gonderir (bkz. resolveInstanceAlert).
      */
     public void resolveJobAlert(AlertCode code) {
         String alertKey = code.getCode() + ":" + code.getSourceComponent() + ":global";
         try {
-            alertRepo.resolve(alertKey);
+            String title = fetchOpenAlertTitle(alertKey);
+            if (title == null) return;
+            alertRepo.resolveAndNotify(alertKey, title, "Sorun cozuldu.");
         } catch (Exception e) {
             log.error("Job alert resolve hatasi: {} — {}", alertKey, e.getMessage());
         }
@@ -363,10 +370,26 @@ public class AlertService {
     public void resolveDatabaseAlert(AlertCode code, long instancePk, long dbid) {
         String alertKey = buildDatabaseAlertKey(code, instancePk, dbid);
         try {
-            alertRepo.resolve(alertKey);
+            String title = fetchOpenAlertTitle(alertKey);
+            if (title == null) return;
+            alertRepo.resolveAndNotify(alertKey, title, "Sorun cozuldu.");
             log.debug("Database alert resolve edildi: {}", alertKey);
         } catch (Exception e) {
             log.error("Database alert resolve hatasi: {} — {}", alertKey, e.getMessage());
         }
+    }
+
+    /**
+     * Acik (open/acknowledged) bir alert'in title'ini okur — resolve bildirimi
+     * icin "Resolved: " onekiyle kullanilir. Alert yoksa veya zaten resolved
+     * ise null doner (resolveAndNotify zaten idempotent, ama title'i almadan
+     * once erken cikmak gereksiz sorguyu/log'u onler).
+     */
+    private String fetchOpenAlertTitle(String alertKey) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            select title from ops.alert
+            where alert_key = ? and status <> 'resolved'
+            """, alertKey);
+        return rows.isEmpty() ? null : String.valueOf(rows.get(0).get("title"));
     }
 }
