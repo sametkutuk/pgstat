@@ -2464,6 +2464,16 @@
           "id": "AC5",
           "text": "Live verification: after migrating and deploying, re-enabling dead_tuple_ratio rules on the central pgstat database produces a real alert for the previously-missed bloat (e.g. ops.alert or ops.notification_log) without flooding false positives on healthy tables.",
           "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "findBloatedTables() reads n_dead_tup_estimate/n_live_tup_estimate from the most recent sample in the window (DISTINCT ON ... ORDER BY sample_ts DESC) instead of max() across the window, so a manual VACUUM/cleanup is reflected as soon as the next db_objects collection cycle (up to 30 minutes, per schedule_profile.db_objects_interval_seconds) samples the lowered dead-tuple count — max() previously kept showing the pre-cleanup peak until the whole window aged out, delaying auto-resolve by up to double the collection interval. autovacuum_count_sum still sums the full window (a count-of-runs signal, not a point-in-time one).",
+          "status": "done"
+        },
+        {
+          "id": "AC7",
+          "text": "mvn compile && mvn test pass with the DISTINCT ON / window-function rewrite.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2490,9 +2500,10 @@
         "Market research (check_postgres, Datadog, pganalyze, Citus) confirmed mature tools do not rely on a single percentage threshold; ratio+absolute-count+trend/ineffectiveness combinations are standard practice.",
         "Design presented to and approved by customer via a mind-map walkthrough before implementation ('eğer böyle okeyse kullanalım').",
         "mvn compile, mvn test, and npx tsc --noEmit all pass with the full implementation (migration + evaluator + UI).",
-        "Customer enabled the rule via the UI (rule_id=14, thresholds left blank to use defaults). Within the evaluation window it fired real alerts for previously-missed bloat across the fleet (e.g. control.database_state at 45%, a table at 99% on instance 'sam-ets', another at 100% on db1.dc-etstur.com-test-161.213) — confirms the 3-signal design correctly surfaces real bloat it was designed to catch. No false positives reported. Customer's only feedback was about message readability (see PGSTAT-P0-035), not correctness."
+        "Customer enabled the rule via the UI (rule_id=14, thresholds left blank to use defaults). Within the evaluation window it fired real alerts for previously-missed bloat across the fleet (e.g. control.database_state at 45%, a table at 99% on instance 'sam-ets', another at 100% on db1.dc-etstur.com-test-161.213) — confirms the 3-signal design correctly surfaces real bloat it was designed to catch. No false positives reported. Customer's only feedback was about message readability (see PGSTAT-P0-035), not correctness.",
+        "Customer manually ran VACUUM (FULL, ANALYZE) on a critical-severity table and reported the alert stayed 'critical' 5-6 minutes later. Investigated: fact.pg_table_stat_delta for that instance is collected every db_objects_interval_seconds (default schedule_profile = 1800s = 30 minutes, not hourly as the customer initially recalled), and findBloatedTables() was aggregating with max(n_dead_tup_estimate) over the evaluation window — so a pre-VACUUM peak sampled earlier in the same 30-minute window kept overriding the post-VACUUM lower value until the whole window aged past the peak. Confirmed with the customer this was the only bloated table on that instance, ruling out the separate 'multiple tables, one alert per instance/rule' grouping behavior as the cause here. Fixed by switching to DISTINCT ON (...) ORDER BY sample_ts DESC — the alert now reflects the most recent sample instead of the window's worst historical moment, so it resolves as soon as the next collection cycle (not the whole window) sees the post-cleanup value."
       ],
-      "next_action": "Watch for a few more days for any false-positive reports on healthy tables; once the readability fix (P0-035) ships, consider this task fully accepted."
+      "next_action": "Deploy the DISTINCT ON fix (./pgstat upgrade); ask the customer to re-verify that a manual VACUUM now resolves the alert within one db_objects collection cycle (≤30 min) instead of up to the full evaluation window; watch for a few more days for false positives before considering this task fully accepted."
     },
     {
       "id": "PGSTAT-P0-035",

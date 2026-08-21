@@ -2485,13 +2485,23 @@ public class AlertRuleEvaluator {
             "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective" +
             "  from (" +
-            "    select instance_pk, schemaname, relname, dbid," +
-            "           max(n_dead_tup_estimate) as n_dead_tup_estimate," +
-            "           max(n_live_tup_estimate) as n_live_tup_estimate," +
-            "           sum(coalesce(autovacuum_count_delta, 0)) as autovacuum_count_sum" +
+            // n_dead_tup_estimate/n_live_tup_estimate pencerenin EN SON ornegine
+            // (sample_ts en yuksek olan satir) ait olmali, max() degil — max()
+            // kullanilirsa pencere icinde VACUUM/manuel temizlik oncesi gorulen
+            // yuksek deger, temizlik sonrasi bile pencere kapanana kadar (30dk'ya
+            // kadar) alert'i "hala kritik" gosterip resolve olmasini geciktirir
+            // (musteri raporu 2026-08-21: VACUUM FULL sonrasi alert resolve olmadi).
+            // autovacuum_count_sum ayrik kalir — o pencere boyunca KAC KEZ
+            // autovacuum calistigini sayar, en son ornek degil toplam anlamli.
+            "    select distinct on (instance_pk, schemaname, relname, dbid)" +
+            "           instance_pk, schemaname, relname, dbid," +
+            "           n_dead_tup_estimate, n_live_tup_estimate," +
+            "           sum(coalesce(autovacuum_count_delta, 0)) over (" +
+            "             partition by instance_pk, schemaname, relname, dbid" +
+            "           ) as autovacuum_count_sum" +
             "      from fact.pg_table_stat_delta" +
             "     where instance_pk = ? and sample_ts > now() - ?::interval" +
-            "     group by instance_pk, schemaname, relname, dbid" +
+            "     order by instance_pk, schemaname, relname, dbid, sample_ts desc" +
             "  ) t" +
             "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
             "  where (" +
