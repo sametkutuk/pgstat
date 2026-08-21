@@ -16,7 +16,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 93 |
+| Migrations scanned | 94 |
 | Tables discovered | 92 |
 | Columns discovered | 1151 |
 | Indexes discovered | 123 |

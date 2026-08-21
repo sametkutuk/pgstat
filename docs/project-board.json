@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 5,
+    "max_in_progress": 6,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2463,7 +2463,7 @@
         {
           "id": "AC5",
           "text": "Live verification: after migrating and deploying, re-enabling dead_tuple_ratio rules on the central pgstat database produces a real alert for the previously-missed bloat (e.g. ops.alert or ops.notification_log) without flooding false positives on healthy tables.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2489,9 +2489,71 @@
         "Customer live query on the central pgstat database confirmed n_dead_tup/n_live_tup growth with no alert ever firing; alert_rule query confirmed dead_tuple_ratio rules existed but were disabled and used a single-signal, >1000-row-gated design.",
         "Market research (check_postgres, Datadog, pganalyze, Citus) confirmed mature tools do not rely on a single percentage threshold; ratio+absolute-count+trend/ineffectiveness combinations are standard practice.",
         "Design presented to and approved by customer via a mind-map walkthrough before implementation ('eğer böyle okeyse kullanalım').",
-        "mvn compile, mvn test, and npx tsc --noEmit all pass with the full implementation (migration + evaluator + UI)."
+        "mvn compile, mvn test, and npx tsc --noEmit all pass with the full implementation (migration + evaluator + UI).",
+        "Customer enabled the rule via the UI (rule_id=14, thresholds left blank to use defaults). Within the evaluation window it fired real alerts for previously-missed bloat across the fleet (e.g. control.database_state at 45%, a table at 99% on instance 'sam-ets', another at 100% on db1.dc-etstur.com-test-161.213) — confirms the 3-signal design correctly surfaces real bloat it was designed to catch. No false positives reported. Customer's only feedback was about message readability (see PGSTAT-P0-035), not correctness."
       ],
-      "next_action": "Run ./pgstat migrate in production, re-enable the central database's dead_tuple_ratio alert rule (leaving the three new fields blank to use defaults initially), and watch for a few days to confirm real bloat is caught without false positives before tuning further."
+      "next_action": "Watch for a few more days for any false-positive reports on healthy tables; once the readability fix (P0-035) ships, consider this task fully accepted."
+    },
+    {
+      "id": "PGSTAT-P0-035",
+      "order": 42,
+      "priority": "P1",
+      "workstream": "alerting",
+      "status": "in_progress",
+      "title": "table_threshold alert message is too dense to scan when several arrive at once",
+      "problem": "After enabling the redesigned dead_tuple_ratio rule (PGSTAT-P0-034), the customer received several real table_threshold alerts in quick succession via Telegram and reported the format was hard to read at a glance: every alert repeated the same verbose 'Table=..., DB=..., metric=..., value=..., Condition=..., window=..., Action: ...' field-by-field layout, with no visual distinction between WARNING and CRITICAL severity and no compact summary — scanning several stacked messages to find the most severe one was slow.",
+      "requirements": [
+        "Rework only the table_threshold message template (control.alert_message_template) — other templates (statement_threshold, index_threshold, etc.) are out of scope for this task, to keep the change small and low-risk.",
+        "Title must lead with a severity-distinguishing visual marker (the renderer's existing severity_emoji placeholder) plus instance and table name, so severity is scannable without reading the body.",
+        "Message body must drop redundant 'Field=' prefixes and lead with the single most important comparison (current value vs threshold) instead of a flat field list.",
+        "If the dead_tuple_ratio bloat rule's vacuum_ineffective signal (PGSTAT-P0-034) is present and true, the message must include an extra warning line calling that out; when absent/false, no empty or placeholder-looking line should appear."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "V090 migration updates control.alert_message_template's table_threshold title_template to '{{severity_emoji}} {{instance}} — {{table}} bloat' and message_template to a condensed value/threshold-first body with a vacuum_note line.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "AlertRuleEvaluator.populateRecordCtx always sets a vacuum_note context value for table_metric records — a one-line warning when vacuum_ineffective is true, empty string otherwise — so the template never renders a dangling or blank-looking placeholder line.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn compile && mvn test pass with the context/template changes.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: after migrating and deploying, the next batch of table_threshold alerts (Telegram or wherever notifications are delivered) renders in the new condensed format and is confirmed easier to scan by the customer.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations/V090__readable_table_threshold_template.sql: UPDATE control.alert_message_template set title_template/message_template for alert_code='table_threshold'.",
+        "AlertRuleEvaluator.java populateRecordCtx table_metric branch: compute vacuum_note alongside the existing vacuum_ineffective boolean, defaulting to empty string when the vacuum_ineffective key is absent (non-dead_tuple_ratio table_metric rules) or false."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: ./pgstat migrate; wait for the next real table_threshold alert batch and visually confirm the new condensed format renders correctly in the delivery channel, including the vacuum_note line when applicable."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Surfaced while PGSTAT-P0-034 was in flight (real dead_tuple_ratio alerts triggered readability feedback), but this task's own acceptance does not require P0-034 to be formally closed first — noted informally as related context, not a board dependency.",
+        "Customer shared a screenshot of several stacked table_threshold Telegram messages using the old verbose format, explicitly asking for a more scannable layout ('çok güzel değil anlaşılmıyor tek bakışla ve metin çok karışık çok veri var yani').",
+        "Confirmed via AskUserQuestion that the complaint covered message density, lack of grouping, and weak severity distinction together — and that only the table_threshold template (not the full template set) should be reworked for now.",
+        "mvn compile and mvn test pass with the new vacuum_note context field and updated template."
+      ],
+      "next_action": "Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan."
     }
   ]
 }

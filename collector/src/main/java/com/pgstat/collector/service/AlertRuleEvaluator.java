@@ -1874,8 +1874,17 @@ public class AlertRuleEvaluator {
                 ctx.put("live_tup", rec.get("live_tup"));
                 // Bacak C (bkz. findBloatedTables): sadece dead_tuple_ratio icin doldurulur,
                 // diger table_metric'lerde bu key hic yok, ctx'e null olarak yazilmaz.
+                // vacuum_note: table_threshold sablonunda (V090) tam satir olarak
+                // kullanilir — vacuum_ineffective true degilse bos string, boylece
+                // sablonda "bos satir/anlamsiz placeholder" gorunmez.
                 if (rec.containsKey("vacuum_ineffective")) {
-                    ctx.put("vacuum_ineffective", Boolean.TRUE.equals(rec.get("vacuum_ineffective")));
+                    boolean vacuumIneffective = Boolean.TRUE.equals(rec.get("vacuum_ineffective"));
+                    ctx.put("vacuum_ineffective", vacuumIneffective);
+                    ctx.put("vacuum_note", vacuumIneffective
+                        ? "⚠️ Autovacuum çalışıyor ama yetişmiyor\n"
+                        : "");
+                } else {
+                    ctx.put("vacuum_note", "");
                 }
             }
             case "index_metric" -> {
