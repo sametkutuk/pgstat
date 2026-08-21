@@ -41,6 +41,12 @@ interface AlertRule {
   last_evaluated_at: string | null;
   last_value: number | null;
   current_severity: string | null;
+  // dead_tuple_ratio icin uc bacakli bloat/vacuum override'lari (V089).
+  // Hepsi opsiyonel — NULL ise kod tarafinda best-practice default kullanilir
+  // (bloat_min_rows=100, bloat_abs_dead_tup=500, bloat_vacuum_ineffective_count=20).
+  bloat_min_rows: number | null;
+  bloat_abs_dead_tup: number | null;
+  bloat_vacuum_ineffective_count: number | null;
 }
 
 interface Instance {
@@ -263,6 +269,10 @@ const emptyForm = {
   auto_resolve: true,
   title_template: '',
   message_template: '',
+  // dead_tuple_ratio icin opsiyonel override'lar — bos ise default kullanilir
+  bloat_min_rows: '' as string | number,
+  bloat_abs_dead_tup: '' as string | number,
+  bloat_vacuum_ineffective_count: '' as string | number,
 };
 
 // =========================================================================
@@ -805,6 +815,9 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       auto_resolve: rule.auto_resolve,
       title_template: rule.title_template || '',
       message_template: rule.message_template || '',
+      bloat_min_rows: rule.bloat_min_rows ?? '' as string | number,
+      bloat_abs_dead_tup: rule.bloat_abs_dead_tup ?? '' as string | number,
+      bloat_vacuum_ineffective_count: rule.bloat_vacuum_ineffective_count ?? '' as string | number,
     } : { ...emptyForm }
   );
 
@@ -837,6 +850,13 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       alert_category: EVAL_TYPES[form.evaluation_type]?.category ?? 'threshold',
       title_template: form.title_template?.trim() || null,
       message_template: form.message_template?.trim() || null,
+      // Sadece dead_tuple_ratio icin anlamli; bos ise null (kod defaultu kullanilir)
+      bloat_min_rows: form.metric_name === 'dead_tuple_ratio' && form.bloat_min_rows !== ''
+        ? Number(form.bloat_min_rows) : null,
+      bloat_abs_dead_tup: form.metric_name === 'dead_tuple_ratio' && form.bloat_abs_dead_tup !== ''
+        ? Number(form.bloat_abs_dead_tup) : null,
+      bloat_vacuum_ineffective_count: form.metric_name === 'dead_tuple_ratio' && form.bloat_vacuum_ineffective_count !== ''
+        ? Number(form.bloat_vacuum_ineffective_count) : null,
     };
     saveMut.mutate(body);
   };
@@ -1121,6 +1141,55 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                       placeholder={METRIC_TYPES[form.metric_type]?.metrics[form.metric_name]?.placeholder || 'Opsiyonel'} />
                   </div>
                 </div>
+
+                {/* Dead Tuple Oranı: uc bacakli bloat override'lari — hepsi opsiyonel,
+                    bos ise best-practice default kullanilir (V089) */}
+                {form.metric_name === 'dead_tuple_ratio' && (
+                  <div className="border border-[#E2E8F0] rounded-md p-3 space-y-3 bg-[#F8FAFC]">
+                    <p className="text-xs font-medium text-[#475569]">
+                      Bloat Tespit Ayarları <span className="text-[#94A3B8] font-normal">— hepsi opsiyonel, boş bırakılırsa önerilen değer kullanılır</span>
+                    </p>
+                    <div>
+                      <label className="block text-xs font-medium text-[#475569] mb-1">
+                        Minimum Satır Sayısı <span className="text-[#94A3B8] font-normal">(oran kontrolü için)</span>
+                      </label>
+                      <input type="number" min="0" value={form.bloat_min_rows}
+                        onChange={e => set('bloat_min_rows', e.target.value)}
+                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                        placeholder="Önerilen: 100" />
+                      <p className="text-xs text-[#64748B] mt-1">
+                        Bu satır sayısının altındaki tablolarda oran (yukarıdaki eşikler) değerlendirilmez —
+                        çok küçük tablolarda oran gürültülü olur.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[#475569] mb-1">
+                        Mutlak Dead Tuple Eşiği <span className="text-[#94A3B8] font-normal">(satır sayısından bağımsız)</span>
+                      </label>
+                      <input type="number" min="0" value={form.bloat_abs_dead_tup}
+                        onChange={e => set('bloat_abs_dead_tup', e.target.value)}
+                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                        placeholder="Önerilen: 500" />
+                      <p className="text-xs text-[#64748B] mt-1">
+                        Bu sayıyı aşan ölü satır varsa, oran eşiğinin altında kalsa da alert oluşur —
+                        küçük ama kritik tabloları (örn. sistem tabloları) yakalamak için.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[#475569] mb-1">
+                        "Vacuum Yetersiz" Autovacuum Eşiği
+                      </label>
+                      <input type="number" min="0" value={form.bloat_vacuum_ineffective_count}
+                        onChange={e => set('bloat_vacuum_ineffective_count', e.target.value)}
+                        className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
+                        placeholder="Önerilen: 20" />
+                      <p className="text-xs text-[#64748B] mt-1">
+                        Bu sayıdan fazla autovacuum çalıştığı halde ölü satır hâlâ yüksekse, alert mesajında
+                        "vacuum çalışıyor ama etkisiz" notu eklenir.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </>)}
               {/* Tüm tipler için pencere + aggregation */}
               <div className="grid grid-cols-2 gap-3">

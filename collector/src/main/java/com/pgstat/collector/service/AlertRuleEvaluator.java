@@ -1766,8 +1766,16 @@ public class AlertRuleEvaluator {
             BigDecimal probeThreshold = warningThreshold != null ? warningThreshold : criticalThreshold;
             if (probeThreshold == null) continue;
 
+            // dead_tuple_ratio icin uc bacakli override'lar (bkz. AlertRuleEvaluator
+            // findBloatedTables): kullanici alert_rule'da deger girmemisse (NULL)
+            // kod tarafinda best-practice default kullanilir.
+            Long bloatMinRows = toLongOrNull(rule.get("bloat_min_rows"));
+            Long bloatAbsDeadTup = toLongOrNull(rule.get("bloat_abs_dead_tup"));
+            Integer bloatVacuumIneffectiveCount = toIntOrNull(rule.get("bloat_vacuum_ineffective_count"));
+
             List<Map<String, Object>> exceeding = findRecordsExceedingThreshold(
-                instancePk, metricType, metricName, windowMinutes, operator, probeThreshold);
+                instancePk, metricType, metricName, windowMinutes, operator, probeThreshold,
+                bloatMinRows, bloatAbsDeadTup, bloatVacuumIneffectiveCount);
             enrichStatementRecords(instancePk, exceeding, metricType, windowMinutes);
 
             String prevSeverity = getPrevSeverity(ruleId, instancePk);
@@ -1864,6 +1872,11 @@ public class AlertRuleEvaluator {
                 ctx.put("database", rec.get("datname"));
                 ctx.put("dead_tup", rec.get("dead_tup"));
                 ctx.put("live_tup", rec.get("live_tup"));
+                // Bacak C (bkz. findBloatedTables): sadece dead_tuple_ratio icin doldurulur,
+                // diger table_metric'lerde bu key hic yok, ctx'e null olarak yazilmaz.
+                if (rec.containsKey("vacuum_ineffective")) {
+                    ctx.put("vacuum_ineffective", Boolean.TRUE.equals(rec.get("vacuum_ineffective")));
+                }
             }
             case "index_metric" -> {
                 String idx = rec.get("schemaname") + "." + rec.get("indexrelname");
@@ -2361,7 +2374,9 @@ public class AlertRuleEvaluator {
     private List<Map<String, Object>> findRecordsExceedingThreshold(long instancePk,
                                                                     String metricType, String metricName,
                                                                     int windowMinutes, String operator,
-                                                                    BigDecimal threshold) {
+                                                                    BigDecimal threshold,
+                                                                    Long bloatMinRows, Long bloatAbsDeadTup,
+                                                                    Integer bloatVacuumIneffectiveCount) {
         String op = sanitizeOperator(operator);
         try {
             return switch (metricType) {
@@ -2384,17 +2399,8 @@ public class AlertRuleEvaluator {
                 case "table_metric" -> {
                     String col = toFactColumn(metricName, "table_metric");
                     if ("dead_tuple_ratio".equals(metricName)) {
-                        yield jdbc.queryForList(
-                            "select t.schemaname, t.relname, t.dbid," +
-                            "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
-                            "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname" +
-                            "  from fact.pg_table_stat_delta t" +
-                            "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
-                            "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
-                            "    and (t.n_live_tup_estimate + t.n_dead_tup_estimate) > 1000" +
-                            "    and 100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) " + op + " ?" +
-                            "  order by current_val desc limit 10",
-                            instancePk, windowMinutes + " minutes", threshold);
+                        yield findBloatedTables(instancePk, windowMinutes, op, threshold,
+                            bloatMinRows, bloatAbsDeadTup, bloatVacuumIneffectiveCount);
                     }
                     yield jdbc.queryForList(
                         "select t.schemaname, t.relname, t.dbid," +
@@ -2431,6 +2437,68 @@ public class AlertRuleEvaluator {
                 metricType, metricName, instancePk, e.getMessage());
             return java.util.Collections.emptyList();
         }
+    }
+
+    // Bloat/vacuum alert best-practice defaultlari (kullanici alert_rule'da
+    // deger girmemisse, yani NULL ise, kullanilir). Piyasa arastirmasina
+    // (check_postgres, Datadog, pganalyze, Citus) dayanir — bkz. mind-map
+    // tasarim onayi 2026-08-21. Kucuk-ama-kritik sistem tablolarini (orn.
+    // 592 satirlik ops.alert, %22 dead tuple) kacirmamak icin eski 1000
+    // satirlik esik yerine cok daha kucuk bir min-rows (Bacak A) + satir
+    // sayisindan tamamen bagimsiz mutlak esik (Bacak B) birlikte kullanilir.
+    private static final long DEFAULT_BLOAT_MIN_ROWS = 100;
+    private static final long DEFAULT_BLOAT_ABS_DEAD_TUP = 500;
+    private static final int DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT = 20;
+
+    /**
+     * dead_tuple_ratio icin uc bacakli bloat tespiti — herhangi biri true olursa
+     * tablo "esigi asan kayit" olarak doner:
+     *   A) oran + minimum satir sayisi (mevcut mantigin devami, esik dusuruldu)
+     *   B) mutlak dead-tuple sayisi (satir sayisindan bagimsiz)
+     *   C) "vacuum_ineffective" — son pencerede cok sayida autovacuum calismis
+     *      olup dead_tup hala yuksekse ayrica isaretlenir (context/mesaj notu,
+     *      alert'i tek basina tetiklemez — A veya B zaten tetiklemis olmali).
+     * Disk MB (nightly relation_size_snapshot) karara girmez, sadece bacak A/B
+     * tetiklenirse UI/mesaj context'inde gosterilebilir (bu metodun disinda).
+     */
+    private List<Map<String, Object>> findBloatedTables(long instancePk, int windowMinutes,
+                                                          String op, BigDecimal threshold,
+                                                          Long bloatMinRows, Long bloatAbsDeadTup,
+                                                          Integer bloatVacuumIneffectiveCount) {
+        long minRows = bloatMinRows != null ? bloatMinRows : DEFAULT_BLOAT_MIN_ROWS;
+        long absDeadTup = bloatAbsDeadTup != null ? bloatAbsDeadTup : DEFAULT_BLOAT_ABS_DEAD_TUP;
+        int vacuumIneffectiveCount = bloatVacuumIneffectiveCount != null
+            ? bloatVacuumIneffectiveCount : DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT;
+
+        return jdbc.queryForList(
+            "select t.schemaname, t.relname, t.dbid," +
+            "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
+            "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
+            "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective" +
+            "  from (" +
+            "    select instance_pk, schemaname, relname, dbid," +
+            "           max(n_dead_tup_estimate) as n_dead_tup_estimate," +
+            "           max(n_live_tup_estimate) as n_live_tup_estimate," +
+            "           sum(coalesce(autovacuum_count_delta, 0)) as autovacuum_count_sum" +
+            "      from fact.pg_table_stat_delta" +
+            "     where instance_pk = ? and sample_ts > now() - ?::interval" +
+            "     group by instance_pk, schemaname, relname, dbid" +
+            "  ) t" +
+            "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+            "  where (" +
+            // Bacak A: oran + minimum satir sayisi
+            "    (t.n_live_tup_estimate + t.n_dead_tup_estimate) >= ?" +
+            "    and 100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) " + op + " ?" +
+            "  ) or (" +
+            // Bacak B: mutlak dead-tuple sayisi, satir sayisindan bagimsiz
+            "    t.n_dead_tup_estimate >= ?" +
+            "  )" +
+            "  order by current_val desc nulls last limit 10",
+            vacuumIneffectiveCount, absDeadTup,
+            instancePk, windowMinutes + " minutes",
+            minRows, threshold,
+            absDeadTup
+        );
     }
 
     private static String sanitizeOperator(String op) {
@@ -3457,6 +3525,9 @@ public class AlertRuleEvaluator {
 
     private long toLong(Object v) { return ((Number) v).longValue(); }
     private int  toInt(Object v)  { return v != null ? ((Number) v).intValue() : 0; }
+    /** toLong'un aksine null'i 0'a degil null'a cevirir — "kullanici override etmedi" ile "0" ayrimi icin. */
+    private Long toLongOrNull(Object v) { return v instanceof Number n ? n.longValue() : null; }
+    private Integer toIntOrNull(Object v) { return v instanceof Number n ? n.intValue() : null; }
     private BigDecimal toBD(Object v)     { return v instanceof BigDecimal bd ? bd : null; }
     private BigDecimal toBDSafe(Object v) {
         if (v == null) return null;

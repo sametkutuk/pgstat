@@ -468,16 +468,18 @@ EOF
 
     # 4) Build — başarısız olursa net mesaj
     #
-    # UI tarafini --no-cache ile zorla rebuild ediyoruz. Sebebi: Vite
-    # output bundle hash'i ayni kalsa bile (idempotent build), Docker
-    # COPY layer hash'i bazen invalide olmuyor ve container icinde eski
-    # /usr/share/nginx/html kaliyor. UI build hizli (~30sn), no-cache
-    # maliyeti dusuk; ama yanlis bundle'in production'a sizmasi pahali.
-    # api/collector daha agir (maven, npm ci) — onlarda cache calismaya
-    # devam eder.
-    echo -e "${C}UI rebuild ediliyor (no-cache)...${N}"
-    if ! $COMPOSE build --no-cache ui 2>&1 | tail -5; then
-      fail "UI build başarısız. Detay: ./pgstat logs ui"
+    # UI ve collector'i --no-cache ile zorla rebuild ediyoruz. Sebebi:
+    # Docker COPY layer hash'i bazen (Vite bundle veya derlenmis .jar
+    # ayni kalsa bile) invalide olmuyor ve container icinde eski dosya
+    # kaliyor — musteri raporu 2026-08-21: kod dogru commit'teydi, image
+    # "yeni" gorunuyordu (Created zamani guncel) ama collector.jar hala
+    # eski sorguyu calistiriyordu; sadece --no-cache rebuild duzeltti.
+    # api icin bu koruma henuz eklenmedi (ayni riski tasiyor olabilir,
+    # ama simdiye kadar rapor edilmedi) — ilerde benzer bir belirti
+    # gorulurse api de bu listeye eklenmeli.
+    echo -e "${C}UI ve collector rebuild ediliyor (no-cache)...${N}"
+    if ! $COMPOSE build --no-cache ui collector 2>&1 | tail -8; then
+      fail "UI/collector build başarısız. Detay: ./pgstat logs ui  |  ./pgstat logs collector"
     fi
 
     echo -e "${C}Container'lar yeniden inşa ediliyor...${N}"

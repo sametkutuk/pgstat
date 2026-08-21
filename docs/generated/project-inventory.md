@@ -16,9 +16,9 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 92 |
+| Migrations scanned | 93 |
 | Tables discovered | 92 |
-| Columns discovered | 1148 |
+| Columns discovered | 1151 |
 | Indexes discovered | 123 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
@@ -218,7 +218,7 @@ This generated inventory is the bridge between code and the manual project docum
 | --- | --- | --- | --- | --- | --- |
 | control.alert_message_template | 6 | no |  | V030__alert_message_templates.sql | V030__alert_message_templates.sql |
 | control.alert_notification | 9 | no |  | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |
-| control.alert_rule | 33 | no |  | V011__alert_rules.sql | V030__alert_message_templates.sql |
+| control.alert_rule | 36 | no |  | V011__alert_rules.sql | V089__bloat_alert_thresholds.sql |
 | control.alert_rule_last_eval | 8 | no |  | V011__alert_rules.sql | V016__smart_alerts.sql |
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |
 | control.baseline_trigger | 8 | no |  | V020__baseline_trigger.sql | V020__baseline_trigger.sql |
@@ -286,7 +286,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>control.alert_rule columns (33)</summary>
+<details><summary>control.alert_rule columns (36)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -323,6 +323,9 @@ This generated inventory is the bridge between code and the manual project docum
 | instance_group_id | integer | V018__adaptive_alerting.sql |
 | title_template | text | V030__alert_message_templates.sql |
 | message_template | text | V030__alert_message_templates.sql |
+| bloat_min_rows | bigint | V089__bloat_alert_thresholds.sql |
+| bloat_abs_dead_tup | bigint | V089__bloat_alert_thresholds.sql |
+| bloat_vacuum_ineffective_count | int | V089__bloat_alert_thresholds.sql |
 
 </details>
 

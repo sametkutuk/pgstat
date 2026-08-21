@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 4,
+    "max_in_progress": 5,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2399,9 +2399,79 @@
         "Customer shared postgres logs showing repeating temp_file WARN lines (9.5MB and 3.1MB, roughly every minute) from user=pgstats_collector on a source instance; raising work_mem 2MB->4MB reduced but did not eliminate them.",
         "Customer ran pg_stat_statements on the target instance and shared the top temp_blks_written statements: the largest non-VACUUM entries were the collector's own pg_stat_statements($1)-wrapping CTE (~10MB/call, 11 calls) and 'select queryid, query from pg_stat_statements($1)' (~3MB/call, 11 calls) — both traced to TextEnricher.enrich() via Pg11_12Queries.pgssTextQuery().",
         "Root cause confirmed by code read: pgssTextQuery() had no WHERE clause, so pg_stat_statements(true) materializes query text for every actively tracked statement on the instance, not just the queryids TextEnricher's current batch needs.",
-        "Fix applied: pgssTextQuery() now takes 'where queryid = any(?)'; TextEnricher switched from Statement to PreparedStatement with a bigint array bind of the pending queryids. mvn compile and mvn test pass with no regressions."
+        "Fix applied: pgssTextQuery() now takes 'where queryid = any(?)'; TextEnricher switched from Statement to PreparedStatement with a bigint array bind of the pending queryids. mvn compile and mvn test pass with no regressions.",
+        "Second root cause found after deploy (2026-08-21): customer reported temp files still appearing ~14 minutes after deploying commit 6f92a78. docker inspect showed the collector image's Created timestamp was recent (matching the deploy), but the running jar was still executing the old unfiltered query — a Docker build-layer cache inconsistency (the COPY layer hash did not invalidate even though the compiled jar content changed). Customer ran `docker compose build --no-cache collector && docker compose up -d --force-recreate collector` manually on the server and confirmed temp files stopped appearing in the logs.",
+        "Preventive fix applied to ./pgstat's upgrade command: the UI-only --no-cache rebuild was extended to also force --no-cache for the collector service, so future deploys can't silently keep a stale jar behind a fresh-looking image. api is not yet covered by this protection (same risk theoretically possible, not reported so far) — flagged for follow-up if a similar symptom recurs there."
       ],
-      "next_action": "Deploy to production; live-verify the temp-file WARN log lines from TextEnricher's statement stop or shrink dramatically on the two affected source instances."
+      "next_action": "Live-verify in production that the --no-cache collector rebuild in ./pgstat upgrade is deployed and the next scheduled upgrade run doesn't reintroduce the stale-jar symptom; keep watching the two originally-affected source instances for a few more days before formally closing AC4."
+    },
+    {
+      "id": "PGSTAT-P0-034",
+      "order": 41,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "in_progress",
+      "title": "dead_tuple_ratio alert rule redesigned with a 3-signal bloat/vacuum-ineffectiveness model",
+      "problem": "Customer reported (2026-08-21) that pgstat's own central database has ongoing autovacuum-vs-delete-rate imbalance (continuous DELETE workload, autovacuum not keeping up, dead tuple / wasted size growing) but no alert had ever fired. Investigation found dead_tuple_ratio alert rules existed but were disabled (is_enabled=false), and the underlying evaluation logic was a single-signal design: percentage-only, gated by a >1000 total-row minimum that silently excluded small-but-important tables (e.g. ops.alert at 592 rows with 22% dead tuples never qualified for evaluation at all). Customer explicitly asked for a more principled design that avoids false positives while still catching real bloat, and asked for a market-practice comparison (check_postgres, Datadog, pganalyze, Citus) before implementing.",
+      "requirements": [
+        "Replace the single-threshold percentage model with a 3-signal model: (A) ratio + minimum-row-count gate (existing logic, threshold lowered/made configurable), (B) absolute dead-tuple-count threshold independent of row count (catches small-but-critical tables), (C) an autovacuum-ineffectiveness signal (N+ autovacuum runs in the window but dead tuples still not dropping).",
+        "All three thresholds must be optional/nullable per alert_rule row — if the customer leaves them blank, code-side best-practice defaults apply (bloat_min_rows=100, bloat_abs_dead_tup=500, bloat_vacuum_ineffective_count=20); if the customer fills them in, their values win.",
+        "UI must expose the three overrides only when metric_name is dead_tuple_ratio, following the existing 'optional override, blank = default' pattern already used for the adaptive rule's absolute-floor field.",
+        "Change must be backward compatible with existing table_metric evaluation for every other metric_name (no behavior change for non-dead_tuple_ratio rules)."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "V089 migration adds bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count as nullable columns with >=0-or-null check constraints on control.alert_rule.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "AlertRuleEvaluator gains a findBloatedTables() method implementing the 3-signal OR logic (ratio+min-rows) OR (absolute dead-tuple count), annotated with a vacuum_ineffective flag when the autovacuum-count signal fires; table_metric/dead_tuple_ratio routes to it instead of the generic table_metric query.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "AlertRules.tsx exposes the three optional overrides (with default-value placeholders and explanatory copy) when metric_name === 'dead_tuple_ratio', wired through form state and the save payload.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "mvn compile && mvn test and npx tsc --noEmit both pass with the new code.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "Live verification: after migrating and deploying, re-enabling dead_tuple_ratio rules on the central pgstat database produces a real alert for the previously-missed bloat (e.g. ops.alert or ops.notification_log) without flooding false positives on healthy tables.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations/V089__bloat_alert_thresholds.sql: 3 nullable columns + check constraints + column comments explaining each signal's purpose.",
+        "AlertRuleEvaluator.java: findBloatedTables() query joins a per-table max(dead/live tuple estimate) + summed autovacuum-count-delta subquery against dim.database_ref, applies the OR of (ratio+min-rows) and (absolute dead-tuple count), flags vacuum_ineffective when autovacuum_count_sum >= threshold and dead tuples are still >= the absolute threshold; evaluateThresholdPerRecord passes the three nullable overrides through; populateRecordCtx adds vacuum_ineffective to the alert message context.",
+        "AlertRules.tsx: interface/emptyForm/edit-populate/save-payload updated for the three optional fields; JSX adds a bordered 'Bloat Tespit Ayarları' panel with the three inputs, shown only for metric_name === 'dead_tuple_ratio', each with a default-value placeholder and one-line rationale."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test (collector)",
+        "npx tsc --noEmit (ui)",
+        "Live: ./pgstat migrate, re-enable the central-database dead_tuple_ratio rule, confirm ops.alert/ops.notification_log-style small-but-bloated tables now alert and no new false positives appear on healthy tables over a few days."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer live query on the central pgstat database confirmed n_dead_tup/n_live_tup growth with no alert ever firing; alert_rule query confirmed dead_tuple_ratio rules existed but were disabled and used a single-signal, >1000-row-gated design.",
+        "Market research (check_postgres, Datadog, pganalyze, Citus) confirmed mature tools do not rely on a single percentage threshold; ratio+absolute-count+trend/ineffectiveness combinations are standard practice.",
+        "Design presented to and approved by customer via a mind-map walkthrough before implementation ('eğer böyle okeyse kullanalım').",
+        "mvn compile, mvn test, and npx tsc --noEmit all pass with the full implementation (migration + evaluator + UI)."
+      ],
+      "next_action": "Run ./pgstat migrate in production, re-enable the central database's dead_tuple_ratio alert rule (leaving the three new fields blank to use defaults initially), and watch for a few days to confirm real bloat is caught without false positives before tuning further."
     }
   ]
 }

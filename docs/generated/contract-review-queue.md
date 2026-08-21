@@ -14,8 +14,8 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 46 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 904 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 598 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Field contracts needing exact source/version review | 907 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 601 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -35,7 +35,7 @@ node scripts/generate-doc-inventory.mjs
 | --- | --- | --- | --- | --- | --- | --- |
 | control.alert_message_template | control/config | 6 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_notification | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
-| control.alert_rule | control/config | 33 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
+| control.alert_rule | control/config | 36 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
 | control.alert_rule_last_eval | control/config | 8 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_snooze | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.baseline_trigger | control/config | 8 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
@@ -150,6 +150,9 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_rule.aggregation | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.alert_category | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.auto_resolve | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule.bloat_abs_dead_tup | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule.bloat_min_rows | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule.bloat_vacuum_ineffective_count | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.change_threshold_pct | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.condition_operator | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.cooldown_minutes | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
