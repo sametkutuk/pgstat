@@ -284,9 +284,17 @@ public class Pg11_12Queries implements SourceQueries {
 
     @Override
     public String pgssTextQuery(String pgssFunction) {
+        // %s(true) TUM aktif izlenen sorgulari (query text dahil) sunucu tarafinda
+        // materialize eder — instance'ta cok sayida/uzun query text'i varsa bu,
+        // work_mem'i asip temp file'a dokulur (musteri raporu, 2026-08-21: her
+        // TextEnricher dongusunde ~3MB sabit boyutlu temp file, work_mem 2->4MB
+        // yukseltilse de devam etti çünkü asil sorun filtre olmamasiydi).
+        // queryid = ANY(?) ile sadece enrichment bekleyen queryid'ler cekilir,
+        // sunucu tam view'i materialize etmez.
         return """
             select queryid, query
             from %s(true)
+            where queryid = any(?)
             """.formatted(pgssFunction);
     }
 

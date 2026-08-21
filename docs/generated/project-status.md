@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 39 |
+| Total tasks | 40 |
 | Done tasks | 16 |
-| Remaining tasks | 23 |
-| Max in progress | 3 |
+| Remaining tasks | 24 |
+| Max in progress | 4 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 16 |
-| in_progress | 3 |
+| in_progress | 4 |
 | planned | 20 |
 
 ## Workstream Counts
@@ -42,7 +42,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | contracts | 2 |
 | governance | 5 |
-| operations | 12 |
+| operations | 13 |
 | pgdbaagent | 5 |
 | release | 1 |
 | security | 1 |
@@ -93,6 +93,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref | Closed. |
 | 38 | PGSTAT-P0-031 | P0 | operations | done | Updating an instance's password does not auto-trigger a bootstrap retry | Closed. |
 | 39 | PGSTAT-P0-032 | P0 | operations | in_progress | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index | Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements. |
+| 40 | PGSTAT-P0-033 | P0 | operations | in_progress | TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files | Deploy to production; live-verify the temp-file WARN log lines from TextEnricher's statement stop or shrink dramatically on the two affected source instances. |
 
 ## Dependency Map
 
@@ -137,6 +138,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-030 | - | - |
 | PGSTAT-P0-031 | - | - |
 | PGSTAT-P0-032 | - | - |
+| PGSTAT-P0-033 | - | - |
 
 ## Closure Rules
 

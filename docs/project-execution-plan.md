@@ -180,8 +180,16 @@ Sequential execution rule:
 - 2026-08-19: customer reported nightly long-running-query alerts on
   pgstat's own central database (ops.job_run purge batches taking
   5-20 minutes due to a missing started_at index). Fixed as PGSTAT-P0-032
-  (migration-only, V088); `max_in_progress` raised to 3. Restore to 1 as
-  each of P0-002, P1-008, P0-032 closes.
+  (migration-only, V088); `max_in_progress` raised to 3. P0-032 stayed
+  open pending a 2026-08-20/21 pg_locks investigation (the index alone
+  did not fully resolve the duration).
+- 2026-08-21: customer reported recurring temp-file WARN log lines from
+  the collector user on two monitored source instances (TextEnricher's
+  pg_stat_statements(true) call had no WHERE clause, materializing the
+  whole view every enrichment cycle instead of just the pending batch).
+  Fixed as PGSTAT-P0-033, running alongside PGSTAT-P0-002, PGSTAT-P1-008,
+  and PGSTAT-P0-032; `max_in_progress` raised to 4. Restore to 1 as each
+  of P0-002, P1-008, P0-032, P0-033 closes.
 - When a task is completed, update its acceptance criteria and verification
   evidence, move it to the correct next status, then start the next highest
   priority planned task.
@@ -362,6 +370,7 @@ production bug or a user-approved urgent feature.
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref (production bug) | - |
 | 38 | PGSTAT-P0-031 | P0 | operations | done | Updating an instance's password does not auto-trigger a bootstrap retry (production bug) | - |
 | 39 | PGSTAT-P0-032 | P0 | operations | in_progress | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index (production bug) | - |
+| 40 | PGSTAT-P0-033 | P0 | operations | in_progress | TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files (production bug) | - |
 
 ## 6. Workstream Rules
 

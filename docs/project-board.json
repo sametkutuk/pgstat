@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 3,
+    "max_in_progress": 4,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2342,6 +2342,66 @@
         "Fix applied: V088 migration adds CREATE INDEX CONCURRENTLY on job_run(started_at), job_run_instance(started_at), and preventively alert(resolved_at) partial index (audit_log/report_history already had their equivalent). No Java code change — the existing PurgeEvaluator query already matches the new index shape. mvn test passes."
       ],
       "next_action": "Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements."
+    },
+    {
+      "id": "PGSTAT-P0-033",
+      "order": 40,
+      "priority": "P0",
+      "workstream": "operations",
+      "status": "in_progress",
+      "title": "TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files",
+      "problem": "Customer reported (2026-08-21) recurring temp file WARN log lines on two monitored source instances, e.g. 'temporary file: path base/pgsql_tmp/pgsql_tmp1951006.1, size 9526206' appearing every ~1 minute from user=pgstats_collector. Raising work_mem 2MB->4MB on the target instance only shrank, not eliminated, the temp files, ruling out work_mem sizing as the real fix. Live pg_stat_statements query on the target instance identified the exact two collector-issued statements responsible: the pgssStatsQuery-style CTE around pg_stat_statements($1) (~10MB temp/call) and 'select queryid, query from pg_stat_statements($1)' (~3MB temp/call) — both from TextEnricher.enrich(). Root cause: TextEnricher.pgssTextQuery() called pg_stat_statements(true) with no WHERE clause at all, so PostgreSQL materializes the query-text column (often the largest part of the view) for every actively tracked statement on the instance, not just the handful of queryids TextEnricher actually needs (the pendingSeries batch, size = batchSize). On instances with many/long tracked statements this exceeds work_mem and spills to disk every enrichment cycle. Also relevant: the target instance was PG12 at initial diagnosis and has since been upgraded to PG17 mid-investigation; the fix must apply to every PG version family since pgssTextQuery has no per-version override.",
+      "requirements": [
+        "TextEnricher must only ask the source instance for the specific queryids it needs to enrich in this batch, not the entire pg_stat_statements view.",
+        "Fix must apply uniformly across all supported PG major versions (11-18) — pgssTextQuery is defined once in Pg11_12Queries and inherited by Pg13/Pg14_16/Pg17_18, so a single change covers all of them, confirmed no subclass overrides it.",
+        "No new alert code or migration needed — this is a pure query-shape fix in the collector."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Pg11_12Queries.pgssTextQuery() adds 'where queryid = any(?)' to the pg_stat_statements(true) call.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "TextEnricher.enrich() switches from Statement to PreparedStatement and binds the pending queryids (queryIdToSeriesId.keySet()) as a bigint array parameter.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn compile && mvn test pass with the new PreparedStatement/array-binding code.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: after deploying, the two source instances that were producing temp-file WARN log lines every ~1 minute stop producing them (or shrink dramatically, proportional to batchSize instead of total tracked statement count).",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Pg11_12Queries.pgssTextQuery(): 'select queryid, query from %s(true) where queryid = any(?)'.",
+        "TextEnricher.enrich(): build Long[] pendingQueryIds from queryIdToSeriesId.keySet() (guaranteed non-empty since pendingSeries.isEmpty() already short-circuits earlier), switch the query execution to conn.prepareStatement(...) + stmt.setArray(1, conn.createArrayOf(\"bigint\", pendingQueryIds)), keep the same row-processing loop inside the try-with-resources ResultSet block."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: on the two affected source instances, watch postgres logs (log_temp_files is already on) for at least 10-15 minutes after deploy and confirm the pgstats_collector temp-file lines from TextEnricher's statement no longer appear (or are much smaller, bounded by batch size)."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer shared postgres logs showing repeating temp_file WARN lines (9.5MB and 3.1MB, roughly every minute) from user=pgstats_collector on a source instance; raising work_mem 2MB->4MB reduced but did not eliminate them.",
+        "Customer ran pg_stat_statements on the target instance and shared the top temp_blks_written statements: the largest non-VACUUM entries were the collector's own pg_stat_statements($1)-wrapping CTE (~10MB/call, 11 calls) and 'select queryid, query from pg_stat_statements($1)' (~3MB/call, 11 calls) — both traced to TextEnricher.enrich() via Pg11_12Queries.pgssTextQuery().",
+        "Root cause confirmed by code read: pgssTextQuery() had no WHERE clause, so pg_stat_statements(true) materializes query text for every actively tracked statement on the instance, not just the queryids TextEnricher's current batch needs.",
+        "Fix applied: pgssTextQuery() now takes 'where queryid = any(?)'; TextEnricher switched from Statement to PreparedStatement with a bigint array bind of the pending queryids. mvn compile and mvn test pass with no regressions."
+      ],
+      "next_action": "Deploy to production; live-verify the temp-file WARN log lines from TextEnricher's statement stop or shrink dramatically on the two affected source instances."
     }
   ]
 }

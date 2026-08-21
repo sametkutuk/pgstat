@@ -14,8 +14,8 @@ import org.springframework.stereotype.Component;
 
 import java.security.MessageDigest;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.Statement;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -94,32 +94,38 @@ public class TextEnricher {
                         + instance.adminDbname());
             }
 
-            try (Statement stmt = conn.createStatement();
-                 ResultSet rs = stmt.executeQuery(
+            // Sadece enrichment bekleyen queryid'ler icin filtrele — pg_stat_statements(true)
+            // sunucu tarafinda tum aktif izlenen sorgulari (query text dahil) materialize
+            // eder, WHERE queryid = ANY(?) olmadan bu buyuk instance'larda work_mem'i asip
+            // temp file'a dokulebiliyordu (bkz. Pg11_12Queries.pgssTextQuery yorumu).
+            Long[] pendingQueryIds = queryIdToSeriesId.keySet().toArray(new Long[0]);
+            try (PreparedStatement stmt = conn.prepareStatement(
                          queries.pgssTextQuery(pgssExtension.qualify("pg_stat_statements")))) {
+                stmt.setArray(1, conn.createArrayOf("bigint", pendingQueryIds));
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        long queryid = rs.getLong("queryid");
+                        String queryText = rs.getString("query");
 
-                while (rs.next()) {
-                long queryid = rs.getLong("queryid");
-                String queryText = rs.getString("query");
+                        // Bu queryid'nin enrichment bekleyen serisi var mi?
+                        Long seriesId = queryIdToSeriesId.get(queryid);
+                        if (seriesId == null || queryText == null || queryText.isBlank()) {
+                            continue;
+                        }
 
-                // Bu queryid'nin enrichment bekleyen serisi var mi?
-                Long seriesId = queryIdToSeriesId.get(queryid);
-                if (seriesId == null || queryText == null || queryText.isBlank()) {
-                    continue;
-                }
+                        // query_hash olustur (SHA-256, byte[])
+                        byte[] queryHash = hashQuery(queryText);
 
-                // query_hash olustur (SHA-256, byte[])
-                byte[] queryHash = hashQuery(queryText);
+                        // dim.query_text upsert
+                        long queryTextId = dimensionRepo.upsertQueryText(
+                            queryHash, queryText, instancePk, pgMajor);
 
-                // dim.query_text upsert
-                long queryTextId = dimensionRepo.upsertQueryText(
-                    queryHash, queryText, instancePk, pgMajor);
+                        // dim.statement_series.query_text_id guncelle
+                        dimensionRepo.updateSeriesQueryTextId(seriesId, queryTextId);
 
-                // dim.statement_series.query_text_id guncelle
-                dimensionRepo.updateSeriesQueryTextId(seriesId, queryTextId);
-
-                enrichedCount++;
-                queryIdToSeriesId.remove(queryid); // Islendi, tekrar islenmesin
+                        enrichedCount++;
+                        queryIdToSeriesId.remove(queryid); // Islendi, tekrar islenmesin
+                    }
                 }
             }
         }
