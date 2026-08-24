@@ -99,10 +99,14 @@ public class AlertRuleEvaluator {
      */
     private String previousRecordsLabel(String alertKey, String metricType) {
         try {
+            // DB=... oneki, ayni sema.tablo adinin farkli database'lerde
+            // ayri anlam tasiyabilecegini net etmek icin (musteri talebi
+            // 2026-08-24: "hangi database'de oldugunu gostermemiz o da cok
+            // onemli").
             String labelExpr = switch (metricType) {
-                case "table_metric" -> "r->>'schemaname' || '.' || r->>'relname'";
-                case "index_metric" -> "r->>'schemaname' || '.' || r->>'indexrelname'";
-                case "statement_metric" -> "'queryid=' || (r->>'queryid')";
+                case "table_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' ' || r->>'schemaname' || '.' || r->>'relname'";
+                case "index_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' ' || r->>'schemaname' || '.' || r->>'indexrelname'";
+                case "statement_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' queryid=' || (r->>'queryid')";
                 default -> null;
             };
             if (labelExpr == null) return null;
@@ -121,14 +125,19 @@ public class AlertRuleEvaluator {
         }
     }
 
-    /** Per-record kaydin (tablo/sorgu/index) okunabilir etiketi — resolve bildiriminde kullanilir. */
+    /**
+     * Per-record kaydin (tablo/sorgu/index) okunabilir etiketi — resolve
+     * bildiriminde kullanilir. DB=... oneki dahil — ayni sema.tablo adi farkli
+     * database'lerde ayri anlam tasiyabilir (musteri talebi 2026-08-24).
+     */
     private static String recordLabel(Map<String, Object> record, String metricType) {
+        String db = "DB=" + (record.get("datname") != null ? record.get("datname") : "?") + " ";
         return switch (metricType) {
-            case "table_metric" -> record.get("schemaname") + "." + record.get("relname");
-            case "index_metric" -> record.get("schemaname") + "." + record.get("indexrelname");
+            case "table_metric" -> db + record.get("schemaname") + "." + record.get("relname");
+            case "index_metric" -> db + record.get("schemaname") + "." + record.get("indexrelname");
             case "statement_metric" -> {
                 Object seriesId = record.get("statement_series_id");
-                yield seriesId != null ? "queryid=" + record.get("queryid") : null;
+                yield seriesId != null ? db + "queryid=" + record.get("queryid") : null;
             }
             default -> null;
         };
