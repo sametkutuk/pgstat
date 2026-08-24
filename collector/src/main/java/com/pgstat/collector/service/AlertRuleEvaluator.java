@@ -2784,6 +2784,36 @@ public class AlertRuleEvaluator {
     }
 
     /**
+     * Su an calisan autovacuum worker sayisini (fact.pg_activity_snapshot,
+     * backend_type='autovacuum worker', son 2dk'lik en son snapshot) ve
+     * autovacuum_max_workers ayarini okur — 1b-ii senaryosunda "kontrol et"
+     * degil KESIN sonuc vermek icin (musteri talebi 2026-08-24: "bu net
+     * teshis degil").
+     *
+     * @return [runningWorkers(Integer), maxWorkers(Integer)] — okunamazsa
+     *         ikisi de null.
+     */
+    private Object[] fetchAutovacuumWorkerStatus(long instancePk) {
+        try {
+            Integer runningWorkers = jdbc.queryForObject(
+                "select count(*) from fact.pg_activity_snapshot " +
+                "where instance_pk = ? and snapshot_ts > now() - interval '2 minutes' " +
+                "  and backend_type = 'autovacuum worker'",
+                Integer.class, instancePk);
+            List<String> maxWorkersRows = jdbc.queryForList(
+                "select setting_value from fact.pg_settings_snapshot " +
+                "where instance_pk = ? and setting_name = 'autovacuum_max_workers' " +
+                "order by snapshot_ts desc limit 1",
+                String.class, instancePk);
+            Integer maxWorkers = maxWorkersRows.isEmpty() ? null : Integer.parseInt(maxWorkersRows.get(0));
+            return new Object[]{runningWorkers, maxWorkers};
+        } catch (Exception e) {
+            log.debug("fetchAutovacuumWorkerStatus okunamadi instance={}: {}", instancePk, e.getMessage());
+            return new Object[]{null, null};
+        }
+    }
+
+    /**
      * dead_tuple_ratio icin kanita dayali teshis+aksiyon metni uretir (karar
      * agaci: docs/bloat-diagnosis-decision-tree.md, PGSTAT-P0-036 AC6).
      * Kaynaklar: postgresql.org vacuum docs, Citus/pganalyze muhendislik
@@ -2831,10 +2861,30 @@ public class AlertRuleEvaluator {
                             "ALTER TABLE <şema.tablo> RESET (autovacuum_enabled); ile bu tabloya özel override'ı kaldır, ardından manuel VACUUM ANALYZE çalıştır."
                         };
                     }
+                    // 1b-ii: "olasi nedenler" degil KESIN sonuc — su an calisan
+                    // worker sayisini/limitini de okuyup net soyluyoruz (musteri
+                    // talebi 2026-08-24: "bu net teshis degil").
+                    Object[] workerStatus = fetchAutovacuumWorkerStatus(instancePk);
+                    Integer runningWorkers = (Integer) workerStatus[0];
+                    Integer maxWorkers = (Integer) workerStatus[1];
+                    if (runningWorkers != null && maxWorkers != null && runningWorkers >= maxWorkers) {
+                        return new String[]{
+                            String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d autovacuum worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.",
+                                triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
+                            "autovacuum_max_workers ayarını artır (postgresql.conf, reload gerektirir) veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
+                        };
+                    }
+                    if (runningWorkers != null && maxWorkers != null) {
+                        return new String[]{
+                            String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d worker çalışıyor (doygunluk yok, boş kapasite var), yani eşiği ÇOK YAKIN ZAMANDA aştı ve autovacuum'un bir sonraki tarama döngüsünü (naptime) henüz beklemiyor.",
+                                triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
+                            "Bir sonraki autovacuum_naptime (varsayılan 1dk) döngüsünü bekle; birkaç döngü sonra da tetiklenmezse manuel VACUUM ANALYZE çalıştır."
+                        };
+                    }
                     return new String[]{
-                        String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — normalde tetiklenmiş olmalıydı; olası nedenler: autovacuum_max_workers doygunluğu (başka tablolar sırada) veya çok yakın zamanda eşiği aştı, henüz sıradaki döngüsünü beklemiyor.",
+                        String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — worker durumu okunamadı (fact.pg_activity_snapshot/pg_settings_snapshot henüz toplanmamış olabilir).",
                             triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
-                        "pg_stat_activity'de 'autovacuum worker' backend_type'ını kontrol et — tüm worker'lar başka tablolarla meşgul olabilir; meşgul değilse manuel VACUUM ANALYZE çalıştır."
+                        "Manuel VACUUM ANALYZE çalıştır; bir toplama döngüsü sonrası bu alert tekrar tetiklenirse worker durumu netleşecek."
                     };
                 }
                 return new String[]{

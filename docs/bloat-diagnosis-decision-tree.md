@@ -64,12 +64,31 @@ Sıra önemli — üstteki koşul true ise altındakiler değerlendirilmez (en k
                          çalıştır."
 
        1b-ii. Override yok, autovacuum açık, eşik aşılmış ama hâlâ çalışmamış
-             → TEŞHİS: "Normalde tetiklenmiş olmalıydı; olası nedenler:
-                        autovacuum_max_workers doygunluğu (başka tablolar
-                        sırada) veya çok yakın zamanda eşiği aştı."
-             → AKSİYON: "pg_stat_activity'de 'autovacuum worker' backend_type'ını
-                         kontrol et; meşgul değilse manuel VACUUM ANALYZE
-                         çalıştır."
+             — fact.pg_activity_snapshot'tan (backend_type='autovacuum worker')
+             gerçek çalışan worker sayısı ve fact.pg_settings_snapshot'tan
+             autovacuum_max_workers okunur, "olası nedenler" değil KESİN
+             sonuç verilir:
+
+       1b-ii-a. Çalışan worker sayısı >= autovacuum_max_workers (doygunluk KESİN)
+             → TEŞHİS: "Şu an X/Y autovacuum worker çalışıyor, TÜM WORKER'LAR
+                        DOLU, bu yüzden bu tablo sıraya girip beklemiş."
+             → AKSİYON: "autovacuum_max_workers ayarını artır veya diğer
+                         tabloların vacuum yükünü azalt; bu tabloyu şimdi
+                         manuel VACUUM ANALYZE ile öne al."
+
+       1b-ii-b. Çalışan worker sayısı < autovacuum_max_workers (doygunluk YOK, KESİN)
+             → TEŞHİS: "Şu an X/Y worker çalışıyor (doygunluk yok, boş
+                        kapasite var), yani eşiği ÇOK YAKIN ZAMANDA aştı ve
+                        autovacuum'un bir sonraki tarama döngüsünü (naptime)
+                        henüz beklemiyor."
+             → AKSİYON: "Bir sonraki autovacuum_naptime (varsayılan 1dk)
+                         döngüsünü bekle; birkaç döngü sonra da
+                         tetiklenmezse manuel VACUUM ANALYZE çalıştır."
+
+       1b-ii-c. Worker durumu okunamadı (veri henüz toplanmamış)
+             → TEŞHİS: "Worker durumu okunamadı."
+             → AKSİYON: "Manuel VACUUM ANALYZE çalıştır; bir toplama
+                         döngüsü sonrası netleşecek."
 
    1c. eşik henüz aşılmamış (gerçekten normal, henüz sıra gelmemiş)
        → TEŞHİS: "Henüz gerekmiyor olabilir — eşik henüz aşılmamış,
@@ -142,8 +161,8 @@ tablo için önceki örneğine bakar (pencere dışına taşan, ek bir sorgu).
   1b-ii: override kesin yok). Bu, ilk versiyonda ("bu araç henüz
   toplamıyor") bilinen bir sınırlamaydı; müşteri "bunu da kontrol
   edebilirsin, tespit et" dediği için aynı oturumda kapatıldı.
-- `autovacuum_max_workers` doygunluğu (senaryo 1b-ii) şu an gerçek zamanlı
-  `pg_stat_activity`'den doğrulanmıyor — sadece olası bir neden olarak
-  anılıyor, aksiyon metninde kontrol komutu veriliyor. İleride
-  `fact.pg_activity_snapshot`'ta `backend_type='autovacuum worker'` sayımı
-  eklenirse bu da kesinleştirilebilir.
+- `autovacuum_max_workers` doygunluğu (senaryo 1b-ii) artık `fact.pg_activity_snapshot`
+  (`backend_type='autovacuum worker'`) ve `fact.pg_settings_snapshot`'tan
+  gerçek zamanlı KESİN olarak doğrulanıyor (1b-ii-a/b/c) — ilk versiyonda
+  ("olası nedenler... kontrol et") bilinen bir sınırlamaydı, müşteri "bu
+  net teşhis değil" dediği için aynı oturumda kapatıldı.
