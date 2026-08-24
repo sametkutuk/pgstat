@@ -2618,6 +2618,59 @@
       "next_action": "Deploy AC1-AC5 (./pgstat upgrade); live-verify bloat threshold persistence, per-rule channel routing, and specific-table resolve naming with the customer. Separately, design and implement the AC6 decision tree (root-cause-varying action text) as a follow-up pass using the completed market research."
     },
     {
+      "id": "PGSTAT-P1-009",
+      "order": 44,
+      "priority": "P2",
+      "workstream": "collector",
+      "status": "planned",
+      "title": "Collector restart loses one collection cycle per table/statement due to in-memory prev-value caches",
+      "problem": "While live-verifying PGSTAT-P0-034's VACUUM-resolve fix, discovered that DbObjectsCollector.previousTableStats (a ConcurrentHashMap<String, Map<String,Long>> instance field) is empty right after any collector restart/deploy — its baseline-detection logic (`if (prev == null) continue;`) then treats the FIRST post-restart collection cycle for every table as a fresh baseline and writes zero rows to fact.pg_table_stat_delta, silently skipping that cycle. Confirmed live: a deploy at 12:14:56+03 meant the 12:24:25 collection cycle for instance_pk=26/dbid=62751 produced last_db_objects_collect_at movement but zero fact.pg_table_stat_delta rows; the next cycle (12:39:25) resumed normally. Same in-memory-cache pattern likely exists in StatementsCollector (previousSamples) and possibly other collectors — not confirmed for all of them yet. Impact is a one-cycle (~15-30 min, depending on schedule_profile) gap in delta data per table/statement per restart, not data loss beyond that cycle, and not alert-incorrectness (the hasRecentData guard from PGSTAT-P0-034 already prevents this gap from causing a false auto-resolve).",
+      "requirements": [
+        "Survey every collector with an in-memory prev-value cache (DbObjectsCollector confirmed; check StatementsCollector, ClusterCollector, and any others using a similar baseline-on-null-previous pattern).",
+        "Design a cross-collector-consistent way to persist the last raw (not delta) cumulative values so a restart can rehydrate the cache instead of starting from an empty baseline — likely a new small control/ops table keyed by (instance_pk, collector, entity_key) storing the raw counters as of the last successful cycle.",
+        "Must not change the existing delta semantics (negative delta still means reset/wraparound and is skipped) — this only affects the FIRST post-restart cycle's baseline detection, not ongoing behavior.",
+        "Given the blast radius (touches every collector's core loop), this needs its own design pass before implementation — do not bolt a one-off fix onto a single collector."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A written design (schema + which collectors are affected + rehydration logic) is reviewed and approved before any code changes.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Implementation covers at least DbObjectsCollector and StatementsCollector; mvn compile && mvn test pass.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Live verification: after a deploy/restart, the first post-restart collection cycle for a previously-tracked table/statement produces a normal delta row (not silently skipped) — confirmed via fact.pg_table_stat_delta / fact.pgss_delta sample_ts continuity across a restart.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Not yet designed — this is a placeholder pending a dedicated design pass (see next_action). Survey step: grep every collector for a bare instance-field Map used as a prev-sample cache (DbObjectsCollector.previousTableStats confirmed; StatementsCollector.previousSamples and ClusterCollector are suspects, not yet confirmed)."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: trigger a deploy, immediately compare pre- and post-restart sample_ts rows in the relevant fact tables for a known tracked entity, confirm no gap."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": false,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Discovered and root-caused live on 2026-08-24 while verifying PGSTAT-P0-034's VACUUM-resolve fix: docker inspect confirmed collector restart at 12:14:56+03; control.database_state showed last_db_objects_collect_at advancing to 12:24:25 for the affected instance/database with zero corresponding fact.pg_table_stat_delta rows; the next cycle (12:39:25) resumed normally with a correct delta reflecting the customer's VACUUM FULL. Code read of DbObjectsCollector.java confirmed the root cause: `Map<String, Long> prev = previousTableStats.put(cacheKey, current); if (prev == null) continue;` — an in-memory-only cache with no persistence across restarts.",
+        "Deliberately deferred implementation: the customer asked for 'the logical and healthy' fix, which was assessed as a persisted raw-counter rehydration mechanism — but that touches every collector's core loop and needed its own design pass rather than a same-session bolt-on fix to a single collector."
+      ],
+      "next_action": "Schedule a dedicated design session: survey all collectors for the same in-memory-cache-on-restart pattern, design the persisted raw-state table and rehydration logic, then implement and verify before closing."
+    },
+    {
       "id": "PGSTAT-P0-035",
       "order": 42,
       "priority": "P1",

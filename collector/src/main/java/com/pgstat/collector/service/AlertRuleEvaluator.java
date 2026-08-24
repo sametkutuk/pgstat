@@ -87,6 +87,40 @@ public class AlertRuleEvaluator {
         resolveAlert(alertKey, rule, instancePk, null);
     }
 
+    /**
+     * exceeding.isEmpty() dalinda (artik esigi asan hicbir kayit yok) resolve
+     * bildirimine hangi tablo(lar)in duzeldigini eklemek icin, o alert'in EN
+     * SON acik halindeki details_json'undaki (buildPerRecordsJson ile yazilan
+     * "records" dizisi) kayit etiketlerini okur. Musteri talebi (2026-08-24):
+     * "hangi tablo resolve olduysa resolve mesajinda o sema ve tablo adi
+     * olmali" — birden fazla tablo ayni anda duzelmis olsa da hepsi listelenir.
+     * details_json yoksa/parse edilemezse null doner (resolveAlert generic
+     * etikete duser).
+     */
+    private String previousRecordsLabel(String alertKey, String metricType) {
+        try {
+            String labelExpr = switch (metricType) {
+                case "table_metric" -> "r->>'schemaname' || '.' || r->>'relname'";
+                case "index_metric" -> "r->>'schemaname' || '.' || r->>'indexrelname'";
+                case "statement_metric" -> "'queryid=' || (r->>'queryid')";
+                default -> null;
+            };
+            if (labelExpr == null) return null;
+
+            List<String> labels = jdbc.queryForList(
+                "select distinct " + labelExpr + " as lbl " +
+                "from ops.alert, jsonb_array_elements(details_json->'records') r " +
+                "where alert_key = ? and details_json is not null " +
+                "order by 1 limit 5",
+                String.class, alertKey);
+            if (labels.isEmpty()) return null;
+            return String.join(", ", labels);
+        } catch (Exception e) {
+            log.debug("previousRecordsLabel okunamadi alertKey={}: {}", alertKey, e.getMessage());
+            return null;
+        }
+    }
+
     /** Per-record kaydin (tablo/sorgu/index) okunabilir etiketi — resolve bildiriminde kullanilir. */
     private static String recordLabel(Map<String, Object> record, String metricType) {
         return switch (metricType) {
@@ -1844,7 +1878,7 @@ public class AlertRuleEvaluator {
                 // bosluguna denk gelince yanlislikla resolve edildi).
                 boolean hasData = hasRecentData(instancePk, metricType, windowMinutes);
                 if (hasData && prevSeverity != null && autoResolve) {
-                    resolveAlert(alertKey, rule, instancePk);
+                    resolveAlert(alertKey, rule, instancePk, previousRecordsLabel(alertKey, metricType));
                     updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 }
                 continue;
