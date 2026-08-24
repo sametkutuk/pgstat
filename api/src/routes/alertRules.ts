@@ -174,7 +174,12 @@ router.get('/:id', async (req: Request, res: Response) => {
   if (!id) return res.status(400).json({ error: 'Geçersiz rule_id' });
 
   const result = await pool.query(
-    `select r.*, i.display_name as instance_name
+    `select r.*, i.display_name as instance_name,
+       coalesce((
+         select array_agg(channel_id order by channel_id)
+         from control.alert_rule_notification_channel
+         where rule_id = r.rule_id
+       ), '{}') as notification_channel_ids
      from control.alert_rule r
      left join control.instance_inventory i on i.instance_pk = r.instance_pk
      where r.rule_id = $1`,
@@ -197,7 +202,9 @@ router.post('/', async (req: Request, res: Response, next) => {
       aggregation, evaluation_type, change_threshold_pct, min_data_days,
       alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
       is_enabled, cooldown_minutes, auto_resolve,
-      title_template, message_template
+      title_template, message_template,
+      bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count,
+      notification_channel_ids
     } = req.body;
 
     // Dinamik kolon listesi — DB'deki gerçek kolonlara göre INSERT kur.
@@ -234,6 +241,10 @@ router.post('/', async (req: Request, res: Response, next) => {
       // V030+
       { name: 'title_template', val: title_template ?? null },
       { name: 'message_template', val: message_template ?? null },
+      // V089+ — dead_tuple_ratio uc bacakli bloat override'lari
+      { name: 'bloat_min_rows', val: bloat_min_rows ?? null },
+      { name: 'bloat_abs_dead_tup', val: bloat_abs_dead_tup ?? null },
+      { name: 'bloat_vacuum_ineffective_count', val: bloat_vacuum_ineffective_count ?? null },
     ];
 
     const active = cols.filter(c => existing.has(c.name));
@@ -245,12 +256,35 @@ router.post('/', async (req: Request, res: Response, next) => {
       `insert into control.alert_rule (${colList}) values (${placeholders}) returning *`,
       values
     );
-    res.status(201).json(result.rows[0]);
+    const rule = result.rows[0];
+    await saveNotificationChannelSelection(rule.rule_id, notification_channel_ids);
+    res.status(201).json(rule);
   } catch (e: any) {
     console.error('alert-rules POST failed:', e.message, e.stack);
     res.status(500).json({ error: e.message || 'insert failed' });
   }
 });
+
+/**
+ * Kural bazli bildirim kanali secimini kaydeder (V091). notificationChannelIds
+ * undefined ise mevcut secim dokunulmadan birakilir (PUT'ta bu alan gonderilmezse
+ * eski secim korunur); bos dizi [] gonderilirse tum secimler kaldirilir (kural
+ * tekrar "tum aktif kanallara git" varsayilan davranisina doner).
+ */
+async function saveNotificationChannelSelection(ruleId: number, notificationChannelIds: unknown) {
+  if (notificationChannelIds === undefined) return;
+  const ids = Array.isArray(notificationChannelIds)
+    ? notificationChannelIds.filter((v): v is number => typeof v === 'number')
+    : [];
+  await pool.query('delete from control.alert_rule_notification_channel where rule_id = $1', [ruleId]);
+  if (ids.length > 0) {
+    const values = ids.map((_, i) => `($1, $${i + 2})`).join(', ');
+    await pool.query(
+      `insert into control.alert_rule_notification_channel (rule_id, channel_id) values ${values}`,
+      [ruleId, ...ids]
+    );
+  }
+}
 
 // Kolon listesi cache (60s TTL)
 let columnsCache: { at: number; cols: Set<string> } | null = null;
@@ -281,7 +315,9 @@ router.put('/:id', async (req: Request, res: Response) => {
       aggregation, evaluation_type, change_threshold_pct, min_data_days,
       alert_category, spike_fallback_pct, flatline_minutes, sensitivity, instance_group_id,
       is_enabled, cooldown_minutes, auto_resolve,
-      title_template, message_template
+      title_template, message_template,
+      bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count,
+      notification_channel_ids
     } = req.body;
 
     // Dinamik UPDATE — DB'deki mevcut kolonlara göre set kur
@@ -312,6 +348,10 @@ router.put('/:id', async (req: Request, res: Response) => {
       { name: 'instance_group_id', val: instance_group_id ?? null },
       { name: 'title_template', val: title_template ?? null },
       { name: 'message_template', val: message_template ?? null },
+      // V089+ — dead_tuple_ratio uc bacakli bloat override'lari
+      { name: 'bloat_min_rows', val: bloat_min_rows ?? null },
+      { name: 'bloat_abs_dead_tup', val: bloat_abs_dead_tup ?? null },
+      { name: 'bloat_vacuum_ineffective_count', val: bloat_vacuum_ineffective_count ?? null },
     ];
     const active = cols.filter(c => existing.has(c.name));
     const setSql = active.map((c, i) => `${c.name}=$${i + 1}`).join(', ');
@@ -323,6 +363,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       values
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Kural bulunamadı' });
+    await saveNotificationChannelSelection(id, notification_channel_ids);
     res.json(result.rows[0]);
   } catch (e: any) {
     console.error('alert-rules PUT failed:', e.message, e.stack);

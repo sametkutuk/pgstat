@@ -16,9 +16,9 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 94 |
-| Tables discovered | 92 |
-| Columns discovered | 1151 |
+| Migrations scanned | 95 |
+| Tables discovered | 93 |
+| Columns discovered | 1154 |
 | Indexes discovered | 123 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
@@ -220,6 +220,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.alert_notification | 9 | no |  | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |
 | control.alert_rule | 36 | no |  | V011__alert_rules.sql | V089__bloat_alert_thresholds.sql |
 | control.alert_rule_last_eval | 8 | no |  | V011__alert_rules.sql | V016__smart_alerts.sql |
+| control.alert_rule_notification_channel | 3 | no |  | V091__alert_rule_notification_channel_selection.sql | V091__alert_rule_notification_channel_selection.sql |
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |
 | control.baseline_trigger | 8 | no |  | V020__baseline_trigger.sql | V020__baseline_trigger.sql |
 | control.baseline_version | 11 | no |  | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |
@@ -341,6 +342,16 @@ This generated inventory is the bridge between code and the manual project docum
 | current_severity | text | V011__alert_rules.sql |
 | baseline_value | numeric | V016__smart_alerts.sql |
 | baseline_updated_at | timestamptz | V016__smart_alerts.sql |
+
+</details>
+
+<details><summary>control.alert_rule_notification_channel columns (3)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| rule_id | bigint | V091__alert_rule_notification_channel_selection.sql |
+| channel_id | integer | V091__alert_rule_notification_channel_selection.sql |
+| created_at | timestamptz | V091__alert_rule_notification_channel_selection.sql |
 
 </details>
 
@@ -2006,7 +2017,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/service/AlertService.java | control.instance_inventory, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java | control.baseline_trigger, control.instance_inventory, control.metric_baseline, fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java | control.instance_inventory, control.long_query_subscription, fact.pg_activity_snapshot, ops.alert |
-| collector/src/main/java/com/pgstat/collector/service/NotificationService.java | control.alert_rule, control.alert_snooze, control.maintenance_window, control.notification_channel, control.telegram_message_map, ops.alert, ops.notification_log |
+| collector/src/main/java/com/pgstat/collector/service/NotificationService.java | control.alert_rule, control.alert_rule_notification_channel, control.alert_snooze, control.maintenance_window, control.notification_channel, control.telegram_message_map, ops.alert, ops.notification_log |
 | collector/src/main/java/com/pgstat/collector/service/PartitionManager.java | agg.pg_table_stat_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/PgssResetTracker.java | control.pgss_reset_history, control.pgss_reset_schedule, ops.job_run |
 | collector/src/main/java/com/pgstat/collector/service/PurgeEvaluator.java | agg.pg_activity_hourly, agg.pg_archiver_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_table_stat_hourly, agg.pg_wal_daily, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.instance_inventory, control.report_config, control.retention_policy, control.telegram_message_map, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.audit_log, ops.job_run, ops.job_run_instance, ops.notification_log, ops.report_history |
@@ -2279,7 +2290,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | File | Tables referenced |
 | --- | --- |
 | api/src/routes/adaptiveAlerting.ts | control.alert_rule, control.alert_snooze, control.baseline_trigger, control.baseline_version, control.database_access_subscription, control.instance_group, control.instance_group_member, control.instance_inventory, control.invalidate_baseline, control.long_query_subscription, control.maintenance_window, control.metric_baseline, control.nightly_snapshot_trigger, control.notification_channel, control.slot_lifecycle_subscription, control.slot_observation_state, control.xid_freeze_subscription, fact.pg_activity_snapshot, fact.pg_database_freeze_snapshot, fact.pg_settings_snapshot, ops.alert |
-| api/src/routes/alertRules.ts | control.alert_message_template, control.alert_rule, control.alert_rule_last_eval, control.instance_inventory, ops.alert |
+| api/src/routes/alertRules.ts | control.alert_message_template, control.alert_rule, control.alert_rule_last_eval, control.alert_rule_notification_channel, control.instance_inventory, ops.alert |
 | api/src/routes/alerts.ts | control.alert_rule, control.collector_command, control.instance_inventory, ops.alert |
 | api/src/routes/auditLog.ts | ops.audit_log |
 | api/src/routes/clusters.ts | control.instance_capability, control.instance_inventory, control.instance_state, control.v_cluster_summary, control.v_instance_cluster, ops.alert |

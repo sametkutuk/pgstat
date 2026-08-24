@@ -16,12 +16,12 @@ This file answers the operational contract questions at table/data-family level.
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 92 |
+| Tables analyzed | 93 |
 | Seeded semantic contracts | 46 |
-| Generated defaults needing review | 46 |
-| Tables with detected API consumers | 77 |
-| Tables with inferred UI consumers | 59 |
-| Tables with alert/report/notification consumers | 45 |
+| Generated defaults needing review | 47 |
+| Tables with detected API consumers | 78 |
+| Tables with inferred UI consumers | 60 |
+| Tables with alert/report/notification consumers | 46 |
 
 ## Contract Matrix
 
@@ -41,6 +41,7 @@ This file answers the operational contract questions at table/data-family level.
 | control.alert_notification | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.alert_rule | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | alerts, notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.alert_rule_last_eval | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
+| control.alert_rule_notification_channel | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.alert_snooze | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.baseline_trigger | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.baseline_version | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |

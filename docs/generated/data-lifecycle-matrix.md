@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 92 |
-| Tables without detected retention mapping | 41 |
+| Tables analyzed | 93 |
+| Tables without detected retention mapping | 42 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 3 |
@@ -41,6 +41,7 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 | control.alert_notification | control/config | 9 | sent_at | no | not detected | not detected | no | not detected | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |  |
 | control.alert_rule | control/config | 36 | created_at, updated_at | no | not detected | not detected | no | not detected | V011__alert_rules.sql | V089__bloat_alert_thresholds.sql | collector/service/AlertRuleEvaluator.java<br>collector/service/NotificationService.java |
 | control.alert_rule_last_eval | control/config | 8 | baseline_updated_at, last_alert_at, last_evaluated_at | no | not detected | not detected | no | not detected | V011__alert_rules.sql | V016__smart_alerts.sql | collector/service/AlertRuleEvaluator.java |
+| control.alert_rule_notification_channel | control/config | 3 | created_at | no | not detected | not detected | no | not detected | V091__alert_rule_notification_channel_selection.sql | V091__alert_rule_notification_channel_selection.sql | collector/service/NotificationService.java |
 | control.alert_snooze | control/config | 11 | created_at | no | not detected | not detected | no | not detected | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql | collector/service/NotificationService.java<br>collector/service/TelegramCommandPoller.java |
 | control.baseline_trigger | control/config | 8 | completed_at, requested_at, started_at | no | not detected | not detected | no | not detected | V020__baseline_trigger.sql | V020__baseline_trigger.sql | collector/service/BaselineCalculator.java |
 | control.baseline_version | control/config | 11 | created_at, invalidated_at | no | not detected | not detected | no | not detected | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |  |

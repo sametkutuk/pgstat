@@ -106,8 +106,8 @@ public class NotificationService {
                 return;
             }
 
-            // Aktif kanalları yükle
-            List<Map<String, Object>> channels = loadEnabledChannels(severity);
+            // Aktif kanalları yükle — kural bazlı kanal secimi varsa ona gore filtrelenir
+            List<Map<String, Object>> channels = loadEnabledChannels(severity, alertId);
             if (channels.isEmpty()) return;
 
             for (Map<String, Object> channel : channels) {
@@ -708,11 +708,32 @@ public class NotificationService {
         }
     }
 
-    private List<Map<String, Object>> loadEnabledChannels(String severity) {
+    /**
+     * Aktif kanallari, severity esigine ve (varsa) kural bazli kanal secimine
+     * gore filtreler. Musteri istegi (2026-08-24): "isteyen telegramda isteyen
+     * uida gorsun" — bir alert_rule, control.alert_rule_notification_channel'da
+     * satir eklemisse SADECE o kanallara gonderilir; hic satir yoksa (kural
+     * hicbir kanal secmemis) eski davranis devam eder — tum aktif kanallara
+     * gonderilir. Bu, mevcut kurallari sessizce bildirimsiz birakmaz.
+     */
+    private List<Map<String, Object>> loadEnabledChannels(String severity, long alertId) {
         // 5 severity seviyesi: info < warning < error < critical < emergency.
         // Onceki bug: 'error' siralamada yoktu -> error severity alert'leri (job_failed gibi)
         // bircok kanal filtresinden gecemiyordu.
-        return jdbc.queryForList(
+        Long ruleId = jdbc.query(
+            "select rule_id from ops.alert where alert_id = ?",
+            rs -> rs.next() ? (Long) rs.getObject("rule_id") : null,
+            alertId);
+
+        boolean hasChannelSelection = ruleId != null && Boolean.TRUE.equals(jdbc.queryForObject(
+            "select exists(select 1 from control.alert_rule_notification_channel where rule_id = ?)",
+            Boolean.class, ruleId));
+
+        String ruleFilter = hasChannelSelection
+            ? "  and channel_id in (select channel_id from control.alert_rule_notification_channel where rule_id = ?) "
+            : "";
+
+        String sql =
             "select channel_id, channel_name, channel_type, config::text as config, min_severity " +
             "from control.notification_channel " +
             "where is_enabled = true " +
@@ -724,8 +745,12 @@ public class NotificationService {
             "       <= case ? " +
             "         when 'info' then 0 when 'warning' then 1 " +
             "         when 'error' then 2 when 'critical' then 3 " +
-            "         when 'emergency' then 4 else 0 end)",
-            severity);
+            "         when 'emergency' then 4 else 0 end) " +
+            ruleFilter;
+
+        return hasChannelSelection
+            ? jdbc.queryForList(sql, severity, ruleId)
+            : jdbc.queryForList(sql, severity);
     }
 
     private boolean isAlertSnoozed(String alertKey, String alertCode, Long instancePk) {

@@ -84,11 +84,37 @@ public class AlertRuleEvaluator {
      * ekliyor.
      */
     private void resolveAlert(String alertKey, Map<String, Object> rule, long instancePk) {
+        resolveAlert(alertKey, rule, instancePk, null);
+    }
+
+    /** Per-record kaydin (tablo/sorgu/index) okunabilir etiketi — resolve bildiriminde kullanilir. */
+    private static String recordLabel(Map<String, Object> record, String metricType) {
+        return switch (metricType) {
+            case "table_metric" -> record.get("schemaname") + "." + record.get("relname");
+            case "index_metric" -> record.get("schemaname") + "." + record.get("indexrelname");
+            case "statement_metric" -> {
+                Object seriesId = record.get("statement_series_id");
+                yield seriesId != null ? "queryid=" + record.get("queryid") : null;
+            }
+            default -> null;
+        };
+    }
+
+    /**
+     * detail: granular (per-record) kurallarda hangi tablo/sorgu/index'in
+     * duzeldigini belirtir (orn. "public.t_currency_rate_active") — musteri
+     * geri bildirimi (2026-08-24): "cozuldu" bildirimi sadece instance adini
+     * gosteriyordu, hangi tablonun duzeldigi belirsizdi. null ise (instance/job
+     * bazli alertler gibi granular olmayan durumlar) title'a eklenmez.
+     */
+    private void resolveAlert(String alertKey, Map<String, Object> rule, long instancePk, String detail) {
         String ruleName = (String) rule.get("rule_name");
         String metricType = (String) rule.get("metric_type");
         String metricName = (String) rule.get("metric_name");
         String instanceName = lookupInstanceName(instancePk);
-        String title = String.format("%s - %s", instanceName, ruleName);
+        String title = detail != null && !detail.isBlank()
+            ? String.format("%s - %s (%s)", instanceName, ruleName, detail)
+            : String.format("%s - %s", instanceName, ruleName);
         String message = String.format("Metrik %s.%s tekrar normal seviyede.", metricType, metricName);
         alertRepo.resolveAndNotify(alertKey, title, message);
     }
@@ -1829,7 +1855,9 @@ public class AlertRuleEvaluator {
             BigDecimal currentVal = toBDSafe(top.get("current_val"));
             String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
             if (severity == null) {
-                if (prevSeverity != null && autoResolve) resolveAlert(alertKey, rule, instancePk);
+                if (prevSeverity != null && autoResolve) {
+                    resolveAlert(alertKey, rule, instancePk, recordLabel(top, metricType));
+                }
                 updateLastEval(ruleId, instancePk, currentVal, null);
                 continue;
             }

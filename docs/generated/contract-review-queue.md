@@ -13,9 +13,9 @@ node scripts/generate-doc-inventory.mjs
 
 | Queue | Count | Action |
 | --- | --- | --- |
-| Table/data-family contracts needing semantic review | 46 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 907 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 601 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Table/data-family contracts needing semantic review | 47 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
+| Field contracts needing exact source/version review | 910 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 604 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -37,6 +37,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_notification | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
 | control.alert_rule | control/config | 36 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
 | control.alert_rule_last_eval | control/config | 8 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
+| control.alert_rule_notification_channel | control/config | 3 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_snooze | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.baseline_trigger | control/config | 8 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.baseline_version | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
@@ -189,6 +190,9 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_rule_last_eval.last_evaluated_at | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule_last_eval.last_value | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule_last_eval.rule_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule_notification_channel.channel_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule_notification_channel.created_at | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule_notification_channel.rule_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_snooze.alert_code | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_snooze.alert_key | secret/config sensitive | blocked | control/context when explicitly contracted | needs field-level review |
 | control.alert_snooze.created_at | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

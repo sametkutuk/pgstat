@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 6,
+    "max_in_progress": 7,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2537,7 +2537,85 @@
         "Customer then asked why no 'resolved' notification appeared in Telegram even though the alert correctly closed in the UI/DB. Investigation: alertRepo.resolve(alertKey) across the entire collector (12 call sites in AlertRuleEvaluator plus AlertService/LongRunningQueryEvaluator/SlotLifecycleEvaluator) only ever updated ops.alert's status column — none of them called the existing alertRepo.resolveAndNotify(alertKey, title, message), which is the only path that fires a 'Resolved: ...' notification. This was pre-existing behavior across the whole codebase, not something introduced by today's fixes. Fixed by switching every resolve() call site to resolveAndNotify(), adding a resolveAlert() helper in AlertRuleEvaluator (builds a generic 'instance - rule_name' title since exact original alert text isn't reliably available at every call site) and a fetchOpenAlertTitle() helper in AlertService (looks up the still-open alert's title from ops.alert, since those methods don't receive title as a parameter).",
         "SERIOUS REGRESSION found shortly after that deploy: customer reported the entire dead_tuple_ratio alert list had gone empty in the UI, even though they had only manually fixed one table. Querying ops.alert for alert_key like 'rule:14:instance:%' showed all 11 instances had transitioned to status='resolved' within a ~2-minute window (18:29-18:31) right after the cooldown/resolve-separation deploy — clearly not 11 simultaneous real fixes. Cross-checked the actual data: querying fact.pg_table_stat_delta directly for the specific bloated tables (test-etsrooms-166-52's and sam-ets's t_currency_rate_active, both previously ~99%+) showed they were STILL at ~99% bloat at query time, unresolved. Running findBloatedTables()'s exact SQL by hand for one affected instance correctly returned the bloated table in the exceeding set — so the SQL itself was fine. The actual root cause: at the exact moment the evaluator ran right after deploy, that instance's fact.pg_table_stat_delta had no sample newer than 'now() - windowMinutes' (its ~15-30 minute collection cycle happened to leave a gap spanning the evaluation window) — findRecordsExceedingThreshold legitimately found zero rows, which the evaluator's exceeding.isEmpty() branch could not distinguish from 'the bloat is actually gone,' so it auto-resolved 11 alerts that were still genuinely critical. This gap between collection interval and evaluation window is a pre-existing structural risk in evaluateThresholdPerRecord that the cooldown fix (which finally let resolve execute) made visible for the first time — cooldown was previously masking it by coincidence. Fixed with a new hasRecentData(instancePk, metricType, windowMinutes) guard: before auto-resolving on an empty exceeding list, confirm at least one row exists for that instance in the relevant fact table within the window; if not, skip (don't resolve, don't update last_eval) and let the next cycle re-check once fresh data has landed."
       ],
-      "next_action": "Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted."
+      "next_action": "Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted.",
+      "customer_acceptance_note": "Customer confirmed after deploying the hasRecentData guard: the 11 alerts correctly reopened. Two new pieces of feedback surfaced from watching the live notification stream, tracked separately as PGSTAT-P0-036: (1) repeat notifications for the same still-open alert felt too frequent — root cause is the rule's cooldown_minutes=60 setting, not a bug, and the customer was pointed to the existing AlertRules UI control (Step 4, 'Tekrar Alert Cooldown' dropdown, up to 360 minutes) to self-adjust; (2) the resolve notification only named the instance, not which specific table had recovered, and the fixed action text ('tablo istatistiklerine ve autovacuum/index ihtiyacına bak') never varied by root cause."
+    },
+    {
+      "id": "PGSTAT-P0-036",
+      "order": 43,
+      "priority": "P1",
+      "workstream": "alerting",
+      "status": "in_progress",
+      "title": "Bloat alert follow-ups: missing API wiring, resolve notification detail, per-rule channel selection, evidence-based action text",
+      "problem": "While watching the redesigned dead_tuple_ratio alert live (PGSTAT-P0-034), four related gaps surfaced: (1) bloat_min_rows/bloat_abs_dead_tup/bloat_vacuum_ineffective_count were added to the UI form and the alert_rule schema (V089) but never wired into the alertRules.ts POST/PUT routes — a customer entering custom values in the UI had them silently discarded, the code-side defaults were always used regardless of what was typed. (2) The 'Resolved: ...' notification (added earlier today) only includes instance + rule name, not which specific table recovered, making it hard to tell what was actually fixed when several tables shared one rule. (3) Customer asked for a per-rule choice of which notification channels an alert goes to ('isteyen telegramda isteyen uida isteyen ikisinde de görsün') — no such control existed; every rule went to every enabled channel matching severity. (4) The fixed action text in the table_threshold message never varies by root cause — customer wants an evidence-based diagnosis (autovacuum never ran vs. running but ineffective vs. running effectively but blocked by xmin horizon vs. a genuinely new/growing trend), researched against real PostgreSQL guidance, not a single generic sentence.",
+      "requirements": [
+        "Fix the alertRules.ts POST/PUT routes to actually persist bloat_min_rows/bloat_abs_dead_tup/bloat_vacuum_ineffective_count from the request body.",
+        "Resolve notifications for granular (per-record) rules should name the specific table/query/index that recovered when that information is available at the call site; when it's genuinely ambiguous (e.g. the whole exceeding set went empty, not just the top record), fall back to the existing instance+rule_name label rather than fabricating a false specific.",
+        "Add a many-to-many rule-to-channel selection: a rule with no selected channels keeps today's behavior (goes to every enabled channel matching severity); a rule with at least one selected channel goes only to those. Must be visible/editable in AlertRules.tsx per rule.",
+        "Research-backed, root-cause-varying action text for the dead_tuple_ratio bloat alert, grounded in real PostgreSQL/vacuum internals and cited sources — not a guess. Must distinguish at minimum: autovacuum never triggered vs. running but throttled/ineffective vs. running frequently but blocked (xmin horizon / long transactions / stale replication slots) vs. a fresh/growing trend that may still self-correct."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "alertRules.ts POST and PUT both include bloat_min_rows/bloat_abs_dead_tup/bloat_vacuum_ineffective_count in the dynamic column list, so values entered in the UI are actually saved.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "AlertRuleEvaluator's resolveAlert() helper gains an optional detail parameter; the severity==null resolve branch in evaluateThresholdPerRecord passes the top record's table/index/query label (via a new recordLabel() helper) so the notification names what specifically recovered. The exceeding.isEmpty() branch (ambiguous — could be one or many records) keeps the generic instance+rule_name label.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "V091 migration adds control.alert_rule_notification_channel (rule_id, channel_id many-to-many); NotificationService.loadEnabledChannels(severity, alertId) looks up the alert's rule_id from ops.alert and, if that rule has any rows in the new table, filters to only those channel_ids — otherwise keeps today's 'every enabled channel' behavior.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "AlertRules.tsx exposes a channel checklist (fetched from GET /api/adaptive-alerting/notification-channels) in the rule form's Behavior step; selections round-trip through GET /:id (notification_channel_ids array), POST, and PUT.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn compile && mvn test (collector) and npx tsc --noEmit (both api and ui) all pass.",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "Root-cause-varying action text for dead_tuple_ratio implemented in AlertRuleEvaluator/V090 template, backed by cited PostgreSQL sources (postgresql.org docs, Citus/pganalyze engineering blogs), covering at minimum the four scenarios in requirements.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "api/src/routes/alertRules.ts: add bloat_* fields and notification_channel_ids to the destructured request body and the dynamic cols array in both POST and PUT; add saveNotificationChannelSelection() helper (delete-then-insert into control.alert_rule_notification_channel) called after both routes' main upsert; GET /:id left-joins/aggregates notification_channel_ids as an array.",
+        "db/migrations/V091__alert_rule_notification_channel_selection.sql: many-to-many join table, cascade deletes on both sides.",
+        "collector AlertRuleEvaluator.java: resolveAlert() overload with detail param appends '(detail)' to the title; new recordLabel(record, metricType) static helper builds a schema.table / schema.index / queryid=N label depending on metric type.",
+        "collector NotificationService.java: loadEnabledChannels() takes alertId, looks up rule_id from ops.alert, checks control.alert_rule_notification_channel for any row, and conditionally adds a channel_id IN (...) filter.",
+        "ui AlertRules.tsx: NotificationChannel interface + query, checklist UI in the Behavior step, notification_channel_ids threaded through form state/emptyForm/edit-populate (handleSave already spreads ...form so no extra payload wiring needed).",
+        "Action-text redesign (AC6) deferred to a follow-up implementation pass — requires the market research already gathered (autovacuum internals, xmin horizon, check_postgres message conventions) to be turned into a decision tree inside AlertRuleEvaluator's message-building code, plus new context fields (last_autovacuum, trend direction) that may require additional queries against fact.pg_table_stat_delta."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test (collector); npx tsc --noEmit (api); npx tsc --noEmit (ui)",
+        "Live: ./pgstat migrate + upgrade; edit rule_id=14 in the UI, set custom bloat_min_rows/bloat_abs_dead_tup, save, reload the rule and confirm the values persisted (not reset to blank/default).",
+        "Live: select a specific channel (e.g. only the UI/no-Telegram option by selecting a non-Telegram channel, or the reverse) for one rule, trigger/wait for that rule's alert, confirm it only notifies through the selected channel(s) while other rules keep going to all channels.",
+        "Live: wait for a granular rule's alert to resolve via the severity==null path and confirm the notification names the specific table/index/query, not just the instance."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer live-watched the Telegram stream after PGSTAT-P0-034's fixes deployed and reported: repeat notifications felt too frequent (resolved via existing cooldown_minutes UI control, not a code change), resolve notifications didn't name the specific table, no way to route a rule to a subset of channels, and the action text never varied by cause.",
+        "Confirmed via code read that bloat_min_rows/bloat_abs_dead_tup/bloat_vacuum_ineffective_count were present in the AlertRules.tsx form and the V089 migration/schema but absent from alertRules.ts's POST/PUT destructured body and dynamic column list — any value a customer entered in the UI was silently dropped before reaching the database.",
+        "mvn compile, mvn test (collector), npx tsc --noEmit (api), npx tsc --noEmit (ui) all pass with the AC1-AC5 implementation.",
+        "Market research completed for AC6 (background agent), covering: autovacuum never-triggered scenarios (postgresql.org runtime-config-vacuum docs), autovacuum-running-but-ineffective diagnosis via pg_stat_progress_vacuum/pg_stat_activity (Citus engineering blog), the xmin-horizon-blocks-cleanup scenario via pg_stat_activity.backend_xmin/pg_replication_slots (pganalyze blog), trend-based urgency framing (pganalyze autovacuum visualization blog), and check_postgres's own check_bloat message conventions (verified against its GitHub source). AC6 implementation itself deferred — needs a decision-tree design pass before coding."
+      ],
+      "next_action": "Deploy AC1-AC5 (./pgstat upgrade); live-verify bloat threshold persistence, per-rule channel routing, and specific-table resolve naming with the customer. Separately, design and implement the AC6 decision tree (root-cause-varying action text) as a follow-up pass using the completed market research."
     },
     {
       "id": "PGSTAT-P0-035",

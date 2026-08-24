@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 42 |
+| Total tasks | 43 |
 | Done tasks | 16 |
-| Remaining tasks | 26 |
-| Max in progress | 6 |
+| Remaining tasks | 27 |
+| Max in progress | 7 |
 
 ## Current Focus
 
@@ -33,14 +33,14 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 16 |
-| in_progress | 6 |
+| in_progress | 7 |
 | planned | 20 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 2 |
+| alerting | 3 |
 | contracts | 2 |
 | governance | 5 |
 | operations | 13 |
@@ -97,6 +97,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 40 | PGSTAT-P0-033 | P0 | operations | in_progress | TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files | Continue passive monitoring for a few more days (no action needed unless a new temp-file report surfaces); consider closing the task fully and moving customer_acceptance to accepted once the customer explicitly signs off. |
 | 41 | PGSTAT-P0-034 | P0 | alerting | in_progress | dead_tuple_ratio alert rule redesigned with a 3-signal bloat/vacuum-ineffectiveness model | Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted. |
 | 42 | PGSTAT-P0-035 | P1 | alerting | in_progress | table_threshold alert message is too dense to scan when several arrive at once | Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan. |
+| 43 | PGSTAT-P0-036 | P1 | alerting | in_progress | Bloat alert follow-ups: missing API wiring, resolve notification detail, per-rule channel selection, evidence-based action text | Deploy AC1-AC5 (./pgstat upgrade); live-verify bloat threshold persistence, per-rule channel routing, and specific-table resolve naming with the customer. Separately, design and implement the AC6 decision tree (root-cause-varying action text) as a follow-up pass using the completed market research. |
 
 ## Dependency Map
 
@@ -144,6 +145,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-033 | - | - |
 | PGSTAT-P0-034 | - | - |
 | PGSTAT-P0-035 | - | - |
+| PGSTAT-P0-036 | - | - |
 
 ## Closure Rules
 

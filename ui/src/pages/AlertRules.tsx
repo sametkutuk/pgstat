@@ -47,11 +47,21 @@ interface AlertRule {
   bloat_min_rows: number | null;
   bloat_abs_dead_tup: number | null;
   bloat_vacuum_ineffective_count: number | null;
+  // Kural bazli bildirim kanali secimi (V091). Bos dizi = tum aktif kanallara
+  // git (varsayilan/eski davranis); doluysa sadece belirtilen kanallara git.
+  notification_channel_ids: number[];
 }
 
 interface Instance {
   instance_pk: number;
   display_name: string;
+}
+
+interface NotificationChannel {
+  channel_id: number;
+  channel_name: string;
+  channel_type: string;
+  is_enabled: boolean;
 }
 
 // Her metrik için label, birim ve placeholder bilgisi
@@ -273,6 +283,8 @@ const emptyForm = {
   bloat_min_rows: '' as string | number,
   bloat_abs_dead_tup: '' as string | number,
   bloat_vacuum_ineffective_count: '' as string | number,
+  // Bos = tum aktif kanallara git (varsayilan)
+  notification_channel_ids: [] as number[],
 };
 
 // =========================================================================
@@ -818,8 +830,14 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       bloat_min_rows: rule.bloat_min_rows ?? '' as string | number,
       bloat_abs_dead_tup: rule.bloat_abs_dead_tup ?? '' as string | number,
       bloat_vacuum_ineffective_count: rule.bloat_vacuum_ineffective_count ?? '' as string | number,
+      notification_channel_ids: rule.notification_channel_ids ?? [],
     } : { ...emptyForm }
   );
+
+  const { data: channels = [] } = useQuery<NotificationChannel[]>({
+    queryKey: ['notification-channels-for-rule'],
+    queryFn: () => apiGet('/adaptive-alerting/notification-channels'),
+  });
 
   const { data: instances = [] } = useQuery<Instance[]>({
     queryKey: ['instances-list'],
@@ -1238,6 +1256,35 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                     className="accent-[#3B82F6] w-4 h-4" />
                   <span className="text-sm text-[#1E293B]">Kural aktif olsun</span>
                 </label>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#475569] mb-1">
+                  Bildirim Kanalları <span className="text-[#94A3B8] font-normal">— hepsi boş bırakılırsa tüm aktif kanallara gider</span>
+                </label>
+                {channels.length === 0 ? (
+                  <p className="text-xs text-[#94A3B8]">Henüz bildirim kanalı tanımlı değil (Ayarlar → Bildirim Kanalları).</p>
+                ) : (
+                  <div className="border border-[#E2E8F0] rounded-md divide-y divide-[#E2E8F0]">
+                    {channels.map(ch => {
+                      const checked = form.notification_channel_ids.includes(ch.channel_id);
+                      return (
+                        <label key={ch.channel_id} className="flex items-center gap-2 px-3 py-2 cursor-pointer text-sm">
+                          <input type="checkbox" checked={checked}
+                            onChange={e => set('notification_channel_ids', e.target.checked
+                              ? [...form.notification_channel_ids, ch.channel_id]
+                              : form.notification_channel_ids.filter(id => id !== ch.channel_id))}
+                            className="accent-[#3B82F6] w-4 h-4" />
+                          <span className="text-[#1E293B]">{ch.channel_name}</span>
+                          <span className="text-xs text-[#94A3B8]">({ch.channel_type})</span>
+                          {!ch.is_enabled && <span className="text-xs text-[#EF4444]">devre dışı</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-xs text-[#64748B] mt-1">
+                  Alert her durumda UI/Alertler ekranında görünür. Bu seçim sadece Telegram/e-posta/vb. bildirim kanallarını filtreler.
+                </p>
               </div>
             </>
           )}
