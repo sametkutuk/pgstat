@@ -38,11 +38,39 @@ Sıra önemli — üstteki koşul true ise altındakiler değerlendirilmez (en k
 
 ```
 1. last_autovacuum IS NULL VE last_vacuum IS NULL
-   → TEŞHİS: "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel)."
-   → AKSİYON: "autovacuum_enabled ayarını (tablo düzeyinde ve postgresql.conf'ta)
-               kontrol et; ölü satır eşiği (autovacuum_vacuum_threshold +
-               autovacuum_vacuum_scale_factor × canlı satır) henüz aşılmamış
-               olabilir — manuel VACUUM ANALYZE ile hemen düzelt."
+   → fact.pg_settings_snapshot'tan autovacuum/autovacuum_vacuum_scale_factor/
+     autovacuum_vacuum_threshold okunur (gece toplanır, V039), eşik
+     n_live_tup ile birlikte KESİN hesaplanır — "kontrol et" değil,
+     doğrudan sonuç söylenir (musteri talebi 2026-08-24: "bizde tüm
+     veriler var, kontrol et diyorsun ama biliyoruz olmalı"):
+
+   1a. autovacuum = 'off' (global)
+       → TEŞHİS: "Bu tablo hiç vacuum edilmemiş — instance genelinde
+                  autovacuum kapalı (autovacuum=off)."
+       → AKSİYON: "postgresql.conf'ta autovacuum=on yap ve reload et;
+                   manuel VACUUM ANALYZE ile mevcut bloat'u hemen temizle."
+
+   1b. eşik (threshold + scale_factor × live_tup) dead_tup tarafından
+       AŞILMIŞ ama hâlâ hiç vacuum çalışmamış
+       → TEŞHİS: "Autovacuum açık ama tetikleme eşiği çoktan aşılmış,
+                  normalde tetiklenmiş olmalıydı — tabloya özel
+                  autovacuum_enabled=off override'ı olabilir (pg_class.reloptions,
+                  bu araç henüz toplamıyor — bilinen sınırlama, aşağıya bak)."
+       → AKSİYON: "SELECT reloptions FROM pg_class WHERE oid = '<şema.tablo>'::regclass;
+                   ile kontrol et; varsa kaldır veya manuel VACUUM ANALYZE çalıştır."
+
+   1c. eşik henüz aşılmamış (gerçekten normal, henüz sıra gelmemiş)
+       → TEŞHİS: "Henüz gerekmiyor olabilir — eşik henüz aşılmamış,
+                  bu tablo mutlak dead-tuple eşiğiyle (Bacak B) yakalandı."
+       → AKSİYON: "Düşük satır sayılı ama kritik bir tablo olabilir;
+                   manuel VACUUM ANALYZE ile temizle."
+
+   1d. pg_settings_snapshot henüz toplanmamış (yeni instance, gece
+       toplaması henüz olmamış)
+       → TEŞHİS: "Hiç vacuum edilmemiş; global ayarlar henüz
+                  toplanmadığı için kesin eşik hesabı yapılamadı."
+       → AKSİYON: "Manuel VACUUM ANALYZE çalıştır; gece toplaması
+                   sonrası eşik hesabı netleşecek."
 
 2. xmin horizon engeli var (pg_activity_snapshot'ta bu instance için
    xact_start çok eski (>10dk) açık bir transaction VAR, veya
@@ -95,3 +123,11 @@ tablo için önceki örneğine bakar (pencere dışına taşan, ek bir sorgu).
   okumuyoruz (bu, `pg_settings`'ten ayrı bir sorgu gerektirir) — senaryo 3'ün
   aksiyon metni jenerik ayar isimlerini anıyor, gerçek değerleri göstermiyor.
   İleride `pg_settings` toplama genişletilirse buraya eklenebilir.
+- Tablo-özel `autovacuum_enabled` override'ı (`pg_class.reloptions`) şu an
+  toplanmıyor — sadece **global** `autovacuum`/`autovacuum_vacuum_scale_factor`/
+  `autovacuum_vacuum_threshold` (`fact.pg_settings_snapshot`, gece toplanır,
+  V039) kullanılıyor. Senaryo 1b bu sınırlamayı teşhis metninde açıkça
+  belirtir ve kullanıcıya kontrol edeceği tam SQL sorgusunu (`SELECT
+  reloptions FROM pg_class ...`) verir — "kontrol et" demekten kaçınmak
+  için elimizdeki veriyle gidebildiğimiz en uzak noktaya kadar gidip, gerçek
+  sınırı da saklamadan söylüyoruz.

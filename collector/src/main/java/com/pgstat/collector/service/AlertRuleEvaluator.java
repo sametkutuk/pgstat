@@ -2690,6 +2690,47 @@ public class AlertRuleEvaluator {
     }
 
     /**
+     * Instance'in global autovacuum ayarlarini fact.pg_settings_snapshot'tan
+     * okur (gece toplanir, bkz. V039). Musteri talebi (2026-08-24): "kontrol
+     * et" gibi belirsiz aksiyon onerileri yerine, elimizdeki gercek veriyle
+     * KESIN teshis yapilmali — "autovacuum_enabled ayarini kontrol et" degil,
+     * "canli/olu satir sayisina gore tetikleme esigi X coktan asilmis ama
+     * global autovacuum='off'" gibi.
+     * Tablo-duzeyinde autovacuum_enabled override'i (pg_class.reloptions) su an
+     * toplanmiyor — bu yuzden global ayar kesin, tablo-ozel override kesin
+     * degil; diagnoseBloat bunu acikca belirtir (bkz. docs/bloat-diagnosis-decision-tree.md).
+     *
+     * @return [autovacuumOn(Boolean), scaleFactor(BigDecimal), threshold(Long)] — degerler bulunamazsa null.
+     */
+    private Object[] fetchAutovacuumSettings(long instancePk) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "select distinct on (setting_name) setting_name, setting_value " +
+                "from fact.pg_settings_snapshot " +
+                "where instance_pk = ? and setting_name in " +
+                "  ('autovacuum', 'autovacuum_vacuum_scale_factor', 'autovacuum_vacuum_threshold') " +
+                "order by setting_name, snapshot_ts desc",
+                instancePk);
+            Boolean autovacuumOn = null;
+            BigDecimal scaleFactor = null;
+            Long threshold = null;
+            for (Map<String, Object> row : rows) {
+                String name = (String) row.get("setting_name");
+                String value = (String) row.get("setting_value");
+                switch (name) {
+                    case "autovacuum" -> autovacuumOn = "on".equalsIgnoreCase(value);
+                    case "autovacuum_vacuum_scale_factor" -> scaleFactor = new BigDecimal(value);
+                    case "autovacuum_vacuum_threshold" -> threshold = Long.parseLong(value);
+                }
+            }
+            return new Object[]{autovacuumOn, scaleFactor, threshold};
+        } catch (Exception e) {
+            log.debug("fetchAutovacuumSettings okunamadi instance={}: {}", instancePk, e.getMessage());
+            return new Object[]{null, null, null};
+        }
+    }
+
+    /**
      * Bir instance'ta uzun suredir acik (xact_start > 10dk once) bir transaction
      * veya pasif (active=false) bir replication slot var mi kontrol eder —
      * "autovacuum calisiyor ama xmin horizon engelliyor" senaryosunun kaniti
@@ -2734,12 +2775,42 @@ public class AlertRuleEvaluator {
         Long autovacuumCountSum = record.get("autovacuum_count_sum") instanceof Number n ? n.longValue() : 0L;
         Object prevDeadTupObj = record.get("prev_dead_tup");
         Long currentDeadTup = record.get("dead_tup") instanceof Number n ? n.longValue() : null;
+        Long liveTup = record.get("live_tup") instanceof Number n ? n.longValue() : null;
 
-        // Senaryo 1: hic vacuum edilmemis (otomatik veya manuel)
+        // Senaryo 1: hic vacuum edilmemis (otomatik veya manuel). "Kontrol et"
+        // demek yerine elimizdeki gercek veriyle (fact.pg_settings_snapshot,
+        // canli/olu satir) KESIN teshis yapiyoruz — musteri talebi 2026-08-24:
+        // "biz de tum veriler var, neden olabilir kontrol et diyorsun".
         if (lastAutovacuum == null && lastVacuum == null) {
+            Object[] settings = fetchAutovacuumSettings(instancePk);
+            Boolean autovacuumOn = (Boolean) settings[0];
+            BigDecimal scaleFactor = (BigDecimal) settings[1];
+            Long avThreshold = (Long) settings[2];
+
+            if (Boolean.FALSE.equals(autovacuumOn)) {
+                return new String[]{
+                    "Bu tablo hiç vacuum edilmemiş — instance genelinde autovacuum kapalı (autovacuum=off)." ,
+                    "postgresql.conf'ta autovacuum=on yap ve reload et; bu tablo için manuel VACUUM ANALYZE çalıştırarak mevcut bloat'u hemen temizle."
+                };
+            }
+            if (scaleFactor != null && avThreshold != null && liveTup != null) {
+                long triggerThreshold = avThreshold + scaleFactor.multiply(BigDecimal.valueOf(liveTup)).longValue();
+                if (currentDeadTup != null && currentDeadTup >= triggerThreshold) {
+                    return new String[]{
+                        String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — normalde tetiklenmiş olmalıydı, bu tablo için ayrı bir autovacuum_enabled=off override'ı olabilir (pg_class.reloptions, bu araç henüz toplamıyor).",
+                            triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
+                        "SELECT reloptions FROM pg_class WHERE oid = '<şema.tablo>'::regclass; ile bu tabloya özel autovacuum_enabled=off override'ı olup olmadığını kontrol et; varsa kaldır veya manuel VACUUM ANALYZE çalıştır."
+                    };
+                }
+                return new String[]{
+                    String.format("Bu tablo hiç vacuum edilmemiş ama henüz gerekmiyor olabilir — autovacuum tetikleme eşiği (%d = %d + %.2f × %d canlı satır) şu an %d ölü satırla henüz aşılmamış.",
+                        triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup != null ? currentDeadTup : 0),
+                    "Bu tablo mutlak dead-tuple eşiğiyle (Bacak B) yakalandı, oran eşiğinden değil — düşük satır sayılı ama kritik bir tablo olabilir; manuel VACUUM ANALYZE ile temizle."
+                };
+            }
             return new String[]{
-                "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel).",
-                "autovacuum_enabled ayarını (tablo düzeyinde ve postgresql.conf'ta) kontrol et; ölü satır eşiği (autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × canlı satır) henüz aşılmamış olabilir — manuel VACUUM ANALYZE ile hemen düzelt."
+                "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel); global autovacuum ayarları henüz toplanmamış (fact.pg_settings_snapshot boş veya gece toplaması yapılmamış), kesin eşik hesabı yapılamadı.",
+                "Manuel VACUUM ANALYZE çalıştır; bir gece toplaması geçtikten sonra bu alert tekrar tetiklenirse eşik hesabı otomatik olarak netleşecek."
             };
         }
 
