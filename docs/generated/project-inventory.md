@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 96 |
-| Tables discovered | 93 |
-| Columns discovered | 1154 |
-| Indexes discovered | 123 |
+| Migrations scanned | 97 |
+| Tables discovered | 94 |
+| Columns discovered | 1162 |
+| Indexes discovered | 124 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
 | API ColumnRegistry objects discovered | 33 |
@@ -251,6 +251,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.slot_lifecycle_subscription | 11 | no |  | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql |
 | control.slot_observation_state | 10 | no |  | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql |
 | control.system_alert_config | 11 | no |  | V042__system_alert_config.sql | V065__alert_intervals_and_cleanup.sql |
+| control.table_relopts_snapshot | 8 | no |  | V093__table_relopts_snapshot.sql | V093__table_relopts_snapshot.sql |
 | control.telegram_command_allowlist | 5 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
 | control.telegram_message_map | 8 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
 | control.telegram_poll_state | 3 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
@@ -890,6 +891,21 @@ This generated inventory is the bridge between code and the manual project docum
 | window_minutes | integer | V062__alert_window_minutes.sql |
 | is_event_type | boolean | V065__alert_intervals_and_cleanup.sql |
 | include_in_daily_report | boolean | V065__alert_intervals_and_cleanup.sql |
+
+</details>
+
+<details><summary>control.table_relopts_snapshot columns (8)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| instance_pk | bigint | V093__table_relopts_snapshot.sql |
+| dbid | oid | V093__table_relopts_snapshot.sql |
+| relid | oid | V093__table_relopts_snapshot.sql |
+| schemaname | text | V093__table_relopts_snapshot.sql |
+| relname | text | V093__table_relopts_snapshot.sql |
+| autovacuum_enabled | boolean | V093__table_relopts_snapshot.sql |
+| reloptions_raw | text | V093__table_relopts_snapshot.sql |
+| updated_at | timestamptz | V093__table_relopts_snapshot.sql |
 
 </details>
 
@@ -1972,13 +1988,13 @@ PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_control_system`, `pg
 
 Methods: `activityQuery`, `familyCode`, `pgssStatsQuery`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
 
-PostgreSQL source tokens: `pg_backend_pid`, `pg_current_wal_lsn`, `pg_database`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_tables`
+PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg14_16Queries.java
 
 Methods: `activityQuery`, `computeQueryIdQuery`, `databaseStatsQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `pgssStatsQuery`, `progressCopyQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `subscriptionQuery`, `tableStatsQuery`, `walQuery`
 
-PostgreSQL source tokens: `pg_backend_pid`, `pg_current_wal_lsn`, `pg_database`, `pg_index`, `pg_locks`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_copy`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_indexes`, `pg_statio_user_tables`
+PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_index`, `pg_locks`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_copy`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_indexes`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg17_18Queries.java
 
@@ -2006,14 +2022,14 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/repository/AlertRepository.java | ops.alert |
 | collector/src/main/java/com/pgstat/collector/repository/CapabilityRepository.java | control.instance_capability |
 | collector/src/main/java/com/pgstat/collector/repository/DimensionRepository.java | dim.database_ref, dim.query_text, dim.relation_ref, dim.role_ref, dim.statement_series |
-| collector/src/main/java/com/pgstat/collector/repository/FactRepository.java | fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |
+| collector/src/main/java/com/pgstat/collector/repository/FactRepository.java | control.table_relopts_snapshot, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/repository/InventoryRepository.java | control.database_state, control.instance_inventory, control.instance_state, control.schedule_profile, dim.database_ref |
 | collector/src/main/java/com/pgstat/collector/repository/OpsRepository.java | ops.job_run, ops.job_run_instance |
 | collector/src/main/java/com/pgstat/collector/repository/ReportConfigRepository.java | control.report_config |
 | collector/src/main/java/com/pgstat/collector/repository/ReportHistoryRepository.java | ops.report_history |
 | collector/src/main/java/com/pgstat/collector/repository/StateRepository.java | control.database_state, control.instance_inventory, control.instance_state |
 | collector/src/main/java/com/pgstat/collector/service/AlertMessageRenderer.java | control.alert_message_template |
-| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | control.alert_rule, control.alert_rule_last_eval, control.get_baseline, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
+| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | control.alert_rule, control.alert_rule_last_eval, control.get_baseline, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/AlertService.java | control.instance_inventory, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java | control.baseline_trigger, control.instance_inventory, control.metric_baseline, fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java | control.instance_inventory, control.long_query_subscription, fact.pg_activity_snapshot, ops.alert |

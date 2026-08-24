@@ -204,10 +204,12 @@ public class Pg14_16Queries extends Pg13Queries {
               coalesce((src.j->>'total_vacuum_time')::double precision, 0) as total_vacuum_time,
               coalesce((src.j->>'total_autovacuum_time')::double precision, 0) as total_autovacuum_time,
               coalesce((src.j->>'total_analyze_time')::double precision, 0) as total_analyze_time,
-              coalesce((src.j->>'total_autoanalyze_time')::double precision, 0) as total_autoanalyze_time
+              coalesce((src.j->>'total_autoanalyze_time')::double precision, 0) as total_autoanalyze_time,
+              array_to_string(c.reloptions, ',') as reloptions_raw
             from pg_stat_user_tables s
             join src on src.relid = s.relid
             left join pg_statio_user_tables io on io.relid = s.relid
+            left join pg_class c on c.oid = s.relid
             """;
     }
 

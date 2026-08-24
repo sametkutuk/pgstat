@@ -91,9 +91,11 @@ public class Pg13Queries extends Pg11_12Queries {
               0::double precision as total_vacuum_time,
               0::double precision as total_autovacuum_time,
               0::double precision as total_analyze_time,
-              0::double precision as total_autoanalyze_time
+              0::double precision as total_autoanalyze_time,
+              array_to_string(c.reloptions, ',') as reloptions_raw
             from pg_stat_user_tables s
             left join pg_statio_user_tables io on io.relid = s.relid
+            left join pg_class c on c.oid = s.relid
             """;
     }
 

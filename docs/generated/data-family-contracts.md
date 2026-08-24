@@ -16,12 +16,12 @@ This file answers the operational contract questions at table/data-family level.
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 93 |
+| Tables analyzed | 94 |
 | Seeded semantic contracts | 46 |
-| Generated defaults needing review | 47 |
+| Generated defaults needing review | 48 |
 | Tables with detected API consumers | 78 |
 | Tables with inferred UI consumers | 60 |
-| Tables with alert/report/notification consumers | 46 |
+| Tables with alert/report/notification consumers | 47 |
 
 ## Contract Matrix
 
@@ -72,6 +72,7 @@ This file answers the operational contract questions at table/data-family level.
 | control.slot_lifecycle_subscription | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.slot_observation_state | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.system_alert_config | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
+| control.table_relopts_snapshot | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.telegram_command_allowlist | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/telegramAllowlist.ts (4 routes) | not detected | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.telegram_message_map | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | fixed 7 days in PurgeEvaluator | collector/service/PurgeEvaluator.java | not detected | not detected | not detected | not detected | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.telegram_poll_state | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |

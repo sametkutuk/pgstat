@@ -438,6 +438,40 @@ public class FactRepository {
         );
     }
 
+    /**
+     * Tablo-ozel autovacuum_enabled override'ini (pg_class.reloptions) upsert
+     * eder. Delta degil, nadiren degisen bir konfigurasyon — her toplama
+     * donguesunde ayni satir guncellenir (V093, PGSTAT-P0-036 AC6).
+     *
+     * @param reloptionsRaw virgulle ayrilmis reloptions dizisi (orn.
+     *                      "autovacuum_enabled=false,fillfactor=90"), null/bos
+     *                      olabilir (override yoksa)
+     */
+    public void upsertTableRelOptions(long instancePk, long dbid, long relid,
+                                       String schemaname, String relname, String reloptionsRaw) {
+        Boolean autovacuumEnabled = null;
+        if (reloptionsRaw != null) {
+            for (String opt : reloptionsRaw.split(",")) {
+                if (opt.trim().startsWith("autovacuum_enabled=")) {
+                    autovacuumEnabled = opt.trim().endsWith("=true");
+                }
+            }
+        }
+        jdbc.update("""
+            insert into control.table_relopts_snapshot
+              (instance_pk, dbid, relid, schemaname, relname, autovacuum_enabled, reloptions_raw, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, now())
+            on conflict (instance_pk, dbid, relid) do update set
+              schemaname = excluded.schemaname,
+              relname = excluded.relname,
+              autovacuum_enabled = excluded.autovacuum_enabled,
+              reloptions_raw = excluded.reloptions_raw,
+              updated_at = now()
+            """,
+            instancePk, dbid, relid, schemaname, relname, autovacuumEnabled, reloptionsRaw
+        );
+    }
+
     // -------------------------------------------------------------------------
     // fact.pg_index_stat_delta — per-index istatistik delta
     // -------------------------------------------------------------------------

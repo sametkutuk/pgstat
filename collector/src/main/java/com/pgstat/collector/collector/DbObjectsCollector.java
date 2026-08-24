@@ -253,6 +253,16 @@ public class DbObjectsCollector {
                 long nDeadTup = rs.getLong("n_dead_tup");
                 long nModSinceAnalyze = rs.getLong("n_mod_since_analyze");
 
+                // Tablo-ozel autovacuum_enabled override (pg_class.reloptions,
+                // V093) — dead_tuple_ratio "hic vacuum edilmemis" teshisinde
+                // "override olabilir" yerine KESIN sonuc vermek icin
+                // (musteri talebi 2026-08-24: "bunu da kontrol edebilirsin").
+                // reloptions delta degil, nadiren degisen bir konfigurasyon —
+                // ayri, kucuk bir tabloda upsert edilir (33 parametreli
+                // insertTableStatDelta'ya eklenmedi, riski artirmamak icin).
+                String reloptionsRaw = rs.getString("reloptions_raw");
+                factRepo.upsertTableRelOptions(instancePk, dbid, relid, schemaname, relname, reloptionsRaw);
+
                 // Yeni gauge/timestamp kolonlari (V066)
                 java.time.OffsetDateTime lastVacuum = rs.getObject("last_vacuum", java.time.OffsetDateTime.class);
                 java.time.OffsetDateTime lastAutovacuum = rs.getObject("last_autovacuum", java.time.OffsetDateTime.class);

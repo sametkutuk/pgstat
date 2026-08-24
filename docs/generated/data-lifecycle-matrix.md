@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 93 |
-| Tables without detected retention mapping | 42 |
+| Tables analyzed | 94 |
+| Tables without detected retention mapping | 43 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 3 |
@@ -72,6 +72,7 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 | control.slot_lifecycle_subscription | control/config | 11 | created_at, updated_at | no | not detected | not detected | no | not detected | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql | collector/service/SlotLifecycleEvaluator.java |
 | control.slot_observation_state | control/config | 10 | last_retrigger_at, last_seen_at, tombstone_at | no | not detected | not detected | no | not detected | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql | collector/service/SlotLifecycleEvaluator.java |
 | control.system_alert_config | control/config | 11 | updated_at | no | not detected | not detected | no | not detected | V042__system_alert_config.sql | V065__alert_intervals_and_cleanup.sql |  |
+| control.table_relopts_snapshot | control/config | 8 | updated_at | no | not detected | not detected | no | not detected | V093__table_relopts_snapshot.sql | V093__table_relopts_snapshot.sql | collector/repository/FactRepository.java<br>collector/service/AlertRuleEvaluator.java |
 | control.telegram_command_allowlist | control/config | 5 | created_at | no | not detected | not detected | no | not detected | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql | collector/service/TelegramCommandPoller.java |
 | control.telegram_message_map | control/config | 8 | sent_at | no | not detected | fixed 7 days in PurgeEvaluator | yes | not detected | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql | collector/service/NotificationService.java<br>collector/service/PurgeEvaluator.java<br>collector/service/TelegramCommandPoller.java |
 | control.telegram_poll_state | control/config | 3 | updated_at | no | not detected | not detected | no | not detected | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql | collector/service/TelegramCommandPoller.java |

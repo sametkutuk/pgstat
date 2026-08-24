@@ -2731,6 +2731,30 @@ public class AlertRuleEvaluator {
     }
 
     /**
+     * Bir tablonun autovacuum_enabled override durumunu (pg_class.reloptions,
+     * V093, control.table_relopts_snapshot) okur. "Olabilir" yerine KESIN
+     * sonuc vermek icin — musteri talebi 2026-08-24: "bunu da kontrol
+     * edebilirsin, neden autovacuum tetiklenmemis onu tespit et".
+     *
+     * @return FALSE ise override kapali (autovacuum_enabled=false), TRUE ise
+     *         acik override var, null ise override yok/hic toplanmamis
+     *         (varsayilan davranis: acik).
+     */
+    private Boolean fetchTableAutovacuumOverride(long instancePk, String schemaname, String relname) {
+        try {
+            List<Boolean> rows = jdbc.queryForList(
+                "select autovacuum_enabled from control.table_relopts_snapshot " +
+                "where instance_pk = ? and schemaname = ? and relname = ?",
+                Boolean.class, instancePk, schemaname, relname);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.debug("fetchTableAutovacuumOverride okunamadi instance={} table={}.{}: {}",
+                instancePk, schemaname, relname, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Bir instance'ta uzun suredir acik (xact_start > 10dk once) bir transaction
      * veya pasif (active=false) bir replication slot var mi kontrol eder —
      * "autovacuum calisiyor ama xmin horizon engelliyor" senaryosunun kaniti
@@ -2796,10 +2820,21 @@ public class AlertRuleEvaluator {
             if (scaleFactor != null && avThreshold != null && liveTup != null) {
                 long triggerThreshold = avThreshold + scaleFactor.multiply(BigDecimal.valueOf(liveTup)).longValue();
                 if (currentDeadTup != null && currentDeadTup >= triggerThreshold) {
+                    // "Olabilir" degil KESIN sonuc — pg_class.reloptions artik
+                    // toplaniyor (V093), gercek override durumunu direkt soyluyoruz.
+                    Boolean tableAutovacuumOverride = fetchTableAutovacuumOverride(
+                        instancePk, (String) record.get("schemaname"), (String) record.get("relname"));
+                    if (Boolean.FALSE.equals(tableAutovacuumOverride)) {
+                        return new String[]{
+                            String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum genel olarak açık (autovacuum=on) ve tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — ama bu TABLOYA ÖZEL autovacuum_enabled=false override'ı var (pg_class.reloptions), bu yüzden hiç çalışmadı.",
+                                triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
+                            "ALTER TABLE <şema.tablo> RESET (autovacuum_enabled); ile bu tabloya özel override'ı kaldır, ardından manuel VACUUM ANALYZE çalıştır."
+                        };
+                    }
                     return new String[]{
-                        String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — normalde tetiklenmiş olmalıydı, bu tablo için ayrı bir autovacuum_enabled=off override'ı olabilir (pg_class.reloptions, bu araç henüz toplamıyor).",
+                        String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — normalde tetiklenmiş olmalıydı; olası nedenler: autovacuum_max_workers doygunluğu (başka tablolar sırada) veya çok yakın zamanda eşiği aştı, henüz sıradaki döngüsünü beklemiyor.",
                             triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
-                        "SELECT reloptions FROM pg_class WHERE oid = '<şema.tablo>'::regclass; ile bu tabloya özel autovacuum_enabled=off override'ı olup olmadığını kontrol et; varsa kaldır veya manuel VACUUM ANALYZE çalıştır."
+                        "pg_stat_activity'de 'autovacuum worker' backend_type'ını kontrol et — tüm worker'lar başka tablolarla meşgul olabilir; meşgul değilse manuel VACUUM ANALYZE çalıştır."
                     };
                 }
                 return new String[]{

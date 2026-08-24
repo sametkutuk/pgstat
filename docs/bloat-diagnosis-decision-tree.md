@@ -51,13 +51,25 @@ Sıra önemli — üstteki koşul true ise altındakiler değerlendirilmez (en k
                    manuel VACUUM ANALYZE ile mevcut bloat'u hemen temizle."
 
    1b. eşik (threshold + scale_factor × live_tup) dead_tup tarafından
-       AŞILMIŞ ama hâlâ hiç vacuum çalışmamış
-       → TEŞHİS: "Autovacuum açık ama tetikleme eşiği çoktan aşılmış,
-                  normalde tetiklenmiş olmalıydı — tabloya özel
-                  autovacuum_enabled=off override'ı olabilir (pg_class.reloptions,
-                  bu araç henüz toplamıyor — bilinen sınırlama, aşağıya bak)."
-       → AKSİYON: "SELECT reloptions FROM pg_class WHERE oid = '<şema.tablo>'::regclass;
-                   ile kontrol et; varsa kaldır veya manuel VACUUM ANALYZE çalıştır."
+       AŞILMIŞ ama hâlâ hiç vacuum çalışmamış — control.table_relopts_snapshot'tan
+       (V093, pg_class.reloptions, her toplama döngüsünde upsert edilir) KESİN
+       override durumu okunur, "olabilir" denmez:
+
+       1b-i. Tabloya özel autovacuum_enabled=false override'ı VAR (kesin)
+             → TEŞHİS: "Autovacuum genel olarak açık ve eşik çoktan aşılmış
+                        — ama bu TABLOYA ÖZEL autovacuum_enabled=false
+                        override'ı var, bu yüzden hiç çalışmadı."
+             → AKSİYON: "ALTER TABLE <şema.tablo> RESET (autovacuum_enabled);
+                         ile override'ı kaldır, ardından manuel VACUUM ANALYZE
+                         çalıştır."
+
+       1b-ii. Override yok, autovacuum açık, eşik aşılmış ama hâlâ çalışmamış
+             → TEŞHİS: "Normalde tetiklenmiş olmalıydı; olası nedenler:
+                        autovacuum_max_workers doygunluğu (başka tablolar
+                        sırada) veya çok yakın zamanda eşiği aştı."
+             → AKSİYON: "pg_stat_activity'de 'autovacuum worker' backend_type'ını
+                         kontrol et; meşgul değilse manuel VACUUM ANALYZE
+                         çalıştır."
 
    1c. eşik henüz aşılmamış (gerçekten normal, henüz sıra gelmemiş)
        → TEŞHİS: "Henüz gerekmiyor olabilir — eşik henüz aşılmamış,
@@ -123,11 +135,15 @@ tablo için önceki örneğine bakar (pencere dışına taşan, ek bir sorgu).
   okumuyoruz (bu, `pg_settings`'ten ayrı bir sorgu gerektirir) — senaryo 3'ün
   aksiyon metni jenerik ayar isimlerini anıyor, gerçek değerleri göstermiyor.
   İleride `pg_settings` toplama genişletilirse buraya eklenebilir.
-- Tablo-özel `autovacuum_enabled` override'ı (`pg_class.reloptions`) şu an
-  toplanmıyor — sadece **global** `autovacuum`/`autovacuum_vacuum_scale_factor`/
-  `autovacuum_vacuum_threshold` (`fact.pg_settings_snapshot`, gece toplanır,
-  V039) kullanılıyor. Senaryo 1b bu sınırlamayı teşhis metninde açıkça
-  belirtir ve kullanıcıya kontrol edeceği tam SQL sorgusunu (`SELECT
-  reloptions FROM pg_class ...`) verir — "kontrol et" demekten kaçınmak
-  için elimizdeki veriyle gidebildiğimiz en uzak noktaya kadar gidip, gerçek
-  sınırı da saklamadan söylüyoruz.
+- Tablo-özel `autovacuum_enabled` override'ı artık **V093** ile toplanıyor
+  (`control.table_relopts_snapshot`, `DbObjectsCollector` her toplama
+  döngüsünde `pg_class.reloptions`'ı okuyup upsert ediyor) — senaryo 1b bu
+  yüzden "olabilir" demez, kesin sonuç verir (1b-i: override kesin var,
+  1b-ii: override kesin yok). Bu, ilk versiyonda ("bu araç henüz
+  toplamıyor") bilinen bir sınırlamaydı; müşteri "bunu da kontrol
+  edebilirsin, tespit et" dediği için aynı oturumda kapatıldı.
+- `autovacuum_max_workers` doygunluğu (senaryo 1b-ii) şu an gerçek zamanlı
+  `pg_stat_activity`'den doğrulanmıyor — sadece olası bir neden olarak
+  anılıyor, aksiyon metninde kontrol komutu veriliyor. İleride
+  `fact.pg_activity_snapshot`'ta `backend_type='autovacuum worker'` sayımı
+  eklenirse bu da kesinleştirilebilir.
