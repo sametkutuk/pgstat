@@ -103,10 +103,16 @@ public class AlertRuleEvaluator {
             // ayri anlam tasiyabilecegini net etmek icin (musteri talebi
             // 2026-08-24: "hangi database'de oldugunu gostermemiz o da cok
             // onemli").
+            // Not: r->>'x' ifadeleri parantez icine alinmali — parantezsiz
+            // hali ("r->>'schemaname' || '.' || r->>'relname'") calisma
+            // zamaninda "operator does not exist: text ->> unknown" hatasi
+            // veriyordu (musteri raporu 2026-08-24: bazi resolve mesajlarinda
+            // tablo adi hic gorunmuyordu — bu sorgu exception firlatip catch
+            // blogunda sessizce null donuyordu).
             String labelExpr = switch (metricType) {
-                case "table_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' ' || r->>'schemaname' || '.' || r->>'relname'";
-                case "index_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' ' || r->>'schemaname' || '.' || r->>'indexrelname'";
-                case "statement_metric" -> "'DB=' || coalesce(r->>'datname','?') || ' queryid=' || (r->>'queryid')";
+                case "table_metric" -> "'DB=' || coalesce((r->>'datname'), 'bilinmiyor') || ' ' || (r->>'schemaname') || '.' || (r->>'relname')";
+                case "index_metric" -> "'DB=' || coalesce((r->>'datname'), 'bilinmiyor') || ' ' || (r->>'schemaname') || '.' || (r->>'indexrelname')";
+                case "statement_metric" -> "'DB=' || coalesce((r->>'datname'), 'bilinmiyor') || ' queryid=' || (r->>'queryid')";
                 default -> null;
             };
             if (labelExpr == null) return null;
