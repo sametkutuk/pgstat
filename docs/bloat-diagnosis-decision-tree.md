@@ -123,6 +123,30 @@ Sıra önemli — üstteki koşul true ise altındakiler değerlendirilmez (en k
                pg_stat_progress_vacuum ile şu an çalışan vacuum'un
                ilerleyişini izle."
 
+3.5. last_autovacuum ESKİ (>24 saat önce) VE trend artıyor — "hiç vacuum
+     edilmemiş" değil (senaryo 1), "bir süredir çalışmıyor ve bloat
+     büyümeye devam ediyor" (müşteri talebi 2026-08-24). Aynı worker
+     durumu kontrolü (fetchAutovacuumWorkerStatus) burada da kullanılır:
+
+   3.5-a. Worker doygunluğu KESİN var
+       → TEŞHİS: "Son autovacuum X saat önce çalışmış, o zamandan beri
+                  bir daha çalışmadı ve ölü satır sayısı artmaya devam
+                  ediyor — şu an Y/Z worker çalışıyor, TÜM WORKER'LAR
+                  DOLU."
+       → AKSİYON: "autovacuum_max_workers ayarını artır veya diğer
+                   tabloların vacuum yükünü azalt; bu tabloyu şimdi
+                   manuel VACUUM ANALYZE ile öne al."
+
+   3.5-b. Worker doygunluğu KESİN yok
+       → TEŞHİS: "Son autovacuum X saat önce çalışmış, o zamandan beri
+                  bir daha çalışmadı ve ölü satır sayısı artmaya devam
+                  ediyor — worker doygunluğu yok; olası nedenler:
+                  tetikleme eşiği hâlâ aşılmamış olabilir, ya da
+                  autovacuum_naptime uzun ayarlanmış olabilir."
+       → AKSİYON: "postgresql.conf'ta autovacuum_naptime ayarını
+                   kontrol et; sürekli artış devam ediyorsa manuel
+                   VACUUM ANALYZE ile hemen temizle."
+
 4. last_autovacuum son 24 saat içinde VE trend yükseliyor (bu örnek önceki
    örnekten daha yüksek)
    → TEŞHİS: "Bloat yeni oluşmuş/artıyor, autovacuum henüz yetişmemiş olabilir."

@@ -2915,6 +2915,37 @@ public class AlertRuleEvaluator {
             };
         }
 
+        // Senaryo 3.5: son vacuum ESKI (>24 saat) ve bloat artmaya devam ediyor
+        // — "hic vacuum edilmemis" degil ama "bir suredir calismiyor" (musteri
+        // talebi 2026-08-24: "bir suredir calismiyor bloat surekli artiyor gibi
+        // yorum yapacak mi?"). Senaryo 1'den (last_autovacuum/last_vacuum NULL)
+        // farkli — burada EN AZ BIR KEZ calismis ama son calismadan sonra
+        // durmus ve artis surmus. Ayni worker/xmin kanitlarini kullanarak
+        // "neden calismiyor" sorusuna da kesin cevap veriyoruz.
+        boolean staleAutovacuum = lastAutovacuum instanceof java.time.OffsetDateTime lastAvTime
+            && lastAvTime.isBefore(java.time.OffsetDateTime.now().minusHours(24));
+        boolean increasingTrendEarly = prevDeadTupObj instanceof Number prevN2 && currentDeadTup != null
+            && currentDeadTup > prevN2.longValue();
+        if (staleAutovacuum && increasingTrendEarly) {
+            long hoursSinceLastAutovacuum = java.time.Duration.between(
+                (java.time.OffsetDateTime) lastAutovacuum, java.time.OffsetDateTime.now()).toHours();
+            Object[] workerStatus = fetchAutovacuumWorkerStatus(instancePk);
+            Integer runningWorkers = (Integer) workerStatus[0];
+            Integer maxWorkers = (Integer) workerStatus[1];
+            if (runningWorkers != null && maxWorkers != null && runningWorkers >= maxWorkers) {
+                return new String[]{
+                    String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — şu an %d/%d worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.",
+                        hoursSinceLastAutovacuum, runningWorkers, maxWorkers),
+                    "autovacuum_max_workers ayarını artır veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
+                };
+            }
+            return new String[]{
+                String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — worker doygunluğu yok, bu yüzden neden tekrar tetiklenmediği ayrıca araştırılmalı (olası nedenler: bu süre içinde tetikleme eşiği hâlâ aşılmamış olabilir, ya da autovacuum_naptime uzun ayarlanmış olabilir).",
+                    hoursSinceLastAutovacuum),
+                "postgresql.conf'ta autovacuum_naptime ayarını kontrol et; sürekli artış devam ediyorsa manuel VACUUM ANALYZE ile hemen temizle."
+            };
+        }
+
         // Senaryo 4: yeni olusmus/artan trend, autovacuum henuz yetismemis olabilir
         boolean recentAutovacuum = lastAutovacuum instanceof java.time.OffsetDateTime t
             && t.isAfter(java.time.OffsetDateTime.now().minusHours(24));
