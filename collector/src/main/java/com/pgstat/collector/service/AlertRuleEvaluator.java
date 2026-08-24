@@ -1914,6 +1914,22 @@ public class AlertRuleEvaluator {
             ctx.put("window", windowMinutes);
             populateRecordCtx(ctx, top, metricType);
 
+            // dead_tuple_ratio icin kanita dayali teshis+aksiyon (PGSTAT-P0-036
+            // AC6, bkz. docs/bloat-diagnosis-decision-tree.md) — sabit "tablo
+            // istatistiklerine ve autovacuum/index ihtiyacina bak" yerine.
+            // Diger table_metric kurallari icin sablon bu placeholder'lari
+            // kullanmiyor (V092 sadece table_threshold'u degistirdi), ama
+            // ileride kullanilirsa bos satir gorunmesin diye jenerik fallback
+            // her zaman set edilir.
+            if ("dead_tuple_ratio".equals(metricName)) {
+                String[] diagnosis = diagnoseBloat(top, instancePk);
+                ctx.put("diagnosis", "Teşhis: " + diagnosis[0] + "\n");
+                ctx.put("bloat_action", diagnosis[1]);
+            } else {
+                ctx.put("diagnosis", "");
+                ctx.put("bloat_action", "Tablo istatistiklerine ve autovacuum/index ihtiyacına bak.");
+            }
+
             String fallbackMsg = buildPerRecordThresholdMessage(metricType, metricName, top,
                 operator, threshold, windowMinutes);
             String detailsJson = buildPerRecordsJson(exceeding, metricType, windowMinutes,
@@ -2626,7 +2642,9 @@ public class AlertRuleEvaluator {
             "select t.schemaname, t.relname, t.dbid," +
             "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
             "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
-            "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective" +
+            "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
+            "       t.last_autovacuum, t.last_vacuum, t.autovacuum_count_sum," +
+            "       t.prev_dead_tup" +
             "  from (" +
             // n_dead_tup_estimate/n_live_tup_estimate pencerenin EN SON ornegine
             // (sample_ts en yuksek olan satir) ait olmali, max() degil — max()
@@ -2636,12 +2654,20 @@ public class AlertRuleEvaluator {
             // (musteri raporu 2026-08-21: VACUUM FULL sonrasi alert resolve olmadi).
             // autovacuum_count_sum ayrik kalir — o pencere boyunca KAC KEZ
             // autovacuum calistigini sayar, en son ornek degil toplam anlamli.
+            // last_autovacuum/last_vacuum ve prev_dead_tup (trend icin onceki
+            // ornek) teshis/aksiyon karar agacinda kullanilir (bkz.
+            // docs/bloat-diagnosis-decision-tree.md, PGSTAT-P0-036 AC6).
             "    select distinct on (instance_pk, schemaname, relname, dbid)" +
             "           instance_pk, schemaname, relname, dbid," +
             "           n_dead_tup_estimate, n_live_tup_estimate," +
+            "           last_autovacuum, last_vacuum," +
             "           sum(coalesce(autovacuum_count_delta, 0)) over (" +
             "             partition by instance_pk, schemaname, relname, dbid" +
-            "           ) as autovacuum_count_sum" +
+            "           ) as autovacuum_count_sum," +
+            "           lag(n_dead_tup_estimate) over (" +
+            "             partition by instance_pk, schemaname, relname, dbid" +
+            "             order by sample_ts" +
+            "           ) as prev_dead_tup" +
             "      from fact.pg_table_stat_delta" +
             "     where instance_pk = ? and sample_ts > now() - ?::interval" +
             "     order by instance_pk, schemaname, relname, dbid, sample_ts desc" +
@@ -2661,6 +2687,95 @@ public class AlertRuleEvaluator {
             minRows, threshold,
             absDeadTup
         );
+    }
+
+    /**
+     * Bir instance'ta uzun suredir acik (xact_start > 10dk once) bir transaction
+     * veya pasif (active=false) bir replication slot var mi kontrol eder —
+     * "autovacuum calisiyor ama xmin horizon engelliyor" senaryosunun kaniti
+     * (bkz. docs/bloat-diagnosis-decision-tree.md, senaryo 2). Instance-genel
+     * bir kontroldur (hangi transaction'in hangi tabloyu ENGELLEDIGI degil,
+     * sadece "boyle bir risk var mi" sorusuna cevap verir) — bilincli bir
+     * basitlestirme, yanlis pozitif riski yanlis negatiften daha az zararli
+     * sayildi (aksiyon onerisi, zorunlu emir degil).
+     */
+    private boolean hasXminHorizonRisk(long instancePk) {
+        try {
+            Integer count = jdbc.queryForObject(
+                "select " +
+                "  (select count(*) from fact.pg_activity_snapshot" +
+                "    where instance_pk = ? and snapshot_ts > now() - interval '10 minutes'" +
+                "      and xact_start is not null and xact_start < now() - interval '10 minutes'" +
+                "      and state != 'idle') +" +
+                "  (select count(*) from fact.pg_replication_slot_snapshot" +
+                "    where instance_pk = ? and sample_ts > now() - interval '30 minutes'" +
+                "      and active = false)",
+                Integer.class, instancePk, instancePk);
+            return count != null && count > 0;
+        } catch (Exception e) {
+            log.debug("hasXminHorizonRisk kontrolu hatasi instance={}: {}", instancePk, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * dead_tuple_ratio icin kanita dayali teshis+aksiyon metni uretir (karar
+     * agaci: docs/bloat-diagnosis-decision-tree.md, PGSTAT-P0-036 AC6).
+     * Kaynaklar: postgresql.org vacuum docs, Citus/pganalyze muhendislik
+     * bloglari (xmin horizon, autovacuum throttling). Sira onemli — ilk
+     * eslesen senaryo kullanilir.
+     *
+     * @return [teshis, aksiyon] — ikisi de bos olmayan Turkce metin.
+     */
+    private String[] diagnoseBloat(Map<String, Object> record, long instancePk) {
+        Object lastAutovacuum = record.get("last_autovacuum");
+        Object lastVacuum = record.get("last_vacuum");
+        boolean vacuumIneffective = Boolean.TRUE.equals(record.get("vacuum_ineffective"));
+        Long autovacuumCountSum = record.get("autovacuum_count_sum") instanceof Number n ? n.longValue() : 0L;
+        Object prevDeadTupObj = record.get("prev_dead_tup");
+        Long currentDeadTup = record.get("dead_tup") instanceof Number n ? n.longValue() : null;
+
+        // Senaryo 1: hic vacuum edilmemis (otomatik veya manuel)
+        if (lastAutovacuum == null && lastVacuum == null) {
+            return new String[]{
+                "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel).",
+                "autovacuum_enabled ayarını (tablo düzeyinde ve postgresql.conf'ta) kontrol et; ölü satır eşiği (autovacuum_vacuum_threshold + autovacuum_vacuum_scale_factor × canlı satır) henüz aşılmamış olabilir — manuel VACUUM ANALYZE ile hemen düzelt."
+            };
+        }
+
+        // Senaryo 2: autovacuum calisiyor ama xmin horizon engelliyor
+        if (autovacuumCountSum > 0 && hasXminHorizonRisk(instancePk)) {
+            return new String[]{
+                "Autovacuum çalışıyor ama uzun süren bir transaction/kullanılmayan replication slot ölü satırların temizlenmesini engelliyor (xmin horizon).",
+                "pg_stat_activity'de xact_start'ı eski olan bağlantıları ve pg_replication_slots'ta aktif olmayan slot'ları kontrol et; gerekirse sonlandır/sil."
+            };
+        }
+
+        // Senaryo 3: autovacuum sik calisiyor ama yetersiz (Bacak C sinyali)
+        if (vacuumIneffective) {
+            return new String[]{
+                "Autovacuum çalışıyor ama yeterince hızlı temizleyemiyor (muhtemelen I/O throttling veya yüksek yazma hızı).",
+                "autovacuum_vacuum_cost_limit/cost_delay ve autovacuum_max_workers ayarlarını gözden geçir; pg_stat_progress_vacuum ile şu an çalışan vacuum'un ilerleyişini izle."
+            };
+        }
+
+        // Senaryo 4: yeni olusmus/artan trend, autovacuum henuz yetismemis olabilir
+        boolean recentAutovacuum = lastAutovacuum instanceof java.time.OffsetDateTime t
+            && t.isAfter(java.time.OffsetDateTime.now().minusHours(24));
+        boolean increasingTrend = prevDeadTupObj instanceof Number prevN && currentDeadTup != null
+            && currentDeadTup > prevN.longValue();
+        if (recentAutovacuum && increasingTrend) {
+            return new String[]{
+                "Bloat yeni oluşmuş/artıyor, autovacuum henüz yetişmemiş olabilir.",
+                "Kısa süre gözlemle — autovacuum döngüsü kendiliğinden düzeltebilir; düzelmezse manuel VACUUM ANALYZE çalıştır."
+            };
+        }
+
+        // Senaryo 5: varsayilan
+        return new String[]{
+            "Autovacuum ayarları veya iş yükü tabloyu dengede tutmaya yetmiyor.",
+            "Manuel VACUUM ANALYZE çalıştır; sürekli tekrarlıyorsa autovacuum_vacuum_scale_factor'ü düşürmeyi değerlendir."
+        };
     }
 
     private static String sanitizeOperator(String op) {
