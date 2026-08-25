@@ -1,17 +1,41 @@
 # Autovacuum Sistem Maliyeti Teşhisi — Tasarım Dokümanı
 
-**Durum:** PGSTAT-P1-011 — tasarım + doğrulama (AC1) TAMAMLANDI, 2026-08-25.
-Henüz kodlanmadı (AC2 bekliyor). Teşhis 0, 2, 2b üç instance'ta (PG13/15/17)
-test edildi; Teşhis 1 güvenilmez bulunup ikincil/opsiyonel'e indirildi.
-Cost ayarları toplama listesine eklendi ve canlı doğrulandı (üçü de
-varsayılan değerde). `VacuumDelay`'in PG sürümünden bağımsız olarak her
-zaman `wait_event_type='Timeout'` altında geldiği ham veriyle
-doğrulandı (ilk taslaktaki "PG13'te IO'ya taşındı" notu YANLIŞTI,
-düzeltildi — bkz. Teşhis 2 bölümü). Bir bağımsız dış inceleme (2026-08-25)
-birkaç fazla-kesin ifadeyi ve eksik bir sürüm dallanmasını (`VacuumDelay`
-wait_event'inin kendisi PG13'te eklendi) buldu, hepsi düzeltildi — bkz.
-ilgili bölümlerdeki "DÜZELTME" notları. AC2'ye başlamak için bilinen açık
-belirsizlik kalmadı.
+**Durum:** PGSTAT-P1-011 — tasarım aşaması, 2026-08-25. Henüz kodlanmadı
+(AC2 bekliyor). Teşhis 0, 2, 2b üç instance'ta test edildi; Teşhis 1
+güvenilmez bulunup ikincil/opsiyonel'e indirildi. **Bu doküman ÜÇ ayrı
+inceleme turundan geçti** (kendi canlı testlerimiz, bir dış inceleme,
+bir ikinci daha derin dış inceleme — resmi PG11 dokümantasyonu çekilip
+doğrulandı) ve her turda gerçek hatalar bulunup düzeltildi — bu,
+dokümanın artık hatasız olduğu anlamına GELMEZ, sadece bilinen
+hataların düzeltildiği anlamına gelir.
+
+**Bu turda düzeltilenler (2026-08-25, ikinci inceleme):** PG sürüm
+dağılım tablosu ile metin arasındaki sayı tutarsızlığı (25 kayıtlı
+instance, "23" yanlıştı); `instance_pk=23`'ün PG15/PG17 referanslarına
+zaman/bağlam notu eklendi (upgrade öncesi/sonrası, çelişki değil);
+yanlış parametre adları (`autovacuum_vacuum_cost_page_*` yerine
+önekisiz `vacuum_cost_page_*`); `wait_event IS NULL`'ın "aktif
+çalışıyor" değil "wait event raporlanmadı" olarak adlandırılması;
+`-1` sentinel'in "PG12'de tanıtıldı" yanlış iddiası (gerçekte PG11'de
+zaten vardı, resmi dokümanla doğrulandı); IO-wait oranının cost_delay
+yüksekliğinin kanıtı olmadığı (bağımsız sinyaller); "7 doğrulanmış
+bulgu" sayımının yanlış olduğu (doğrusu: 5 zorunlu + 1 opsiyonel + 1
+açık); `HOT_SETTINGS_QUERY`'nin hâlâ `vacuum_cost_delay`/
+`vacuum_cost_limit`/`autovacuum` içermediği; `docs/project-board.json`.
+
+**Hâlâ AÇIK, AC2'de çözülmesi gereken maddeler (kapatılmadı):**
+
+- Örnekleme eşiği ("≥10 bucket") "bucket" biriminde tanımlı, koda
+  dökülürken bunun `count(*)` mi yoksa `distinct snapshot_ts` mi
+  olması gerektiği netleştirilmedi — kodlarken kesinleştirilmeli.
+- Timestamp okuma tutarlılığı — `queryForList()` üzerinden gelen ham
+  `Object` değerlerin gerçek tipi doğrudan kanıtlanmadı, sadece
+  `ResultSet`-bazlı kod yollarında sorun bulunmadı. AC2'de bir testle
+  doğrulanana kadar AÇIK kabul edilmeli, "sorun yok" denmemeli.
+- AC3'ün canlı doğrulama hedefi (`instance_pk=8/23`) — hangi instance'ın
+  hangi PG sürümünde OLACAĞI (upgrade planları varsa) netleşene kadar
+  kesin bir hedef listesi verilmiyor, AC2 tamamlandığında güncel
+  `instance_capability` sorgusuyla teyit edilmeli.
 
 **Terminoloji notu:** Bu dokümanda ve `AlertRuleEvaluator`'da "bloat"
 kelimesi `n_dead_tup`/`n_live_tup` **tahminine** dayanıyor —
@@ -331,8 +355,13 @@ seviyesi metrik, PG'nin görev alanı dışında). Bu yüzden CPU tüketimini
 modeli üzerinden **dolaylı, somut** bir tespit kurulabilir:
 
 - Autovacuum her sayfa I/O işleminde "cost puanı" biriktirir
-  (`autovacuum_vacuum_cost_page_hit/miss/dirty`), toplam
-  `autovacuum_vacuum_cost_limit`'e ulaşınca `autovacuum_vacuum_cost_delay`
+  (**DÜZELTME, ikinci dış inceleme:** doğru parametre adları önekisiz
+  `vacuum_cost_page_hit`/`vacuum_cost_page_miss`/`vacuum_cost_page_dirty`
+  — `autovacuum_vacuum_cost_page_*` diye bir parametre YOK, bu üç
+  maliyet parametresi hem normal `VACUUM` hem `autovacuum` için ortak/
+  paylaşılan, autovacuum'a özel bir override'ı yok), toplam
+  `autovacuum_vacuum_cost_limit`'e (`-1` ise `vacuum_cost_limit`'e)
+  ulaşınca `autovacuum_vacuum_cost_delay` (`-1` ise `vacuum_cost_delay`)
   kadar **uyur** (bu uyku sırasında CPU harcamaz, I/O da yapmaz).
 - Yani worker'ın zamanı iki kovaya ayrılır: **(a) aktif çalışma** (CPU +
   I/O harcıyor) ve **(b) throttle uykusu** (`wait_event = 'VacuumDelay'`,
@@ -341,11 +370,11 @@ modeli üzerinden **dolaylı, somut** bir tespit kurulabilir:
   `wait_event`'tir ve I/O beklemesinden farklıdır.
 
 ```sql
--- Worker zamanının nereye gittiğini dagit: throttle uykusu / IO beklemesi / aktif calisma
+-- Worker orneklerinin wait_event dagilimi: throttle uykusu / IO beklemesi / rapor edilmemis
 select
   count(*) filter (where wait_event = 'VacuumDelay') as throttle_sleep_samples,
   count(*) filter (where wait_event_type = 'IO') as io_wait_samples,
-  count(*) filter (where wait_event is null) as actively_running_samples,
+  count(*) filter (where wait_event is null) as no_wait_event_samples,
   count(*) as total_samples
 from fact.pg_activity_snapshot
 where instance_pk = ? and backend_type = 'autovacuum worker'
@@ -360,24 +389,34 @@ where instance_pk = ?
 order by 1;
 ```
 
-**DÜZELTME (dış inceleme, 2026-08-25): tablo dili fazla kesindi, ihtiyatlı
-hâle getirildi.** İlk yazımda "gerçek bir yük", "kasıtlı yavaşlatma
-sorunu" gibi kesin nedensellik iddiaları vardı — bunlar örneklemenin
-verebileceğinden daha fazla kesinlik taşıyordu. Düzeltilmiş yorumlama:
+**DÜZELTME (iki tur dış inceleme, 2026-08-25): tablo dili fazla kesindi
+VE terminoloji yanlıştı, ikisi de düzeltildi.** İlk yazımda "gerçek bir
+yük", "kasıtlı yavaşlatma sorunu" gibi kesin nedensellik iddiaları
+vardı. Ayrıca `wait_event IS NULL` durumu "aktif çalışıyor" olarak
+adlandırılmıştı — bu **yanlış**: `wait_event IS NULL`, PostgreSQL'in o
+anki örneklemede **hiçbir wait event raporlamadığı** anlamına gelir,
+bu genelde (ama her zaman değil) worker'ın CPU'da aktif çalıştığı
+anlamına gelir, ama kesin bir kanıt değildir — kolonun adı da buna göre
+`no_wait_event_samples` olarak değiştirildi (`actively_running_samples`
+değil). Düzeltilmiş yorumlama:
 
-| `actively_running_samples` oranı | `throttle_sleep_samples` oranı | Gözlem (kesin değil, olası yorum) | Aksiyon |
+| `no_wait_event_samples` oranı | `throttle_sleep_samples` oranı | Gözlem (kesin değil, olası yorum) | Aksiyon |
 |---|---|---|---|
-| Yüksek (>%60) | Düşük | Worker örneklemelerin çoğunda aktif görünüyor — throttle uykusunda değil | `cost_limit`'i artırmak işi hızlandırabilir ama CPU/I/O rekabetini azaltmaz; scale_factor/threshold ayarına da bakılmalı |
-| Düşük | Yüksek (>%50) | Worker örneklemelerin çoğunda throttle'dan uyuyor — ayar `cost_delay` **default veya üzerinde** ise bu **beklenen bir davranış**, mutlaka bir "sorun" değil | Sadece ayar demonstrably non-default (kasıtlı yükseltilmiş) İSE `cost_delay`'i düşürmeyi öner; ayar zaten default'ta ise bunu "normal throttling" olarak belirt, aksiyon önerme |
-| Yüksek | Düşük, `cost_delay` de düşük/0 | Worker aktif VE throttle'a az giriyor — CPU/I/O'yu görece serbestçe tüketiyor olabilir | Teşhis 0 (varsa, PG16+) yüksekse ek bağlam olarak sun; tek başına "rekabet ediyor" sonucuna varma |
+| Yüksek (>%60) | Düşük | Worker örneklemelerin çoğunda wait event raporlanmamış (muhtemelen CPU'da aktif) | `cost_limit`'i artırmak işi hızlandırabilir ama CPU/I/O rekabetini azaltmaz; scale_factor/threshold ayarına da bakılmalı |
+| Düşük | Yüksek (>%50) | Worker örneklemelerin çoğunda throttle'dan uyuyor — **bu, cost bütçesine ULAŞTIĞININ göstergesidir (worker aktif çalışıyor demektir), "yetersiz iş" göstergesi DEĞİL**. Ayar `cost_delay` default veya üzerindeyse bu beklenen bir davranış | Sadece ayar demonstrably non-default (kasıtlı yükseltilmiş) İSE `cost_delay`'i düşürmeyi öner; ayar zaten default'ta ise sadece gözlemi raporla, "sorun" ya da "normal" gibi bir yorum ekleme |
+| Yüksek | Düşük, `cost_delay` de düşük/0 | Worker örneklemelerin çoğunda wait event yok VE throttle'a az giriyor | Teşhis 0 (varsa, PG16+) yüksekse ek bağlam olarak sun; tek başına "rekabet ediyor" sonucuna varma |
 
 **Bu tablo örnekleme anının bir görüntüsüdür, backlog/geride kalma
 KANITI değildir.** `wait_event`/`wait_event_type`, `pg_activity_snapshot`
 örneklemesinin o anki bir enstantanesidir — worker'ın toplam çalışma
-süresi boyunca nasıl davrandığının istatistiksel bir özeti değil. Örnek
-sayısı azsa (örn. <10 örnek) yorum güvenilmez; kod bu eşiği açıkça
-uygulamalı, düşük örnek sayısında "yetersiz veri" demeli, zorla bir
-yorum üretmemeli.
+süresi boyunca nasıl davrandığının istatistiksel bir özeti değil.
+Örnek sayısı azsa yorum güvenilmez — **bu eşiğin nasıl sayılacağı
+implementasyon aşamasında kesinleştirilmeli**: "en az 10 örnek"
+tanımı, basit `count(*)` mi (aynı worker'ın art arda birkaç cycle'da
+görünmesi hâlâ tek bir olayı fazla sayabilir) yoksa `count(distinct
+snapshot_ts)` mi (kaç farklı toplama anında örneklendiği) olmalı
+netleştirilmedi — kod yazılırken karar verilip burada dokümante
+edilmeli, şu an açık bir madde.
 
 **Cost ayarı okumadan sadece `wait_event_type='IO'` oranına bakmanın
 neden yanıltıcı olduğu:** worker aktif görünebilir ama aslında
@@ -400,36 +439,47 @@ gecikmeli yakalamak istemeyiz). Bu, AC2'nin **ilk adımı** olmalı — kod
 yazmadan önce bu iki liste güncellenip bir sonraki toplama döngüsünde
 verinin gerçekten geldiği doğrulanmalı.
 
-**DÜZELTME (dış inceleme + doğrulama, 2026-08-25): sürüm bilgisi
-YANLIŞTI, düzeltildi.** İlk yazımda "PG12→PG13'te 20ms'den 2ms'ye
-düştü, PG13'te `-1` fallback'i kaldırıldı" denmişti — **her iki iddia
-da yanlış**:
+**DÜZELTME 2 (ikinci dış inceleme, resmi PG11 dokümantasyonuyla
+doğrulandı, 2026-08-25): önceki "DÜZELTME" notu da kısmen yanlıştı.**
+İlk düzeltmede "`-1` sentinel'i PG12'de tanıtıldı" denmişti — bu
+**yanlış**. `postgresql.org/docs/11/runtime-config-autovacuum.html`
+sayfası doğrudan çekilip doğrulandı, tam metin:
 
-- **Varsayılan değişikliği PG12'de oldu**, PG13'te değil —
-  `autovacuum_vacuum_cost_delay` **PG12'de** `20ms`'den `2ms`'ye
-  düşürüldü (PG12 release notes). PG13+ zaten `2ms` varsayılanını
-  koruyor, PG13'ün kendisinde bir değişiklik yok.
-- **`-1` sentinel davranışı hiçbir zaman kaldırılmadı** — `-1` ("genel
-  `vacuum_cost_delay`/`vacuum_cost_limit`'e düş" anlamına gelir) PG12'de
-  tanıtıldı ve **PG17 dahil güncel sürümlerde hâlâ geçerli**, resmi
-  dokümantasyonda hâlâ bu şekilde tanımlı.
+> *"Specifies the cost delay value that will be used in automatic
+> VACUUM operations. If -1 is specified, the regular
+> `vacuum_cost_delay` value will be used. The default value is 20
+> milliseconds."*
 
-**Doğru kural:** PG11 varsayılanı `20ms`; **PG12 ve sonrası (PG12-18)
-varsayılanı `2ms`** — sürüme göre değişen tek eşik bu. `-1` sentinel'i
-her PG sürümünde (12+) aynı şekilde yorumlanmalı: etkin değeri
-`vacuum_cost_delay`/`vacuum_cost_limit`'ten oku. İmplementasyonda "PG13
-sürüm notu" değil, "**PG12 sürüm notu**" olarak anılmalı — eşik `pg_major
-< 12` için `20ms`, `>= 12` için `2ms` olmalı (kayıtlı instance'ların
-en eskisi PG12 olduğu için PG11 dalı şu an pratikte hiç tetiklenmeyecek,
-ama kod doğru olmalı).
+Yani **`-1` sentinel davranışı PG11'de zaten mevcuttu** (muhtemelen
+daha da eski sürümlerde) — "PG12'de tanıtıldı" iddiası kaynaksızdı,
+kaldırıldı. **Doğru ve kaynaklı olan tek sürüm bilgisi:**
+`autovacuum_vacuum_cost_delay`'in **varsayılan değeri** PG11'de
+`20ms`, **PG12'den itibaren (PG12-18) `2ms`**'ye düştü — bu, PG12
+release notes ile doğrulanmış tek gerçek eşik. `-1` sentinel'in
+**kendisi** sürüme göre değişmiyor, her PG sürümünde aynı şekilde
+yorumlanmalı: etkin değeri `vacuum_cost_delay`/`vacuum_cost_limit`'ten
+oku. İmplementasyonda tek sürüm dallanması **varsayılan değer
+eşiği** olmalı (`pg_major < 12` için `20ms`, `>= 12` için `2ms`),
+`-1` davranışının kendisi için hiçbir sürüm dallanmasına gerek yok.
 
 **Henüz test edilmedi — aşağıdaki "Doğrulama planı" bölümüne bakın.**
 
 ## Doğrulama planı — çoklu instance testi (TAMAMLANDI, 2026-08-25)
 
-Üç instance'ta (`pk=6` PG17, `pk=8` PG13, `pk=23` PG15) test edildi.
-Sonuçlar hem envanterdeki PG16 uyarısını **gerçek veriyle doğruladı**
-hem de yeni, önceden öngörülmeyen bir bulgu ortaya çıkardı.
+**Zamanlama notu (ikinci dış inceleme sonrası eklendi):** Bu bölümdeki
+test **`instance_pk=23`'ün merkezi pgstat DB'sinin PG15'ten PG17'ye
+upgrade edilmesinden ÖNCE** yapıldı — o anki gerçek sürüm **PG15**
+idi. Dokümanın ilerisindeki (Teşhis 2 bölümü, ~satır 281) `VacuumDelay`
+ham veri testi ise **upgrade'den SONRA** yapıldı, o noktada
+`instance_pk=23` **PG17** idi. Yani "pk=23 PG15" (bu bölüm) ile
+"pk=23 PG17" (Teşhis 2 bölümü) arasında çelişki YOK — ikisi de doğru,
+farklı tarihlerde/farklı sürümlerde yapılmış testler. Karışıklığı
+önlemek için her referansta hangi test turunun kastedildiği bu notla
+netleştiriliyor.
+
+Üç instance'ta (`pk=6` PG17, `pk=8` PG13, `pk=23` **o zamanki** PG15)
+test edildi. Sonuçlar hem envanterdeki PG16 uyarısını **gerçek veriyle
+doğruladı** hem de yeni, önceden öngörülmeyen bir bulgu ortaya çıkardı.
 
 ### Sonuç tablosu
 
@@ -456,7 +506,13 @@ olduğundan değil.
 | 17 | 4 | EVET |
 | 18 | 3 | EVET |
 
-23 kayıtlı instance'ın **15'i (%65) PG16 altı** — Teşhis 0 kayıtlı
+**DÜZELTME (ikinci dış inceleme, sayı toplamı kontrol edilerek
+doğrulandı, 2026-08-25):** Bu bölümde ve `docs/worklog/2026-08-25.md`'de
+"23 kayıtlı instance" deniyordu — tablo toplamı (5+5+5+3+4+3) **25**
+ediyor, "23" yanlıştı (muhtemelen erken bir sayımdan kalma yazım hatası
+— gerçek `instance_pk` listesi 1-24 + 26'yı kapsıyor, `25` numarası
+boş/silinmiş, toplam **25 benzersiz kayıtlı instance**). Doğru cümle:
+**25 kayıtlı instance'ın 15'i (%60) PG16 altı** — Teşhis 0 kayıtlı
 instance'ların çoğunluğunda hiç çalışamıyor. **Karar (kesinleşti):**
 Teşhis 0, "birincil kanıt" statüsünden **"varsa ekstra kanıt (sadece
 PG16+ instance'lar için)"** seviyesine indirildi. Sürüm bağımsız çalışan
@@ -493,10 +549,9 @@ gösteriyor — **kod yazmadan önce ham `wait_event_type` değerini
 (`select wait_event, wait_event_type from fact.pg_activity_snapshot
 where instance_pk=23 and wait_event='VacuumDelay'`).
 
-### Doğrulanan: cost ayarları artık toplanıyor (2026-08-25, hot refresh sonrası)
+### Doğrulanan: cost ayarları toplanıyor, AMA HOT_SETTINGS_QUERY hâlâ eksik (2026-08-25)
 
-Deploy sonrası ilk hot refresh (3 saatlik döngü, gece snapshot'ını
-beklemeye gerek kalmadı) ile üç instance'ta da veri geldi:
+Deploy sonrası ilk hot refresh ile üç instance'ta da veri geldi:
 
 | instance_pk | autovacuum_vacuum_cost_delay | autovacuum_vacuum_cost_limit | vacuum_cost_limit |
 |---|---|---|---|
@@ -504,21 +559,63 @@ beklemeye gerek kalmadı) ile üç instance'ta da veri geldi:
 | 8 | 2 | -1 | 200 |
 | 23 | 2 | -1 | 200 |
 
-Üçü de **tamamen varsayılan değerlerde** — `cost_delay=2ms` (PG13+
-varsayılanı), `autovacuum_vacuum_cost_limit=-1` ("genel
-`vacuum_cost_limit`'i kullan" sentinel'i), `vacuum_cost_limit=200`
-(PG varsayılanı). Hiçbir instance'ta özel bir throttle ayarı yok. Bu,
-Teşhis 2b'nin `instance_pk=6`'da bulduğu "16 örneğin 15'i
-`VacuumDelay`" bulgusuna önemli bir yorum katmanı ekliyor: **worker
-agresif bir şekilde throttle EDİLMİYOR (ayar varsayılan), yine de
-çoğunlukla uykuda** — yani darboğaz "cost_delay çok yüksek ayarlanmış"
-değil, muhtemelen "iş küçük parçalar hâlinde geliyor, worker sık sık
-cost bütçesini hızla dolduramıyor" ya da örnekleme anının doğal
-dağılımı. Yorumlama tablosundaki "cost_delay'i düşür" önerisi bu
-üç instance için **geçerli değil** (zaten minimum düzeyde) — kod bu
-ayrımı yapmalı: `cost_delay`/`cost_limit` zaten varsayılansa "ayarı
-düşür" değil, "bu normal, worker'ın throttle'dan değil doğal
-aralıklı çalışmasından kaynaklanıyor" mesajı üretilmeli.
+Üçü de **tamamen varsayılan değerlerde** — `cost_delay=2ms` (**PG12+**
+varsayılanı, bkz. yukarıdaki düzeltilmiş sürüm notu — PG13 değil),
+`autovacuum_vacuum_cost_limit=-1` ("genel `vacuum_cost_limit`'i kullan"
+sentinel'i), `vacuum_cost_limit=200` (PG varsayılanı). Hiçbir
+instance'ta özel bir throttle ayarı yok.
+
+**DÜZELTME (ikinci dış inceleme, kod okunarak doğrulandı, 2026-08-25):
+"eklendi ve tamamlandı" ifadesi eksik bilgi veriyordu.** Gerçek kod
+durumu (`NightlySnapshotCollector.java:37-55` ve `119-129`):
+
+| Ayar | `SETTINGS_QUERY` (gece, günde 1) | `HOT_SETTINGS_QUERY` (3 saatte 1) |
+|---|---|---|
+| `autovacuum_vacuum_cost_delay` | VAR | VAR |
+| `autovacuum_vacuum_cost_limit` | VAR | VAR |
+| `vacuum_cost_delay` | VAR | **YOK** |
+| `vacuum_cost_limit` | VAR | **YOK** |
+| `autovacuum` (açık/kapalı) | **YOK** | **YOK** |
+
+Yukarıdaki tablo verisi `vacuum_cost_limit=200` gösteriyor çünkü test
+sırasında gece `SETTINGS_QUERY`'nin bir turu geçmişti — ama
+`HOT_SETTINGS_QUERY`'de bu ayar yok, yani `ALTER SYSTEM SET
+vacuum_cost_limit = ...` ile biri bu ayarı değiştirirse, **3 saatlik
+hot refresh bunu YAKALAMAZ**, ancak bir sonraki gece snapshot'ında
+görünür (en fazla 24 saat gecikme). Ayrıca `autovacuum` (genel
+açık/kapalı parametresi) hiçbir listede yok — bu, Teşhis 3'ün
+("autovacuum kapatılmış mı" guard'ı) ayarın kendisini okuyabilmesi
+için AC2'de eklenmesi gereken ayrı bir eksiklik. **AC2'nin ilk adımı
+olarak `vacuum_cost_delay`/`vacuum_cost_limit`/`autovacuum`'un
+`HOT_SETTINGS_QUERY`'ye de eklenmesi gerekiyor** (yalnızca
+`SETTINGS_QUERY`'ye eklemek yeterli değil, önceki "tamamlandı" notu
+yanlıştı).
+
+Ölçülen değerler, Teşhis 2b'nin `instance_pk=6`'da bulduğu "16 örneğin
+15'i `VacuumDelay`" bulgusuna önemli bir yorum katmanı ekliyor: **cost
+ayarları agresif bir şekilde yükseltilmemiş (hepsi varsayılan)**, yine
+de worker örneklemelerin çoğunda throttle uykusunda görünüyor.
+
+**DÜZELTME (ikinci dış inceleme, 2026-08-25): "worker bütçeyi
+dolduramıyor/doğal aralıklı çalışıyor" yorumu YANLIŞ mekanizma
+anlayışına dayanıyordu, kaldırıldı.** `VacuumDelay`, worker'ın cost
+bütçesini **DOLDURAMADIĞI** için değil, tam tersine **cost bütçesine
+ULAŞTIĞI** için oluşur — PostgreSQL'in cost-based throttling
+mekanizması, worker her sayfa I/O işleminde puan biriktirir, toplam
+`cost_limit`'e ULAŞINCA `cost_delay` kadar uyur. Yani "çoğunlukla
+`VacuumDelay`'de" bulgusu, worker'ın **aktif ve verimli çalıştığının**
+(sürekli cost bütçesini dolduracak kadar iş yaptığının) bir işareti
+olabilir — varsayılan `cost_delay=2ms` gibi kısa bir uyku süresiyle
+bu oran yüksek çıkması **beklenen, normal** bir davranıştır, "worker
+yetersiz iş görüyor" ya da "bir sorun var" anlamına gelmez. Doğru
+gözlemsel ifade: "worker örneklemelerin %N'inde throttle uykusunda
+gözlemlendi; `cost_delay` ayarı [default/non-default]" — bir "bu
+neden böyle" yorumu eklenmemeli, mekanizma net bilinmeden nedensel
+açıklama üretmek riskli. Yorumlama tablosundaki "cost_delay'i düşür"
+önerisi bu üç instance için **geçerli değil** (zaten minimum
+düzeyde) — kod bu ayrımı yapmalı: `cost_delay`/`cost_limit` zaten
+varsayılansa "ayarı düşür" önerisi ÜRETİLMEMELİ, sadece gözlemi
+(oran + ayar değeri) raporlamalı, bir yorum eklememeli.
 
 **Önemli sınırlama (dış inceleme, 2026-08-25): bu, INSTANCE-geneli
 (global) ayar, tablo-özel override'ı YANSITMAZ.** `pg_settings`
@@ -549,10 +646,26 @@ tüm sabit aksiyon metinlerinin bu deseni içermediği doğrulanabilir.
 
 AC2'ye başlamadan önce, mevcut ilgili kodda (`AlertRuleEvaluator.java`,
 `ClusterCollector.java`, `control.table_relopts_snapshot`) bir kod
-denetimi (subagent ile) yapıldı — bu teşhisleri kodlarken üzerine
-inşa edilecek temelin kendisinde 7 somut bulgu doğrulandı. Bunlar
-AC2'nin implementasyon adımlarına dahil edilmeli, ayrı "iyi olur"
-maddeleri değil:
+denetimi (subagent ile) yapıldı.
+
+**DÜZELTME (ikinci dış inceleme, 2026-08-25): "7 doğrulanmış bulgu"
+sayımı yanlıştı — 7 madde aynı ağırlıkta değil.** Doğru sınıflandırma:
+
+- **Maddeler 1-5: gerçek, zorunlu düzeltmeler** — bu teşhisler
+  kodlanmadan önce ele alınmalı, aksi hâlde üzerine inşa edilen kod
+  aynı hataları miras alır.
+- **Madde 6: tip-sertleştirme (type-hardening) iyileştirmesi** — aktif
+  bir bug değil (gerçekçi PG sayaç büyüklüklerinde pratik hassasiyet
+  kaybı riski yok), ama düzeltilmesi doğru bir tasarım kararı. AC2'nin
+  zorunlu kapsamı DEĞİL, fırsat varsa yapılabilir.
+- **Madde 7: doğrulanmamış/açık soru**, "sorun yok" diye KAPATILMAMALI
+  — bir önceki denetim bunu yanlışlıkla "sorun bulunamadı" diye
+  raporlamıştı, ikinci incelemede bu kapanışın erken olduğu görüldü
+  (bkz. madde 7'nin güncellenmiş metni).
+
+Yani doğru özet: **5 zorunlu düzeltme + 1 opsiyonel type-hardening
+bulgusu + 1 açık/doğrulanmamış soru** — "7 eşit ağırlıklı prerequisite"
+değil:
 
 1. **`fetchAutovacuumWorkerStatus()` (`AlertRuleEvaluator.java:2811-2815`)
    `count(*)` kullanıyor, `count(distinct pid)` değil.** Aynı worker
@@ -601,10 +714,22 @@ maddeleri değil:
    (`Double`'ın 52-bit tam sayı hassasiyeti ~9×10^15) pratik bir
    hassasiyet kaybı riski yok, ama tip uyuşmazlığı bir tasarım kusuru —
    AC2'nin kapsamında değilse bile not düşülüyor.
-7. **Timestamp okuma tutarlı** — `getTimestamp()` hiç kullanılmıyor,
-   her yerde `rs.getObject(..., OffsetDateTime.class)` — bu maddede
-   bir sorun bulunmadı, dış incelemenin bu kısmı doğrulanamadı (gerçek
-   bir sorun yok).
+7. **Timestamp okuma — DURUM AÇIK, kapatılmadı (ikinci dış inceleme,
+   2026-08-25).** İlk kod denetimi `getTimestamp()`'in hiç
+   kullanılmadığını, `rs.getObject(..., OffsetDateTime.class)`'in
+   tutarlı kullanıldığını bulmuştu — ama bu denetim doğrudan
+   `ResultSet` üzerinden okuyan kod yollarını kapsıyordu.
+   `AlertRuleEvaluator`'daki bazı sorgular `JdbcTemplate.queryForList()`
+   üzerinden `Map<String, Object>` dönüyor — bu yolda zaman damgası
+   alanının gerçek Java tipinin (`java.sql.Timestamp` mi, `OffsetDateTime`
+   mi, sürücü/driver ayarına göre değişebilir) ne olduğu **doğrudan
+   kanıtlanmadı**, sadece `ResultSet`-bazlı kod yollarında sorun
+   olmadığı gösterildi. AC2'de yeni bir helper (örn.
+   `fetchAutovacuumIoImpact`) `queryForList()` kullanacaksa, zaman
+   damgası alanlarının tipini bir birim testle (gerçek DB'ye karşı
+   veya mock ResultSet ile) doğrulamadan `instanceof OffsetDateTime`
+   kontrolüne güvenilmemeli — bu madde AC2 tamamlanana kadar **açık**
+   kabul edilmeli, "sorun yok" diye kapatılmamalı.
 
 ## Uygulama sırası (revize, çoklu-instance test sonrası — 2026-08-25)
 
