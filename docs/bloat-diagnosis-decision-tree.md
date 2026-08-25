@@ -147,8 +147,29 @@ Sıra önemli — üstteki koşul true ise altındakiler değerlendirilmez (en k
                    kontrol et; sürekli artış devam ediyorsa manuel
                    VACUUM ANALYZE ile hemen temizle."
 
+4.5. last_autovacuum son 24 saat içinde VE trend yükseliyor VE autovacuum bu
+   pencerede KRONİK olarak çalışmış (autovacuum_count_sum > 1) — müşteri
+   olayı 2026-08-25: pgstat'ın kendi DB'sinde `agg.pg_table_stat_hourly`
+   (rollup job'ı tarafından ~5dk'da bir UPSERT'lenen bir tablo)
+   sürekli büyüyordu, autovacuum ara sıra çalışıyordu ama tablonun
+   güncelleme hızına yetişemiyordu — sistem bunu hiç tespit edip
+   önermedi, kullanıcı manuel araştırmayla buldu. Bu senaryo, "henüz
+   yetişmedi, bekle" (senaryo 4) ile "eşik yanlış kalibre edilmiş"
+   (bu senaryo) arasındaki farkı ayırt eder: autovacuum sadece 1 kez
+   değil, tekrar tekrar çalışmasına rağmen trend hâlâ artıyorsa, sorun
+   "henüz sırası gelmedi" değil "eşik bu tablo için yapısal olarak
+   yanlış".
+   → TEŞHİS: "Autovacuum kronik olarak çalışıyor (bu pencerede N kez)
+              ve son çalışması yakın zamanda oldu, ama ölü satır sayısı
+              hâlâ artmaya devam ediyor — tetikleme eşiği bu tablonun
+              güncelleme hızına göre çok yüksek kalmış."
+   → AKSİYON: "ALTER TABLE <şema.tablo> SET (autovacuum_vacuum_scale_factor
+               = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha
+               düşük bir eşik ayarla."
+
 4. last_autovacuum son 24 saat içinde VE trend yükseliyor (bu örnek önceki
-   örnekten daha yüksek)
+   örnekten daha yüksek), ama autovacuum kronik olarak çalışmamış (4.5'in
+   şartını sağlamıyor — muhtemelen tek/az sayıda çalışma)
    → TEŞHİS: "Bloat yeni oluşmuş/artıyor, autovacuum henüz yetişmemiş olabilir."
    → AKSİYON: "Kısa süre gözlemle — autovacuum döngüsü kendiliğinden
                düzeltebilir; düzelmezse manuel VACUUM ANALYZE çalıştır."

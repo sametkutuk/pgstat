@@ -2964,6 +2964,23 @@ public class AlertRuleEvaluator {
             && t.isAfter(java.time.OffsetDateTime.now().minusHours(24));
         boolean increasingTrend = prevDeadTupObj instanceof Number prevN && currentDeadTup != null
             && currentDeadTup > prevN.longValue();
+
+        // Senaryo 4.5: autovacuum KRONIK olarak calisiyor (bu pencerede birden
+        // fazla kez, autovacuum_count_sum > 1) ve son calismasi yakin zamanda
+        // olmasina ragmen trend hala artiyor — bu "henuz yetismedi, biraz
+        // bekle" degil (senaryo 4'un varsayimi), "esik bu tablonun gercek
+        // guncelleme hizina gore YANLIS KALIBRE EDILMIS" demek. Musteri talebi
+        // 2026-08-25: pgstat kendi DB'sinde (agg.pg_table_stat_hourly, 5dk'da
+        // bir UPSERT'lenen bir rollup tablosu) tam bu senaryoyu yasadi ama
+        // sistem bunu hic tespit edip onermedi — kullanici manuel arastirmayla
+        // buldu. Bu senaryo, ayni durumu bir daha otomatik yakalamak icin.
+        if (recentAutovacuum && increasingTrend && autovacuumCountSum > 1) {
+            return new String[]{
+                String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.", autovacuumCountSum),
+                "Bu tablo için ALTER TABLE <şema.tablo> SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha düşük bir eşik ayarla (özellikle sık UPSERT/UPDATE alan büyük tablolarda varsayılan %20 oranı çok geç tetiklenir)."
+            };
+        }
+
         if (recentAutovacuum && increasingTrend) {
             return new String[]{
                 "Bloat yeni oluşmuş/artıyor, autovacuum henüz yetişmemiş olabilir.",
