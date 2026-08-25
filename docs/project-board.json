@@ -2700,6 +2700,61 @@
       "next_action": "AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state."
     },
     {
+      "id": "PGSTAT-P1-011",
+      "order": 46,
+      "priority": "P1",
+      "workstream": "collector",
+      "status": "planned",
+      "title": "Measure autovacuum's actual system cost (I/O/CPU/query latency), not just whether it ran",
+      "problem": "After PGSTAT-P1-010's fix (lowering autovacuum thresholds on two high-UPSERT hourly rollup tables) and PGSTAT-P0-036 AC7 (a new alert scenario that recommends lowering thresholds for chronically-updated tables), the customer asked a sharp follow-up: 'autovacuum'un etkisini de ölçmeliyiz, sık sık devreye girerek sistemi yavaşlatıyor da olabilir' (we should measure autovacuum's impact too — frequent triggering could be slowing the system down). Correct and important — a background research agent confirmed both that this is a real, well-documented risk (worker saturation causing checkpoint pressure and buffer pool contention, cost-based throttling misconfiguration causing excessive I/O) AND that pgstat currently has NO instrumentation for it: fetchAutovacuumWorkerStatus() (AlertRuleEvaluator.java) only counts running workers, fact.pg_progress_vacuum_snapshot only has progress metrics (blocks scanned/vacuumed), and fact.pg_io_stat_delta has a backend_type column that COULD isolate autovacuum-worker I/O from the rest of the workload but nothing currently aggregates or alerts on it. This means every 'lower your autovacuum threshold' recommendation pgstat now makes (V094's fix, scenario 4.5's alert action) is a one-sided recommendation — it addresses bloat but has no way to warn if the same change measurably degrades query latency or I/O headroom.",
+      "requirements": [
+        "Design (not yet implementation) for measuring autovacuum's actual resource cost, distinct from its mere activity/frequency: at minimum, I/O volume attributable to autovacuum workers (via fact.pg_io_stat_delta's backend_type='autovacuum worker') and ideally a way to correlate autovacuum activity windows with query latency degradation (e.g. via fact.pgss_delta mean_time trends during vs. outside autovacuum activity windows).",
+        "Should surface as a visible metric/chart (not just an internal computation) so a human can see 'autovacuum consumed X MB/s of I/O over the last Y minutes' rather than only inferring cost from side effects.",
+        "Any future bloat-diagnosis action text that recommends more aggressive autovacuum settings (like V094 and scenario 4.5) should eventually be able to reference this data to caveat the recommendation when the table/instance already shows autovacuum-driven I/O or latency pressure — this is a design goal, not an AC for this task, since it requires the base measurement to exist first."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A design is written (or an existing doc extended, e.g. docs/bloat-diagnosis-decision-tree.md or a new doc) covering: which existing fact tables/columns can be reused (pg_io_stat_delta.backend_type, pg_activity_snapshot.wait_event/wait_event_type), what new aggregation or query is needed, and whether a new fact/agg table is required or an existing one can be extended.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Implementation covers at least autovacuum-attributable I/O volume (reads/writes) over a rolling window, queryable per instance/table; mvn compile && mvn test pass.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Live verification: on an instance with active autovacuum, confirm the new metric shows non-zero, plausible I/O attribution during a known autovacuum run (cross-checked against fact.pg_progress_vacuum_snapshot's active-vacuum window).",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Not yet designed — placeholder pending AC1's design pass. Starting point: extend a query (or new fact/agg table) that sums fact.pg_io_stat_delta rows filtered to backend_type='autovacuum worker' over a rolling window, per instance/database; cross-reference with fact.pg_activity_snapshot.wait_event for autovacuum workers to see what they're bottlenecked on (I/O vs. lock vs. CPU)."
+      ],
+      "verification_plan": [
+        "mvn compile && mvn test",
+        "Live: trigger or wait for autovacuum on a busy table, compare the new I/O-attribution metric against fact.pg_io_stat_delta's raw backend_type='autovacuum worker' rows for the same window to confirm the aggregation is correct."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P1-010",
+        "PGSTAT-P0-036"
+      ],
+      "customer_acceptance": {
+        "required": false,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer's question was well-founded per background research: real-world case studies (perun.au 'five failure patterns', a dev.to postmortem) document autovacuum worker saturation causing checkpoint pressure, buffer pool contention, and query latency spikes — this is a genuine, bidirectional risk (the same research also found cases where MORE aggressive autovacuum fixed performance problems, so the risk cuts both ways and can't be resolved by intuition alone).",
+        "Code audit (background Explore-style agent) confirmed pgstat currently measures only autovacuum ACTIVITY (is it running, how many workers, what phase) via fetchAutovacuumWorkerStatus() and fact.pg_progress_vacuum_snapshot — it does not measure autovacuum's system COST (I/O volume, CPU, query latency impact). fact.pg_io_stat_delta already has a backend_type column that could isolate this but nothing currently uses it that way — a genuine, well-scoped gap rather than something already solved and just undiscovered."
+      ],
+      "next_action": "Scope a design pass (AC1) before any implementation — decide the exact aggregation/query shape and whether a new fact/agg table is warranted, using the already-collected pg_io_stat_delta.backend_type and pg_activity_snapshot.wait_event columns as the starting data sources."
+    },
+    {
       "id": "PGSTAT-P1-009",
       "order": 44,
       "priority": "P2",
