@@ -34,19 +34,32 @@
 -- olusturulacak partition'lar icin PartitionManager.java'ya (yeni ay
 -- partition'i olustururken WITH (...) ekleyecek sekilde) ayri bir kod
 -- degisikligi PGSTAT-P1-010 AC4 olarak takip ediliyor.
+--
+-- IKINCI DUZELTME (canli deploy 2026-08-25): bazi partition'larin
+-- (202606-202608) sahibi migration'i calistiran uygulama kullanicisi
+-- (ornegin pgstatuser) degil, gecmiste farkli bir kullanici (ornegin
+-- primeit) ile olusturulmus — bu yuzden "must be owner of table" hatasi
+-- alindi. ALTER TABLE ... SET (...) calistirmadan once o partition'in
+-- sahibi degilsek current_user'a OWNER TO ile sahiplik devrediliyor —
+-- boylece hem bu migration hem gelecekteki migration'lar/ALTER'lar
+-- tutarli sekilde calisir, sahiplik tutarsizligi kalici olarak giderilir.
 
 do $$
 declare
   part record;
 begin
   for part in
-    select c.relname
+    select c.relname, o.rolname as owner
     from pg_inherits i
     join pg_class c on c.oid = i.inhrelid
     join pg_class p on p.oid = i.inhparent
     join pg_namespace n on n.oid = p.relnamespace
+    join pg_roles o on o.oid = c.relowner
     where n.nspname = 'agg' and p.relname in ('pg_table_stat_hourly', 'pgss_hourly')
   loop
+    if part.owner <> current_user then
+      execute format('alter table agg.%I owner to %I', part.relname, current_user);
+    end if;
     execute format(
       'alter table agg.%I set (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000)',
       part.relname
