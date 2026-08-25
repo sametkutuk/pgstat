@@ -5,7 +5,7 @@
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
     "codex_role": "project manager + product manager + lead developer",
-    "max_in_progress": 7,
+    "max_in_progress": 8,
     "operating_model": "one product program, two independent runtime layers: pgstat Core and pgdbaagent"
   },
   "status_lifecycle": [
@@ -2625,6 +2625,55 @@
         "Live bug found right after the previous deploy: several resolve notifications (the exceeding.isEmpty() branch, e.g. sam-ets/pgstat-dev-137.10/dev-etsrooms-140-52/db1.dc-etstur.com-test-161.213) came through with the generic 'instance - rule_name' label, missing table/database entirely, even though details_json was populated correctly. Root cause: previousRecordsLabel()'s dynamically-built SQL used unparenthesized `r->>'schemaname' || '.' || r->>'relname'` — this threw 'operator does not exist: text ->> unknown' at query time (confirmed by running the exact SQL by hand), which the method's catch-all silently swallowed and returned null from, falling back to the generic label. The `->>` operator works fine standalone but broke once chained through `||` concatenation without parentheses. Fixed by parenthesizing every `r->>'x'` call in all three metricType branches (table/index/statement), and replaced the '?' JDBC-placeholder-lookalike coalesce fallback with 'bilinmiyor' to remove a second latent risk. Verified the corrected SQL by hand against a real details_json row before deploying. mvn compile/mvn test pass."
       ],
       "next_action": "Deploy the previousRecordsLabel() SQL fix (./pgstat upgrade) together with the 1b-ii/3.5 additions; live-verify the next batch of exceeding.isEmpty() resolve notifications names the correct table/database instead of falling back to the generic label. Scenarios 2/3/4/5 still need a live trigger to confirm end-to-end wording quality, though their logic reuses already-verified data sources. Consider this task customer-accepted once the customer confirms satisfaction with the diagnosis quality across a full alert batch; otherwise keep iterating per feedback."
+    },
+    {
+      "id": "PGSTAT-P1-010",
+      "order": 45,
+      "priority": "P1",
+      "workstream": "collector",
+      "status": "in_progress",
+      "title": "agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow",
+      "problem": "Customer asked a conceptual question after watching the bloat alert system work all day: 'pgstat's own DB has ongoing DELETE-driven bloat, why doesn't autovacuum ever recover the space, shouldn't autovacuum let new writes reuse dead tuple space?' Investigated with fact.pg_relation_size_snapshot (nightly-collected real table size, not just dead_tup ratio) and found agg.pg_table_stat_hourly_202608 grew from 1457MB to 2723MB over 14 days (~87%) while agg fact-table partitions grew for the expected reason (new daily data). Live query on fact.pg_table_stat_delta showed n_live_tup_estimate=7,062,216 constant while n_dead_tup_estimate climbed from 1,121,145 to 1,194,965 within a few hours — live count NOT changing, dead count climbing: a strong signal of repeated UPDATE, not INSERT growth. control.table_relopts_snapshot confirmed no per-table autovacuum_enabled override; last_autovacuum was ~9 hours old with autovacuum_count_delta=0 since. Root-caused via code read (Explore agent): AggRepository.rollupTableStatHourly()/rollupPgssHourly() UPSERT (on conflict on the full PK: bucket_start/instance_pk/dbid/relid or equivalent) the SAME current-hour bucket rows every ~5 minutes (JobOrchestrator's readHourlyRollupIntervalSec guard, default 300s) — roughly 12 real UPDATEs per row per hour, each leaving a dead tuple via MVCC. At this table's scale (~7M rows), the default autovacuum trigger (threshold=50 + scale_factor=0.2 × live_tup ≈ 1.4M dead tuples) takes far too long to reach relative to the actual update rate, so the table bloats for days before autovacuup ever fires — not a bug in the rollup logic (which is correct and necessary), but a mismatch between this table's write pattern (small delta, many updates) and Postgres's row-count-scaled default vacuum threshold.",
+      "requirements": [
+        "The two hourly rollup tables with this UPSERT-every-cycle pattern (agg.pg_table_stat_hourly, agg.pgss_hourly) should get a lower, size-independent autovacuum trigger so dead tuples from the rollup's repeated UPSERTs get reclaimed promptly instead of accumulating for days.",
+        "Fix must be a per-table storage parameter (ALTER TABLE ... SET), not a change to the rollup logic itself — the UPSERT-every-5-minutes design is correct and intentional (JobOrchestrator already has a 5-minute guard to prevent worse, per-poll-cycle UPSERTs).",
+        "Must apply automatically to future monthly partitions of these two tables, not require a migration per partition."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "V094 migration sets autovacuum_vacuum_scale_factor and autovacuum_vacuum_threshold via ALTER TABLE on the partitioned parent (agg.pg_table_stat_hourly, agg.pgss_hourly) to a low, mostly-count-based threshold appropriate for a table with a near-constant live row count and a high per-row update rate.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "Live verification: after deploying and waiting a full autovacuum_naptime + threshold-crossing period, confirm via fact.pg_table_stat_delta that last_autovacuum advances on the current-month partition and n_dead_tup_estimate stops climbing unbounded, and via fact.pg_relation_size_snapshot that the partition's total_size_bytes growth rate slows.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations/V094__hourly_agg_aggressive_autovacuum.sql: ALTER TABLE agg.pg_table_stat_hourly / agg.pgss_hourly SET (autovacuum_vacuum_scale_factor, autovacuum_vacuum_threshold) on the parent — PG11+ propagates storage params to existing AND future partitions automatically, no per-partition migration needed."
+      ],
+      "verification_plan": [
+        "./pgstat migrate; confirm via control.table_relopts_snapshot or a manual pg_class.reloptions check that the new partition-of-the-month inherits the setting.",
+        "Live: monitor fact.pg_table_stat_delta for the current-month partition of both tables over the following days; confirm last_autovacuum starts advancing more frequently and n_dead_tup_estimate no longer grows unbounded between autovacuum runs.",
+        "Live: compare fact.pg_relation_size_snapshot total_size_bytes growth rate before/after over a comparable multi-day window."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": false,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer asked a first-principles question ('autovacuum should let writes reuse dead tuple space, why does disk keep growing') that led to auditing pgstat's own database with fact.pg_relation_size_snapshot — found agg.pg_table_stat_hourly_202608 growing far faster (87% in 14 days) than its actual data volume justified (n_live_tup_estimate was CONSTANT at 7,062,216 across samples).",
+        "Root-caused via a background Explore agent reading AggRepository.java and JobOrchestrator.java: the hourly hourly-rollup jobs re-UPSERT the current hour's bucket rows every ~5 minutes by design (this is correct behavior, not a bug), which at ~12 updates/row/hour outpaces the table's row-count-scaled default autovacuum threshold (~1.4M dead tuples at this table's scale) by a wide margin.",
+        "Confirmed via control.table_relopts_snapshot that no per-table autovacuum_enabled override exists here (unlike the customer-facing dead_tuple_ratio cases) — this is purely a threshold-tuning problem, distinct from the P0-036 diagnosis work."
+      ],
+      "next_action": "Deploy V094 (./pgstat migrate); monitor over the next several days whether autovacuum on the current-month partitions of these two tables starts firing more often and whether their size growth rate slows."
     },
     {
       "id": "PGSTAT-P1-009",

@@ -13,10 +13,10 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 44 |
+| Total tasks | 45 |
 | Done tasks | 16 |
-| Remaining tasks | 28 |
-| Max in progress | 7 |
+| Remaining tasks | 29 |
+| Max in progress | 8 |
 
 ## Current Focus
 
@@ -33,7 +33,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Status | Count |
 | --- | ---: |
 | done | 16 |
-| in_progress | 7 |
+| in_progress | 8 |
 | planned | 21 |
 
 ## Workstream Counts
@@ -41,7 +41,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | Workstream | Count |
 | --- | ---: |
 | alerting | 3 |
-| collector | 1 |
+| collector | 2 |
 | contracts | 2 |
 | governance | 5 |
 | operations | 13 |
@@ -100,6 +100,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 42 | PGSTAT-P0-035 | P1 | alerting | in_progress | table_threshold alert message is too dense to scan when several arrive at once | Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan. |
 | 43 | PGSTAT-P0-036 | P1 | alerting | in_progress | Bloat alert follow-ups: missing API wiring, resolve notification detail, per-rule channel selection, evidence-based action text | Deploy the previousRecordsLabel() SQL fix (./pgstat upgrade) together with the 1b-ii/3.5 additions; live-verify the next batch of exceeding.isEmpty() resolve notifications names the correct table/database instead of falling back to the generic label. Scenarios 2/3/4/5 still need a live trigger to confirm end-to-end wording quality, though their logic reuses already-verified data sources. Consider this task customer-accepted once the customer confirms satisfaction with the diagnosis quality across a full alert batch; otherwise keep iterating per feedback. |
 | 44 | PGSTAT-P1-009 | P2 | collector | planned | Collector restart loses one collection cycle per table/statement due to in-memory prev-value caches | Schedule a dedicated design session: survey all collectors for the same in-memory-cache-on-restart pattern, design the persisted raw-state table and rehydration logic, then implement and verify before closing. |
+| 45 | PGSTAT-P1-010 | P1 | collector | in_progress | agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow | Deploy V094 (./pgstat migrate); monitor over the next several days whether autovacuum on the current-month partitions of these two tables starts firing more often and whether their size growth rate slows. |
 
 ## Dependency Map
 
@@ -149,6 +150,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-035 | - | - |
 | PGSTAT-P0-036 | - | - |
 | PGSTAT-P1-009 | - | - |
+| PGSTAT-P1-010 | - | - |
 
 ## Closure Rules
 
