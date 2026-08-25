@@ -17,20 +17,42 @@
 -- mutlak esik ile her rollup dongusunden sonra (pratikte) autovacuum
 -- tetiklenebilir hale getiriliyor.
 --
--- ALTER TABLE ... SET (...) partition edilmis parent tabloda calisir ve
--- PG11+'ta hem mevcut hem gelecekte olusturulacak partition'lara otomatik
--- yayilir (create_partition sirasinda inherit edilir) — tek tek partition'lara
--- ayri ayri uygulamaya gerek yok.
+-- DUZELTME (ilk versiyon PG15'te "unrecognized parameter" hatasi verdi):
+-- arastirma sonucu (2026-08-25) VACUUM tarafi reloption'larinin
+-- (autovacuum_vacuum_scale_factor/threshold) hicbir PostgreSQL surumunde
+-- (PG10-17 dahil) partition edilmis PARENT tabloya set edilemedigini
+-- gosterdi — sadece ANALYZE tarafi (autovacuum_analyze_*) ve
+-- autovacuum_enabled PG14+'ta parent'a set edilebiliyor, VACUUM fiziksel
+-- storage uzerinde calistigi icin parent'in (storage'i olmayan) bu
+-- ayarlari hic bir zaman desteklenmedi. Resmi dokuman (PG15 CREATE TABLE):
+-- "Specifying these parameters for partitioned tables is not supported,
+-- but you may specify them for individual leaf partitions."
+--
+-- Bu yuzden ayar MEVCUT tum partition'lara (leaf) tek tek uygulanir —
+-- pg_inherits uzerinden agg.pg_table_stat_hourly/agg.pgss_hourly'nin
+-- alt partition'lari bulunup donguyle ALTER TABLE calistirilir. Gelecekte
+-- olusturulacak partition'lar icin PartitionManager.java'ya (yeni ay
+-- partition'i olustururken WITH (...) ekleyecek sekilde) ayri bir kod
+-- degisikligi PGSTAT-P1-010 AC4 olarak takip ediliyor.
 
-alter table agg.pg_table_stat_hourly set (
-  autovacuum_vacuum_scale_factor = 0.02,
-  autovacuum_vacuum_threshold = 5000
-);
-
-alter table agg.pgss_hourly set (
-  autovacuum_vacuum_scale_factor = 0.02,
-  autovacuum_vacuum_threshold = 5000
-);
+do $$
+declare
+  part record;
+begin
+  for part in
+    select c.relname
+    from pg_inherits i
+    join pg_class c on c.oid = i.inhrelid
+    join pg_class p on p.oid = i.inhparent
+    join pg_namespace n on n.oid = p.relnamespace
+    where n.nspname = 'agg' and p.relname in ('pg_table_stat_hourly', 'pgss_hourly')
+  loop
+    execute format(
+      'alter table agg.%I set (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000)',
+      part.relname
+    );
+  end loop;
+end $$;
 
 comment on table agg.pg_table_stat_hourly is
   'Saatlik table-stat rollup. autovacuum_vacuum_scale_factor/threshold V094''te dusurulmustur — rollup jobu bu tabloyu ~5dk''da bir UPSERT ile yeniden yazdigi icin varsayilan esik (satir sayisina gore ~1.4M) cok gec tetikleniyordu.';

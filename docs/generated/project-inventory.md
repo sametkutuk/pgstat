@@ -36,11 +36,11 @@ This generated inventory is the bridge between code and the manual project docum
 | agg.pg_lock_hourly | 6 | no |  | V056__snapshot_hourly_rollup_remaining.sql | V056__snapshot_hourly_rollup_remaining.sql |
 | agg.pg_replication_hourly | 6 | no |  | V056__snapshot_hourly_rollup_remaining.sql | V056__snapshot_hourly_rollup_remaining.sql |
 | agg.pg_slru_hourly | 8 | no |  | V056__snapshot_hourly_rollup_remaining.sql | V056__snapshot_hourly_rollup_remaining.sql |
-| agg.pg_table_stat_hourly | 23 | yes | bucket_start | V068__pg_table_stat_hourly_agg.sql | V094__hourly_agg_aggressive_autovacuum.sql |
+| agg.pg_table_stat_hourly | 23 | yes | bucket_start | V068__pg_table_stat_hourly_agg.sql | V068__pg_table_stat_hourly_agg.sql |
 | agg.pg_wal_daily | 6 | no |  | V061__wal_daily_rollup.sql | V061__wal_daily_rollup.sql |
 | agg.pg_wal_hourly | 10 | no |  | V055__snapshot_hourly_rollup.sql | V084__pg_wal_hourly_agg.sql |
 | agg.pgss_daily | 9 | yes | bucket_start | V005__agg_tables.sql | V005__agg_tables.sql |
-| agg.pgss_hourly | 15 | yes | bucket_start | V005__agg_tables.sql | V094__hourly_agg_aggressive_autovacuum.sql |
+| agg.pgss_hourly | 15 | yes | bucket_start | V005__agg_tables.sql | V085__pgss_hourly_wal_and_latency.sql |
 
 <details><summary>agg.pg_activity_hourly columns (10)</summary>
 

@@ -75,6 +75,21 @@ public class PartitionManager {
         "agg.pg_table_stat_hourly"
     };
 
+    /**
+     * Bu iki tablo, AggRepository.rollupXxxHourly() tarafindan mevcut saatin
+     * bucket satirlari ~5dk'da bir UPSERT ile yeniden yazildigi icin yuksek
+     * guncelleme sikligina sahip (bkz. V094 migration, PGSTAT-P1-010).
+     * VACUUM tarafi autovacuum reloption'lari partition edilmis PARENT
+     * tabloya set edilemedigi icin (PG10-17, hicbir surumde desteklenmiyor —
+     * VACUUM fiziksel storage uzerinde calisir, parent'in storage'i yok),
+     * her yeni leaf partition olusturulurken bu ayar dogrudan CREATE TABLE
+     * DDL'ine WITH (...) olarak eklenir.
+     */
+    private static final Map<String, String> MONTHLY_AGG_STORAGE_PARAMS = Map.of(
+        "agg.pgss_hourly", "autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000",
+        "agg.pg_table_stat_hourly", "autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000"
+    );
+
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("yyyyMM");
 
@@ -163,7 +178,8 @@ public class PartitionManager {
 
                 if (existing.contains(partitionName)) continue;
 
-                createPartition(parentTable, partitionName, boundsForMonthOffset(m));
+                createPartition(parentTable, partitionName, boundsForMonthOffset(m),
+                    MONTHLY_AGG_STORAGE_PARAMS.get(parentTable));
             }
         }
     }
@@ -225,6 +241,19 @@ public class PartitionManager {
      * ismini uretir; range timestamp'lerini kendi timezone'u ile formatlamaz.
      */
     private void createPartition(String parentTable, String partitionName, PartitionBounds bounds) {
+        createPartition(parentTable, partitionName, bounds, null);
+    }
+
+    /**
+     * @param storageParams null degilse, yeni olusturulan leaf partition'a
+     *                      WITH (...) storage parametresi olarak eklenir —
+     *                      VACUUM tarafi autovacuum reloption'lari partition
+     *                      edilmis parent'a set edilemedigi icin (bkz.
+     *                      MONTHLY_AGG_STORAGE_PARAMS yorumu) bu ayar SADECE
+     *                      leaf partition olusturma anında verilebilir.
+     */
+    private void createPartition(String parentTable, String partitionName, PartitionBounds bounds,
+                                  String storageParams) {
         String[] parentParts = parentTable.split("\\.", 2);
         String schema = parentParts[0];
         String parentName = parentParts[1];
@@ -246,9 +275,10 @@ public class PartitionManager {
                 continue;
             }
 
+            String withClause = storageParams != null ? " WITH (" + storageParams + ")" : "";
             String ddl = String.format(
-                "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%s) TO (%s)",
-                fullPartitionName, parentTable, segment.lowerLiteral(), segment.upperLiteral()
+                "CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%s) TO (%s)%s",
+                fullPartitionName, parentTable, segment.lowerLiteral(), segment.upperLiteral(), withClause
             );
 
             try {

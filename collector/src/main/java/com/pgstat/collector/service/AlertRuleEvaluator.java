@@ -2687,7 +2687,14 @@ public class AlertRuleEvaluator {
             // Bacak B: mutlak dead-tuple sayisi, satir sayisindan bagimsiz
             "    t.n_dead_tup_estimate >= ?" +
             "  )" +
-            "  order by current_val desc nulls last limit 10",
+            // Siralama MUTLAK dead_tup'a gore, current_val (oran) DEGIL —
+            // musteri gozlemi 2026-08-25: kucuk bir tabloda %76 oran (83 olu
+            // satir), 1.2M+ olu satirli buyuk bir agregasyon tablosunu (agg.
+            // pg_table_stat_hourly, ~%17 oran) "top" konumundan itiyordu.
+            // Gercek disk/performans etkisi mutlak satir sayisiyla orantili,
+            // yuzdeyle degil — bu yuzden en cok etkiye sahip tablo alert
+            // mesajinda gorunmeliydi ama gorunmedi.
+            "  order by dead_tup desc nulls last limit 10",
             vacuumIneffectiveCount, absDeadTup,
             instancePk, windowMinutes + " minutes",
             minRows, threshold,

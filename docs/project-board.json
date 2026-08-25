@@ -2637,27 +2637,41 @@
       "requirements": [
         "The two hourly rollup tables with this UPSERT-every-cycle pattern (agg.pg_table_stat_hourly, agg.pgss_hourly) should get a lower, size-independent autovacuum trigger so dead tuples from the rollup's repeated UPSERTs get reclaimed promptly instead of accumulating for days.",
         "Fix must be a per-table storage parameter (ALTER TABLE ... SET), not a change to the rollup logic itself — the UPSERT-every-5-minutes design is correct and intentional (JobOrchestrator already has a 5-minute guard to prevent worse, per-poll-cycle UPSERTs).",
-        "Must apply automatically to future monthly partitions of these two tables, not require a migration per partition."
+        "Must apply automatically to future monthly partitions of these two tables, not require a migration per partition.",
+        "The dead_tuple_ratio alert's top-candidate selection must surface this table when it IS the biggest problem — the customer separately asked 'neden pg stat bu bloatı yakalamadı, alertlerde görmedim hiç bu tabloları' (why didn't pgstat catch this bloat, I never saw these tables in the alerts) after this investigation, which surfaced a second, distinct bug (see AC3)."
       ],
       "acceptance_criteria": [
         {
           "id": "AC1",
-          "text": "V094 migration sets autovacuum_vacuum_scale_factor and autovacuum_vacuum_threshold via ALTER TABLE on the partitioned parent (agg.pg_table_stat_hourly, agg.pgss_hourly) to a low, mostly-count-based threshold appropriate for a table with a near-constant live row count and a high per-row update rate.",
+          "text": "V094 migration sets autovacuum_vacuum_scale_factor and autovacuum_vacuum_threshold on every EXISTING leaf partition of agg.pg_table_stat_hourly and agg.pgss_hourly to a low, mostly-count-based threshold appropriate for a table with a near-constant live row count and a high per-row update rate.",
           "status": "done"
         },
         {
           "id": "AC2",
           "text": "Live verification: after deploying and waiting a full autovacuum_naptime + threshold-crossing period, confirm via fact.pg_table_stat_delta that last_autovacuum advances on the current-month partition and n_dead_tup_estimate stops climbing unbounded, and via fact.pg_relation_size_snapshot that the partition's total_size_bytes growth rate slows.",
           "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "findBloatedTables() orders candidate tables by absolute dead_tup count (descending), not by dead-tuple percentage — a small table with a high ratio (e.g. 83 dead rows out of 25 live, 76% ratio) must not outrank a huge table with a lower ratio but a vastly larger absolute problem (e.g. 1.2M+ dead rows, ~15% ratio) for the alert's top/title selection.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "PartitionManager.createPartition() gains an optional storageParams parameter appended as a WITH (...) clause on the CREATE TABLE ... PARTITION OF DDL itself, applied only for agg.pg_table_stat_hourly/agg.pgss_hourly (via a new MONTHLY_AGG_STORAGE_PARAMS map) — future monthly partitions of these two tables get the same lowered autovacuum threshold at creation time, since the V094 fix (below) only reaches partitions that already exist.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
-        "db/migrations/V094__hourly_agg_aggressive_autovacuum.sql: ALTER TABLE agg.pg_table_stat_hourly / agg.pgss_hourly SET (autovacuum_vacuum_scale_factor, autovacuum_vacuum_threshold) on the parent — PG11+ propagates storage params to existing AND future partitions automatically, no per-partition migration needed."
+        "db/migrations/V094__hourly_agg_aggressive_autovacuum.sql: initial version used ALTER TABLE ... SET (...) on the PARTITIONED PARENT — failed live on PostgreSQL 15 with 'unrecognized parameter \"autovacuum_vacuum_scale_factor\"'. Root-caused via web research: VACUUM-side autovacuum reloptions (scale_factor/threshold, as opposed to the ANALYZE-side ones and autovacuum_enabled) have never been settable on a partitioned parent table in ANY PostgreSQL version (10-17) — VACUUM operates on physical storage, which the parent doesn't have. Fixed by rewriting the migration as a DO block that iterates pg_inherits to find every existing leaf partition of both tables and ALTERs each one individually.",
+        "PartitionManager.java: added MONTHLY_AGG_STORAGE_PARAMS (table name -> WITH clause body) and a createPartition() overload taking an optional storageParams string, appended to the CREATE TABLE ... PARTITION OF DDL as WITH (...) when non-null. ensureMonthlyPartitions() now looks up the map per parent table and passes it through — this covers all FUTURE monthly partitions of these two tables at creation time (V094 only covers partitions that already existed when it ran).",
+        "AlertRuleEvaluator.findBloatedTables(): changed the final ORDER BY from current_val (ratio) descending to dead_tup (absolute count) descending, so the alert's top-record selection (and therefore its title/message) surfaces the table with the largest real impact, not the table with the most dramatic-looking percentage."
       ],
       "verification_plan": [
-        "./pgstat migrate; confirm via control.table_relopts_snapshot or a manual pg_class.reloptions check that the new partition-of-the-month inherits the setting.",
+        "./pgstat migrate (after the fix, not the original ALTER-on-parent version); confirm no error, and via a manual pg_class.reloptions check on the current-month partitions that the ALTER actually took.",
         "Live: monitor fact.pg_table_stat_delta for the current-month partition of both tables over the following days; confirm last_autovacuum starts advancing more frequently and n_dead_tup_estimate no longer grows unbounded between autovacuum runs.",
-        "Live: compare fact.pg_relation_size_snapshot total_size_bytes growth rate before/after over a comparable multi-day window."
+        "Live: compare fact.pg_relation_size_snapshot total_size_bytes growth rate before/after over a comparable multi-day window.",
+        "Live: after the next monthly partition rollover, confirm the newly-created partition (via PartitionManager) already has the lowered autovacuum threshold set from creation, without needing a manual ALTER."
       ],
       "required_docs": [
         "docs/generated/project-status.md"
@@ -2671,9 +2685,11 @@
       "verification_evidence": [
         "Customer asked a first-principles question ('autovacuum should let writes reuse dead tuple space, why does disk keep growing') that led to auditing pgstat's own database with fact.pg_relation_size_snapshot — found agg.pg_table_stat_hourly_202608 growing far faster (87% in 14 days) than its actual data volume justified (n_live_tup_estimate was CONSTANT at 7,062,216 across samples).",
         "Root-caused via a background Explore agent reading AggRepository.java and JobOrchestrator.java: the hourly hourly-rollup jobs re-UPSERT the current hour's bucket rows every ~5 minutes by design (this is correct behavior, not a bug), which at ~12 updates/row/hour outpaces the table's row-count-scaled default autovacuum threshold (~1.4M dead tuples at this table's scale) by a wide margin.",
-        "Confirmed via control.table_relopts_snapshot that no per-table autovacuum_enabled override exists here (unlike the customer-facing dead_tuple_ratio cases) — this is purely a threshold-tuning problem, distinct from the P0-036 diagnosis work."
+        "Confirmed via control.table_relopts_snapshot that no per-table autovacuum_enabled override exists here (unlike the customer-facing dead_tuple_ratio cases) — this is purely a threshold-tuning problem, distinct from the P0-036 diagnosis work.",
+        "AC3: customer then asked why the bloat alert never caught agg.pg_table_stat_hourly at all. Checked rule:14:instance:23 directly — it WAS open/critical the whole time (last_seen_at fresh), but its title pointed at control.instance_state (76% ratio, only 83 dead rows) instead of agg.pg_table_stat_hourly (1.2M+ dead rows). Ran findBloatedTables()'s query by hand for instance_pk=23: confirmed both tables ARE in the exceeding set, but the query's ORDER BY current_val desc put the tiny-table-high-ratio row first. Re-ran the same query with ORDER BY dead_tup desc: agg.pg_table_stat_hourly_202608 (1,255,613 dead) correctly sorted to the top ahead of agg.pgss_hourly_202608 (280,007) and every fact.*_delta partition. Fixed the code to match, mvn compile/mvn test pass.",
+        "AC1 first-deploy failure: customer ran ./pgstat upgrade, got 'psql:...V094...: ERROR: unrecognized parameter \"autovacuum_vacuum_scale_factor\"' on line 28 (the ALTER TABLE on the parent) — migration correctly recorded as failed (not applied to schema_migrations, so the fix could be re-run via the same version file). Web research confirmed VACUUM-side reloptions are architecturally unsupported on partitioned parents in every PostgreSQL version — this was a genuine design mistake in the first V094, not a PG15-specific quirk. Rewrote the migration to target existing leaf partitions individually via pg_inherits, and added AC4 (PartitionManager change) so future partitions don't need a manual fix-up migration each time."
       ],
-      "next_action": "Deploy V094 (./pgstat migrate); monitor over the next several days whether autovacuum on the current-month partitions of these two tables starts firing more often and whether their size growth rate slows."
+      "next_action": "Deploy the corrected V094 + PartitionManager change + the dead_tup-ordering fix together (./pgstat migrate && ./pgstat upgrade); monitor over the next several days whether autovacuum on the current-month partitions of these two tables starts firing more often and whether their size growth rate slows; live-verify that rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state; live-verify the next monthly partition rollover creates partitions with the lowered threshold already set."
     },
     {
       "id": "PGSTAT-P1-009",
