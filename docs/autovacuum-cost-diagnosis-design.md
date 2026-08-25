@@ -7,8 +7,22 @@ Cost ayarları toplama listesine eklendi ve canlı doğrulandı (üçü de
 varsayılan değerde). `VacuumDelay`'in PG sürümünden bağımsız olarak her
 zaman `wait_event_type='Timeout'` altında geldiği ham veriyle
 doğrulandı (ilk taslaktaki "PG13'te IO'ya taşındı" notu YANLIŞTI,
-düzeltildi — bkz. Teşhis 2 bölümü). AC2'ye başlamak için bilinen açık
+düzeltildi — bkz. Teşhis 2 bölümü). Bir bağımsız dış inceleme (2026-08-25)
+birkaç fazla-kesin ifadeyi ve eksik bir sürüm dallanmasını (`VacuumDelay`
+wait_event'inin kendisi PG13'te eklendi) buldu, hepsi düzeltildi — bkz.
+ilgili bölümlerdeki "DÜZELTME" notları. AC2'ye başlamak için bilinen açık
 belirsizlik kalmadı.
+
+**Terminoloji notu:** Bu dokümanda ve `AlertRuleEvaluator`'da "bloat"
+kelimesi `n_dead_tup`/`n_live_tup` **tahminine** dayanıyor —
+`pg_stat_user_tables`'ın istatistiksel bir tahminidir, fiziksel disk
+alanı israfının (gerçek bloat, `pgstattuple` gibi bir extension'la
+ölçülür) doğrudan eşdeğeri değildir. Daha doğru terim "ölü satır
+birikim göstergesi" olurdu, ama mevcut kod tabanında "bloat" terimi
+zaten yaygın kullanıldığı için (`findBloatedTables()`,
+`diagnoseBloat()`, `docs/bloat-diagnosis-decision-tree.md`) burada
+tutarlılık adına korunuyor — okuyucu bunun bir tahmin olduğunu, kesin
+fiziksel ölçüm olmadığını bilmeli.
 **Amaç:** Kullanıcının sorusu — "autovacuum kapatılmalı mı, sık çalışıp diğer
 sorguları yavaşlatıyor mu, yoksa yetişemiyor mu — bunu en doğru ve somut
 kanıtlı şekilde nasıl tespit ederiz?" Bu doküman üç ayrı teşhis hedefini,
@@ -46,6 +60,34 @@ cevaplayamıyoruz (`dim.query_text.query_text` içinde metin araması ile
 yaklaşık bir eşleştirme yapılabilir ama güvenilir değil — LIKE '%tablename%'
 yanlış pozitif üretebilir). Bu yüzden aşağıdaki teşhisler **instance-geneli**
 korelasyona dayanıyor (tablo-özel değil) — bu bilinçli bir basitleştirme.
+
+**Genel sınırlama — worker aktivitesi ile hedef tablo ilişkilendirmesi
+zayıf (dış inceleme, 2026-08-25):** Teşhis 2/2b, `pg_activity_snapshot`
+üzerinden `backend_type='autovacuum worker'` filtrelenerek **cluster
+genelinde** hesaplanıyor — hangi worker'ın hangi tabloyu vacuum ettiği
+bu sorgularda yok. `fact.pg_progress_vacuum_snapshot.relid` bu bilgiyi
+taşıyor ama şu an Teşhis 2/2b ile PID üzerinden eşleştirilmiyor. Bu,
+kabul edilen bir kapsam sınırlaması (tıpkı Teşhis 1'in `pgss_delta`
+sınırlaması gibi) — "cluster genelinde autovacuum worker'lar ne kadar
+throttle'lı/I/O bekliyor" sorusuna cevap veriyoruz, "BU tablonun
+vacuum'u ne kadar throttle'lı" sorusuna değil. İleride
+`pg_progress_vacuum_snapshot.relid`/`pid` ile `pg_activity_snapshot.pid`
+eşleştirilerek tablo-bazlı kırılım eklenebilir — bu görevin kapsamı
+dışında, ayrı bir iyileştirme.
+
+**Alternatif kök nedenler — bu teşhisler bunları AYIRT ETMEZ, sadece
+gözlemlenen semptomu raporlar:** Yüksek dead-tuple oranı veya yüksek
+autovacuum I/O'su, aşağıdaki nedenlerden HERHANGİ birinden kaynaklanabilir
+ve bu doküman şu an bunları birbirinden ayırt eden bir mantık içermiyor
+— alert metninde "kesin neden X" yerine "gözlemlenen kanıt Y" dili
+kullanılmalı, kullanıcının kendi ortamını bilerek yorumlamasına izin
+verilmeli:
+- Worker doygunluğu (`autovacuum_max_workers` yetersiz, kuyrukta bekleyen tablo var)
+- Uzun süren transaction/prepared transaction (xmin horizon ilerlemiyor, vacuum "temizleyecek" bir şey bulamıyor)
+- Pasif/unutulmuş replication slot (aynı xmin horizon etkisi)
+- Wraparound/freeze baskısı (agresif vacuum bilinçli olarak tetiklenmiş olabilir, bu "sorun" değil "gerekli")
+- Lock/BufferPin bekleme (worker `IO` veya `VacuumDelay` DEĞİL, `Lock` kategorisinde bekliyor olabilir — bu üçünü ayrı saymak gerekir)
+- Tablo/TOAST'a özel `reloptions` override'ı (global `pg_settings` okuması bunu YANSITMAZ — bkz. aşağıdaki not)
 
 ## REVİZYON (2026-08-25, gerçek veriyle test sonrası)
 
@@ -98,10 +140,22 @@ order by total_reads desc nulls last;
 | background writer | 0 | 3,454,920 | 0.0 | 0.0 |
 
 **Kanıt yorumu:** Bu instance'ta autovacuum worker'lar `client backend`'den
-**~30 kat fazla okuma** yapmış — somut, tartışmasız bir kanıt: "autovacuum
-son 24 saatte X okuma yaptı, bu instance'taki uygulama trafiğinin Y katı".
-Bu, korelasyona değil doğrudan sayıma dayandığı için "olası" gibi bir
-belirsizlik ifadesi gerektirmez — kesin bir sayı.
+**~30 kat fazla okuma** yapmış — korelasyona değil doğrudan sayıma
+dayandığı için nedensellik açısından tartışmasız (bu okumalar mekanik
+olarak autovacuum'un kendi aktivitesi).
+
+**DÜZELTME (dış inceleme, 2026-08-25): "I/O maliyeti" ifadesi fazla
+iddialıydı, kapsamı netleştirildi.** `reads_delta`/`writes_delta`
+**byte veya gerçek disk IOPS değil** — `pg_stat_io`'nun saydığı **işlem
+(sayfa) sayısıdır**, `op_bytes` sütunuyla çarpılmadan gerçek veri
+hacmine dönüştürülemez. Ayrıca bu sayaç sadece worker'ın **kendi**
+işlemidir — checkpointer'ın sonradan aynı kirli sayfaları diske
+yazması (checkpoint I/O) ayrı bir `backend_type` satırında görünür,
+worker'a atfedilmez; yani "autovacuum'un toplam sistem etkisi" değil,
+"autovacuum worker'ının kendi doğrudan işlem sayısı" ölçülüyor. Doğru
+ifade: **"autovacuum worker'lar son 24 saatte X okuma/Y yazma işlemi
+yaptı, bu N kat client backend'den fazla"** — "X MB I/O tüketti" ya da
+"sisteme X maliyeti oldu" gibi bir hacim/maliyet iddiası kurulmamalı.
 
 **Pratik not (gerçek veriyle keşfedildi):** `total_read_time_ms`/
 `total_write_time_ms` bu instance'ta **her zaman 0.0** çıktı — bu,
@@ -210,14 +264,26 @@ güncellendikten SONRA test edildi) ve sonuç:
 | VacuumDelay | **Timeout** | 10 |
 
 Yani **PG17'de bile `VacuumDelay` hâlâ `Timeout` kategorisinde** —
-hiçbir sürümde `IO`'ya taşınmamış. **Doğru kural:** Teşhis 2'nin
+hiçbir sürümde `IO`'ya taşınmamış (bu, ilk taslaktaki "PG13'te IO'ya
+taşındı" iddiasını çürütüyor, düzeltildi). **Doğru kural:** Teşhis 2'nin
 `wait_event_type = 'IO'` filtresi throttle uykusunu **hiçbir PG
 sürümünde yakalamaz** — `VacuumDelay` her zaman ayrı bir olay, ayrı bir
 sinyal. Teşhis 2 ("I/O'da mı bekliyor") ve Teşhis 2b ("throttle'dan mı
 uyuyor") **birbirinden bağımsız iki farklı soru**, aynı filtreyle
 birleştirilmemeli — implementasyonda `wait_event_type = 'IO'` (gerçek
 disk bekleme) ile `wait_event = 'VacuumDelay'` (throttle) ayrı ayrı
-sayılmalı, `pg_major` dallanmasına hiç gerek yok.
+sayılmalı, kategori karışıklığı için `pg_major` dallanmasına gerek yok.
+
+**Ayrı bir sürüm kısıtlaması (kategoriden bağımsız, gözden kaçmıştı):**
+`wait_event = 'VacuumDelay'` **kendisi PG13'te eklendi** — PG13
+öncesinde autovacuum'un cost-based uyku durumu `pg_stat_activity`'de
+hiç ayrı bir `wait_event` olarak görünmüyordu. Yani Teşhis 2b, kayıtlı
+PG12 instance'larında (5/23) her zaman `0` throttle-sleep örneği
+dönecek — bu "throttle yok" anlamına gelmez, "bu sürümde bu sinyal
+hiç yok" anlamına gelir. İmplementasyonda `pg_major < 13` için Teşhis
+2b'nin throttle-sleep kısmı `null`/"desteklenmiyor" olarak işaretlenmeli,
+sessizce `0` gösterilmemeli (aksi hâlde "throttle yok, worker aktif
+çalışıyor" gibi yanlış bir sonuca varılabilir).
 
 ## Teşhis 2: "Autovacuum yetişemiyor mu?" (kısmen zaten var)
 
@@ -279,22 +345,33 @@ where instance_pk = ?
 order by 1;
 ```
 
-**Yorumlama kuralı (ayar + örnekleme birlikte okunmalı):**
+**DÜZELTME (dış inceleme, 2026-08-25): tablo dili fazla kesindi, ihtiyatlı
+hâle getirildi.** İlk yazımda "gerçek bir yük", "kasıtlı yavaşlatma
+sorunu" gibi kesin nedensellik iddiaları vardı — bunlar örneklemenin
+verebileceğinden daha fazla kesinlik taşıyordu. Düzeltilmiş yorumlama:
 
-| `actively_running_samples` oranı | `throttle_sleep_samples` oranı | Yorum | Aksiyon |
+| `actively_running_samples` oranı | `throttle_sleep_samples` oranı | Gözlem (kesin değil, olası yorum) | Aksiyon |
 |---|---|---|---|
-| Yüksek (>%60) | Düşük | Worker gerçekten aktif çalışıyor, CPU/I/O harcıyor — bu **gerçek bir yük**, throttle'dan kaynaklanmıyor | `cost_limit`'i artırmak işi HIZLANDIRIR ama CPU/I/O rekabetini AZALTMAZ; sorun zaten "iş yükü büyük" — scale_factor/threshold ayarına bakılmalı |
-| Düşük | Yüksek (>%50) | Worker çoğunlukla throttle'dan uyuyor, aktif değil — mevcut `cost_delay` işi **yavaşlatıyor**, bu yüzden tablo yetişemiyor olabilir | `autovacuum_vacuum_cost_delay`'i düşür veya `cost_limit`'i artır — CPU/I/O rekabeti değil, **kasıtlı yavaşlatma** sorunu |
-| Yüksek | Düşük, ama `cost_delay=0`/çok düşük | Worker aktif VE throttle'sız çalışıyor — bu, autovacuum'un **tam hızda** CPU/I/O tükettiği, diğer sorgularla en çok rekabet ettiği senaryo | Teşhis 0 (I/O sayımı) yüksekse, `cost_limit`'i düşürüp/`cost_delay`'i artırıp worker'ı kasıtlı yavaşlatmak (rekabeti azaltmak) düşünülebilir — ama bu, senaryo 3/4.5 ile çelişmemeli (yetişemiyor sorunu varsa yavaşlatma önerilmemeli) |
+| Yüksek (>%60) | Düşük | Worker örneklemelerin çoğunda aktif görünüyor — throttle uykusunda değil | `cost_limit`'i artırmak işi hızlandırabilir ama CPU/I/O rekabetini azaltmaz; scale_factor/threshold ayarına da bakılmalı |
+| Düşük | Yüksek (>%50) | Worker örneklemelerin çoğunda throttle'dan uyuyor — ayar `cost_delay` **default veya üzerinde** ise bu **beklenen bir davranış**, mutlaka bir "sorun" değil | Sadece ayar demonstrably non-default (kasıtlı yükseltilmiş) İSE `cost_delay`'i düşürmeyi öner; ayar zaten default'ta ise bunu "normal throttling" olarak belirt, aksiyon önerme |
+| Yüksek | Düşük, `cost_delay` de düşük/0 | Worker aktif VE throttle'a az giriyor — CPU/I/O'yu görece serbestçe tüketiyor olabilir | Teşhis 0 (varsa, PG16+) yüksekse ek bağlam olarak sun; tek başına "rekabet ediyor" sonucuna varma |
 
-**Neden bu "somut" sayılır, CPU'yu tahmin etmekten farklı:** Buradaki iddia
-"worker X CPU saniyesi harcadı" değil, "worker örneklemelerin %N'inde
-throttle'dan uyuyordu, ayar `cost_delay=Yms`" — bu, `pg_activity_snapshot`
-örneklemesinden **doğrudan sayılabilen**, yorum gerektirmeyen bir gerçek.
-CPU'yu tahmin etmek yerine, "worker zaten throttle'lı mı yoksa serbest mi
-çalışıyor" sorusuna kesin cevap veriyor — cost ayarını görmeden sadece
-`wait_event_type='IO'` oranına bakmak yanıltıcı olurdu (worker aktif
-görünebilir ama aslında `VacuumDelay`'de uyuyor olabilir, `IO` değil).
+**Bu tablo örnekleme anının bir görüntüsüdür, backlog/geride kalma
+KANITI değildir.** `wait_event`/`wait_event_type`, `pg_activity_snapshot`
+örneklemesinin o anki bir enstantanesidir — worker'ın toplam çalışma
+süresi boyunca nasıl davrandığının istatistiksel bir özeti değil. Örnek
+sayısı azsa (örn. <10 örnek) yorum güvenilmez; kod bu eşiği açıkça
+uygulamalı, düşük örnek sayısında "yetersiz veri" demeli, zorla bir
+yorum üretmemeli.
+
+**Cost ayarı okumadan sadece `wait_event_type='IO'` oranına bakmanın
+neden yanıltıcı olduğu:** worker aktif görünebilir ama aslında
+`VacuumDelay`'de uyuyor olabilir (`IO` değil, `Timeout` kategorisinde)
+— bu yüzden Teşhis 2 ve 2b'nin birlikte okunması gerekiyor, ayar
+değeriyle karşılaştırılmadan `throttle_sleep_samples` oranının kendisi
+"iyi" mi "kötü" mü olduğunu söylemez (varsayılan `cost_delay=2ms` bile
+worker'ı sık sık `VacuumDelay`'e sokabilir, bu bir arıza değildir —
+üç test instance'ımızın hepsinde de tam bu durum gözlendi, bkz. aşağı).
 
 **KRİTİK EKSİK (kod envanteri ile doğrulandı, 2026-08-25): şu an kodlanamaz.**
 `autovacuum_vacuum_cost_limit`, `autovacuum_vacuum_cost_delay`,
@@ -412,6 +489,24 @@ dağılımı. Yorumlama tablosundaki "cost_delay'i düşür" önerisi bu
 ayrımı yapmalı: `cost_delay`/`cost_limit` zaten varsayılansa "ayarı
 düşür" değil, "bu normal, worker'ın throttle'dan değil doğal
 aralıklı çalışmasından kaynaklanıyor" mesajı üretilmeli.
+
+**Önemli sınırlama (dış inceleme, 2026-08-25): bu, INSTANCE-geneli
+(global) ayar, tablo-özel override'ı YANSITMAZ.** `pg_settings`
+sadece cluster'ın genel `autovacuum_vacuum_cost_*` değerini verir.
+Ama PostgreSQL, `ALTER TABLE ... SET (autovacuum_vacuum_cost_delay = ...)`
+ile **tablo bazında** bu ayarı ezebilir — pgstat'ın kendisi bunu zaten
+`control.table_relopts_snapshot` (V093, bloat teşhisinde
+`fetchTableAutovacuumOverride()` ile kullanılıyor) üzerinden topluyor.
+Yani "bu instance'ın cost_delay'i default" demek, "BU TABLONUN
+vacuum'u default hızda çalışıyor" anlamına gelmez — tablo özelinde
+daha agresif/daha yavaş bir override olabilir. Teşhis 2b, alert bir
+tabloya bağlıyken (senaryo 3/4.5 gibi) `table_relopts_snapshot`'ı da
+kontrol etmeli; sadece instance-geneli ayara bakıp "bu tablo için
+cost_delay normal" sonucuna varmamalı. Ayrıca `autovacuum_vacuum_cost_limit=-1`
+sentinel'i, gerçek etkin limitin `vacuum_cost_limit` (genel, PostgreSQL
+tarafından `autovacuum_max_workers`'a paylaştırılan) olduğu anlamına
+gelir — kod bu iki değeri birbirine karıştırmamalı, `-1` görüldüğünde
+`vacuum_cost_limit`'i etkin değer olarak kullanmalı.
 
 ## Teşhis 3: Otomatik "kapat" önerisi engeli
 
