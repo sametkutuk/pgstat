@@ -1,10 +1,14 @@
 # Autovacuum Sistem Maliyeti Teşhisi — Tasarım Dokümanı
 
-**Durum:** PGSTAT-P1-011 kapsamında tasarlandı, 2026-08-25. Henüz kodlanmadı.
-Teşhis 0 tek instance'ta (pk=6) test edildi; Teşhis 1 iki instance'ta
-(pk=8, 23) test edilip güvenilmez bulundu; Teşhis 2 ve 2b henüz hiç
-test edilmedi. AC2 (implementasyon) öncesi çoklu-instance doğrulaması
-bekleniyor (bkz. "Doğrulama planı" bölümü).
+**Durum:** PGSTAT-P1-011 — tasarım + doğrulama (AC1) TAMAMLANDI, 2026-08-25.
+Henüz kodlanmadı (AC2 bekliyor). Teşhis 0, 2, 2b üç instance'ta (PG13/15/17)
+test edildi; Teşhis 1 güvenilmez bulunup ikincil/opsiyonel'e indirildi.
+Cost ayarları toplama listesine eklendi ve canlı doğrulandı (üçü de
+varsayılan değerde). `VacuumDelay`'in PG sürümünden bağımsız olarak her
+zaman `wait_event_type='Timeout'` altında geldiği ham veriyle
+doğrulandı (ilk taslaktaki "PG13'te IO'ya taşındı" notu YANLIŞTI,
+düzeltildi — bkz. Teşhis 2 bölümü). AC2'ye başlamak için bilinen açık
+belirsizlik kalmadı.
 **Amaç:** Kullanıcının sorusu — "autovacuum kapatılmalı mı, sık çalışıp diğer
 sorguları yavaşlatıyor mu, yoksa yetişemiyor mu — bunu en doğru ve somut
 kanıtlı şekilde nasıl tespit ederiz?" Bu doküman üç ayrı teşhis hedefini,
@@ -183,15 +187,37 @@ rastgele yön değiştirebiliyor. Bu yüzden asla tek başına bir aksiyon
 "ek bağlam" olarak ve **sadece yeterli örnek varsa** (örn. her iki tarafta
 da en az 10 bucket) gösterilmeli, aksi halde hiç gösterilmemeli.
 
-**PG sürüm notu (`wait_event_type='IO'` vs `VacuumDelay`):** `VacuumDelay`
-her zaman `wait_event` adı olarak sabit kaldı, ama **kategorisi PG13'te
-değişti** — PG13 öncesinde `wait_event_type='Timeout'` altındaydı, PG13+'ta
-`'IO'` kategorisine taşındı. Yani aşağıdaki Teşhis 2 sorgusundaki
-`wait_event_type = 'IO'` filtresi, **PG13 öncesi instance'larda throttle
-uykusunu YAKALAMAZ** (o zaman `Timeout` kategorisindedir) — bu instance'lar
-için filtre `wait_event_type in ('IO', 'Timeout')` olmalı veya doğrudan
-`wait_event = 'VacuumDelay'` ile ayrıştırılmalı (Teşhis 2b zaten bunu
-yapıyor). Bu ayrım implementasyonda `pg_major` kontrolüyle ele alınmalı.
+**DÜZELTME (2026-08-25, ham veriyle test edildi — önceki not YANLIŞTI):**
+İlk yazımda "`VacuumDelay` PG13'te `Timeout`'tan `IO`'ya taşındı" denmişti
+— bu **PostgreSQL kaynağına bakılmadan, tahminle yazılmış yanlış bir
+bilgiydi**. Gerçek veri bunu çürüttü:
+
+```sql
+select wait_event, wait_event_type, count(*)
+from fact.pg_activity_snapshot
+where instance_pk = 23 and backend_type = 'autovacuum worker'
+  and snapshot_ts > now() - interval '6 hours'
+group by wait_event, wait_event_type
+order by count(*) desc;
+```
+
+`instance_pk=23` **PG17** çalıştırıyor (bu satır, kendisi bu dokümanda
+anlatılan `pg_major` auto-detect düzeltmesiyle PG15'ten PG17'ye
+güncellendikten SONRA test edildi) ve sonuç:
+
+| wait_event | wait_event_type | count |
+|---|---|---|
+| VacuumDelay | **Timeout** | 10 |
+
+Yani **PG17'de bile `VacuumDelay` hâlâ `Timeout` kategorisinde** —
+hiçbir sürümde `IO`'ya taşınmamış. **Doğru kural:** Teşhis 2'nin
+`wait_event_type = 'IO'` filtresi throttle uykusunu **hiçbir PG
+sürümünde yakalamaz** — `VacuumDelay` her zaman ayrı bir olay, ayrı bir
+sinyal. Teşhis 2 ("I/O'da mı bekliyor") ve Teşhis 2b ("throttle'dan mı
+uyuyor") **birbirinden bağımsız iki farklı soru**, aynı filtreyle
+birleştirilmemeli — implementasyonda `wait_event_type = 'IO'` (gerçek
+disk bekleme) ile `wait_event = 'VacuumDelay'` (throttle) ayrı ayrı
+sayılmalı, `pg_major` dallanmasına hiç gerek yok.
 
 ## Teşhis 2: "Autovacuum yetişemiyor mu?" (kısmen zaten var)
 
@@ -360,15 +386,32 @@ gösteriyor — **kod yazmadan önce ham `wait_event_type` değerini
 (`select wait_event, wait_event_type from fact.pg_activity_snapshot
 where instance_pk=23 and wait_event='VacuumDelay'`).
 
-### Henüz doğrulanamayan: cost ayarları
+### Doğrulanan: cost ayarları artık toplanıyor (2026-08-25, hot refresh sonrası)
 
-`autovacuum_vacuum_cost_limit`/`autovacuum_vacuum_cost_delay`/
-`vacuum_cost_limit` üç instance'ta da hâlâ `fact.pg_settings_snapshot`'ta
-görünmüyor — sadece daha önceden toplanan `autovacuum_max_workers`
-geldi. Collector değişikliği (bkz. Uygulama sırası, adım 0) deploy
-edildi ama henüz bir gece snapshot'ı (UTC 03:00) geçmedi. **Bir sonraki
-gün tekrar kontrol edilmeli** — Teşhis 2b'nin ayar-okuma kısmı bu veri
-gelmeden doğrulanamaz.
+Deploy sonrası ilk hot refresh (3 saatlik döngü, gece snapshot'ını
+beklemeye gerek kalmadı) ile üç instance'ta da veri geldi:
+
+| instance_pk | autovacuum_vacuum_cost_delay | autovacuum_vacuum_cost_limit | vacuum_cost_limit |
+|---|---|---|---|
+| 6 | 2 | -1 | 200 |
+| 8 | 2 | -1 | 200 |
+| 23 | 2 | -1 | 200 |
+
+Üçü de **tamamen varsayılan değerlerde** — `cost_delay=2ms` (PG13+
+varsayılanı), `autovacuum_vacuum_cost_limit=-1` ("genel
+`vacuum_cost_limit`'i kullan" sentinel'i), `vacuum_cost_limit=200`
+(PG varsayılanı). Hiçbir instance'ta özel bir throttle ayarı yok. Bu,
+Teşhis 2b'nin `instance_pk=6`'da bulduğu "16 örneğin 15'i
+`VacuumDelay`" bulgusuna önemli bir yorum katmanı ekliyor: **worker
+agresif bir şekilde throttle EDİLMİYOR (ayar varsayılan), yine de
+çoğunlukla uykuda** — yani darboğaz "cost_delay çok yüksek ayarlanmış"
+değil, muhtemelen "iş küçük parçalar hâlinde geliyor, worker sık sık
+cost bütçesini hızla dolduramıyor" ya da örnekleme anının doğal
+dağılımı. Yorumlama tablosundaki "cost_delay'i düşür" önerisi bu
+üç instance için **geçerli değil** (zaten minimum düzeyde) — kod bu
+ayrımı yapmalı: `cost_delay`/`cost_limit` zaten varsayılansa "ayarı
+düşür" değil, "bu normal, worker'ın throttle'dan değil doğal
+aralıklı çalışmasından kaynaklanıyor" mesajı üretilmeli.
 
 ## Teşhis 3: Otomatik "kapat" önerisi engeli
 
