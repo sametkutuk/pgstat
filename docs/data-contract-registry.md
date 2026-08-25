@@ -326,6 +326,10 @@ Critical fields:
 - `autovacuum_vacuum_scale_factor`
 - `autovacuum_analyze_scale_factor`
 - `autovacuum_max_workers`
+- `autovacuum_vacuum_cost_limit` (added 2026-08-25, PGSTAT-P1-011)
+- `autovacuum_vacuum_cost_delay` (added 2026-08-25, PGSTAT-P1-011)
+- `vacuum_cost_limit` (added 2026-08-25, PGSTAT-P1-011)
+- `vacuum_cost_delay` (added 2026-08-25, PGSTAT-P1-011)
 
 Primary consumers:
 
@@ -337,6 +341,11 @@ Primary consumers:
 - Vacuum Lag context
 - pgdbaagent configuration advisor
 - AI action plans
+- Autovacuum cost/CPU throttling diagnosis (planned, PGSTAT-P1-011 —
+  `autovacuum_vacuum_cost_limit`/`autovacuum_vacuum_cost_delay` read
+  alongside `fact.pg_activity_snapshot.wait_event` to distinguish
+  worker throttle sleep from active CPU/IO work; see
+  `docs/autovacuum-cost-diagnosis-design.md`)
 
 ### Table Maintenance Contract
 
@@ -366,6 +375,37 @@ Primary consumers:
 - freeze risk alerts
 - pgdbaagent vacuum advisor
 - future operations planning
+
+### Instance Capability Contract
+
+Domain: `control.instance_capability` — collector's understanding of a
+monitored instance's PostgreSQL major version and feature set.
+
+Behavior change (2026-08-25): `pg_major`/`server_version_num` were
+previously written only once, during bootstrap discovery. A `pg_upgrade`
+on a monitored instance left the row stale, silently disabling
+version-gated collection (e.g. `pg_stat_io`, PG16+ only). Every
+`ClusterCollector` cycle now re-checks `server_version_num` against the
+live connection before reading `pg_major`/`collector_sql_family`; a
+mismatch re-runs full discovery and raises/resolves
+`AlertCode.INSTANCE_PG_VERSION_CHANGED` (info severity) as an audit
+trail. Historical fact/agg rows are unaffected — they are partitioned by
+`instance_pk`, not by capability snapshot.
+
+Critical fields:
+
+- `pg_major`
+- `server_version_num`
+- `collector_sql_family`
+- `has_pg_stat_io`
+- `has_pg_stat_checkpointer`
+
+Primary consumers:
+
+- `ClusterCollector` (version-gated collection steps)
+- `SqlFamilyResolver` (query dialect selection)
+- Autovacuum cost/CPU diagnosis (PGSTAT-P1-011 — PG16+ gate on the I/O
+  cost signal)
 
 ### Validation Contract
 

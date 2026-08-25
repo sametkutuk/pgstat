@@ -102,6 +102,18 @@ public class CapabilityRepository {
         );
     }
 
+    /** Belirli bir instance'in son discovery'de kaydedilen server_version_num degerini okur. */
+    public Integer findServerVersionNum(long instancePk) {
+        return jdbc.queryForObject("""
+            select server_version_num
+            from control.instance_capability
+            where instance_pk = ?
+            """,
+            Integer.class,
+            instancePk
+        );
+    }
+
     /** Belirli bir instance'in collector_sql_family degerini okur. */
     public String findSqlFamily(long instancePk) {
         return jdbc.queryForObject("""

@@ -44,6 +44,8 @@ public class NightlySnapshotCollector {
           'autovacuum_vacuum_scale_factor', 'autovacuum_analyze_scale_factor',
           'autovacuum_vacuum_threshold', 'autovacuum_max_workers',
           'autovacuum_freeze_max_age', 'autovacuum_naptime',
+          'autovacuum_vacuum_cost_limit', 'autovacuum_vacuum_cost_delay',
+          'vacuum_cost_limit', 'vacuum_cost_delay',
           'jit', 'jit_above_cost', 'jit_inline_above_cost',
           'max_connections', 'random_page_cost', 'seq_page_cost',
           'log_min_duration_statement', 'log_temp_files',
@@ -112,7 +114,7 @@ public class NightlySnapshotCollector {
           and n.nspname not like 'pg_toast_temp_%'
         """;
 
-    // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 11 parametre.
+    // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 13 parametre.
     // 3 saatte bir yenilenir → ALTER SYSTEM sonrası alert eski değer görmesin.
     private static final String HOT_SETTINGS_QUERY = """
         select name, setting, unit, context, source from pg_settings
@@ -121,6 +123,7 @@ public class NightlySnapshotCollector {
           'effective_cache_size', 'max_connections',
           'max_wal_size', 'checkpoint_timeout', 'checkpoint_completion_target',
           'autovacuum_vacuum_scale_factor', 'autovacuum_max_workers',
+          'autovacuum_vacuum_cost_limit', 'autovacuum_vacuum_cost_delay',
           'random_page_cost'
         )
         """;

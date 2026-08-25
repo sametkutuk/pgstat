@@ -13,6 +13,11 @@ public enum AlertCode {
     SYSTEM_CLEANUP_FAILED("system_cleanup_failed", "error", "system"),
     SYSTEM_DISK_FULL("system_disk_full", "critical", "system"),
 
+    // Izlenen instance'in PG major surumu bir onceki discovery'ye gore
+    // degisti (orn. pg_upgrade ile PG15 -> PG17). capability otomatik
+    // guncellenir, bu alert sadece degisikligi gorunur kilmak icindir.
+    INSTANCE_PG_VERSION_CHANGED("instance_pg_version_changed", "info", "system"),
+
     SLOT_LOST("slot_lost", "critical", "adaptive"),
     SLOT_ACTIVE_DELETED("slot_active_deleted", "critical", "adaptive"),
     SLOT_INACTIVE_DELETED("slot_inactive_deleted", "info", "adaptive"),

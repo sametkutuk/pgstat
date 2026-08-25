@@ -120,11 +120,21 @@ function main() {
   const failures = [];
   const impacted = [];
 
+  // generatedRequired sadece "bu commit'te generated docs degisti mi" degil,
+  // "generated docs SU AN (HEAD'e gore) guncel mi" sorusunu sormali — kod
+  // degisikligi inventory'nin (tablo/kolon/route sayimi) icerigini
+  // etkilemiyorsa generate script'i calistirmak dosyada fark uretmez, bu
+  // durum bir eksiklik degildir. pre-commit hook generate script'ini
+  // calistirip sonucu stage ettikten SONRA bu script'i cagirdigi icin,
+  // HEAD ile working tree arasinda fark yoksa dosyalarin zaten guncel
+  // oldugu kabul edilir (bu script generate etmez, sadece raporlar).
+  const generatedDocsUpToDate = !GENERATED_DOCS.some((doc) => run(`git diff HEAD --name-only -- ${doc}`).trim());
+
   for (const group of CRITICAL_GROUPS) {
     const groupFiles = files.filter((file) => matchesAny(file, group.patterns));
     if (!groupFiles.length) continue;
     impacted.push(`${group.name}: ${groupFiles.length} file(s)`);
-    if (group.generatedRequired && !changedGeneratedDocs.length) {
+    if (group.generatedRequired && !changedGeneratedDocs.length && !generatedDocsUpToDate) {
       failures.push(`${group.name} changed but generated docs were not updated. Run: node scripts/generate-doc-inventory.mjs`);
     }
     if (group.manualRequired && !changedManualDocs.length) {

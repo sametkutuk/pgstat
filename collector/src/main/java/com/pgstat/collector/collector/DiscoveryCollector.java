@@ -1,5 +1,6 @@
 package com.pgstat.collector.collector;
 
+import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.model.InstanceCapability;
 import com.pgstat.collector.model.InstanceInfo;
 import com.pgstat.collector.repository.CapabilityRepository;
@@ -71,6 +72,62 @@ public class DiscoveryCollector {
         this.pgssResolver = pgssResolver;
         this.jdbc = jdbc;
         this.alertService = alertService;
+    }
+
+    /**
+     * Acik bir baglanti uzerinden server_version_num'i son kaydedilen degerle
+     * karsilastirir. Farkli ise (orn. pg_upgrade ile major surum degisti),
+     * capability'yi tam discover() ile yeniden kesfeder ve bir bilgi alert'i
+     * uretir — boylece pg_major'a bagli davranislar (orn. PG16+ pg_stat_io
+     * toplama) bir sonraki cycle'da dogru calisir. Her cluster toplama
+     * dongusunde cagrilmasi icin tasarlandi; ek maliyeti tek bir sorgudur
+     * (surum degismediyse discover() tetiklenmez).
+     *
+     * @param instance hedef instance
+     * @param conn     zaten acik olan kaynak baglanti (yeniden baglanmaz)
+     */
+    public void recheckVersionIfChanged(InstanceInfo instance, Connection conn) {
+        try {
+            int liveServerVersionNum;
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(
+                     "select current_setting('server_version_num')::integer as server_version_num")) {
+                rs.next();
+                liveServerVersionNum = rs.getInt("server_version_num");
+            }
+
+            Integer recordedServerVersionNum = capabilityRepo.findServerVersionNum(instance.instancePk());
+            log.info("DEBUG surum kontrolu: {} — kayitli={}, canli={}",
+                    instance.instanceId(), recordedServerVersionNum, liveServerVersionNum);
+            if (recordedServerVersionNum != null && recordedServerVersionNum == liveServerVersionNum) {
+                return;
+            }
+
+            int oldPgMajor = recordedServerVersionNum != null
+                    ? SqlFamilyResolver.extractPgMajor(recordedServerVersionNum) : -1;
+            int newPgMajor = SqlFamilyResolver.extractPgMajor(liveServerVersionNum);
+            log.info("PG surum degisikligi tespit edildi: {} — PG{} -> PG{} ({} -> {}), yeniden kesfediliyor",
+                    instance.instanceId(), oldPgMajor, newPgMajor, recordedServerVersionNum, liveServerVersionNum);
+
+            discover(instance);
+
+            // Bu bir kalici sorun degil, tek seferlik bir bilgilendirme —
+            // raise hemen ardindan resolve edilerek UI'da "acik alert" olarak
+            // kalici gorunmesi engellenir (audit/bildirim amacli tetiklenir,
+            // aktif alert listesinde asili kalmaz).
+            alertService.raiseInstanceAlert(AlertCode.INSTANCE_PG_VERSION_CHANGED, instance.instancePk(),
+                    "PostgreSQL sürümü değişti: " + instance.instanceId(),
+                    String.format(
+                        "%s instance'ının PostgreSQL sürümü PG%d'den PG%d'ye değişti (%d -> %d). " +
+                        "Yetenek bilgileri (pg_major, sql_family, extension durumu) otomatik olarak " +
+                        "yeniden keşfedildi; geçmiş toplanan veriler etkilenmedi.",
+                        instance.instanceId(), oldPgMajor, newPgMajor,
+                        recordedServerVersionNum, liveServerVersionNum));
+            alertService.resolveInstanceAlert(AlertCode.INSTANCE_PG_VERSION_CHANGED, instance.instancePk());
+
+        } catch (Exception e) {
+            log.warn("Surum kontrolu hatasi (yoksayildi): {} — {}", instance.instanceId(), e.getMessage());
+        }
     }
 
     /**

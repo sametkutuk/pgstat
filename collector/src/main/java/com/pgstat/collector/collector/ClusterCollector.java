@@ -60,16 +60,20 @@ public class ClusterCollector {
     /** Subscription conflict delta cache: "instancePk:subid" → 7 conflict counter'lar */
     private final ConcurrentHashMap<String, long[]> previousSubConflicts = new ConcurrentHashMap<>();
 
+    private final DiscoveryCollector discoveryCollector;
+
     public ClusterCollector(SourceConnectionFactory connectionFactory,
                             SqlFamilyResolver familyResolver,
                             FactRepository factRepo,
                             CapabilityRepository capabilityRepo,
-                            DeltaCalculator deltaCalc) {
+                            DeltaCalculator deltaCalc,
+                            DiscoveryCollector discoveryCollector) {
         this.connectionFactory = connectionFactory;
         this.familyResolver = familyResolver;
         this.factRepo = factRepo;
         this.capabilityRepo = capabilityRepo;
         this.deltaCalc = deltaCalc;
+        this.discoveryCollector = discoveryCollector;
     }
 
     /**
@@ -81,13 +85,19 @@ public class ClusterCollector {
      */
     public long collect(InstanceInfo instance) throws Exception {
         long instancePk = instance.instancePk();
-        String sqlFamily = capabilityRepo.findSqlFamily(instancePk);
-        Integer pgMajor = capabilityRepo.findPgMajor(instancePk);
-        SourceQueries queries = familyResolver.resolveByCode(sqlFamily);
         OffsetDateTime now = OffsetDateTime.now();
         long rowsWritten = 0;
 
         try (Connection conn = connectionFactory.connect(instance)) {
+
+            // Adim 0: PG surumu degisti mi kontrolu (orn. pg_upgrade sonrasi).
+            // Degistiyse capability'yi yeniden kesfeder — asagidaki sqlFamily/pgMajor
+            // okumasi guncel degeri gorsun diye bu adimdan SONRA okunuyor.
+            discoveryCollector.recheckVersionIfChanged(instance, conn);
+
+            String sqlFamily = capabilityRepo.findSqlFamily(instancePk);
+            Integer pgMajor = capabilityRepo.findPgMajor(instancePk);
+            SourceQueries queries = familyResolver.resolveByCode(sqlFamily);
 
             // Adim 1: is_primary kontrolu
             boolean isPrimary;
