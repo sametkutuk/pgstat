@@ -300,12 +300,27 @@ where instance_pk = ? and backend_type = 'autovacuum worker'
   and snapshot_ts > now() - interval '30 minutes';
 ```
 
-**Kanıt yorumu:** `waiting_on_io / total_av_worker_samples` oranı yüksekse
-(örn. >%50), autovacuum worker'ları çoğunlukla I/O'da bekliyor demektir —
-bu, `autovacuum_vacuum_cost_delay`'in çok yüksek ayarlandığının somut
-kanıtı (worker var ama throttle'dan dolayı ilerlemiyor). Bu durumda aksiyon
-"cost_delay'i düşür" olmalı, "scale_factor'ü düşür" değil — ikisi farklı
-sorunlara farklı çözümler.
+**DÜZELTME (dış inceleme, 2026-08-25): "IO wait = cost_delay yüksek"
+iddiası YANLIŞTI.** İlk yazımda `waiting_on_io` oranının yüksek
+olmasının `cost_delay`'in yüksek ayarlandığının kanıtı olduğu
+söylenmişti — bu iki sinyal **bağımsızdır**, birbirine kanıt teşkil
+etmez:
+
+- `wait_event_type = 'IO'` → worker **gerçek diskten okuma/yazma**
+  bekliyor (donanım/dosya sistemi gecikmesi).
+- `wait_event = 'VacuumDelay'` (Teşhis 2b) → worker **kasıtlı olarak
+  uyutulmuş** (cost-based throttling, `cost_delay` parametresiyle
+  kontrol edilir).
+
+Bunlar PostgreSQL'in aynı mekanizmasının iki farklı fazı değil, **iki
+ayrı bekleme türü** — biri donanımdan, diğeri konfigürasyondan
+kaynaklanır. Yüksek `waiting_on_io` oranı, `cost_delay` ayarı ne olursa
+olsun (default, düşük, hatta throttling tamamen kapalı olsa bile)
+gerçekleşebilir — disk gerçekten yavaşsa. **Doğru kural:** "cost_delay'i
+düşür" aksiyonu SADECE Teşhis 2b'nin (`VacuumDelay` oranı + etkin
+ayarın sürüm-varsayılanından yüksek olduğu doğrulanmışsa) kanıtına
+dayanmalı — Teşhis 2 (`IO` oranı) tek başına bu aksiyona gerekçe
+olmamalı, sadece "worker disktan ne kadar etkileniyor" bağlamını verir.
 
 ## Teşhis 2b (YENİ, 2026-08-25): CPU maliyeti — cost ayarı üzerinden dolaylı tespit
 
@@ -385,13 +400,28 @@ gecikmeli yakalamak istemeyiz). Bu, AC2'nin **ilk adımı** olmalı — kod
 yazmadan önce bu iki liste güncellenip bir sonraki toplama döngüsünde
 verinin gerçekten geldiği doğrulanmalı.
 
-**PG13 sürüm notu:** `autovacuum_vacuum_cost_delay` varsayılanı PG12'de
-`20ms`, PG13+'ta `2ms`'ye düştü (10 kat); PG12'de `-1` değeri "genel
-`vacuum_cost_delay`'i kullan" anlamına geliyordu, PG13'te bu sentinel
-davranışı kaldırıldı. Birim (ms) değişmedi ama **"yüksek cost_delay"
-eşiği PG sürümüne göre farklı yorumlanmalı** — PG12 instance'ında
-`20ms` normal (varsayılan) iken, PG13+ instance'ında aynı değer bilinçli
-bir "yavaşlat" ayarı anlamına gelir.
+**DÜZELTME (dış inceleme + doğrulama, 2026-08-25): sürüm bilgisi
+YANLIŞTI, düzeltildi.** İlk yazımda "PG12→PG13'te 20ms'den 2ms'ye
+düştü, PG13'te `-1` fallback'i kaldırıldı" denmişti — **her iki iddia
+da yanlış**:
+
+- **Varsayılan değişikliği PG12'de oldu**, PG13'te değil —
+  `autovacuum_vacuum_cost_delay` **PG12'de** `20ms`'den `2ms`'ye
+  düşürüldü (PG12 release notes). PG13+ zaten `2ms` varsayılanını
+  koruyor, PG13'ün kendisinde bir değişiklik yok.
+- **`-1` sentinel davranışı hiçbir zaman kaldırılmadı** — `-1` ("genel
+  `vacuum_cost_delay`/`vacuum_cost_limit`'e düş" anlamına gelir) PG12'de
+  tanıtıldı ve **PG17 dahil güncel sürümlerde hâlâ geçerli**, resmi
+  dokümantasyonda hâlâ bu şekilde tanımlı.
+
+**Doğru kural:** PG11 varsayılanı `20ms`; **PG12 ve sonrası (PG12-18)
+varsayılanı `2ms`** — sürüme göre değişen tek eşik bu. `-1` sentinel'i
+her PG sürümünde (12+) aynı şekilde yorumlanmalı: etkin değeri
+`vacuum_cost_delay`/`vacuum_cost_limit`'ten oku. İmplementasyonda "PG13
+sürüm notu" değil, "**PG12 sürüm notu**" olarak anılmalı — eşik `pg_major
+< 12` için `20ms`, `>= 12` için `2ms` olmalı (kayıtlı instance'ların
+en eskisi PG12 olduğu için PG11 dalı şu an pratikte hiç tetiklenmeyecek,
+ama kod doğru olmalı).
 
 **Henüz test edilmedi — aşağıdaki "Doğrulama planı" bölümüne bakın.**
 
@@ -514,6 +544,67 @@ Kod tarafında (yeni bir yardımcı fonksiyon veya `diagnoseBloat()`'un
 girişinde) bir assert/test: hiçbir aksiyon string'i `"autovacuum.*=.*off"`
 veya `"autovacuum_enabled.*false"` regex'ine uymamalı — CI'da (birim test)
 tüm sabit aksiyon metinlerinin bu deseni içermediği doğrulanabilir.
+
+## AC2 öncesi zorunlu kod bulguları (kod denetimi, 2026-08-25)
+
+AC2'ye başlamadan önce, mevcut ilgili kodda (`AlertRuleEvaluator.java`,
+`ClusterCollector.java`, `control.table_relopts_snapshot`) bir kod
+denetimi (subagent ile) yapıldı — bu teşhisleri kodlarken üzerine
+inşa edilecek temelin kendisinde 7 somut bulgu doğrulandı. Bunlar
+AC2'nin implementasyon adımlarına dahil edilmeli, ayrı "iyi olur"
+maddeleri değil:
+
+1. **`fetchAutovacuumWorkerStatus()` (`AlertRuleEvaluator.java:2811-2815`)
+   `count(*)` kullanıyor, `count(distinct pid)` değil.** Aynı worker
+   PID'i 2 dakikalık pencerede birden fazla snapshot cycle'ında
+   görünüyorsa, mevcut sorgu bunu birden fazla worker gibi sayıyor —
+   sahte "worker doygunluğu" sonucu üretebilir. Yeni implementasyon
+   `runningWorkers`'ı **en son snapshot_ts'teki distinct pid sayısı**
+   olarak hesaplamalı, tüm pencere boyunca `count(*)` değil.
+2. **`findBloatedTables()`'ın SELECT listesinde `relid` yok**
+   (`AlertRuleEvaluator.java:2648-2676`). Tablo-özel cost override
+   (`control.table_relopts_snapshot`) okuması `(instance_pk, dbid, relid)`
+   anahtarına ihtiyaç duyuyor — `relid`'in bu sorguya eklenmesi AC2'nin
+   ilk adımı olmalı, aksi hâlde tablo-özel override hiç okunamaz
+   (schema/name eşleştirmesi güvenilmez — aynı isimli tablo farklı
+   `dbid`'lerde karışabilir).
+3. **`control.table_relopts_snapshot` (V093) sadece ham `reloptions_raw
+   text` tutuyor, cost ayarları için ayrıştırılmış sütun yok.** Yeni bir
+   migration (V095 önerilir) ile `autovacuum_vacuum_cost_delay`/
+   `autovacuum_vacuum_cost_limit` nullable sütunlar olarak eklenmeli,
+   `FactRepository`'de (veya ilgili upsert metodunda) `reloptions_raw`'dan
+   ayrıştırılıp yazılmalı. Minimal bir raw-string parse'ı seçilecekse
+   ayrı, test edilmiş bir yardımcı fonksiyon olmalı (regex'le enline
+   parse etmek kırılgan).
+4. **`diagnoseBloat()`'un mesaj template'i bulunamazsa (render hatası),
+   kanıt/aksiyon metni tamamen kayboluyor.** `renderWithCode()`
+   (`AlertRuleEvaluator.java:1969-1981`) başarısız render'da
+   `buildPerRecordThresholdMessage()`'ın ürettiği generic "Tablo eşiği
+   aştı" mesajına düşüyor — bu fallback, `diagnosis`/`bloat_action`
+   context alanlarını içermiyor. Yeni evidence sentence'ların bu
+   fallback yolunda da korunduğu (ya da fallback'in bunları da içerecek
+   şekilde güncellendiği) doğrulanmalı — aksi hâlde template render
+   hatası olan her durumda yeni kanıt sessizce kaybolur.
+5. **`previousIoSamples` cache'i `stats_reset`'i okuyor ama karşılaştırmada
+   kullanmıyor** (`ClusterCollector.java:415` okuyor, hiçbir yerde cache
+   anahtarına/karşılaştırmasına dahil etmiyor). `pg_stat_reset_shared('io')`
+   çağrılırsa (nadir ama mümkün), sayaç sıfırlanıp yeniden büyürken eski
+   baseline'a göre delta hesaplanır — reset sonrası ilk cycle'da yanlış
+   (şişirilmiş ya da atlanmış) bir I/O sayısı üretebilir. AC2, Teşhis
+   0'ı yazarken bu riski miras alıyor — `stats_reset` değiştiğinde cache'in
+   sıfırlanıp yeni bir baseline'dan başlaması gerekiyor; bu, PGSTAT-P1-011
+   kapsamında mı yoksa ayrı bir collector-doğruluğu görevi olarak mı ele
+   alınacağı AC2 başında netleştirilmeli.
+6. **I/O sayaçları `Double` olarak tutuluyor** (`ConcurrentHashMap<Long,
+   Map<String,Map<String,Double>>> previousIoSamples`), `long`'a
+   `.longValue()` ile çevriliyor. Gerçekçi PG sayaç büyüklüklerinde
+   (`Double`'ın 52-bit tam sayı hassasiyeti ~9×10^15) pratik bir
+   hassasiyet kaybı riski yok, ama tip uyuşmazlığı bir tasarım kusuru —
+   AC2'nin kapsamında değilse bile not düşülüyor.
+7. **Timestamp okuma tutarlı** — `getTimestamp()` hiç kullanılmıyor,
+   her yerde `rs.getObject(..., OffsetDateTime.class)` — bu maddede
+   bir sorun bulunmadı, dış incelemenin bu kısmı doğrulanamadı (gerçek
+   bir sorun yok).
 
 ## Uygulama sırası (revize, çoklu-instance test sonrası — 2026-08-25)
 
