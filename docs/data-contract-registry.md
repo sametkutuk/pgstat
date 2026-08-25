@@ -390,7 +390,10 @@ live connection before reading `pg_major`/`collector_sql_family`; a
 mismatch re-runs full discovery and raises/resolves
 `AlertCode.INSTANCE_PG_VERSION_CHANGED` (info severity) as an audit
 trail. Historical fact/agg rows are unaffected — they are partitioned by
-`instance_pk`, not by capability snapshot.
+`instance_pk`, not by capability snapshot. Verified live against
+`pgstat-dev` (PG15 -> PG17 pg_upgrade, 2026-08-25) — temporary debug
+logging used during that verification was removed once confirmed
+working; no further contract change.
 
 Critical fields:
 

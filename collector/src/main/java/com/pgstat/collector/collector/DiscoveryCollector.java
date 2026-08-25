@@ -97,8 +97,6 @@ public class DiscoveryCollector {
             }
 
             Integer recordedServerVersionNum = capabilityRepo.findServerVersionNum(instance.instancePk());
-            log.info("DEBUG surum kontrolu: {} — kayitli={}, canli={}",
-                    instance.instanceId(), recordedServerVersionNum, liveServerVersionNum);
             if (recordedServerVersionNum != null && recordedServerVersionNum == liveServerVersionNum) {
                 return;
             }
