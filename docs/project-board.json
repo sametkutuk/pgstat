@@ -2715,8 +2715,8 @@
       "acceptance_criteria": [
         {
           "id": "AC1",
-          "text": "A design is written (or an existing doc extended, e.g. docs/bloat-diagnosis-decision-tree.md or a new doc) covering: which existing fact tables/columns can be reused (pg_io_stat_delta.backend_type, pg_activity_snapshot.wait_event/wait_event_type), what new aggregation or query is needed, and whether a new fact/agg table is required or an existing one can be extended.",
-          "status": "pending"
+          "text": "docs/autovacuum-cost-diagnosis-design.md written: three concrete diagnoses with SQL and evidence semantics — (1) 'is autovacuum slowing other queries' via a window comparison between instance-wide fact.pgss_delta mean_exec_time_ms during vs. outside autovacuum-active windows (from fact.pg_activity_snapshot backend_type='autovacuum worker'); (2) 'is autovacuum falling behind' extended beyond the existing vacuum_ineffective/scenario-4.5 signal with an I/O-wait-ratio check (wait_event_type='IO' among autovacuum worker samples) to distinguish cost_delay throttling from a scale_factor/threshold miscalibration; (3) an explicit guard that the system must never recommend disabling autovacuum, only retuning it. Also documents a confirmed data-model limitation: fact.pgss_delta has no relid/table linkage (only dbid via dim.statement_series), so the query-latency correlation must be instance-wide, not per-table.",
+          "status": "done"
         },
         {
           "id": "AC2",
@@ -2730,7 +2730,7 @@
         }
       ],
       "implementation_plan": [
-        "Not yet designed — placeholder pending AC1's design pass. Starting point: extend a query (or new fact/agg table) that sums fact.pg_io_stat_delta rows filtered to backend_type='autovacuum worker' over a rolling window, per instance/database; cross-reference with fact.pg_activity_snapshot.wait_event for autovacuum workers to see what they're bottlenecked on (I/O vs. lock vs. CPU)."
+        "Per docs/autovacuum-cost-diagnosis-design.md: new AlertRuleEvaluator helper fetchAutovacuumImpactOnLatency(instancePk) implementing the window-comparison query (called only when an alert is about to fire, not every cycle, since it joins fact.pgss_delta over a 2-hour window); extend fetchAutovacuumWorkerStatus() with an additional IO-wait-ratio return value (same table/filter, no extra round-trip); wire both into scenario 3 (vacuum_ineffective) and scenario 4.5's diagnosis text as an additional evidence sentence; add a unit test asserting no hardcoded action string matches an 'autovacuum off/disabled' pattern."
       ],
       "verification_plan": [
         "mvn compile && mvn test",
@@ -2750,9 +2750,10 @@
       },
       "verification_evidence": [
         "Customer's question was well-founded per background research: real-world case studies (perun.au 'five failure patterns', a dev.to postmortem) document autovacuum worker saturation causing checkpoint pressure, buffer pool contention, and query latency spikes — this is a genuine, bidirectional risk (the same research also found cases where MORE aggressive autovacuum fixed performance problems, so the risk cuts both ways and can't be resolved by intuition alone).",
-        "Code audit (background Explore-style agent) confirmed pgstat currently measures only autovacuum ACTIVITY (is it running, how many workers, what phase) via fetchAutovacuumWorkerStatus() and fact.pg_progress_vacuum_snapshot — it does not measure autovacuum's system COST (I/O volume, CPU, query latency impact). fact.pg_io_stat_delta already has a backend_type column that could isolate this but nothing currently uses it that way — a genuine, well-scoped gap rather than something already solved and just undiscovered."
+        "Code audit (background Explore-style agent) confirmed pgstat currently measures only autovacuum ACTIVITY (is it running, how many workers, what phase) via fetchAutovacuumWorkerStatus() and fact.pg_progress_vacuum_snapshot — it does not measure autovacuum's system COST (I/O volume, CPU, query latency impact). fact.pg_io_stat_delta already has a backend_type column that could isolate this but nothing currently uses it that way — a genuine, well-scoped gap rather than something already solved and just undiscovered.",
+        "AC1: customer asked specifically 'nasıl yapılacak doğru mu yapılacak — autovacuumın kapatılması gerekiyor mu, sık çalışıp diğer sorguları yavaşlatıyor mu, yoksa yetişemiyor mu — en doğru ve somut kanıtlı şekilde nasıl tespit ederiz'. A second Explore pass verified exact column names before writing the design (fact.pgss_delta's duration columns are mean_exec_time_ms/total_exec_time_ms_delta, NOT mean_time/total_time as initially assumed) and confirmed the key limitation: pgss_delta has no relid, so per-table query-latency correlation isn't directly queryable — dim.statement_series only carries dbid. Documented this as a deliberate instance-wide (not per-table) scope for the latency-impact diagnosis, and made the 'never recommend disabling autovacuum' guard an explicit requirement with a proposed unit test."
       ],
-      "next_action": "Scope a design pass (AC1) before any implementation — decide the exact aggregation/query shape and whether a new fact/agg table is warranted, using the already-collected pg_io_stat_delta.backend_type and pg_activity_snapshot.wait_event columns as the starting data sources."
+      "next_action": "Implement AC2 per the design doc: fetchAutovacuumImpactOnLatency() and the IO-wait-ratio extension to fetchAutovacuumWorkerStatus(), wired into scenario 3/4.5's diagnosis text as additional evidence sentences (not new top-level scenarios). Then AC3's live verification."
     },
     {
       "id": "PGSTAT-P1-009",
