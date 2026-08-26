@@ -8,18 +8,21 @@ yeni bir not olarak ekliyordu, bu da çelişkili katmanlar yarattı. **Bu
 sürüm tekrar sıfırdan konsolide edildi** — yanlış/eski metin silindi,
 her konu için tek, güncel, doğru bir açıklama bırakıldı.
 
-**AC2'de çözülmesi gereken, hâlâ AÇIK iki madde** (kapatılmış kararlar
-"Örnekleme ve yeterlilik" bölümünde, açık olanlar burada):
+**Açık tasarım kararı KALMADI.** Bir önceki sürüm "iki açık madde"
+diyordu; her ikisi de aslında açık karar değildi:
 
-1. **Timestamp tipi:** `AlertRuleEvaluator`'daki `queryForList()`
-   tabanlı sorguların zaman damgası alanlarının gerçek Java tipi
-   (`OffsetDateTime` mi `java.sql.Timestamp` mi) doğrudan kanıtlanmadı.
-   Kod her iki tipi de güvenli normalize etmeli, ikisi de birim testle
-   kapsanmalı.
-2. **AC3'ün canlı doğrulama hedef instance'ları:** AC2 tamamlandığında
-   güncel `control.instance_capability` sorgusuyla yeniden seçilmeli
-   (bir instance zaten görev sırasında PG15'ten PG17'ye yükseltildi,
-   sabit bir liste vermek yanıltıcı olur).
+- **Timestamp tipi** bir tasarım kararı değil, bir **implementasyon
+  test gereksinimi**: karar zaten net (kod hem `OffsetDateTime` hem
+  `java.sql.Timestamp` değerini güvenli normalize edecek), sadece
+  hangisinin geldiği runtime'da test edilerek doğrulanacak.
+- **AC3 hedef instance seçimi** bir tasarım kararı değil, bir
+  **doğrulama prosedürü**: hedefler AC3 çalıştırılırken güncel
+  `control.instance_capability` sorgusuyla seçilecek (bir instance
+  zaten görev sırasında PG15'ten PG17'ye yükseltildi, sabit liste
+  bayatlar).
+
+Yani AC2'ye geçiş için bekleyen bir tasarım sorusu yok; kalan iş
+implementasyon ve doğrulama.
 
 **Terminoloji notu:** Bu dokümanda ve `AlertRuleEvaluator`'da "bloat"
 kelimesi `n_dead_tup`/`n_live_tup` **tahminine** dayanır —
@@ -153,18 +156,35 @@ Kayıtlı 25 instance'ın 15'i (%60) PG16'nın altında (bkz. "PG sürüm
 dağılımı" bölümü) — bu teşhis, filodaki instance'ların çoğunda hiç
 çalışamıyor. Birincil/geniş-kapsamlı kanıt Teşhis 2 ve 2b'dir (aşağıda).
 
+Sorgu, sadece toplamları değil **durum kararını verebilmek için gereken
+meta bilgiyi de** döndürmeli — aksi hâlde "sıfır" ile "veri yok"
+ayrımı koddan yapılamaz:
+
 ```sql
 select backend_type,
-       sum(reads_delta) as total_reads,
-       sum(writes_delta) as total_writes,
-       sum(read_time_ms_delta) as total_read_time_ms,
-       sum(write_time_ms_delta) as total_write_time_ms
+       sum(reads_delta)                                as total_reads,
+       sum(writes_delta)                               as total_writes,
+       sum(read_time_ms_delta)                         as total_read_time_ms,
+       sum(write_time_ms_delta)                        as total_write_time_ms,
+       count(*)                                        as source_row_count,
+       count(*) filter (where reads_delta is not null) as reads_metric_valid_count,
+       count(*) filter (where writes_delta is not null) as writes_metric_valid_count,
+       max(sample_ts)                                  as latest_sample_ts
 from fact.pg_io_stat_delta
 where instance_pk = ? and object = 'relation'
   and sample_ts > now() - interval '24 hours'
 group by backend_type
 order by total_reads desc nulls last;
 ```
+
+- `source_row_count` — bu pencerede hiç fact satırı var mı? **`NO_FRESH_DATA`
+  kararı bu sayıya dayanmalı, sayaç değerine değil.**
+- `*_metric_valid_count` — kaç satırda ilgili sayaç gerçekten `NOT NULL`?
+  (Kod önkoşulu 9 düzeltilmeden bu her zaman `source_row_count`'a eşit
+  çıkar, çünkü NULL'lar `0.0`'a çevriliyor — düzeltme sonrası anlamlı olur.)
+- `latest_sample_ts` — en son satır ne kadar taze? Tazelik eşiği
+  collector'ın cluster cycle cadence'ine göre hesaplanmalı (bkz.
+  "Tazelik eşikleri" bölümü), sabit bir sayı değil.
 
 `object = 'relation'` filtresi zorunlu — `pg_stat_io` ayrıca `object IN
 ('temp relation')` gibi başka kategoriler de içerir, filtresiz sorgu
@@ -218,28 +238,37 @@ sorguyla yeniden doğrulanmadan "kanıtlanmış" sayılmamalı.
   bölme/sonsuz oran riski) — bu durumda "client backend hiç okuma
   yapmadı, autovacuum X okuma yaptı" şeklinde mutlak sayı raporlanmalı,
   oran üretilmemeli.
-- **Beş farklı durum birbirinden ayrılmalı, hepsi `null`/"N/A" gibi
-  tek bir göstergeye indirgenmemeli:**
-  1. `UNSUPPORTED` — `pg_major < 16`, `pg_stat_io` bu sürümde yok, sorgu
-     hiç çalıştırılmamalı.
-  2. `UNKNOWN_CAPABILITY` — instance'ın `pg_major`'ı henüz keşfedilmemiş
-     (`control.instance_capability`'de satır yok/`null`), desteklenip
-     desteklenmediği bilinmiyor. `UNSUPPORTED` ile aynı gösterge
-     DEĞİL — biri "kesin desteklenmiyor", diğeri "henüz bilinmiyor".
-  3. `NO_DATA` — PG16+ ama `fact.pg_io_stat_delta`'da bu instance için
-     hiç satır yok (örn. collector henüz bir cycle tamamlamamış, ya da
-     `ClusterCollector`'ın NULL→0 dönüşümü nedeniyle kaynak NULL
-     değerlerin ayırt edilemediği bir durum — bkz. "Kod önkoşulları"
-     madde 7). Bu, "autovacuum hiç çalışmadı" ile KARIŞTIRILMAMALI.
-  4. `ZERO_WITH_FRESH_DATA` — PG16+, veri var (collector güncel bir
-     cycle tamamlamış), ama autovacuum worker satırı gerçekten 0 —
-     yani autovacuum bu pencerede hiç çalışmamış. Bu "gerçek sıfır".
-  5. `AVAILABLE` — normal durum, sayılar mevcut ve anlamlı.
+**Diagnosis 0 durum modeli (kesin, sırayla değerlendirilir — ilk eşleşen
+kazanır):**
+
+| # | Durum | Koşul | Anlamı / mesaj |
+|---|---|---|---|
+| 1 | `UNKNOWN_CAPABILITY` | `control.instance_capability` satırı yok, `pg_major` null, VEYA capability kaydı bayat (bkz. tazelik) | "Bu instance'ın sürüm bilgisi henüz bilinmiyor" — `UNSUPPORTED` ile aynı şey DEĞİL |
+| 2 | `UNSUPPORTED` | `pg_major < 16` VEYA `instance_capability.has_pg_stat_io = false` | "Bu PG sürümü bu kanıtı desteklemiyor" — sorgu hiç çalıştırılmaz |
+| 3 | `INSTANCE_UNREACHABLE` | `instance_capability.is_reachable = false` | "Instance'a ulaşılamıyor, veri güncel olmayabilir" — eski veriyi güncelmiş gibi sunma |
+| 4 | `NO_FRESH_DATA` | `source_row_count = 0` VEYA `latest_sample_ts` tazelik eşiğinin dışında | "Bu pencerede taze fact verisi yok" — collector yeni başlamış, cycle atlamış veya durmuş olabilir. **"Autovacuum çalışmadı" DEĞİL.** |
+| 5 | `ZERO_IO_WITH_FRESH_DATA` | Taze satır var, ama `autovacuum worker` için toplam read+write = 0 | "Bu pencerede sayılan `relation` okuma/yazma işlemi yok" — bu da **"autovacuum hiç çalışmadı" demek DEĞİL**: worker çalışmış ama tüm sayfaları shared buffers'ta bulmuş (hit), ya da sadece `temp relation` gibi filtrelenen bir `object` üzerinde çalışmış olabilir |
+| 6 | `AVAILABLE` | Yukarıdakilerin hiçbiri | Sayılar mevcut ve yorumlanabilir |
+
+Durum adı bilerek `ZERO_WITH_FRESH_DATA` değil **`ZERO_IO_WITH_FRESH_DATA`**
+— "sıfır" olan şey autovacuum aktivitesi değil, sadece bu filtreyle
+(`object='relation'`, bu zaman penceresi) sayılan I/O işlemi.
+
+**`NO_FRESH_DATA` kararı sayaç değerine değil, `source_row_count`'a
+dayanmalı.** `ClusterCollector`'ın NULL→0 dönüşümü (Kod önkoşulu 9)
+fact satırını ortadan kaldırmaz — sadece o satırdaki metriğin "N/A"
+bilgisini sıfıra çevirir. Yani "sayaç 0 geldi" ile "hiç satır yok"
+tamamen farklı iki durumdur; birincisi bir ölçüm, ikincisi ölçümün
+yokluğudur.
 
 ## Teşhis 2: I/O bekleme oranı (birincil, her PG sürümünde)
 
-Worker örneklemelerinin ne kadarının gerçek disk I/O'sunda beklediğini
-sayar. Sürüm bağımsız — tüm 25 kayıtlı instance'ta çalışır.
+Worker örneklemelerinin ne kadarında **bir I/O işleminin tamamlanmasının
+beklendiğini** sayar. (Bilerek "gerçek disk I/O'sunda bekleme" denmiyor —
+PostgreSQL bu wait event için sadece "bir I/O tamamlanması bekleniyor"
+garantisi verir; bekleme OS sayfa cache'inden, dosya sistemi katmanından
+veya gerçek diskten kaynaklanabilir, bu view ayırt etmez.) Sürüm
+bağımsız — tüm 25 kayıtlı instance'ta çalışır.
 
 ```sql
 select
@@ -329,15 +358,33 @@ hot refresh 3 saatte bir + gece snapshot'ı 24 saatte bir olduğu için)
 daha eskiyse, ayar değeri "muhtemelen güncel değil" olarak
 işaretlenmeli, sessizce eski bir değer kesin diye sunulmamalı.
 
-**Dört kova, iki değil — ve dördü de `total_samples`'ı tüketmeyebilir:**
-`IO`, `VacuumDelay` (`Timeout` kategorisinde) ve `no_wait_event`
-(muhtemelen aktif CPU, ama kesin kanıt değil) yanında, worker `Lock`,
-`BufferPin`, `LWLock` gibi başka wait kategorilerinde de bekleyebilir.
-Dört kovanın toplamı `total_samples`'a eşit olmayabilir — kalan fark
-açıkça bir `otherWaitSamples` alanı olarak taşınmalı
-(`total_samples - io_wait_samples - throttle_sleep_samples -
-no_wait_event_samples`), yok sayılmamalı. "Worker zamanı ya aktif ya
-throttle'da" gibi iki kutuplu bir model yanlış bir basitleştirme.
+**Üç adlandırılmış kova + bir residual = `total_samples` (tam olarak):**
+Sorgu üç kovayı açıkça sayıyor — `IO` (I/O tamamlanması bekleniyor),
+`VacuumDelay` (`Timeout` kategorisinde, throttle uykusu) ve
+`no_wait_event` (wait event raporlanmadı). Ama worker `Lock`,
+`BufferPin`, `LWLock`, `Client`, `Extension` gibi başka wait
+kategorilerinde de bekleyebilir — bu üçü `total_samples`'ı tüketmez.
+Kalan fark **residual** olarak açıkça taşınmalı:
+
+```
+otherWaitSamples = total_samples - io_wait_samples
+                   - throttle_sleep_samples - no_wait_event_samples
+```
+
+Residual bu şekilde tanımlandığı için **dördünün toplamı tanımı gereği
+her zaman `total_samples`'a eşittir** — bu bir varsayım değil, aritmetik
+bir kimlik, ve bir birim testle doğrulanmalı (regresyon koruması: biri
+sorguya yeni bir `filter` eklerse ya da residual hesabını unutursa test
+yakalar). Önemli olan nokta `otherWaitSamples`'ın **sıfır olmayabileceği**
+ve yok sayılmaması gerektiğidir — "worker zamanı ya aktif ya throttle'da"
+gibi iki kutuplu bir model yanlış bir basitleştirmedir.
+
+**Uyarı — kovalar örtüşmez ama mantıksal olarak dışlayıcı da değil:**
+`wait_event = 'VacuumDelay'` her zaman `wait_event_type = 'Timeout'`
+olduğu için `io_wait_samples` ile `throttle_sleep_samples` fiilen
+kesişmez; yine de sorgu yazılırken bu varsayıma güvenilmemeli, üç
+`filter` ifadesi birbirini dışlayacak şekilde yazılmalı (aksi hâlde
+residual negatif çıkabilir — bu da test edilmeli).
 
 **`no_wait_event_samples`, "aktif çalışıyor" DEĞİL — sadece "wait event
 raporlanmadı" demektir.** `wait_event IS NULL`, PostgreSQL'in o anki
@@ -368,25 +415,69 @@ gerçek gözlem var.
 | `throttle_sleep_samples` oranı yüksek, **etkin `cost_delay` > sürüm varsayılanı** (kasıtlı yükseltilmiş) | `cost_delay`'i düşürmeyi öner — bu, `effectiveCostDelay > versionDefault` kanıtlandığında geçerli. `0ms`/`1ms` gibi varsayılandan DÜŞÜK "non-default" değerlerde bu öneri asla üretilmemeli — kapı "non-default" değil, açıkça `effectiveCostDelay > versionDefault` olmalı. |
 | `io_wait_samples` oranı yüksek | Teşhis 0 (varsa, PG16+) ile birlikte bağlam olarak sun; tek başına bir aksiyona dayanak yapma (Teşhis 2 bölümüne bkz.). |
 
-**Etkin cost ayarı önceliği (tablo override → instance ayarı → `-1`
-fallback):**
+**Etkin cost ayarı çözümleme zinciri (her parametre için ayrı ayrı,
+sırayla):**
 
-1. `control.table_relopts_snapshot`'taki tablo-özel override (varsa) —
-   PostgreSQL `ALTER TABLE ... SET (autovacuum_vacuum_cost_delay = ...)`
-   ile instance-geneli ayarı ezebilir. Şu an bu tablo sadece ham
-   `reloptions_raw` text tutuyor, ayrıştırılmış sütun yok (bkz. "Kod
-   önkoşulları").
-2. Tablo override yoksa `fact.pg_settings_snapshot`'taki en güncel
-   `autovacuum_vacuum_cost_delay`/`autovacuum_vacuum_cost_limit`
-   (yukarıdaki `DISTINCT ON` + tazelik kontrollü sorgu).
-3. Bu değer `-1` ise genel `vacuum_cost_delay`/`vacuum_cost_limit`'e
-   düş — bu `-1` sentinel davranışı **PG11'de zaten mevcuttu** (resmi
-   `postgresql.org/docs/11/runtime-config-autovacuum.html` sayfası
-   çekilip doğrulandı: *"If -1 is specified, the regular
-   vacuum_cost_delay value will be used."*), hiçbir sürümde
-   kaldırılmadı, her sürümde aynı şekilde yorumlanmalı. Tek gerçek
-   sürüm eşiği **varsayılan değerdir**: PG11'de `20ms`, PG12'den
-   itibaren (PG12-18) `2ms` — bu, PG12 release notes ile doğrulanmış.
+`autovacuum_vacuum_cost_delay` ve `autovacuum_vacuum_cost_limit`'in her
+biri için **bağımsız olarak** şu zincir uygulanır (biri tablo
+override'ından, diğeri global'den gelebilir — ikisi aynı kaynaktan
+gelmek zorunda değil):
+
+```
+1. Tablo override (control.table_relopts_snapshot, parse edilmiş sütun):
+   - Değer var ve >= 0        -> ETKİN DEĞER budur, zincir biter.
+   - Değer var ve == -1       -> adım 2'ye devam (sentinel, "global'i kullan").
+   - Sütun yok / tablo satırı yok -> adım 2'ye devam.
+   - Değer malformed (parse edilemedi) -> SONUÇ: UNKNOWN, zincir biter.
+
+2. Global autovacuum_* ayarı (fact.pg_settings_snapshot, en güncel satır):
+   - Değer var ve >= 0        -> ETKİN DEĞER budur, zincir biter.
+   - Değer var ve == -1       -> adım 3'e devam.
+   - Satır yok / bayat / malformed -> SONUÇ: UNKNOWN, zincir biter.
+
+3. Global vacuum_* fallback (fact.pg_settings_snapshot, en güncel satır):
+   - Değer var                -> ETKİN DEĞER budur.
+   - Satır yok / bayat / malformed -> SONUÇ: UNKNOWN.
+```
+
+**`UNKNOWN` sonucu bir aksiyonu ASLA tetiklemez.** Zincirin herhangi bir
+adımında eksik, bozuk veya bayat bir değerle karşılaşılırsa etkin değer
+`UNKNOWN` olur; bu durumda "cost_delay'i düşür" önerisi **bastırılır**
+(bilinmeyen bir değeri "varsayılandan yüksek" sayamayız). Mesajda
+"etkin cost ayarı okunamadı" şeklinde açıkça belirtilir, sessizce
+varsayılan varsayılmaz.
+
+**`-1` sentinel davranışı** PG11'de zaten mevcuttu (resmi
+`postgresql.org/docs/11/runtime-config-autovacuum.html` sayfası çekilip
+doğrulandı: *"If -1 is specified, the regular `vacuum_cost_delay` value
+will be used."*), hiçbir sürümde kaldırılmadı, her sürümde aynı
+yorumlanır. Tek gerçek sürüm eşiği **varsayılan değerdir**: PG11'de
+`20ms`, PG12'den itibaren (PG12-18) `2ms`.
+
+## Tazelik eşikleri (sabit sayı değil, cadence tabanlı)
+
+Hiçbir tazelik kontrolü sabit bir saat sayısına ("25 saat" gibi)
+dayanmamalı — her veri kaynağının kendi toplama sıklığı farklı, ve bu
+sıklık `control.schedule_profile` üzerinden instance başına
+değişebilir. Doğru formül her kaynak için:
+
+```
+tazelik_eşiği = (o kaynağın cadence'i) × 2 + grace
+```
+
+| Veri kaynağı | Cadence | Not |
+|---|---|---|
+| `fact.pg_activity_snapshot` | cluster cycle interval (instance'ın `schedule_profile`'ından) | `runningWorkers`'ın "en güncel genel snapshot" tazelik kontrolü buna dayanır |
+| `fact.pg_io_stat_delta` | cluster cycle interval (aynı) | Diagnosis 0'ın `latest_sample_ts` kontrolü |
+| `fact.pg_settings_snapshot` — hot yenilenen ayarlar | 3 saat (`HOT_SETTINGS_QUERY`) | `autovacuum_vacuum_cost_delay`/`limit` bu gruptadır → eşik ≈ 6-7 saat |
+| `fact.pg_settings_snapshot` — sadece gece yenilenen ayarlar | 24 saat (`SETTINGS_QUERY`) | `vacuum_cost_delay`/`vacuum_cost_limit` şu an bu gruptadır (Kod önkoşulu 7 bunları hot listeye taşıyacak) → eşik ≈ 50 saat, taşındıktan sonra ≈ 6-7 saat |
+| `control.instance_capability` | discovery/bootstrap + her cluster cycle'daki sürüm kontrolü | Bayat capability → `UNKNOWN_CAPABILITY` |
+
+`×2` çarpanı bir cycle atlanmasına tolerans tanır; `grace` (örn. 10
+dakika) saat kayması ve toplama süresi için pay bırakır. Aynı ayar
+farklı listelerdeyse (hot vs. nightly) **kendi listesinin cadence'i**
+kullanılmalı — hepsine tek bir eşik uygulamak, hot yenilenen bir ayarın
+6 saat bayat olduğunu gizler.
 
 ## PG18: worker slot kapasitesi (yeni, filoda 3 instance PG18)
 
@@ -407,6 +498,29 @@ olabilir — gerçek etkin kapasite `min(autovacuum_max_workers,
 autovacuum_worker_slots)`. `autovacuum_worker_slots` şu an hiç
 toplanmıyor (ne `SETTINGS_QUERY`'de ne `HOT_SETTINGS_QUERY`'de) — bu,
 "Kod önkoşulları" bölümüne yeni bir madde olarak eklendi (madde 8).
+
+**Balancing'in KRİTİK istisnası — bu proje için doğrudan önemli:**
+PostgreSQL 18 `routine-vacuuming` dokümantasyonu çekilip doğrulandı:
+
+> *"When multiple workers are running, the autovacuum cost delay
+> parameters are 'balanced' among all the running workers... **However,
+> any workers processing tables whose per-table
+> `autovacuum_vacuum_cost_delay` or `autovacuum_vacuum_cost_limit`
+> storage parameters have been set are not considered in the balancing
+> algorithm.**"*
+
+Yani **tablo düzeyinde cost override'ı olan bir tabloyu vacuum eden
+worker, balancing hesabının tamamen DIŞINDADIR** — kendi ayarıyla,
+diğer worker'lardan bağımsız çalışır. Bu, bu proje için özellikle
+önemli çünkü Teşhis 2b zaten `control.table_relopts_snapshot`'tan
+tablo-özel override okuyor: eğer alert edilen tablonun bir cost
+override'ı varsa, "cost_limit worker'lar arasında paylaştırılıyor,
+o yüzden her worker'ın etkin bütçesi `cost_limit / runningWorkers`"
+şeklindeki bir akıl yürütme **o tablo için geçersizdir** — o worker
+paylaştırmaya dahil değildir, tam `cost_limit`'iyle çalışır. Mesaj
+metni bu ayrımı yapmalı veya (daha güvenlisi) worker başına etkin
+bütçe hesabı yapmaktan tamamen kaçınıp sadece gözlemlenen oranları
+raporlamalı.
 
 ## PG sürüm dağılımı (Teşhis 0/2b'nin kapsamını belirler)
 
@@ -467,13 +581,47 @@ worker çalışıyor" sorusundan bağımsız, ikisi karıştırılmamalı.
 filtresi — sadece yeterlilik kapısı (`distinct snapshot_ts >= 10`)
 `distinct` kullanır, oranın kendisi ham satır sayılarıyla hesaplanır.
 
-**Dönüş tipi typed olmalı, `Object[]` değil:** `fetchAutovacuumWorkerStatus()`
-şu alanları taşıyan typed bir record dönmeli: `runningWorkers`,
-`maxWorkers`, `totalSamples`, `distinctSnapshots`, `ioWaitSamples`,
-`throttleSleepSamples`, `noWaitEventSamples`, `otherWaitSamples`
-(yukarıdaki "dört kova" notundaki kalan fark), ve bir durum enum'u
-(`AVAILABLE`, `INSUFFICIENT_DATA`, `UNSUPPORTED_VERSION`,
-`UNKNOWN_VERSION`).
+## Worker evidence dönüş sözleşmesi (typed, DÖRT ayrı status)
+
+**Dönüş tipi typed bir record olmalı, `Object[]` değil.** Alanlar:
+
+| Alan | Tip | Açıklama |
+|---|---|---|
+| `runningWorkers` | `Integer` | En güncel genel snapshot'taki `count(distinct pid)` (bkz. iki adımlı tanım) |
+| `maxWorkers` | `Integer` | `autovacuum_max_workers` ayarı |
+| `workerSlots` | `Integer` | `autovacuum_worker_slots` (PG18+; öncesinde `null`) |
+| `effectiveWorkerCapacity` | `Integer` | PG18+: `min(maxWorkers, workerSlots)`; öncesinde `maxWorkers` |
+| `totalSamples` | `long` | Penceredeki toplam worker observation satırı |
+| `distinctSnapshots` | `int` | Kaç farklı `snapshot_ts` (yeterlilik kapısının birimi) |
+| `ioWaitSamples` | `long` | `wait_event_type = 'IO'` |
+| `throttleSleepSamples` | `Long` | `wait_event = 'VacuumDelay'`; PG13 altında `null` |
+| `noWaitEventSamples` | `long` | `wait_event IS NULL` |
+| `otherWaitSamples` | `long` | Residual (yukarıdaki kimlik) |
+| `latestSnapshotTs` | `OffsetDateTime` | Tazelik değerlendirmesi için |
+
+**TEK bir status enum'u YETERSİZDİR — dört bağımsız status alanı
+gerekir.** Aynı çağrıda farklı kanıtlar farklı durumlarda olabilir; tek
+bir alana sıkıştırmak bilgi kaybettirir. Somut örnekler:
+
+- **PG12 instance:** `ioWaitStatus = AVAILABLE` (bu sinyal her sürümde
+  var) ama `throttleStatus = UNSUPPORTED_VERSION` (`VacuumDelay` PG13'te
+  eklendi). Tek enum olsaydı ya IO kanıtı gereksiz yere gizlenir ya da
+  throttle "0" gibi yanlış sunulurdu.
+- **Sadece 9 farklı snapshot varsa:** oranlar `INSUFFICIENT_DATA`
+  (`ioWaitStatus`/`throttleStatus`), ama `currentWorkerStatus` yine
+  `AVAILABLE` olabilir — "şu an kaç worker çalışıyor" sorusu tek bir
+  güncel snapshot'a dayanır, 10 farklı örneğe ihtiyaç duymaz.
+- **PG18 instance'ta `autovacuum_worker_slots` toplanmamışsa:** sadece
+  `capacityStatus = UNKNOWN` olur; wait-event kanıtları etkilenmez.
+
+Dört status alanı:
+
+| Status alanı | Neyi kapsar | Olası değerler |
+|---|---|---|
+| `currentWorkerStatus` | `runningWorkers` güvenilir mi | `AVAILABLE`, `NO_FRESH_SNAPSHOT`, `UNKNOWN_VERSION` |
+| `ioWaitStatus` | IO-wait oranı yorumlanabilir mi | `AVAILABLE`, `INSUFFICIENT_DATA`, `NO_FRESH_SNAPSHOT` |
+| `throttleStatus` | Throttle oranı yorumlanabilir mi | `AVAILABLE`, `INSUFFICIENT_DATA`, `NO_FRESH_SNAPSHOT`, `UNSUPPORTED_VERSION` (PG < 13), `UNKNOWN_VERSION` |
+| `capacityStatus` | Etkin worker kapasitesi bilinebiliyor mu | `AVAILABLE`, `UNKNOWN` (ayar toplanmamış/bayat), `NOT_APPLICABLE` (PG < 18, `maxWorkers` tek başına yeterli) |
 
 ## Scope kararı: byte-hacmi metriği bu görevin kapsamında DEĞİL
 
@@ -493,7 +641,7 @@ Byte-hacmi metriği ve `InstanceDetail.tsx`'teki olası görselleştirme,
 ## Kod önkoşulları (AC2'nin ilk adımı, zorunlu)
 
 Kod denetimiyle doğrulanan, bu teşhisler kodlanmadan ÖNCE düzeltilmesi
-gereken **9 madde** — bunlar üzerine inşa edilecek temelin kendisindeki
+gereken **10 madde** — bunlar üzerine inşa edilecek temelin kendisindeki
 hatalar, "iyi olur" maddeleri değil:
 
 1. **`fetchAutovacuumWorkerStatus()` (`AlertRuleEvaluator.java:2811-2815`)
@@ -545,27 +693,46 @@ hatalar, "iyi olur" maddeleri değil:
    NULL değerleri sessizce `0.0`'a çeviriyor** (satır 463-466,
    `reads`/`writes`/`read_time`/`write_time` dahil çoğu I/O sayacı
    için kullanılıyor — istisna: `op_bytes` ayrı, NULL-safe okunuyor).
-   Bu, Teşhis 0'ın "veri yok" (`NO_DATA`) ile "gerçek sıfır"
-   (`ZERO_WITH_FRESH_DATA`) ayrımını koddan imkansız hâle getiriyor —
-   NULL bir kez 0'a döndükten sonra geri ayırt edilemez. `NO_DATA`/
-   `ZERO_WITH_FRESH_DATA` ayrımının çalışması için ya bu helper'ın
+   Bu, Teşhis 0'ın "veri yok" (`NO_FRESH_DATA`) ile "gerçek sıfır"
+   (`ZERO_IO_WITH_FRESH_DATA`) ayrımını koddan imkansız hâle getiriyor —
+   NULL bir kez 0'a döndükten sonra geri ayırt edilemez. `NO_FRESH_DATA`/
+   `ZERO_IO_WITH_FRESH_DATA` ayrımının çalışması için ya bu helper'ın
    I/O sayaçları için NULL-safe hâle getirilmesi (nullable `Long`/
    `Double` dönmesi) ya da NULL bilgisinin ayrı bir flag ile
    korunması gerekiyor — bu, Teşhis 0'ın "beş durum" modelinin ön
    koşulu, atlanamaz.
 
-**Opsiyonel, AC2'nin zorunlu kapsamı DEĞİL:** I/O sayaçları
-`previousIoSamples`'ta `Double` olarak tutulup `long`'a `.longValue()`
-ile çevriliyor — gerçekçi PG sayaç büyüklüklerinde pratik bir
-hassasiyet kaybı riski yok (`Double`'ın 52-bit tam sayı hassasiyeti
-~9×10^15), ama tip uyuşmazlığı bir tasarım kusuru. Madde 5 (stats_reset
-farkındalığı) düzeltilirken aynı yerde `Long`/`BigDecimal` tabanlı
-typed bir sample sınıfına geçmek verimli olabilir, ama tek başına bu
-görevin şartı değil.
+10. **I/O sample cache'i typed hâle getirilmeli — ZORUNLU, opsiyonel
+    değil.** Şu an `previousIoSamples` bir
+    `ConcurrentHashMap<Long, Map<String, Map<String, Double>>>` ve
+    sayaçlar `Double` olarak tutulup `.longValue()` ile çevriliyor.
+    Bu, üç ayrı önkoşulun (5: `stats_reset` farkındalığı, 9: NULL
+    koruma, ve Diagnosis 0'ın beş durumlu modeli) **hepsinin aynı veri
+    yapısına dokunmasını** gerektiriyor — üçünü ayrı ayrı `Map<String,
+    Double>` üzerine yamamaya çalışmak kırılgan olur. Gerekli değişiklik:
+    - **Sayaçlar** (`reads`, `writes`, `extends`, `hits`, `fsyncs`,
+      `evictions`, `reuses`, `writebacks`, byte sayaçları): nullable
+      `Long` (veya çok büyük değer riski varsa `BigDecimal`) — `Double`
+      DEĞİL. (Not: binary64 tamsayıları yalnızca **2^53**'e kadar kesin
+      taşır, ~9×10^15 değil; pratikte PG sayaçları bu sınırın altında
+      kalsa da doğru tip zaten `Long`.)
+    - **Süre metrikleri** (`read_time_ms`, `write_time_ms`): nullable
+      `Double` (bunlar gerçekten kesirli).
+    - **`stats_reset` değeri, önceki sample ile AYNI typed kayıtta**
+      tutulmalı — ayrı bir map'te değil, aksi hâlde ikisi arasında
+      tutarsızlık oluşabilir.
+    - **Reset algılandığında** (yeni `stats_reset` != cache'teki):
+      o key için **o cycle'da delta YAZILMAZ**, sadece yeni baseline
+      alınır. Yeni sayaç eski değerden büyük olsa bile — reset sonrası
+      artış eski baseline'a göre ölçülemez.
+    - **`DeltaCalculator` null-aware olmalı**: girdilerden biri `null`
+      ise sonuç `null` (0 değil), böylece "ölçüm yok" bilgisi
+      `fact.pg_io_stat_delta`'ya kadar korunur ve Diagnosis 0'ın
+      `*_metric_valid_count` sayımı anlamlı olur.
 
 ## AC2 implementasyon sırası
 
-0. Yukarıdaki 9 kod önkoşulunu (madde 1-9) düzelt.
+0. Yukarıdaki 10 kod önkoşulunu (madde 1-10) düzelt.
 1. `fetchAutovacuumWorkerStatus()`'u genişlet — tek SQL round-trip'te
    Teşhis 2 (`ioWaitSamples`) ve Teşhis 2b (`throttleSleepSamples`,
    `noWaitEventSamples`, `otherWaitSamples`, `distinctSnapshots`)
@@ -581,7 +748,7 @@ görevin şartı değil.
 3. `fetchAutovacuumIoImpact(instancePk)` yaz (Teşhis 0) — `pg_major >= 16`
    guard'ı, `object='relation'` filtresi, client-read=0 durumunda oran
    üretmeme, beş durumlu (`UNSUPPORTED`/`UNKNOWN_CAPABILITY`/
-   `NO_DATA`/`ZERO_WITH_FRESH_DATA`/`AVAILABLE`) dönüş modeli — bu,
+   `NO_FRESH_DATA`/`ZERO_IO_WITH_FRESH_DATA`/`AVAILABLE`) dönüş modeli — bu,
    madde 9'daki NULL-safe I/O okuması olmadan doğru çalışamaz.
 4. `autovacuum_worker_slots`'u okuyup `min(autovacuum_max_workers,
    autovacuum_worker_slots)` ile etkin kapasiteyi hesapla (PG18+ için).
@@ -595,27 +762,75 @@ görevin şartı değil.
 7. Bu görevin kapsamı DIŞINDA (ayrı görev): byte-hacmi metriği veya
    `InstanceDetail.tsx`'e görselleştirme.
 
-**Testler (AC2'nin bir parçası, en az):** PG12'de Teşhis 2b
-`UNSUPPORTED_VERSION` (sıfır değil); PG13/15'te Teşhis 2b var ama
-Teşhis 0 `UNSUPPORTED`; PG16+'ta tüm teşhisler kullanılabilir;
-bilinmeyen `pg_major` → `UNKNOWN_VERSION`; 9 distinct snapshot
-yetersiz, tam 10 yeterli; tek snapshot'ta çok worker yeterli sayılmaz;
-`runningWorkers` instance'ın en güncel genel snapshot'ındaki distinct
-pid (worker satırlarının kendi en son snapshot'ı DEĞİL); IO-wait ve
-VacuumDelay birbirine karıştırılmıyor; dört kova + `otherWaitSamples`
-toplamı `totalSamples`'a eşit; varsayılan `cost_delay`'de "düşür"
-önerisi yok; `effectiveCostDelay > versionDefault` iken öneri var,
-`0ms`/`1ms` gibi düşük non-default değerlerde öneri YOK; `-1` fallback
-yolları; aynı isimli tablo farklı `dbid`'lerde karışmıyor; `stats_reset`
-değişiminde delta yazılmıyor; client reads=0 davranışı; NULL kaynak
-değer `NO_DATA` üretiyor, `ZERO_WITH_FRESH_DATA`'yla karışmıyor;
-settings sorgusu her ayar için en güncel satırı dönüyor (eski satırlar
-karışmıyor); eski/taze olmayan settings verisi işaretleniyor;
-`autovacuum_worker_slots` etkin kapasiteyi doğru sınırlıyor; scenario
-3/4.5 kanıt içeriyor, diğer senaryolar değişmiyor; hiçbir aksiyon
-metninde autovacuum kapatma önerisi yok; `queryForList()`'in timestamp
-kolonları için döndürdüğü Java tipi (`OffsetDateTime` veya
-`Timestamp`) her ikisi de test edilip güvenli normalize ediliyor.
+**Test sözleşmesi (AC2'nin bir parçası, en az bunlar):**
+
+*Dört bağımsız status alanı:*
+- PG12'de `ioWaitStatus = AVAILABLE` **ve aynı anda**
+  `throttleStatus = UNSUPPORTED_VERSION` — tek enum'a çökmüyor,
+  throttle sessizce `0` gösterilmiyor.
+- 9 farklı snapshot varken `ioWaitStatus`/`throttleStatus =
+  INSUFFICIENT_DATA` **ama** `currentWorkerStatus = AVAILABLE` —
+  güncel worker sayısı 10 örnek şartına tabi değil.
+- PG18'de `autovacuum_worker_slots` toplanmamışken sadece
+  `capacityStatus = UNKNOWN`; wait-event kanıtları etkilenmiyor.
+- PG < 18'de `capacityStatus = NOT_APPLICABLE`, `effectiveWorkerCapacity
+  = maxWorkers`; PG18'de `min(maxWorkers, workerSlots)`.
+- Bilinmeyen `pg_major` → ilgili alanlar `UNKNOWN_VERSION`.
+
+*Örnekleme ve kova matematiği:*
+- 9 distinct snapshot yetersiz, tam 10 yeterli.
+- Tek snapshot'ta 10 worker görülmesi yeterlilik kapısını GEÇMEZ.
+- `runningWorkers`, instance'ın en güncel **genel** snapshot'ındaki
+  distinct pid — worker satırlarının kendi en son snapshot'ı DEĞİL;
+  o cycle'da 0 worker varsa `0` döner, eski bir sayı değil.
+- Üç adlandırılmış kova + `otherWaitSamples` toplamı **her zaman**
+  `totalSamples`'a eşit (aritmetik kimlik); `otherWaitSamples` asla
+  negatif değil (kovalar örtüşmüyor).
+- IO-wait ve VacuumDelay ayrı sayılıyor, birbirine karışmıyor.
+
+*Diagnosis 0 durum modeli:*
+- `source_row_count = 0` → `NO_FRESH_DATA` (sayaç değerine bakılmadan).
+- Taze satır var, autovacuum read+write toplamı 0 →
+  `ZERO_IO_WITH_FRESH_DATA` — `NO_FRESH_DATA` ile karışmıyor, ve
+  mesajı "autovacuum çalışmadı" demiyor.
+- `latest_sample_ts` tazelik eşiğinin dışında → `NO_FRESH_DATA`.
+- `has_pg_stat_io = false` → `UNSUPPORTED`; `is_reachable = false` →
+  `INSTANCE_UNREACHABLE`; capability satırı yok/bayat →
+  `UNKNOWN_CAPABILITY` (üçü ayrı durumlar).
+- `pg_major < 16` → `UNSUPPORTED`, sorgu hiç çalıştırılmıyor.
+- Client reads = 0 → oran üretilmiyor, mutlak sayı raporlanıyor.
+- NULL kaynak sayaç (Kod önkoşulu 9/10 sonrası) `*_metric_valid_count`
+  ile ayırt ediliyor, `0` ölçümüyle karışmıyor.
+
+*Etkin cost ayarı zinciri:*
+- Tablo override `>= 0` → zincir orada biter, global okunmaz.
+- Tablo override `-1` → global `autovacuum_*`'a düşer.
+- Global `autovacuum_*` `-1` → `vacuum_*`'a düşer.
+- Zincirin herhangi bir adımında eksik/malformed/bayat değer →
+  `UNKNOWN`, ve **"cost_delay düşür" önerisi bastırılıyor**.
+- `effectiveCostDelay > versionDefault` iken öneri var; `0ms`/`1ms`
+  gibi varsayılandan düşük "non-default" değerlerde öneri YOK;
+  varsayılana eşitken öneri YOK.
+- `cost_delay` ve `cost_limit` bağımsız çözümleniyor (biri tablo
+  override'ından, diğeri global'den gelebilir).
+
+*Tazelik:*
+- Tazelik eşiği ilgili kaynağın cadence'ine göre hesaplanıyor (sabit
+  saat değil); hot-yenilenen ve nightly-yenilenen ayarlar farklı
+  eşiklere tabi.
+- Settings sorgusu her ayar için yalnız en güncel satırı dönüyor
+  (`DISTINCT ON`), tarihsel satırlar karışmıyor.
+
+*Diğer:*
+- `stats_reset` değişiminde o key için delta YAZILMIYOR (yeni sayaç
+  eski değerden büyük olsa bile), yeni baseline alınıyor.
+- Aynı isimli tablo farklı `dbid`'lerde karışmıyor (`relid` bazlı).
+- Senaryo 3/4.5 yeni kanıt içeriyor; diğer senaryolar değişmiyor.
+- Template render başarısız olduğunda kanıt metni kaybolmuyor.
+- Hiçbir aksiyon metninde autovacuum kapatma önerisi yok.
+- `queryForList()`'in timestamp kolonları için döndürdüğü Java tipi
+  (`OffsetDateTime` **ve** `java.sql.Timestamp`) — her iki tip de
+  test edilip güvenli normalize ediliyor.
 
 ## Kaynaklar
 
