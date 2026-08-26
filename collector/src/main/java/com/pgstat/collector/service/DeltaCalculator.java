@@ -15,14 +15,21 @@ import org.springframework.stereotype.Service;
 public class DeltaCalculator {
 
     /**
-     * Iki kumulatif long deger arasindaki delta'yi hesaplar.
+     * Iki kumulatif long deger arasindaki delta'yi hesaplar. NULL-AWARE:
+     * her iki taraf da null olabilir.
      *
-     * @param current  su anki kumulatif deger
-     * @param previous onceki kumulatif deger (null ise baseline)
-     * @return delta degeri; negatifse veya previous null ise null
+     * Kaynak sayac NULL geldiginde (metrik o satirda olculememis) sonuc da
+     * NULL olmalidir — 0 yazmak "olculemedi" bilgisini "sifir olculdu"ya
+     * cevirir ve bu ayrimi geri getirmek imkansiz hale gelir
+     * (PGSTAT-P1-011: Teshis 0'in NO_FRESH_DATA vs.
+     * ZERO_IO_WITH_FRESH_DATA ayrimi buna dayanir).
+     *
+     * @param current  su anki kumulatif deger (null = olculemedi)
+     * @param previous onceki kumulatif deger (null = baseline/olculemedi)
+     * @return delta; taraflardan biri null ise veya delta negatifse null
      */
-    public Long deltaLong(long current, Long previous) {
-        if (previous == null) return null;
+    public Long deltaLong(Long current, Long previous) {
+        if (current == null || previous == null) return null;
 
         long diff = current - previous;
         // Negatif delta → stats reset veya wraparound; bu sample'i atla
@@ -30,14 +37,15 @@ public class DeltaCalculator {
     }
 
     /**
-     * Iki kumulatif double deger arasindaki delta'yi hesaplar.
+     * Iki kumulatif double deger arasindaki delta'yi hesaplar. NULL-AWARE —
+     * ayni gerekce, bkz. {@link #deltaLong(Long, Long)}.
      *
-     * @param current  su anki kumulatif deger
-     * @param previous onceki kumulatif deger (null ise baseline)
-     * @return delta degeri; negatifse veya previous null ise null
+     * @param current  su anki kumulatif deger (null = olculemedi)
+     * @param previous onceki kumulatif deger (null = baseline/olculemedi)
+     * @return delta degeri; taraflardan biri null ise veya negatifse null
      */
-    public Double deltaDouble(double current, Double previous) {
-        if (previous == null) return null;
+    public Double deltaDouble(Double current, Double previous) {
+        if (current == null || previous == null) return null;
 
         double diff = current - previous;
         // Negatif delta → stats reset; kucuk negatif degerler floating point

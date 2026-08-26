@@ -51,8 +51,30 @@ public class ClusterCollector {
     /** In-memory delta cache: instancePk → onceki cluster metric sample */
     private final ConcurrentHashMap<Long, ClusterMetricSample> previousSamples = new ConcurrentHashMap<>();
 
-    /** In-memory delta cache: instancePk → onceki io_stat sample */
-    private final ConcurrentHashMap<Long, Map<String, Map<String, Double>>> previousIoSamples = new ConcurrentHashMap<>();
+    /**
+     * Tek bir pg_stat_io satirinin typed kaydi.
+     *
+     * Tasarim kararlari (PGSTAT-P1-011 kod onkosulu 5/10):
+     * - Sayaclar Long (Double DEGIL): bunlar tamsayi sayaclar, binary64
+     *   uzerinden gecirmek gereksiz bir tip donusumu.
+     * - NULL degerler KORUNUR: kaynak NULL'i 0'a cevirmek "olculemedi"
+     *   bilgisini yok eder ve Teshis 0'in NO_FRESH_DATA vs.
+     *   ZERO_IO_WITH_FRESH_DATA ayrimini imkansiz hale getirir.
+     * - statsReset AYNI kayitta tutulur: ayri bir map'te tutulursa sample
+     *   ile reset epoch'u arasinda tutarsizlik olusabilir.
+     */
+    private record IoStatSample(
+        Map<String, Long> counters,
+        Map<String, Double> timings,
+        Long opBytes,
+        OffsetDateTime statsReset
+    ) {
+        Long counter(String name) { return counters.get(name); }
+        Double timing(String name) { return timings.get(name); }
+    }
+
+    /** In-memory delta cache: instancePk → onceki io_stat sample'lari */
+    private final ConcurrentHashMap<Long, Map<String, IoStatSample>> previousIoSamples = new ConcurrentHashMap<>();
 
     /** In-memory cache: instancePk → onceki WAL LSN (period_wal_size_byte icin) */
     private final ConcurrentHashMap<Long, String> previousWalLsn = new ConcurrentHashMap<>();
@@ -377,11 +399,8 @@ public class ClusterCollector {
 
     private long collectIoStats(Connection conn, SourceQueries queries,
                                 long instancePk, OffsetDateTime now) throws Exception {
-        // Key: "backendType|object|context" → metrikName → kumulatif deger
-        Map<String, Map<String, Double>> currentSamples = new LinkedHashMap<>();
-        // Snapshot kolonlari (delta hesaplanmaz): op_bytes, stats_reset
-        Map<String, Long> opBytesMap = new LinkedHashMap<>();
-        Map<String, OffsetDateTime> statsResetMap = new LinkedHashMap<>();
+        // Key: "backendType|object|context" → typed sample
+        Map<String, IoStatSample> currentSamples = new LinkedHashMap<>();
 
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.ioStatQuery())) {
@@ -389,34 +408,36 @@ public class ClusterCollector {
                 String key = rs.getString("backend_type") + "|" +
                              rs.getString("object") + "|" +
                              rs.getString("context");
-                Map<String, Double> metrics = new LinkedHashMap<>();
-                metrics.put("reads", getDoubleOrZero(rs, "reads"));
-                metrics.put("read_time", getDoubleOrZero(rs, "read_time"));
-                metrics.put("writes", getDoubleOrZero(rs, "writes"));
-                metrics.put("write_time", getDoubleOrZero(rs, "write_time"));
-                metrics.put("extends", getDoubleOrZero(rs, "extends"));
-                metrics.put("extend_time", getDoubleOrZero(rs, "extend_time"));
-                metrics.put("hits", getDoubleOrZero(rs, "hits"));
-                metrics.put("evictions", getDoubleOrZero(rs, "evictions"));
-                metrics.put("reuses", getDoubleOrZero(rs, "reuses"));
-                metrics.put("fsyncs", getDoubleOrZero(rs, "fsyncs"));
-                metrics.put("fsync_time", getDoubleOrZero(rs, "fsync_time"));
-                // V067: writebacks, writeback_time monotonik counter → delta
-                metrics.put("writebacks", getDoubleOrZero(rs, "writebacks"));
-                metrics.put("writeback_time", getDoubleOrZero(rs, "writeback_time"));
+                Map<String, Long> counters = new LinkedHashMap<>();
+                counters.put("reads", getLongOrNull(rs, "reads"));
+                counters.put("writes", getLongOrNull(rs, "writes"));
+                counters.put("extends", getLongOrNull(rs, "extends"));
+                counters.put("hits", getLongOrNull(rs, "hits"));
+                counters.put("evictions", getLongOrNull(rs, "evictions"));
+                counters.put("reuses", getLongOrNull(rs, "reuses"));
+                counters.put("fsyncs", getLongOrNull(rs, "fsyncs"));
+                // V067: writebacks monotonik counter → delta
+                counters.put("writebacks", getLongOrNull(rs, "writebacks"));
                 // V067: PG18 byte kolonlari monotonik counter → delta
-                metrics.put("read_bytes", getDoubleOrZero(rs, "read_bytes"));
-                metrics.put("write_bytes", getDoubleOrZero(rs, "write_bytes"));
-                metrics.put("extend_bytes", getDoubleOrZero(rs, "extend_bytes"));
-                currentSamples.put(key, metrics);
-                // Snapshot kolonlari
+                counters.put("read_bytes", getLongOrNull(rs, "read_bytes"));
+                counters.put("write_bytes", getLongOrNull(rs, "write_bytes"));
+                counters.put("extend_bytes", getLongOrNull(rs, "extend_bytes"));
+
+                Map<String, Double> timings = new LinkedHashMap<>();
+                timings.put("read_time", getDoubleOrNull(rs, "read_time"));
+                timings.put("write_time", getDoubleOrNull(rs, "write_time"));
+                timings.put("extend_time", getDoubleOrNull(rs, "extend_time"));
+                timings.put("fsync_time", getDoubleOrNull(rs, "fsync_time"));
+                timings.put("writeback_time", getDoubleOrNull(rs, "writeback_time"));
+
                 Long opBytes = rs.getObject("op_bytes") != null ? rs.getLong("op_bytes") : null;
-                opBytesMap.put(key, opBytes);
-                statsResetMap.put(key, rs.getObject("stats_reset", OffsetDateTime.class));
+                OffsetDateTime statsReset = rs.getObject("stats_reset", OffsetDateTime.class);
+
+                currentSamples.put(key, new IoStatSample(counters, timings, opBytes, statsReset));
             }
         }
 
-        Map<String, Map<String, Double>> prevSamples = previousIoSamples.put(instancePk, currentSamples);
+        Map<String, IoStatSample> prevSamples = previousIoSamples.put(instancePk, currentSamples);
 
         if (prevSamples == null) {
             log.debug("IO stat baseline alindi: instance_pk={}", instancePk);
@@ -424,45 +445,67 @@ public class ClusterCollector {
         }
 
         long rowsWritten = 0;
-        for (Map.Entry<String, Map<String, Double>> entry : currentSamples.entrySet()) {
+        int resetSkipped = 0;
+        for (Map.Entry<String, IoStatSample> entry : currentSamples.entrySet()) {
             String[] parts = entry.getKey().split("\\|", 3);
-            Map<String, Double> prev = prevSamples.get(entry.getKey());
-            Map<String, Double> curr = entry.getValue();
+            IoStatSample prev = prevSamples.get(entry.getKey());
+            IoStatSample curr = entry.getValue();
 
             if (prev == null) continue; // Yeni satir — baseline
 
-            Long readsDelta = deltaCalc.deltaLong(curr.get("reads").longValue(),
-                    prev.get("reads") != null ? prev.get("reads").longValue() : null);
+            // stats_reset degistiyse (pg_stat_reset_shared('io')) sayaclar
+            // sifirlanmistir: eski baseline'a gore delta hesaplamak yanlis
+            // sonuc uretir. Bu cycle'da delta YAZMIYORUZ, sadece yeni
+            // baseline aliniyor (yukaridaki put() bunu zaten yapti).
+            if (!java.util.Objects.equals(prev.statsReset(), curr.statsReset())) {
+                resetSkipped++;
+                continue;
+            }
+
             factRepo.insertIoStatDelta(now, instancePk,
                 parts[0], parts[1], parts[2],
-                readsDelta,
-                deltaCalc.deltaDouble(curr.get("read_time"), prev.get("read_time")),
-                deltaCalc.deltaLong(curr.get("writes").longValue(), prev.get("writes").longValue()),
-                deltaCalc.deltaDouble(curr.get("write_time"), prev.get("write_time")),
-                deltaCalc.deltaLong(curr.get("extends").longValue(), prev.get("extends").longValue()),
-                deltaCalc.deltaDouble(curr.get("extend_time"), prev.get("extend_time")),
-                deltaCalc.deltaLong(curr.get("hits").longValue(), prev.get("hits").longValue()),
-                deltaCalc.deltaLong(curr.get("evictions").longValue(), prev.get("evictions").longValue()),
-                deltaCalc.deltaLong(curr.get("reuses").longValue(), prev.get("reuses").longValue()),
-                deltaCalc.deltaLong(curr.get("fsyncs").longValue(), prev.get("fsyncs").longValue()),
-                deltaCalc.deltaDouble(curr.get("fsync_time"), prev.get("fsync_time")),
-                // V067: yeni kolonlar
-                deltaCalc.deltaLong(curr.get("writebacks").longValue(), prev.get("writebacks").longValue()),
-                deltaCalc.deltaDouble(curr.get("writeback_time"), prev.get("writeback_time")),
-                opBytesMap.get(entry.getKey()),
-                deltaCalc.deltaLong(curr.get("read_bytes").longValue(), prev.get("read_bytes").longValue()),
-                deltaCalc.deltaLong(curr.get("write_bytes").longValue(), prev.get("write_bytes").longValue()),
-                deltaCalc.deltaLong(curr.get("extend_bytes").longValue(), prev.get("extend_bytes").longValue()),
-                statsResetMap.get(entry.getKey())
+                deltaCalc.deltaLong(curr.counter("reads"), prev.counter("reads")),
+                deltaCalc.deltaDouble(curr.timing("read_time"), prev.timing("read_time")),
+                deltaCalc.deltaLong(curr.counter("writes"), prev.counter("writes")),
+                deltaCalc.deltaDouble(curr.timing("write_time"), prev.timing("write_time")),
+                deltaCalc.deltaLong(curr.counter("extends"), prev.counter("extends")),
+                deltaCalc.deltaDouble(curr.timing("extend_time"), prev.timing("extend_time")),
+                deltaCalc.deltaLong(curr.counter("hits"), prev.counter("hits")),
+                deltaCalc.deltaLong(curr.counter("evictions"), prev.counter("evictions")),
+                deltaCalc.deltaLong(curr.counter("reuses"), prev.counter("reuses")),
+                deltaCalc.deltaLong(curr.counter("fsyncs"), prev.counter("fsyncs")),
+                deltaCalc.deltaDouble(curr.timing("fsync_time"), prev.timing("fsync_time")),
+                deltaCalc.deltaLong(curr.counter("writebacks"), prev.counter("writebacks")),
+                deltaCalc.deltaDouble(curr.timing("writeback_time"), prev.timing("writeback_time")),
+                curr.opBytes(),
+                deltaCalc.deltaLong(curr.counter("read_bytes"), prev.counter("read_bytes")),
+                deltaCalc.deltaLong(curr.counter("write_bytes"), prev.counter("write_bytes")),
+                deltaCalc.deltaLong(curr.counter("extend_bytes"), prev.counter("extend_bytes")),
+                curr.statsReset()
             );
             rowsWritten++;
+        }
+        if (resetSkipped > 0) {
+            log.info("IO stat: stats_reset degisti, {} satir icin delta atlandi (yeni baseline alindi): instance_pk={}",
+                    resetSkipped, instancePk);
         }
         return rowsWritten;
     }
 
-    private double getDoubleOrZero(ResultSet rs, String col) throws Exception {
+    /**
+     * Kaynak NULL ise NULL doner (0.0 DEGIL) — "olculemedi" ile "sifir
+     * olculdu" farkli seylerdir ve bu ayrim fact tablosuna kadar
+     * korunmalidir (PGSTAT-P1-011, Teshis 0'in NO_FRESH_DATA vs.
+     * ZERO_IO_WITH_FRESH_DATA ayrimi buna dayanir).
+     */
+    private Long getLongOrNull(ResultSet rs, String col) throws Exception {
+        long val = rs.getLong(col);
+        return rs.wasNull() ? null : val;
+    }
+
+    private Double getDoubleOrNull(ResultSet rs, String col) throws Exception {
         double val = rs.getDouble(col);
-        return rs.wasNull() ? 0.0 : val;
+        return rs.wasNull() ? null : val;
     }
 
     // =========================================================================
