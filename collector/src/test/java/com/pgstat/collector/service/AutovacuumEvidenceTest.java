@@ -342,6 +342,62 @@ class AutovacuumEvidenceTest {
         assertThat(text).contains("Ölçüm kapsamı");
     }
 
+    // ---------------------------------------------------------------
+    // timestamptz normalizasyonu — canli testte bulunan sessiz bug
+    // ---------------------------------------------------------------
+
+    @Test
+    void sqlTimestampIsNormalizedBecauseQueryForListReturnsThatNotOffsetDateTime() {
+        // Kok neden: Spring'in ColumnMapRowMapper'i rs.getObject(i) cagirir ve
+        // PG surucusu timestamptz icin java.sql.Timestamp doner. Kod
+        // "instanceof OffsetDateTime" bekliyordu -> senaryo 3.5/4/4.5 HIC
+        // tetiklenemiyordu.
+        java.time.OffsetDateTime beklenen = java.time.OffsetDateTime.now().minusHours(3);
+        java.sql.Timestamp surucuden = java.sql.Timestamp.from(beklenen.toInstant());
+
+        java.time.OffsetDateTime sonuc = AlertRuleEvaluator.asOffsetDateTime(surucuden);
+
+        assertThat(sonuc).isNotNull();
+        assertThat(sonuc.toInstant()).isEqualTo(beklenen.toInstant());
+    }
+
+    @Test
+    void offsetDateTimePassesThroughUnchanged() {
+        java.time.OffsetDateTime girdi = java.time.OffsetDateTime.now();
+
+        assertThat(AlertRuleEvaluator.asOffsetDateTime(girdi)).isEqualTo(girdi);
+    }
+
+    @Test
+    void instantAndLocalDateTimeAreAlsoAccepted() {
+        java.time.Instant inst = java.time.Instant.now();
+        assertThat(AlertRuleEvaluator.asOffsetDateTime(inst)).isNotNull();
+
+        java.time.LocalDateTime ldt = java.time.LocalDateTime.now();
+        assertThat(AlertRuleEvaluator.asOffsetDateTime(ldt)).isNotNull();
+    }
+
+    @Test
+    void unknownTypesAndNullYieldNullRatherThanThrowing() {
+        assertThat(AlertRuleEvaluator.asOffsetDateTime(null)).isNull();
+        assertThat(AlertRuleEvaluator.asOffsetDateTime("2026-08-26")).isNull();
+        assertThat(AlertRuleEvaluator.asOffsetDateTime(12345L)).isNull();
+    }
+
+    @Test
+    void normalizedTimestampMakesRecencyChecksWorkAsIntended() {
+        // Bug'in pratik sonucu: bir saat once calismis autovacuum "yakin
+        // zamanda" sayilmali. Timestamp olarak gelirse eski kod false
+        // donuyordu; normalize edilince dogru calisir.
+        java.sql.Timestamp birSaatOnce = java.sql.Timestamp.from(
+            java.time.OffsetDateTime.now().minusHours(1).toInstant());
+
+        java.time.OffsetDateTime norm = AlertRuleEvaluator.asOffsetDateTime(birSaatOnce);
+
+        assertThat(norm).isNotNull();
+        assertThat(norm.isAfter(java.time.OffsetDateTime.now().minusHours(24))).isTrue();
+    }
+
     @Test
     void fallbackMessageIsUnchangedWhenThereIsNoDiagnosisToAdd() {
         // dead_tuple_ratio disindaki metrikler icin diagnosis bos string —

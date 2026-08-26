@@ -3393,7 +3393,46 @@ public class AlertRuleEvaluator {
      *
      * @return [teshis, aksiyon] — ikisi de bos olmayan Turkce metin.
      */
+    /**
+     * JdbcTemplate.queryForList() ile okunan bir timestamptz kolonunu
+     * OffsetDateTime'a normalize eder.
+     *
+     * NEDEN GEREKLI (canli testte kesfedilen bug, 2026-08-26): Spring'in
+     * ColumnMapRowMapper'i rs.getObject(i) cagirir; PostgreSQL JDBC surucusu
+     * timestamptz icin varsayilan olarak java.sql.Timestamp doner,
+     * OffsetDateTime DEGIL. diagnoseBloat() ise "lastAutovacuum instanceof
+     * OffsetDateTime" kaliplarini kullaniyordu — java.sql.Timestamp bu testi
+     * HIC gecmez, dolayisiyla senaryo 3.5, 4 ve 4.5 hicbir kosulda
+     * tetiklenemiyordu (sessiz, gorunmez bir bug: alert hep senaryo 5'e
+     * dusuyordu). rs.getObject(col, OffsetDateTime.class) kullanan
+     * ResultSet-tabanli kod yollari bu sorundan etkilenmez; sorun sadece
+     * queryForList() yolunda.
+     *
+     * @return normalize edilmis deger; tip taninmiyorsa/null ise null
+     */
+    static java.time.OffsetDateTime asOffsetDateTime(Object value) {
+        if (value instanceof java.time.OffsetDateTime odt) {
+            return odt;
+        }
+        if (value instanceof java.sql.Timestamp ts) {
+            return ts.toInstant().atOffset(
+                java.time.ZoneId.systemDefault().getRules().getOffset(ts.toInstant()));
+        }
+        if (value instanceof java.time.Instant inst) {
+            return inst.atOffset(
+                java.time.ZoneId.systemDefault().getRules().getOffset(inst));
+        }
+        if (value instanceof java.time.LocalDateTime ldt) {
+            return ldt.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+        }
+        return null;
+    }
+
     private String[] diagnoseBloat(Map<String, Object> record, long instancePk) {
+        // timestamptz kolonlari queryForList()'ten java.sql.Timestamp olarak
+        // gelir — normalize etmeden instanceof OffsetDateTime kontrolleri
+        // her zaman false doner (bkz. asOffsetDateTime javadoc'u).
+        java.time.OffsetDateTime lastAutovacuumTs = asOffsetDateTime(record.get("last_autovacuum"));
         Object lastAutovacuum = record.get("last_autovacuum");
         Object lastVacuum = record.get("last_vacuum");
         boolean vacuumIneffective = Boolean.TRUE.equals(record.get("vacuum_ineffective"));
@@ -3506,13 +3545,13 @@ public class AlertRuleEvaluator {
         // farkli — burada EN AZ BIR KEZ calismis ama son calismadan sonra
         // durmus ve artis surmus. Ayni worker/xmin kanitlarini kullanarak
         // "neden calismiyor" sorusuna da kesin cevap veriyoruz.
-        boolean staleAutovacuum = lastAutovacuum instanceof java.time.OffsetDateTime lastAvTime
-            && lastAvTime.isBefore(java.time.OffsetDateTime.now().minusHours(24));
+        boolean staleAutovacuum = lastAutovacuumTs != null
+            && lastAutovacuumTs.isBefore(java.time.OffsetDateTime.now().minusHours(24));
         boolean increasingTrendEarly = prevDeadTupObj instanceof Number prevN2 && currentDeadTup != null
             && currentDeadTup > prevN2.longValue();
         if (staleAutovacuum && increasingTrendEarly) {
             long hoursSinceLastAutovacuum = java.time.Duration.between(
-                (java.time.OffsetDateTime) lastAutovacuum, java.time.OffsetDateTime.now()).toHours();
+                lastAutovacuumTs, java.time.OffsetDateTime.now()).toHours();
             AutovacuumWorkerEvidence workerStatus = fetchAutovacuumWorkerStatus(instancePk);
             Integer runningWorkers = workerStatus.runningWorkers();
             Integer maxWorkers = workerStatus.effectiveWorkerCapacity();
@@ -3534,8 +3573,8 @@ public class AlertRuleEvaluator {
         }
 
         // Senaryo 4: yeni olusmus/artan trend, autovacuum henuz yetismemis olabilir
-        boolean recentAutovacuum = lastAutovacuum instanceof java.time.OffsetDateTime t
-            && t.isAfter(java.time.OffsetDateTime.now().minusHours(24));
+        boolean recentAutovacuum = lastAutovacuumTs != null
+            && lastAutovacuumTs.isAfter(java.time.OffsetDateTime.now().minusHours(24));
         boolean increasingTrend = prevDeadTupObj instanceof Number prevN && currentDeadTup != null
             && currentDeadTup > prevN.longValue();
 
