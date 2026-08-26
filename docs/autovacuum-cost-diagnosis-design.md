@@ -188,21 +188,34 @@ order by total_reads desc nulls last;
 
 `object = 'relation'` filtresi zorunlu — `pg_stat_io` ayrıca `object IN
 ('temp relation')` gibi başka kategoriler de içerir, filtresiz sorgu
-autovacuum'un tablo/index I/O'sunu diğer kategorilerle karıştırabilir.
-**Bu sorgu `object='relation'` filtresiyle henüz canlı olarak yeniden
-çalıştırılmadı** — aşağıdaki tablo, filtre eklenmeden önceki (2026-08-25)
-bir testin sonucu; sayılar muhtemelen değişmez (autovacuum zaten
-öncelikle `relation` nesnelerinde çalışır) ama bu, AC2/AC3'te filtreli
-sorguyla yeniden doğrulanmadan "kanıtlanmış" sayılmamalı.
+autovacuum'un tablo/index I/O'sunu diğer kategorilerle karıştırır.
 
-**Önceki testten (`instance_pk=6`, PG17, 24 saatlik pencere, filtresiz sorgu):**
+**Filtrenin etkisi ölçüldü ve BEKLENENDEN ÇOK BÜYÜK çıktı
+(`instance_pk=6`, PG17, 24 saatlik pencere):**
 
-| backend_type | total_reads | total_writes | total_read_time_ms | total_write_time_ms |
-|---|---|---|---|---|
-| autovacuum worker | 5,119,503 | 4,203,112 | 0.0 | 0.0 |
-| client backend | 172,332 | 6,245,526 | 0.0 | 0.0 |
-| checkpointer | 0 | 2,499,669 | 0.0 | 0.0 |
-| background writer | 0 | 3,454,920 | 0.0 | 0.0 |
+| Ölçüm | Filtresiz (2026-08-25) | `object='relation'` (2026-08-26) |
+|---|---|---|
+| autovacuum worker reads | 5,119,503 | 8,314,997 |
+| client backend reads | 172,332 | **31,407,722** |
+| **Oran (av / client)** | **~30x** | **0.26x** |
+
+Yani filtresiz sorgunun ürettiği "autovacuum, client backend'den 30 kat
+fazla okuma yapıyor" bulgusu **yanlıştı** — filtre eklendiğinde tablo
+tersine döndü: autovacuum aslında uygulama trafiğinin yaklaşık **dörtte
+biri** kadar okuma yapıyor. Filtresiz sorgu client backend'in
+`relation` dışı I/O'sunu (`temp relation` vb.) dışarıda bırakıp
+oranı ~115 kat şişirmiş.
+
+**Çıkarılacak ders:** Bu, tasarımın "filtre eklendi ama yeniden
+ölçülmedi, o yüzden kanıtlanmış sayılmaz" notunun neden gerekli
+olduğunun somut kanıtı. `pg_stat_io` üzerinde `object` filtresi
+olmadan yapılan hiçbir backend_type karşılaştırması güvenilir değildir.
+
+**Ayrıca doğrulandı:** `reads_valid_count = source_row_count`
+(40982/40982) — bu instance'ta NULL sayaç yok, yani `metricCoveragePct
+= 100`. `NO_FRESH_DATA` / `ZERO_IO_WITH_FRESH_DATA` ayrımının pratikte
+NULL kaynaklı bir belirsizlik üretmediği (en azından bu instance'ta)
+görüldü.
 
 **Kapsam ve dil sınırlamaları (kesin, implementasyonda uygulanmalı):**
 
