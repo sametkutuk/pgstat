@@ -4402,7 +4402,15 @@ public class AlertRuleEvaluator {
                    evaluation_window_minutes, aggregation,
                    evaluation_type, change_threshold_pct, min_data_days,
                    alert_category, spike_fallback_pct, flatline_minutes,
-                   sensitivity, cooldown_minutes, auto_resolve
+                   sensitivity, cooldown_minutes, auto_resolve,
+                   -- dead_tuple_ratio'nun uc bacakli override'lari. Bunlar
+                   -- SELECT listesinde eksikti: kolonlar migration'la eklenmis
+                   -- ve kod bunlari okuyacak sekilde yazilmisti, ama sorguya
+                   -- eklenmedigi icin rule.get(...) her zaman null donuyor ve
+                   -- kod sessizce kod-ici varsayilanlara dusuyordu. Sonuc:
+                   -- kullanici UI'dan bu esikleri degistirse bile hicbir etkisi
+                   -- olmuyordu (canli test, 2026-08-26).
+                   bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count
             from control.alert_rule
             where is_enabled = true
             order by rule_id
