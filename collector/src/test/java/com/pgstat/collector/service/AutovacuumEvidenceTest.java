@@ -1,5 +1,6 @@
 package com.pgstat.collector.service;
 
+import com.pgstat.collector.repository.FactRepository;
 import com.pgstat.collector.service.AlertRuleEvaluator.AutovacuumWorkerEvidence;
 import com.pgstat.collector.service.AlertRuleEvaluator.EvidenceStatus;
 import org.junit.jupiter.api.Test;
@@ -137,25 +138,25 @@ class AutovacuumEvidenceTest {
     void parsesCostDelayOverrideFromRawReloptions() {
         String raw = "{autovacuum_vacuum_cost_delay=10,fillfactor=90}";
 
-        assertThat(AlertRuleEvaluator.parseRelOption(raw, "autovacuum_vacuum_cost_delay"))
+        assertThat(FactRepository.parseIntRelOption(raw, "autovacuum_vacuum_cost_delay"))
             .isEqualTo(10);
     }
 
     @Test
     void returnsNullWhenOptionAbsentOrUnparsable() {
-        assertThat(AlertRuleEvaluator.parseRelOption("{fillfactor=90}", "autovacuum_vacuum_cost_delay"))
+        assertThat(FactRepository.parseIntRelOption("{fillfactor=90}", "autovacuum_vacuum_cost_delay"))
             .isNull();
-        assertThat(AlertRuleEvaluator.parseRelOption("{autovacuum_vacuum_cost_delay=abc}", "autovacuum_vacuum_cost_delay"))
+        assertThat(FactRepository.parseIntRelOption("{autovacuum_vacuum_cost_delay=abc}", "autovacuum_vacuum_cost_delay"))
             .isNull();
-        assertThat(AlertRuleEvaluator.parseRelOption(null, "autovacuum_vacuum_cost_delay")).isNull();
-        assertThat(AlertRuleEvaluator.parseRelOption("", "autovacuum_vacuum_cost_delay")).isNull();
+        assertThat(FactRepository.parseIntRelOption(null, "autovacuum_vacuum_cost_delay")).isNull();
+        assertThat(FactRepository.parseIntRelOption("", "autovacuum_vacuum_cost_delay")).isNull();
     }
 
     @Test
     void preservesMinusOneSentinelRatherThanTreatingItAsAValue() {
         // -1 "global ayari kullan" demek; cozumleme zinciri bunu bir deger
         // olarak degil, bir sonraki adima gecis sinyali olarak gormeli.
-        assertThat(AlertRuleEvaluator.parseRelOption(
+        assertThat(FactRepository.parseIntRelOption(
             "{autovacuum_vacuum_cost_delay=-1}", "autovacuum_vacuum_cost_delay"))
             .isEqualTo(-1);
     }
@@ -230,5 +231,126 @@ class AutovacuumEvidenceTest {
         String text = evaluator.renderWorkerWaitEvidence(AutovacuumWorkerEvidence.unknown());
 
         assertThat(text).isNotNull();
+    }
+
+    // ---------------------------------------------------------------
+    // Template render basarisiz oldugunda kanit korunmasi
+    // ---------------------------------------------------------------
+
+    @Test
+    void fallbackMessageKeepsDiagnosisAndActionWhenTemplateRenderFails() {
+        // Eskiden template render hatasi tum kaniti sessizce yutuyordu ve
+        // kullaniciya sadece jenerik esik satiri gidiyordu.
+        java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+        ctx.put("diagnosis", "Teşhis: Autovacuum çalışıyor ama yetişemiyor.\n");
+        ctx.put("bloat_action", "Eşik ayarlarını gözden geçir.");
+
+        String msg = AlertRuleEvaluator.appendDiagnosisToFallback(
+            "Tablo esigi asti: dead_tuple_ratio = 35", ctx);
+
+        assertThat(msg).contains("Tablo esigi asti");
+        assertThat(msg).contains("Autovacuum çalışıyor ama yetişemiyor");
+        assertThat(msg).contains("Eşik ayarlarını gözden geçir");
+    }
+
+    // ---------------------------------------------------------------
+    // Teshis 0 — alti durumlu I/O islem sayisi modeli
+    // ---------------------------------------------------------------
+
+    @Test
+    void zeroIoWithFreshDataIsNotWordedAsAutovacuumNotRunning() {
+        // Sifir relation I/O, "autovacuum calismadi" DEMEK DEGIL — sayfalar
+        // shared buffers'ta bulunmus (hit) olabilir.
+        AlertRuleEvaluator.AutovacuumIoImpact io = new AlertRuleEvaluator.AutovacuumIoImpact(
+            0L, 0L, 5000L, 1000L, null, 100.0,
+            AlertRuleEvaluator.IoImpactStatus.ZERO_IO_WITH_FRESH_DATA);
+
+        String text = evaluator.renderIoImpactEvidence(io);
+
+        assertThat(text).contains("hiç çalışmadığı anlamına gelmez");
+        assertThat(text).contains("shared buffers");
+    }
+
+    @Test
+    void noFreshDataIsDistinctFromRealZero() {
+        String noData = evaluator.renderIoImpactEvidence(
+            AlertRuleEvaluator.AutovacuumIoImpact.of(AlertRuleEvaluator.IoImpactStatus.NO_FRESH_DATA));
+        String realZero = evaluator.renderIoImpactEvidence(new AlertRuleEvaluator.AutovacuumIoImpact(
+            0L, 0L, 10L, 10L, null, 100.0,
+            AlertRuleEvaluator.IoImpactStatus.ZERO_IO_WITH_FRESH_DATA));
+
+        assertThat(noData).contains("taze veri yok");
+        assertThat(realZero).doesNotContain("taze veri yok");
+        assertThat(noData).isNotEqualTo(realZero);
+    }
+
+    @Test
+    void unsupportedVersionSaysSoInsteadOfShowingZero() {
+        String text = evaluator.renderIoImpactEvidence(
+            AlertRuleEvaluator.AutovacuumIoImpact.of(AlertRuleEvaluator.IoImpactStatus.UNSUPPORTED));
+
+        assertThat(text).contains("PG16");
+        assertThat(text).doesNotContain("0 okuma");
+    }
+
+    @Test
+    void unknownCapabilityIsDistinctFromUnsupported() {
+        String unknown = evaluator.renderIoImpactEvidence(
+            AlertRuleEvaluator.AutovacuumIoImpact.of(AlertRuleEvaluator.IoImpactStatus.UNKNOWN_CAPABILITY));
+        String unsupported = evaluator.renderIoImpactEvidence(
+            AlertRuleEvaluator.AutovacuumIoImpact.of(AlertRuleEvaluator.IoImpactStatus.UNSUPPORTED));
+
+        assertThat(unknown).contains("henüz bilinmediği");
+        assertThat(unknown).isNotEqualTo(unsupported);
+    }
+
+    @Test
+    void reportsAbsoluteCountsWithoutRatioWhenClientReadsAreZero() {
+        // Sifira bolme/sonsuz oran uretmek yerine mutlak sayilar raporlanir.
+        AlertRuleEvaluator.AutovacuumIoImpact io = new AlertRuleEvaluator.AutovacuumIoImpact(
+            5_000_000L, 4_000_000L, 0L, 100L, null, 100.0,
+            AlertRuleEvaluator.IoImpactStatus.AVAILABLE);
+
+        String text = evaluator.renderIoImpactEvidence(io);
+
+        assertThat(text).contains("oran hesaplanmadı");
+        assertThat(text).doesNotContain("Infinity");
+    }
+
+    @Test
+    void ioEvidenceReportsOperationCountsNotBytesOrThroughput() {
+        AlertRuleEvaluator.AutovacuumIoImpact io = new AlertRuleEvaluator.AutovacuumIoImpact(
+            5_119_503L, 4_203_112L, 172_332L, 6_245_526L, 29.7, 100.0,
+            AlertRuleEvaluator.IoImpactStatus.AVAILABLE);
+
+        String text = evaluator.renderIoImpactEvidence(io);
+
+        assertThat(text).contains("işlemi yaptı");
+        assertThat(text).doesNotContain("MB");
+        assertThat(text).doesNotContain("IOPS");
+        assertThat(text).doesNotContain("maliyet");
+    }
+
+    @Test
+    void partialMetricCoverageIsDisclosedRatherThanSilentlyAveraged() {
+        AlertRuleEvaluator.AutovacuumIoImpact io = new AlertRuleEvaluator.AutovacuumIoImpact(
+            1000L, 500L, 100L, 200L, 10.0, 60.0,
+            AlertRuleEvaluator.IoImpactStatus.AVAILABLE);
+
+        String text = evaluator.renderIoImpactEvidence(io);
+
+        assertThat(text).contains("Ölçüm kapsamı");
+    }
+
+    @Test
+    void fallbackMessageIsUnchangedWhenThereIsNoDiagnosisToAdd() {
+        // dead_tuple_ratio disindaki metrikler icin diagnosis bos string —
+        // mesaja bos satir/artik eklenmemeli.
+        java.util.Map<String, Object> ctx = new java.util.HashMap<>();
+        ctx.put("diagnosis", "");
+
+        String msg = AlertRuleEvaluator.appendDiagnosisToFallback("Index esigi asti", ctx);
+
+        assertThat(msg).isEqualTo("Index esigi asti");
     }
 }

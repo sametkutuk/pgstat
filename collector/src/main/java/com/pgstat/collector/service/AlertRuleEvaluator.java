@@ -2007,8 +2007,15 @@ public class AlertRuleEvaluator {
                 ctx.put("bloat_action", "Tablo istatistiklerine ve autovacuum/index ihtiyacına bak.");
             }
 
-            String fallbackMsg = buildPerRecordThresholdMessage(metricType, metricName, top,
-                operator, threshold, windowMinutes);
+            // Fallback mesaja da teshis/aksiyon eklenir: template render
+            // basarisiz olursa (kod bulunamadi/placeholder hatasi) eskiden
+            // sadece jenerik "Tablo esigi asti: ..." satiri kaliyordu ve
+            // diagnoseBloat()'un urettigi tum kanit sessizce kayboluyordu
+            // (PGSTAT-P1-011 kod onkosulu 4).
+            String fallbackMsg = appendDiagnosisToFallback(
+                buildPerRecordThresholdMessage(metricType, metricName, top,
+                    operator, threshold, windowMinutes),
+                ctx);
             String detailsJson = buildPerRecordsJson(exceeding, metricType, windowMinutes,
                 threshold.toPlainString(), "exceeding_threshold");
 
@@ -3079,21 +3086,17 @@ public class AlertRuleEvaluator {
      */
     Integer resolveEffectiveCostDelay(long instancePk, Long relid) {
         try {
-            // Adim 1: tablo override. V093 su an sadece ham reloptions_raw
-            // tutuyor; ayristirilmis kolon eklenene kadar ham metinden
-            // okuyoruz (Kod onkosulu 3 bunu kalicilastiracak).
+            // Adim 1: tablo override — V095 ile ayristirilmis kolondan okunuyor
+            // (toplama aninda bir kez parse edilir, her sorguda tekrar degil).
             if (relid != null) {
-                List<String> raw = jdbc.queryForList(
-                    "select reloptions_raw from control.table_relopts_snapshot " +
-                    "where instance_pk = ? and relid = ? and reloptions_raw is not null",
-                    String.class, instancePk, relid);
-                if (!raw.isEmpty()) {
-                    Integer tableOverride = parseRelOption(raw.get(0), "autovacuum_vacuum_cost_delay");
-                    if (tableOverride != null && tableOverride >= 0) {
-                        return tableOverride;
-                    }
-                    // tableOverride == -1 veya yok -> global'e dus
+                List<Integer> tableRows = jdbc.queryForList(
+                    "select autovacuum_vacuum_cost_delay from control.table_relopts_snapshot " +
+                    "where instance_pk = ? and relid = ?",
+                    Integer.class, instancePk, relid);
+                if (!tableRows.isEmpty() && tableRows.get(0) != null && tableRows.get(0) >= 0) {
+                    return tableRows.get(0);
                 }
+                // override yok (null) veya -1 sentinel -> global'e dus
             }
             // Adim 2: global autovacuum_vacuum_cost_delay
             Integer avDelay = readIntSetting(instancePk, "autovacuum_vacuum_cost_delay");
@@ -3112,25 +3115,166 @@ public class AlertRuleEvaluator {
         }
     }
 
+    /** pg_stat_io view'inin eklendigi PG surumu (Teshis 0'in on kosulu). */
+    private static final int PG_STAT_IO_MIN_PG_MAJOR = 16;
+
+    /** Teshis 0 gozlem penceresi. */
+    private static final String IO_IMPACT_WINDOW = "24 hours";
+
     /**
-     * Ham reloptions metninden ("{autovacuum_vacuum_cost_delay=10,fillfactor=90}")
-     * tek bir sayisal secenegi cikarir. Bulunamazsa/parse edilemezse null.
+     * Teshis 0'in durum modeli — SIRALI degerlendirilir, ilk eslesen kazanir.
+     * "Veri yok" ile "gercekten sifir" ayni gostergeye indirgenmemeli:
+     * birincisi olcumun yoklugu, ikincisi bir olcum sonucudur.
      */
-    static Integer parseRelOption(String reloptionsRaw, String optionName) {
-        if (reloptionsRaw == null || reloptionsRaw.isBlank()) {
-            return null;
+    enum IoImpactStatus {
+        /** instance_capability satiri yok/pg_major null — desteklenip desteklenmedigi bilinmiyor. */
+        UNKNOWN_CAPABILITY,
+        /** pg_major < 16 veya has_pg_stat_io=false — bu surumde pg_stat_io yok. */
+        UNSUPPORTED,
+        /** is_reachable=false — veri guncel olmayabilir, guncelmis gibi sunma. */
+        INSTANCE_UNREACHABLE,
+        /** Pencerede hic fact satiri yok VEYA en son satir tazelik esiginin disinda. */
+        NO_FRESH_DATA,
+        /** Taze satir var ama autovacuum worker icin relation I/O toplami 0. */
+        ZERO_IO_WITH_FRESH_DATA,
+        /** Sayilar mevcut ve yorumlanabilir. */
+        AVAILABLE
+    }
+
+    /**
+     * Teshis 0 sonucu — autovacuum worker'in kendi ISLEM SAYISI (byte/IOPS
+     * DEGIL, pg_stat_io'nun saydigi sayfa islemi sayisi).
+     *
+     * @param autovacuumReads       worker'in relation okuma islemi sayisi
+     * @param clientReads           client backend'in ayni penceredeki sayisi
+     * @param readsRatio            autovacuum/client orani; client 0 ise null
+     *                              (sonsuz oran uretmemek icin)
+     * @param metricCoveragePct     sayaci NOT NULL olan satirlarin yuzdesi;
+     *                              100'den kucukse kismi olcum var demektir
+     */
+    record AutovacuumIoImpact(
+        Long autovacuumReads,
+        Long autovacuumWrites,
+        Long clientReads,
+        Long clientWrites,
+        Double readsRatio,
+        double metricCoveragePct,
+        IoImpactStatus status
+    ) {
+        static AutovacuumIoImpact of(IoImpactStatus status) {
+            return new AutovacuumIoImpact(null, null, null, null, null, 0.0, status);
         }
-        for (String part : reloptionsRaw.replace("{", "").replace("}", "").split(",")) {
-            String[] kv = part.split("=", 2);
-            if (kv.length == 2 && kv[0].trim().equalsIgnoreCase(optionName)) {
-                try {
-                    return Integer.parseInt(kv[1].trim());
-                } catch (NumberFormatException e) {
-                    return null;
-                }
+    }
+
+    /**
+     * Teshis 0: autovacuum worker'larin dogrudan I/O ISLEM SAYISI (PG16+).
+     *
+     * BONUS kanit — birincil degil. Kayitli instance'larin cogunlugu PG16'nin
+     * altinda oldugu icin bu teshis filonun buyuk kisminda calismaz; birincil
+     * kanit Teshis 2/2b'dir (wait-event tabanli, surum bagimsiz).
+     *
+     * Onemli kapsam sinirlari (mesaj metninde de korunmali):
+     * - reads/writes BYTE veya disk IOPS DEGIL, sayfa islemi sayisidir.
+     * - Sadece worker'in KENDI islemidir; checkpointer'in ayni kirli
+     *   sayfalari sonradan diske yazmasi ayri bir backend_type satirinda
+     *   gorunur, worker'a atfedilmez.
+     * - object='relation' filtresi zorunlu (temp relation vb. karismasin).
+     * - Sifir I/O "autovacuum calismadi" DEMEK DEGIL — worker calisip tum
+     *   sayfalari shared buffers'ta bulmus (hit) olabilir.
+     */
+    AutovacuumIoImpact fetchAutovacuumIoImpact(long instancePk) {
+        try {
+            List<Map<String, Object>> capRows = jdbc.queryForList(
+                "select pg_major, has_pg_stat_io, is_reachable " +
+                "from control.instance_capability where instance_pk = ?",
+                instancePk);
+            if (capRows.isEmpty() || capRows.get(0).get("pg_major") == null) {
+                return AutovacuumIoImpact.of(IoImpactStatus.UNKNOWN_CAPABILITY);
             }
+            Map<String, Object> cap = capRows.get(0);
+            int pgMajor = ((Number) cap.get("pg_major")).intValue();
+            if (pgMajor < PG_STAT_IO_MIN_PG_MAJOR || Boolean.FALSE.equals(cap.get("has_pg_stat_io"))) {
+                return AutovacuumIoImpact.of(IoImpactStatus.UNSUPPORTED);
+            }
+            if (Boolean.FALSE.equals(cap.get("is_reachable"))) {
+                return AutovacuumIoImpact.of(IoImpactStatus.INSTANCE_UNREACHABLE);
+            }
+
+            int freshnessSeconds = fetchClusterCadenceSeconds(instancePk) * 2 + FRESHNESS_GRACE_SECONDS;
+            Map<String, Object> row = jdbc.queryForMap(
+                "select" +
+                "  count(*) as source_row_count," +
+                "  count(*) filter (where reads_delta is not null) as reads_valid_count," +
+                "  max(sample_ts) > now() - make_interval(secs => ?) as is_fresh," +
+                "  sum(reads_delta) filter (where backend_type = 'autovacuum worker') as av_reads," +
+                "  sum(writes_delta) filter (where backend_type = 'autovacuum worker') as av_writes," +
+                "  sum(reads_delta) filter (where backend_type = 'client backend') as client_reads," +
+                "  sum(writes_delta) filter (where backend_type = 'client backend') as client_writes" +
+                " from fact.pg_io_stat_delta" +
+                " where instance_pk = ? and object = 'relation'" +
+                "   and sample_ts > now() - interval '" + IO_IMPACT_WINDOW + "'",
+                freshnessSeconds, instancePk);
+
+            long sourceRowCount = toLong(row.get("source_row_count"), 0L);
+            // NO_FRESH_DATA karari SATIR SAYISINA dayanir, sayac degerine degil —
+            // sayac 0 gelmesi bir olcumdur, satir olmamasi olcumun yokluğudur.
+            if (sourceRowCount == 0 || !Boolean.TRUE.equals(row.get("is_fresh"))) {
+                return AutovacuumIoImpact.of(IoImpactStatus.NO_FRESH_DATA);
+            }
+
+            long readsValidCount = toLong(row.get("reads_valid_count"), 0L);
+            double coveragePct = 100.0 * readsValidCount / sourceRowCount;
+
+            Long avReads = row.get("av_reads") instanceof Number n ? n.longValue() : 0L;
+            Long avWrites = row.get("av_writes") instanceof Number n ? n.longValue() : 0L;
+            Long clientReads = row.get("client_reads") instanceof Number n ? n.longValue() : 0L;
+            Long clientWrites = row.get("client_writes") instanceof Number n ? n.longValue() : 0L;
+
+            if (avReads == 0L && avWrites == 0L) {
+                return new AutovacuumIoImpact(avReads, avWrites, clientReads, clientWrites,
+                    null, coveragePct, IoImpactStatus.ZERO_IO_WITH_FRESH_DATA);
+            }
+
+            // Client okuma 0 ise oran uretme — sonsuz/anlamsiz deger yerine
+            // mutlak sayilar raporlanir.
+            Double ratio = clientReads > 0 ? (double) avReads / clientReads : null;
+
+            return new AutovacuumIoImpact(avReads, avWrites, clientReads, clientWrites,
+                ratio, coveragePct, IoImpactStatus.AVAILABLE);
+
+        } catch (Exception e) {
+            log.debug("fetchAutovacuumIoImpact okunamadi instance={}: {}", instancePk, e.getMessage());
+            return AutovacuumIoImpact.of(IoImpactStatus.UNKNOWN_CAPABILITY);
         }
-        return null;
+    }
+
+    /**
+     * Teshis 0'i gozlemsel bir cumleye cevirir. "I/O maliyeti"/"MB" gibi
+     * hacim iddialari kurulmaz — sadece islem sayisi raporlanir.
+     */
+    String renderIoImpactEvidence(AutovacuumIoImpact io) {
+        return switch (io.status()) {
+            case AVAILABLE -> io.readsRatio() != null
+                ? String.format(
+                    " Son 24 saatte autovacuum worker'lar %,d okuma / %,d yazma işlemi yaptı (client backend'in %.1f katı okuma).%s",
+                    io.autovacuumReads(), io.autovacuumWrites(), io.readsRatio(),
+                    io.metricCoveragePct() < 100.0
+                        ? String.format(" (Ölçüm kapsamı %%%.0f — bazı örneklerde sayaç okunamadı.)", io.metricCoveragePct())
+                        : "")
+                : String.format(
+                    " Son 24 saatte autovacuum worker'lar %,d okuma / %,d yazma işlemi yaptı; client backend bu pencerede hiç okuma yapmadığı için oran hesaplanmadı.",
+                    io.autovacuumReads(), io.autovacuumWrites());
+            case ZERO_IO_WITH_FRESH_DATA ->
+                " Son 24 saatte autovacuum worker'lar için sayılan relation okuma/yazma işlemi yok — bu, autovacuum'un hiç çalışmadığı anlamına gelmez (sayfaların tümü shared buffers'ta bulunmuş olabilir).";
+            case NO_FRESH_DATA ->
+                " I/O işlem sayısı kanıtı için bu pencerede taze veri yok (collector yeni başlamış veya bir toplama döngüsü atlanmış olabilir).";
+            case UNSUPPORTED ->
+                " (I/O işlem sayısı kanıtı bu PG sürümünde yok — pg_stat_io PG16'da eklendi.)";
+            case INSTANCE_UNREACHABLE ->
+                " (Instance şu an erişilemez durumda; I/O kanıtı güncel olmayabilir, bu yüzden gösterilmedi.)";
+            case UNKNOWN_CAPABILITY ->
+                " (Instance'ın PG sürümü henüz bilinmediği için I/O işlem sayısı kanıtı değerlendirilemedi.)";
+        };
     }
 
     /**
@@ -3334,7 +3478,8 @@ public class AlertRuleEvaluator {
             Long relid = record.get("relid") instanceof Number rn ? rn.longValue() : null;
             return new String[]{
                 "Autovacuum çalışıyor ama ölü satırları yeterince hızlı temizleyemiyor."
-                    + renderWorkerWaitEvidence(ev),
+                    + renderWorkerWaitEvidence(ev)
+                    + renderIoImpactEvidence(fetchAutovacuumIoImpact(instancePk)),
                 buildCostDelayAction(instancePk, relid, ev)
             };
         }
@@ -3391,8 +3536,9 @@ public class AlertRuleEvaluator {
         if (recentAutovacuum && increasingTrend && autovacuumCountSum > 1) {
             AutovacuumWorkerEvidence ev45 = fetchAutovacuumWorkerStatus(instancePk);
             return new String[]{
-                String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.%s",
-                    autovacuumCountSum, renderWorkerWaitEvidence(ev45)),
+                String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.%s%s",
+                    autovacuumCountSum, renderWorkerWaitEvidence(ev45),
+                    renderIoImpactEvidence(fetchAutovacuumIoImpact(instancePk))),
                 "Bu tablo için ALTER TABLE <şema.tablo> SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha düşük bir eşik ayarla (özellikle sık UPSERT/UPDATE alan büyük tablolarda varsayılan %20 oranı çok geç tetiklenir)."
             };
         }
@@ -3417,6 +3563,29 @@ public class AlertRuleEvaluator {
             case ">", "<", ">=", "<=", "=" -> op;
             default -> ">";
         };
+    }
+
+    /**
+     * Template render basarisiz oldugunda kullanilan fallback mesaja
+     * teshis/aksiyon metnini ekler. Bu olmadan, template bulunamadigi her
+     * durumda diagnoseBloat()'un urettigi kanit (worker wait dagilimi, etkin
+     * cost ayari, senaryo teshisi) sessizce kaybolur ve kullanici jenerik
+     * "Tablo esigi asti" satirindan baska bir sey gormez.
+     *
+     * @param baseMessage jenerik esik mesaji
+     * @param ctx         template context'i — "diagnosis"/"bloat_action" tasir
+     */
+    static String appendDiagnosisToFallback(String baseMessage, Map<String, Object> ctx) {
+        Object diagnosis = ctx.get("diagnosis");
+        Object action = ctx.get("bloat_action");
+        StringBuilder sb = new StringBuilder(baseMessage);
+        if (diagnosis instanceof String s && !s.isBlank()) {
+            sb.append("\n").append(s.trim());
+        }
+        if (action instanceof String s && !s.isBlank()) {
+            sb.append("\nÖnerilen aksiyon: ").append(s.trim());
+        }
+        return sb.toString();
     }
 
     private String buildPerRecordThresholdMessage(String metricType, String metricName,

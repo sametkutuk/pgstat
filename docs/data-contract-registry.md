@@ -327,6 +327,12 @@ Critical fields:
 - `autovacuum_analyze_scale_factor`
 - `autovacuum_max_workers`
 - `autovacuum_vacuum_cost_limit` (added 2026-08-25, PGSTAT-P1-011)
+- Per-table overrides for the two settings above are parsed into dedicated
+  nullable columns on `control.table_relopts_snapshot` as of V095
+  (2026-08-26, PGSTAT-P1-011) — NULL means the option is absent from
+  reloptions (global applies), -1 is the sentinel meaning fall back to the
+  global `vacuum_cost_*` value, and any other value is the effective
+  table-level override
 - `autovacuum_vacuum_cost_delay` (added 2026-08-25, PGSTAT-P1-011)
 - `vacuum_cost_limit` (added 2026-08-25, PGSTAT-P1-011)
 - `vacuum_cost_delay` (added 2026-08-25, PGSTAT-P1-011)

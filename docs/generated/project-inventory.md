@@ -16,9 +16,9 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 98 |
+| Migrations scanned | 99 |
 | Tables discovered | 94 |
-| Columns discovered | 1162 |
+| Columns discovered | 1164 |
 | Indexes discovered | 124 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
@@ -251,7 +251,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.slot_lifecycle_subscription | 11 | no |  | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql |
 | control.slot_observation_state | 10 | no |  | V075__slot_lifecycle_subscription.sql | V075__slot_lifecycle_subscription.sql |
 | control.system_alert_config | 11 | no |  | V042__system_alert_config.sql | V065__alert_intervals_and_cleanup.sql |
-| control.table_relopts_snapshot | 8 | no |  | V093__table_relopts_snapshot.sql | V093__table_relopts_snapshot.sql |
+| control.table_relopts_snapshot | 10 | no |  | V093__table_relopts_snapshot.sql | V095__table_relopts_parsed_cost_columns.sql |
 | control.telegram_command_allowlist | 5 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
 | control.telegram_message_map | 8 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
 | control.telegram_poll_state | 3 | no |  | V081__telegram_alert_mute.sql | V081__telegram_alert_mute.sql |
@@ -894,7 +894,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>control.table_relopts_snapshot columns (8)</summary>
+<details><summary>control.table_relopts_snapshot columns (10)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -906,6 +906,8 @@ This generated inventory is the bridge between code and the manual project docum
 | autovacuum_enabled | boolean | V093__table_relopts_snapshot.sql |
 | reloptions_raw | text | V093__table_relopts_snapshot.sql |
 | updated_at | timestamptz | V093__table_relopts_snapshot.sql |
+| autovacuum_vacuum_cost_delay | integer | V095__table_relopts_parsed_cost_columns.sql |
+| autovacuum_vacuum_cost_limit | integer | V095__table_relopts_parsed_cost_columns.sql |
 
 </details>
 
@@ -2029,7 +2031,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/repository/ReportHistoryRepository.java | ops.report_history |
 | collector/src/main/java/com/pgstat/collector/repository/StateRepository.java | control.database_state, control.instance_inventory, control.instance_state |
 | collector/src/main/java/com/pgstat/collector/service/AlertMessageRenderer.java | control.alert_message_template |
-| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, control.alert_rule, control.alert_rule_last_eval, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
+| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, control.alert_rule, control.alert_rule_last_eval, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/AlertService.java | control.instance_inventory, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java | control.baseline_trigger, control.instance_inventory, control.metric_baseline, fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java | control.instance_inventory, control.long_query_subscription, fact.pg_activity_snapshot, ops.alert |

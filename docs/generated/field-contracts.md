@@ -15,14 +15,14 @@ This file covers every discovered storage column. It is a field-level scaffold, 
 
 | Metric | Count |
 | --- | --- |
-| Fields analyzed | 1162 |
+| Fields analyzed | 1164 |
 | Manual core field contracts | 160 |
-| Fields needing review | 918 |
+| Fields needing review | 920 |
 | Fields inheriting seeded family contract | 84 |
-| Fields with pgstat internal/envelope source | 590 |
+| Fields with pgstat internal/envelope source | 592 |
 | Fields with inferred source column | 412 |
 | Fields blocked from AI context | 13 |
-| Fields requiring conditional AI redaction/allowlist | 599 |
+| Fields requiring conditional AI redaction/allowlist | 601 |
 
 ## Field Matrix
 
@@ -519,6 +519,8 @@ This file covers every discovered storage column. It is a field-level scaffold, 
 | control.system_alert_config.updated_by | text | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V042__system_alert_config.sql | needs field-level review |
 | control.system_alert_config.window_minutes | integer | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V062__alert_window_minutes.sql | needs field-level review |
 | control.table_relopts_snapshot.autovacuum_enabled | boolean | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V093__table_relopts_snapshot.sql | needs field-level review |
+| control.table_relopts_snapshot.autovacuum_vacuum_cost_delay | integer | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V095__table_relopts_parsed_cost_columns.sql | needs field-level review |
+| control.table_relopts_snapshot.autovacuum_vacuum_cost_limit | integer | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V095__table_relopts_parsed_cost_columns.sql | needs field-level review |
 | control.table_relopts_snapshot.dbid | oid | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V093__table_relopts_snapshot.sql | needs field-level review |
 | control.table_relopts_snapshot.instance_pk | bigint | control/config | field-specific; verify | pgstat central database | pgstat envelope/control column | pgstat_internal | pgstat internal, PG11+ target support | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V093__table_relopts_snapshot.sql | needs field-level review |
 | control.table_relopts_snapshot.relid | oid | control/config | field-specific; verify | pgstat central database | pgstat application/control plane | pgstat_internal | not source-PG specific | not applicable | pgstat application/control plane | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | conditional; redact or allowlist | V093__table_relopts_snapshot.sql | needs field-level review |

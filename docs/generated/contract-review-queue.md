@@ -14,8 +14,8 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 48 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 918 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 612 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Field contracts needing exact source/version review | 920 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 614 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -68,7 +68,7 @@ node scripts/generate-doc-inventory.mjs
 | control.slot_lifecycle_subscription | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.slot_observation_state | control/config | 10 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.system_alert_config | control/config | 11 | not detected | not detected | not detected | generated default; needs review |
-| control.table_relopts_snapshot | control/config | 8 | not detected | not detected | not detected | generated default; needs review |
+| control.table_relopts_snapshot | control/config | 10 | not detected | not detected | not detected | generated default; needs review |
 | control.telegram_command_allowlist | control/config | 5 | not detected | api/src/routes/telegramAllowlist.ts (4 routes) | not detected | generated default; needs review |
 | control.telegram_message_map | control/config | 8 | fixed 7 days in PurgeEvaluator | not detected | not detected | generated default; needs review |
 | control.telegram_poll_state | control/config | 3 | not detected | not detected | not detected | generated default; needs review |
@@ -523,6 +523,8 @@ node scripts/generate-doc-inventory.mjs
 | control.system_alert_config.updated_by | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.system_alert_config.window_minutes | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.autovacuum_enabled | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.table_relopts_snapshot.autovacuum_vacuum_cost_delay | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.table_relopts_snapshot.autovacuum_vacuum_cost_limit | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.dbid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.instance_pk | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.relid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

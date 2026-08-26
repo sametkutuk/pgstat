@@ -439,9 +439,15 @@ public class FactRepository {
     }
 
     /**
-     * Tablo-ozel autovacuum_enabled override'ini (pg_class.reloptions) upsert
-     * eder. Delta degil, nadiren degisen bir konfigurasyon — her toplama
-     * donguesunde ayni satir guncellenir (V093, PGSTAT-P0-036 AC6).
+     * Tablo-ozel autovacuum override'larini (pg_class.reloptions) upsert eder.
+     * Delta degil, nadiren degisen bir konfigurasyon — her toplama
+     * donguesunde ayni satir guncellenir (V093, PGSTAT-P0-036 AC6;
+     * cost kolonlari V095, PGSTAT-P1-011).
+     *
+     * autovacuum_enabled disinda cost_delay/cost_limit de ayristirilip
+     * kendi kolonlarina yaziliyor — dead_tuple_ratio teshisinin etkin cost
+     * ayari zinciri bunlari her okumada ham metinden parse etmek yerine
+     * dogrudan kolondan okuyabilsin diye.
      *
      * @param reloptionsRaw virgulle ayrilmis reloptions dizisi (orn.
      *                      "autovacuum_enabled=false,fillfactor=90"), null/bos
@@ -457,19 +463,48 @@ public class FactRepository {
                 }
             }
         }
+        Integer costDelay = parseIntRelOption(reloptionsRaw, "autovacuum_vacuum_cost_delay");
+        Integer costLimit = parseIntRelOption(reloptionsRaw, "autovacuum_vacuum_cost_limit");
         jdbc.update("""
             insert into control.table_relopts_snapshot
-              (instance_pk, dbid, relid, schemaname, relname, autovacuum_enabled, reloptions_raw, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, now())
+              (instance_pk, dbid, relid, schemaname, relname, autovacuum_enabled, reloptions_raw,
+               autovacuum_vacuum_cost_delay, autovacuum_vacuum_cost_limit, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             on conflict (instance_pk, dbid, relid) do update set
               schemaname = excluded.schemaname,
               relname = excluded.relname,
               autovacuum_enabled = excluded.autovacuum_enabled,
               reloptions_raw = excluded.reloptions_raw,
+              autovacuum_vacuum_cost_delay = excluded.autovacuum_vacuum_cost_delay,
+              autovacuum_vacuum_cost_limit = excluded.autovacuum_vacuum_cost_limit,
               updated_at = now()
             """,
-            instancePk, dbid, relid, schemaname, relname, autovacuumEnabled, reloptionsRaw
+            instancePk, dbid, relid, schemaname, relname, autovacuumEnabled, reloptionsRaw,
+            costDelay, costLimit
         );
+    }
+
+    /**
+     * Ham reloptions metninden tek bir tamsayi secenegi cikarir.
+     * Bulunamazsa veya parse edilemezse null — "override yok" ile
+     * "override var ve degeri 0" farkli seylerdir, ikisi karistirilmamali.
+     * -1 gecerli bir degerdir (sentinel: global ayari kullan).
+     */
+    public static Integer parseIntRelOption(String reloptionsRaw, String optionName) {
+        if (reloptionsRaw == null || reloptionsRaw.isBlank()) {
+            return null;
+        }
+        for (String part : reloptionsRaw.replace("{", "").replace("}", "").split(",")) {
+            String[] kv = part.split("=", 2);
+            if (kv.length == 2 && kv[0].trim().equalsIgnoreCase(optionName)) {
+                try {
+                    return Integer.parseInt(kv[1].trim());
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     // -------------------------------------------------------------------------
