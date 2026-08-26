@@ -261,6 +261,20 @@ bilgisini sıfıra çevirir. Yani "sayaç 0 geldi" ile "hiç satır yok"
 tamamen farklı iki durumdur; birincisi bir ölçüm, ikincisi ölçümün
 yokluğudur.
 
+**NULL sayaçlar (önkoşul 9-10 sonrası) hangi duruma girer:** Satırlar
+var ama ilgili metrik tüm satırlarda `NULL` ise
+(`reads_metric_valid_count = 0` ve `source_row_count > 0`), bu
+**`NO_FRESH_DATA` DEĞİL** — satır var, sadece o metrik ölçülememiş.
+Bu durum `AVAILABLE`'ın **metrik-bazlı kısıtlı bir alt hâli** olarak
+ele alınmalı: kayıt `AVAILABLE` döner ama o metrik için değer `null`
+taşınır ve mesajda "bu metrik bu pencerede ölçülememiş" olarak
+belirtilir, `0` gibi sunulmaz. Kısmî durum (bazı satırlarda NULL,
+bazılarında değer) da aynı şekilde: toplam sadece `NOT NULL`
+satırlardan hesaplanır ve kaç satırın kapsandığı
+(`*_metric_valid_count` / `source_row_count`) mesajda taşınır. Bu
+ayrım olmadan "ölçülemedi" ile "sıfırdı" karışır — Teşhis 0'ın tüm
+durum modelinin amacı tam olarak bu karışıklığı önlemek.
+
 ## Teşhis 2: I/O bekleme oranı (birincil, her PG sürümünde)
 
 Worker örneklemelerinin ne kadarında **bir I/O işleminin tamamlanmasının
@@ -353,10 +367,11 @@ partition'lı bir zaman serisi tablosu, her toplama döngüsünde yeni
 satır ekleniyor — bir `ORDER BY`/`LIMIT`/`DISTINCT ON` olmadan sorgu
 her ayar için TÜM geçmiş satırları döndürür, sadece en son değeri
 değil. Ayrıca dönen `snapshot_ts` bir **tazelik kontrolü** için
-kullanılmalı — eğer en son satır makul bir eşikten (örn. son 25 saat,
-hot refresh 3 saatte bir + gece snapshot'ı 24 saatte bir olduğu için)
-daha eskiyse, ayar değeri "muhtemelen güncel değil" olarak
-işaretlenmeli, sessizce eski bir değer kesin diye sunulmamalı.
+kullanılmalı — eşik sabit bir saat sayısı DEĞİL, o ayarın hangi
+listede toplandığına bağlı olarak hesaplanır (bkz. "Tazelik eşikleri"
+bölümü). Eşiğin dışındaysa ayar değeri `UNKNOWN` sayılır ve bir
+aksiyon önerisine dayanak yapılmaz, sessizce eski bir değer kesin
+diye sunulmaz.
 
 **Üç adlandırılmış kova + bir residual = `total_samples` (tam olarak):**
 Sorgu üç kovayı açıkça sayıyor — `IO` (I/O tamamlanması bekleniyor),
@@ -558,8 +573,10 @@ ikisi karıştırılmamalı.)
 
 1. **Önce** `fact.pg_activity_snapshot`'ta bu instance için **tüm
    satırların** (worker filtresi olmadan, instance'ın genel toplama
-   döngüsünün) en son `snapshot_ts`'ini bul, ve bu değerin makul bir
-   tazelik penceresinde (örn. son 5 dakika) olduğunu doğrula.
+   döngüsünün) en son `snapshot_ts`'ini bul, ve bu değerin cluster
+   cycle cadence'ine göre hesaplanan tazelik eşiği içinde olduğunu
+   doğrula (bkz. "Tazelik eşikleri" — sabit bir dakika sayısı değil).
+   Eşiğin dışındaysa `currentWorkerStatus = NO_FRESH_SNAPSHOT`.
 2. **Sonra** o `snapshot_ts` değerinde, `backend_type='autovacuum
    worker'` filtresiyle `count(distinct pid)` hesapla.
 
@@ -699,7 +716,7 @@ hatalar, "iyi olur" maddeleri değil:
    `ZERO_IO_WITH_FRESH_DATA` ayrımının çalışması için ya bu helper'ın
    I/O sayaçları için NULL-safe hâle getirilmesi (nullable `Long`/
    `Double` dönmesi) ya da NULL bilgisinin ayrı bir flag ile
-   korunması gerekiyor — bu, Teşhis 0'ın "beş durum" modelinin ön
+   korunması gerekiyor — bu, Teşhis 0'ın altı durumlu modelinin ön
    koşulu, atlanamaz.
 
 10. **I/O sample cache'i typed hâle getirilmeli — ZORUNLU, opsiyonel
@@ -707,7 +724,7 @@ hatalar, "iyi olur" maddeleri değil:
     `ConcurrentHashMap<Long, Map<String, Map<String, Double>>>` ve
     sayaçlar `Double` olarak tutulup `.longValue()` ile çevriliyor.
     Bu, üç ayrı önkoşulun (5: `stats_reset` farkındalığı, 9: NULL
-    koruma, ve Diagnosis 0'ın beş durumlu modeli) **hepsinin aynı veri
+    koruma, ve Diagnosis 0'ın altı durumlu modeli) **hepsinin aynı veri
     yapısına dokunmasını** gerektiriyor — üçünü ayrı ayrı `Map<String,
     Double>` üzerine yamamaya çalışmak kırılgan olur. Gerekli değişiklik:
     - **Sayaçlar** (`reads`, `writes`, `extends`, `hits`, `fsyncs`,
@@ -745,11 +762,13 @@ hatalar, "iyi olur" maddeleri değil:
    fonksiyon yaz, `effectiveCostDelay > versionDefault` kapısını
    uygula (PG11: `20ms`, PG12+: `2ms`) — "non-default" değil, kesin
    bu karşılaştırma.
-3. `fetchAutovacuumIoImpact(instancePk)` yaz (Teşhis 0) — `pg_major >= 16`
-   guard'ı, `object='relation'` filtresi, client-read=0 durumunda oran
-   üretmeme, beş durumlu (`UNSUPPORTED`/`UNKNOWN_CAPABILITY`/
-   `NO_FRESH_DATA`/`ZERO_IO_WITH_FRESH_DATA`/`AVAILABLE`) dönüş modeli — bu,
-   madde 9'daki NULL-safe I/O okuması olmadan doğru çalışamaz.
+3. `fetchAutovacuumIoImpact(instancePk)` yaz (Teşhis 0) — `object='relation'`
+   filtresi, client-read=0 durumunda oran üretmeme, ve **altı durumlu
+   sıralı** dönüş modeli (`UNKNOWN_CAPABILITY` → `UNSUPPORTED` →
+   `INSTANCE_UNREACHABLE` → `NO_FRESH_DATA` → `ZERO_IO_WITH_FRESH_DATA`
+   → `AVAILABLE`; sıra önemli, ilk eşleşen kazanır — bkz. Teşhis 0
+   bölümündeki tablo). Bu, madde 9-10'daki NULL-safe I/O okuması
+   olmadan doğru çalışamaz.
 4. `autovacuum_worker_slots`'u okuyup `min(autovacuum_max_workers,
    autovacuum_worker_slots)` ile etkin kapasiteyi hesapla (PG18+ için).
 5. Tüm bunları senaryo 3 (`vacuum_ineffective`) ve senaryo 4.5'in
@@ -801,6 +820,13 @@ hatalar, "iyi olur" maddeleri değil:
 - Client reads = 0 → oran üretilmiyor, mutlak sayı raporlanıyor.
 - NULL kaynak sayaç (Kod önkoşulu 9/10 sonrası) `*_metric_valid_count`
   ile ayırt ediliyor, `0` ölçümüyle karışmıyor.
+- Satır var ama metrik TÜM satırlarda NULL (`*_metric_valid_count = 0`,
+  `source_row_count > 0`) → durum `NO_FRESH_DATA` DEĞİL, `AVAILABLE`
+  kalıyor; metrik `null` taşınıyor ve "ölçülemedi" olarak sunuluyor,
+  `0` olarak değil.
+- Kısmî NULL kapsama (bazı satırlarda değer, bazılarında NULL) →
+  toplam sadece `NOT NULL` satırlardan hesaplanıyor ve kapsanan oran
+  (`*_metric_valid_count` / `source_row_count`) mesajda taşınıyor.
 
 *Etkin cost ayarı zinciri:*
 - Tablo override `>= 0` → zincir orada biter, global okunmaz.
