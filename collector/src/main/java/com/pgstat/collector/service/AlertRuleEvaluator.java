@@ -2846,14 +2846,27 @@ public class AlertRuleEvaluator {
     }
 
     /**
-     * Bir instance'ta uzun suredir acik (xact_start > 10dk once) bir transaction
-     * veya pasif (active=false) bir replication slot var mi kontrol eder —
+     * Bir instance'ta uzun suredir acik bir transaction veya pasif
+     * (active=false) bir replication slot var mi kontrol eder —
      * "autovacuum calisiyor ama xmin horizon engelliyor" senaryosunun kaniti
      * (bkz. docs/bloat-diagnosis-decision-tree.md, senaryo 2). Instance-genel
      * bir kontroldur (hangi transaction'in hangi tabloyu ENGELLEDIGI degil,
-     * sadece "boyle bir risk var mi" sorusuna cevap verir) — bilincli bir
-     * basitlestirme, yanlis pozitif riski yanlis negatiften daha az zararli
-     * sayildi (aksiyon onerisi, zorunlu emir degil).
+     * sadece "boyle bir risk var mi" sorusuna cevap verir).
+     *
+     * Iki kritik duzeltme (canli test, 2026-08-26 — ikisi de sahte pozitif
+     * uretiyordu ve senaryo 2'yi haksiz yere senaryo 3/4.5'in onune
+     * geciriyordu):
+     *
+     * 1. Transaction yasi SNAPSHOT ANINA gore olculur
+     *    (snapshot_ts - xact_start), su ana gore DEGIL. Eski kod
+     *    "xact_start < now() - 10 dakika" diyordu; 9 dakika once alinmis bir
+     *    snapshot'taki 2 dakikalik bir transaction, simdi bakildiginda 11
+     *    dakikalik gorunup sahte pozitif uretiyordu.
+     * 2. backend_type = 'autovacuum worker' HARIC tutulur. Uzun suren bir
+     *    VACUUM islemi "xmin horizon'u tutan uzun transaction" DEGILDIR;
+     *    eski kod autovacuum'un kendi vacuum islemini sayip "autovacuum
+     *    calisamiyor cunku autovacuum calisiyor" gibi anlamsiz bir teshis
+     *    uretiyordu (canli ornek: "autovacuum: VACUUM av_test.churn").
      */
     private boolean hasXminHorizonRisk(long instancePk) {
         try {
@@ -2861,8 +2874,10 @@ public class AlertRuleEvaluator {
                 "select " +
                 "  (select count(*) from fact.pg_activity_snapshot" +
                 "    where instance_pk = ? and snapshot_ts > now() - interval '10 minutes'" +
-                "      and xact_start is not null and xact_start < now() - interval '10 minutes'" +
-                "      and state != 'idle') +" +
+                "      and xact_start is not null" +
+                "      and snapshot_ts - xact_start > interval '10 minutes'" +
+                "      and state is distinct from 'idle'" +
+                "      and backend_type is distinct from 'autovacuum worker') +" +
                 "  (select count(*) from fact.pg_replication_slot_snapshot" +
                 "    where instance_pk = ? and sample_ts > now() - interval '30 minutes'" +
                 "      and active = false)",
