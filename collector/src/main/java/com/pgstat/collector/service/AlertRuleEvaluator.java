@@ -52,6 +52,77 @@ public class AlertRuleEvaluator {
     ) {}
 
     /**
+     * Bir kanit alaninin neden kullanilabilir/kullanilamaz oldugunu anlatir.
+     * Tek bir enum tum kanitlari temsil EDEMEZ — ornegin PG12'de IO-wait
+     * kanidi AVAILABLE iken throttle kanidi UNSUPPORTED_VERSION olur; ya da
+     * 9 farkli snapshot varken oranlar INSUFFICIENT_DATA iken guncel worker
+     * sayisi hala AVAILABLE'dir. Bu yuzden AutovacuumWorkerEvidence dort
+     * ayri status alani tasir.
+     * Tasarim: docs/autovacuum-cost-diagnosis-design.md
+     */
+    enum EvidenceStatus {
+        /** Deger var ve yorumlanabilir. */
+        AVAILABLE,
+        /** Veri var ama yeterlilik kapisini (>=10 distinct snapshot) gecmiyor. */
+        INSUFFICIENT_DATA,
+        /** Tazelik esigi icinde hic snapshot yok. */
+        NO_FRESH_SNAPSHOT,
+        /** Bu PG surumu bu sinyali hic uretmiyor (orn. VacuumDelay PG13 oncesi). */
+        UNSUPPORTED_VERSION,
+        /** Instance'in pg_major'i bilinmiyor — desteklenip desteklenmedigi belirsiz. */
+        UNKNOWN_VERSION,
+        /** Ilgili ayar toplanmamis/bayat (kapasite hesabi icin). */
+        UNKNOWN,
+        /** Bu PG surumu icin anlamsiz (orn. worker_slots PG18 oncesi). */
+        NOT_APPLICABLE
+    }
+
+    /**
+     * Autovacuum worker gozlem kaniti — Teshis 2 (IO bekleme) ve Teshis 2b
+     * (throttle uykusu) tek sorgudan beslenir.
+     *
+     * Kova matematigi: uc adlandirilmis kova + residual, tanimi geregi
+     * totalSamples'a esittir (otherWaitSamples fark olarak hesaplanir).
+     * "Worker ya aktif ya throttle'da" iki kutuplu modeli YANLIS — worker
+     * Lock/BufferPin/LWLock gibi baska wait'lerde de bekleyebilir.
+     */
+    record AutovacuumWorkerEvidence(
+        Integer runningWorkers,
+        Integer maxWorkers,
+        Integer workerSlots,
+        Integer effectiveWorkerCapacity,
+        long totalSamples,
+        int distinctSnapshots,
+        long ioWaitSamples,
+        Long throttleSleepSamples,
+        long noWaitEventSamples,
+        long otherWaitSamples,
+        EvidenceStatus currentWorkerStatus,
+        EvidenceStatus ioWaitStatus,
+        EvidenceStatus throttleStatus,
+        EvidenceStatus capacityStatus
+    ) {
+        /** Hicbir kanit okunamadiginda donulen bos kayit. */
+        static AutovacuumWorkerEvidence unknown() {
+            return new AutovacuumWorkerEvidence(
+                null, null, null, null, 0L, 0, 0L, null, 0L, 0L,
+                EvidenceStatus.UNKNOWN_VERSION, EvidenceStatus.UNKNOWN_VERSION,
+                EvidenceStatus.UNKNOWN_VERSION, EvidenceStatus.UNKNOWN);
+        }
+
+        /** IO-wait orani (0-100). Sadece ioWaitStatus == AVAILABLE ise anlamli. */
+        double ioWaitPct() {
+            return totalSamples == 0 ? 0.0 : 100.0 * ioWaitSamples / totalSamples;
+        }
+
+        /** Throttle uykusu orani (0-100). Sadece throttleStatus == AVAILABLE ise anlamli. */
+        double throttleSleepPct() {
+            return totalSamples == 0 || throttleSleepSamples == null
+                ? 0.0 : 100.0 * throttleSleepSamples / totalSamples;
+        }
+    }
+
+    /**
      * Kural için title + message üretir. Kuralda template tanımlıysa onu render eder,
      * yoksa default user_defined_rule template'i, o da yoksa fallback string'leri kullanır.
      *
@@ -2645,7 +2716,7 @@ public class AlertRuleEvaluator {
             ? bloatVacuumIneffectiveCount : DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT;
 
         return jdbc.queryForList(
-            "select t.schemaname, t.relname, t.dbid," +
+            "select t.schemaname, t.relname, t.dbid, t.relid," +
             "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
             "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
@@ -2664,7 +2735,7 @@ public class AlertRuleEvaluator {
             // ornek) teshis/aksiyon karar agacinda kullanilir (bkz.
             // docs/bloat-diagnosis-decision-tree.md, PGSTAT-P0-036 AC6).
             "    select distinct on (instance_pk, schemaname, relname, dbid)" +
-            "           instance_pk, schemaname, relname, dbid," +
+            "           instance_pk, schemaname, relname, dbid, relid," +
             "           n_dead_tup_estimate, n_live_tup_estimate," +
             "           last_autovacuum, last_vacuum," +
             "           sum(coalesce(autovacuum_count_delta, 0)) over (" +
@@ -2796,34 +2867,362 @@ public class AlertRuleEvaluator {
         }
     }
 
+    /** Teshis 2/2b gozlem penceresi — worker'lar araliklı calistigi icin 2 saat. */
+    private static final String WORKER_EVIDENCE_WINDOW = "2 hours";
+
+    /** Oran yorumlamak icin gereken minimum farkli toplama ani sayisi. */
+    private static final int MIN_DISTINCT_SNAPSHOTS = 10;
+
+    /** Tazelik esigi: cadence * 2 + bu pay (saat kaymasi/toplama suresi icin). */
+    private static final int FRESHNESS_GRACE_SECONDS = 600;
+
+    /** VacuumDelay wait_event'inin eklendigi PG surumu. */
+    private static final int VACUUM_DELAY_MIN_PG_MAJOR = 13;
+
+    /** autovacuum_worker_slots'un eklendigi PG surumu. */
+    private static final int WORKER_SLOTS_MIN_PG_MAJOR = 18;
+
     /**
-     * Su an calisan autovacuum worker sayisini (fact.pg_activity_snapshot,
-     * backend_type='autovacuum worker', son 2dk'lik en son snapshot) ve
-     * autovacuum_max_workers ayarini okur — 1b-ii senaryosunda "kontrol et"
-     * degil KESIN sonuc vermek icin (musteri talebi 2026-08-24: "bu net
-     * teshis degil").
+     * Autovacuum worker gozlem kanitini toplar — Teshis 2 (IO bekleme orani)
+     * ve Teshis 2b (throttle uykusu orani), artı 1b-ii senaryosunun ihtiyac
+     * duydugu guncel worker sayisi/kapasitesi.
      *
-     * @return [runningWorkers(Integer), maxWorkers(Integer)] — okunamazsa
-     *         ikisi de null.
+     * Tasarim kararlari (docs/autovacuum-cost-diagnosis-design.md):
+     * - runningWorkers, instance'in EN GUNCEL GENEL snapshot'indaki distinct
+     *   pid sayisidir. Sadece worker satirlarinin en son snapshot'ina bakmak
+     *   yanlis olurdu: o cycle'da hic worker yoksa sorgu eski bir zamana
+     *   denk gelir ve "su an 0 worker var" yerine "worker'in en son
+     *   goruldugu anda kac worker vardi" sorusunu cevaplar.
+     * - Yeterlilik kapisi count(distinct snapshot_ts) >= 10; ham satir sayisi
+     *   DEGIL (ayni worker art arda cycle'larda gorunup tek olayi fazla
+     *   sayabilir).
+     * - Tazelik esigi sabit degil, cluster cycle cadence * 2 + grace.
+     * - Uc adlandirilmis kova + residual = totalSamples (tanimi geregi).
      */
-    private Object[] fetchAutovacuumWorkerStatus(long instancePk) {
+    AutovacuumWorkerEvidence fetchAutovacuumWorkerStatus(long instancePk) {
         try {
-            Integer runningWorkers = jdbc.queryForObject(
-                "select count(*) from fact.pg_activity_snapshot " +
-                "where instance_pk = ? and snapshot_ts > now() - interval '2 minutes' " +
-                "  and backend_type = 'autovacuum worker'",
-                Integer.class, instancePk);
-            List<String> maxWorkersRows = jdbc.queryForList(
-                "select setting_value from fact.pg_settings_snapshot " +
-                "where instance_pk = ? and setting_name = 'autovacuum_max_workers' " +
-                "order by snapshot_ts desc limit 1",
-                String.class, instancePk);
-            Integer maxWorkers = maxWorkersRows.isEmpty() ? null : Integer.parseInt(maxWorkersRows.get(0));
-            return new Object[]{runningWorkers, maxWorkers};
+            Integer pgMajor = fetchPgMajor(instancePk);
+            int cadenceSeconds = fetchClusterCadenceSeconds(instancePk);
+            int freshnessSeconds = cadenceSeconds * 2 + FRESHNESS_GRACE_SECONDS;
+
+            Map<String, Object> agg = jdbc.queryForMap(
+                "with latest as (" +
+                "  select max(snapshot_ts) as ts from fact.pg_activity_snapshot" +
+                "  where instance_pk = ? and snapshot_ts > now() - interval '" + WORKER_EVIDENCE_WINDOW + "'" +
+                "), window_rows as (" +
+                "  select wait_event, wait_event_type, snapshot_ts" +
+                "  from fact.pg_activity_snapshot" +
+                "  where instance_pk = ? and backend_type = 'autovacuum worker'" +
+                "    and snapshot_ts > now() - interval '" + WORKER_EVIDENCE_WINDOW + "'" +
+                ") select" +
+                "  (select ts from latest) as latest_ts," +
+                "  (select ts from latest) > now() - make_interval(secs => ?) as latest_is_fresh," +
+                "  (select count(distinct pid) from fact.pg_activity_snapshot" +
+                "     where instance_pk = ? and backend_type = 'autovacuum worker'" +
+                "       and snapshot_ts = (select ts from latest)) as running_workers," +
+                "  count(*) as total_samples," +
+                "  count(distinct snapshot_ts) as distinct_snapshots," +
+                "  count(*) filter (where wait_event_type = 'IO') as io_wait_samples," +
+                "  count(*) filter (where wait_event = 'VacuumDelay') as throttle_sleep_samples," +
+                "  count(*) filter (where wait_event is null) as no_wait_event_samples" +
+                " from window_rows",
+                instancePk, instancePk, freshnessSeconds, instancePk);
+
+            long totalSamples = toLong(agg.get("total_samples"), 0L);
+            int distinctSnapshots = (int) toLong(agg.get("distinct_snapshots"), 0L);
+            long ioWaitSamples = toLong(agg.get("io_wait_samples"), 0L);
+            long rawThrottleSamples = toLong(agg.get("throttle_sleep_samples"), 0L);
+            long noWaitEventSamples = toLong(agg.get("no_wait_event_samples"), 0L);
+            boolean latestIsFresh = Boolean.TRUE.equals(agg.get("latest_is_fresh"));
+            Integer runningWorkers = agg.get("running_workers") instanceof Number n ? n.intValue() : null;
+
+            // Residual: uc adlandirilmis kova disinda kalan wait'ler (Lock,
+            // BufferPin, LWLock, Client...). Kovalar ortusmedigi icin negatif
+            // olmamali; yine de savunmaci olarak 0'a kirpiyoruz.
+            long otherWaitSamples = Math.max(0L,
+                totalSamples - ioWaitSamples - rawThrottleSamples - noWaitEventSamples);
+
+            boolean sufficientSamples = distinctSnapshots >= MIN_DISTINCT_SNAPSHOTS;
+            boolean versionKnown = pgMajor != null;
+
+            EvidenceStatus currentWorkerStatus = !latestIsFresh
+                ? EvidenceStatus.NO_FRESH_SNAPSHOT
+                : EvidenceStatus.AVAILABLE;
+
+            EvidenceStatus ioWaitStatus;
+            if (totalSamples == 0) {
+                ioWaitStatus = EvidenceStatus.NO_FRESH_SNAPSHOT;
+            } else if (!sufficientSamples) {
+                ioWaitStatus = EvidenceStatus.INSUFFICIENT_DATA;
+            } else {
+                ioWaitStatus = EvidenceStatus.AVAILABLE;
+            }
+
+            // VacuumDelay PG13'te eklendi — oncesinde sinyal HIC YOK. Sessizce
+            // 0 gostermek "throttle yok" gibi yanlis bir sonuca goturur.
+            EvidenceStatus throttleStatus;
+            Long throttleSleepSamples;
+            if (!versionKnown) {
+                throttleStatus = EvidenceStatus.UNKNOWN_VERSION;
+                throttleSleepSamples = null;
+            } else if (pgMajor < VACUUM_DELAY_MIN_PG_MAJOR) {
+                throttleStatus = EvidenceStatus.UNSUPPORTED_VERSION;
+                throttleSleepSamples = null;
+            } else if (totalSamples == 0) {
+                throttleStatus = EvidenceStatus.NO_FRESH_SNAPSHOT;
+                throttleSleepSamples = rawThrottleSamples;
+            } else if (!sufficientSamples) {
+                throttleStatus = EvidenceStatus.INSUFFICIENT_DATA;
+                throttleSleepSamples = rawThrottleSamples;
+            } else {
+                throttleStatus = EvidenceStatus.AVAILABLE;
+                throttleSleepSamples = rawThrottleSamples;
+            }
+
+            Integer maxWorkers = readIntSetting(instancePk, "autovacuum_max_workers");
+            Integer workerSlots = versionKnown && pgMajor >= WORKER_SLOTS_MIN_PG_MAJOR
+                ? readIntSetting(instancePk, "autovacuum_worker_slots") : null;
+
+            // PG18: autovacuum_max_workers, worker_slots'tan buyuk ayarlanirsa
+            // etkisiz kalir — gercek kapasite ikisinin kucugu.
+            Integer effectiveWorkerCapacity;
+            EvidenceStatus capacityStatus;
+            if (!versionKnown) {
+                effectiveWorkerCapacity = maxWorkers;
+                capacityStatus = EvidenceStatus.UNKNOWN_VERSION;
+            } else if (pgMajor < WORKER_SLOTS_MIN_PG_MAJOR) {
+                effectiveWorkerCapacity = maxWorkers;
+                capacityStatus = maxWorkers == null
+                    ? EvidenceStatus.UNKNOWN : EvidenceStatus.NOT_APPLICABLE;
+            } else if (maxWorkers == null || workerSlots == null) {
+                effectiveWorkerCapacity = null;
+                capacityStatus = EvidenceStatus.UNKNOWN;
+            } else {
+                effectiveWorkerCapacity = Math.min(maxWorkers, workerSlots);
+                capacityStatus = EvidenceStatus.AVAILABLE;
+            }
+
+            return new AutovacuumWorkerEvidence(
+                runningWorkers, maxWorkers, workerSlots, effectiveWorkerCapacity,
+                totalSamples, distinctSnapshots, ioWaitSamples, throttleSleepSamples,
+                noWaitEventSamples, otherWaitSamples,
+                currentWorkerStatus, ioWaitStatus, throttleStatus, capacityStatus);
+
         } catch (Exception e) {
             log.debug("fetchAutovacuumWorkerStatus okunamadi instance={}: {}", instancePk, e.getMessage());
-            return new Object[]{null, null};
+            return AutovacuumWorkerEvidence.unknown();
         }
+    }
+
+    /** instance_capability.pg_major — bilinmiyorsa null. */
+    private Integer fetchPgMajor(long instancePk) {
+        try {
+            List<Integer> rows = jdbc.queryForList(
+                "select pg_major from control.instance_capability where instance_pk = ?",
+                Integer.class, instancePk);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Instance'in cluster toplama araligi (saniye) — tazelik esigi bunun
+     * uzerinden hesaplanir, sabit bir sayi kullanilmaz.
+     */
+    private int fetchClusterCadenceSeconds(long instancePk) {
+        try {
+            List<Integer> rows = jdbc.queryForList(
+                "select sp.cluster_interval_seconds from control.instance_inventory ii " +
+                "join control.schedule_profile sp on sp.schedule_profile_id = ii.schedule_profile_id " +
+                "where ii.instance_pk = ?",
+                Integer.class, instancePk);
+            return rows.isEmpty() || rows.get(0) == null ? 60 : rows.get(0);
+        } catch (Exception e) {
+            return 60;
+        }
+    }
+
+    /** En guncel setting degerini int olarak okur; yoksa/parse edilemezse null. */
+    private Integer readIntSetting(long instancePk, String settingName) {
+        try {
+            List<String> rows = jdbc.queryForList(
+                "select setting_value from fact.pg_settings_snapshot " +
+                "where instance_pk = ? and setting_name = ? " +
+                "order by snapshot_ts desc limit 1",
+                String.class, instancePk, settingName);
+            return rows.isEmpty() ? null : Integer.parseInt(rows.get(0).trim());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static long toLong(Object value, long fallback) {
+        return value instanceof Number n ? n.longValue() : fallback;
+    }
+
+    /**
+     * Etkin cost ayari — cozumleme zinciri her parametre icin BAGIMSIZ isler:
+     *   1. Tablo override (control.table_relopts_snapshot) >= 0  -> zincir biter
+     *      -1 veya yok -> adim 2
+     *   2. Global autovacuum_* >= 0 -> zincir biter; -1 -> adim 3
+     *   3. Global vacuum_* -> etkin deger
+     * Herhangi bir adimda eksik/bozuk/bayat deger -> UNKNOWN (null), ve
+     * cagiran taraf aksiyon ONERMEZ (bilinmeyen deger "yuksek" sayilamaz).
+     *
+     * Not: Tablo-ozel cost override'i olan tablolari isleyen worker'lar PG'nin
+     * cost balancing algoritmasinin DISINDA kalir (PG18 routine-vacuuming
+     * dok.) — bu yuzden worker basina butce aritmetigi yapilmaz, sadece
+     * gozlemlenen oranlar raporlanir.
+     *
+     * @return etkin cost_delay (ms) veya cozumlenemezse null
+     */
+    Integer resolveEffectiveCostDelay(long instancePk, Long relid) {
+        try {
+            // Adim 1: tablo override. V093 su an sadece ham reloptions_raw
+            // tutuyor; ayristirilmis kolon eklenene kadar ham metinden
+            // okuyoruz (Kod onkosulu 3 bunu kalicilastiracak).
+            if (relid != null) {
+                List<String> raw = jdbc.queryForList(
+                    "select reloptions_raw from control.table_relopts_snapshot " +
+                    "where instance_pk = ? and relid = ? and reloptions_raw is not null",
+                    String.class, instancePk, relid);
+                if (!raw.isEmpty()) {
+                    Integer tableOverride = parseRelOption(raw.get(0), "autovacuum_vacuum_cost_delay");
+                    if (tableOverride != null && tableOverride >= 0) {
+                        return tableOverride;
+                    }
+                    // tableOverride == -1 veya yok -> global'e dus
+                }
+            }
+            // Adim 2: global autovacuum_vacuum_cost_delay
+            Integer avDelay = readIntSetting(instancePk, "autovacuum_vacuum_cost_delay");
+            if (avDelay == null) {
+                return null; // eksik/bozuk -> UNKNOWN
+            }
+            if (avDelay >= 0) {
+                return avDelay;
+            }
+            // Adim 3: -1 sentinel -> genel vacuum_cost_delay (PG11+ davranisi,
+            // hicbir surumde kaldirilmadi)
+            return readIntSetting(instancePk, "vacuum_cost_delay");
+        } catch (Exception e) {
+            log.debug("resolveEffectiveCostDelay okunamadi instance={}: {}", instancePk, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Ham reloptions metninden ("{autovacuum_vacuum_cost_delay=10,fillfactor=90}")
+     * tek bir sayisal secenegi cikarir. Bulunamazsa/parse edilemezse null.
+     */
+    static Integer parseRelOption(String reloptionsRaw, String optionName) {
+        if (reloptionsRaw == null || reloptionsRaw.isBlank()) {
+            return null;
+        }
+        for (String part : reloptionsRaw.replace("{", "").replace("}", "").split(",")) {
+            String[] kv = part.split("=", 2);
+            if (kv.length == 2 && kv[0].trim().equalsIgnoreCase(optionName)) {
+                try {
+                    return Integer.parseInt(kv[1].trim());
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Sürüm varsayilani: PG11'de 20ms, PG12'den itibaren 2ms (PG12 release
+     * notes). "cost_delay dusur" onerisi SADECE etkin deger bu varsayilandan
+     * BUYUK ise uretilir — "non-default" yeterli degil, cunku 0ms/1ms de
+     * non-default ama varsayilandan dusuk.
+     */
+    static int versionDefaultCostDelayMs(Integer pgMajor) {
+        return pgMajor != null && pgMajor < 12 ? 20 : 2;
+    }
+
+    /**
+     * "cost_delay dusur" onerisi UC kosul birden saglanirsa uretilir:
+     *   1. Throttle uykusu orani yuksek (>%50), VE
+     *   2. Yeterli orneklem var (throttleStatus == AVAILABLE), VE
+     *   3. Etkin cost_delay surum varsayilanindan BUYUK.
+     * Aksi halde eşik/worker ayarina yonlendiren notr bir aksiyon doner.
+     * Ayar cozumlenemezse (UNKNOWN) oneri bastirilir — bilinmeyen bir deger
+     * "yuksek" sayilamaz.
+     */
+    private String buildCostDelayAction(long instancePk, Long relid, AutovacuumWorkerEvidence ev) {
+        Integer pgMajor = fetchPgMajor(instancePk);
+        Integer effectiveDelay = resolveEffectiveCostDelay(instancePk, relid);
+        int versionDefault = versionDefaultCostDelayMs(pgMajor);
+
+        boolean throttleEvidenceUsable = ev.throttleStatus() == EvidenceStatus.AVAILABLE;
+        boolean throttleHigh = throttleEvidenceUsable && ev.throttleSleepPct() > 50.0;
+        boolean delayAboveDefault = effectiveDelay != null && effectiveDelay > versionDefault;
+
+        if (throttleHigh && delayAboveDefault) {
+            return String.format(
+                "Etkin autovacuum_vacuum_cost_delay = %dms, bu PG sürümünün varsayılanından (%dms) yüksek ve worker örneklemelerin çoğunda throttle uykusunda gözlemlendi — cost_delay'i düşürmeyi (veya autovacuum_vacuum_cost_limit'i artırmayı) değerlendir; ardından ölü satır trendini birkaç döngü izle.",
+                effectiveDelay, versionDefault);
+        }
+        if (effectiveDelay == null) {
+            return "Etkin cost ayarı okunamadı (fact.pg_settings_snapshot'ta değer yok veya bayat) — cost_delay için bir öneri üretilmedi. autovacuum_vacuum_scale_factor/threshold ayarlarını ve autovacuum_max_workers'ı gözden geçir; pg_stat_progress_vacuum ile çalışan vacuum'un ilerleyişini izle.";
+        }
+        return String.format(
+            "Etkin autovacuum_vacuum_cost_delay = %dms (sürüm varsayılanı %dms) — throttle ayarı bu tablo için darboğaz görünmüyor, bu yüzden cost_delay değişikliği önerilmiyor. Bunun yerine autovacuum_vacuum_scale_factor/threshold ayarlarını (tetikleme sıklığı) ve autovacuum_max_workers'ı gözden geçir; pg_stat_progress_vacuum ile çalışan vacuum'un ilerleyişini izle.",
+            effectiveDelay, versionDefault);
+    }
+
+    /**
+     * Worker wait-event dagilimini GOZLEMSEL bir cumleye cevirir (Teshis 2/2b).
+     * Dil bilincli olarak nedensel degil:
+     * - "I/O tamamlanmasi bekleniyordu" denir, "disk yavas" DENMEZ —
+     *   PostgreSQL bu ayrimi yapmaz (OS cache'i de olabilir).
+     * - "throttle uykusunda gozlemlendi" denir, "throttling yavaslatiyor"
+     *   DENMEZ — VacuumDelay cost butcesine ULASILDIGI icin olusur, yani
+     *   worker'in calistigini gosterir, bir ariza gostergesi degildir.
+     * Yetersiz/desteklenmeyen kanit sessizce 0 olarak sunulmaz.
+     *
+     * @return bos string (kanit yoksa) veya " " ile baslayan ek cumle(ler)
+     */
+    String renderWorkerWaitEvidence(AutovacuumWorkerEvidence ev) {
+        StringBuilder sb = new StringBuilder();
+
+        if (ev.ioWaitStatus() == EvidenceStatus.AVAILABLE
+                || ev.throttleStatus() == EvidenceStatus.AVAILABLE) {
+            sb.append(String.format(
+                " Ek gözlem: son 2 saatte autovacuum worker'ları %d farklı toplama anında örneklendi",
+                ev.distinctSnapshots()));
+            if (ev.ioWaitStatus() == EvidenceStatus.AVAILABLE) {
+                sb.append(String.format(
+                    "; örneklemelerin %%%.0f'inde bir I/O işleminin tamamlanması bekleniyordu",
+                    ev.ioWaitPct()));
+            }
+            if (ev.throttleStatus() == EvidenceStatus.AVAILABLE) {
+                sb.append(String.format(
+                    "; %%%.0f'inde cost-based throttle uykusundaydı (VacuumDelay)",
+                    ev.throttleSleepPct()));
+            }
+            if (ev.otherWaitSamples() > 0) {
+                sb.append(String.format(
+                    "; %d örnekte ise başka bir bekleme türü (Lock/BufferPin vb.) görüldü",
+                    ev.otherWaitSamples()));
+            }
+            sb.append(".");
+        } else if (ev.ioWaitStatus() == EvidenceStatus.INSUFFICIENT_DATA) {
+            sb.append(String.format(
+                " Worker wait-event dağılımı için yeterli örneklem yok (son 2 saatte yalnız %d farklı toplama anı; yorum için en az %d gerekiyor).",
+                ev.distinctSnapshots(), MIN_DISTINCT_SNAPSHOTS));
+        } else if (ev.ioWaitStatus() == EvidenceStatus.NO_FRESH_SNAPSHOT) {
+            sb.append(" Son 2 saatte hiç autovacuum worker örneklenmedi — bu, worker'ın hiç çalışmadığı anlamına gelmez, örnekleme anlarına denk gelmemiş de olabilir.");
+        }
+
+        if (ev.throttleStatus() == EvidenceStatus.UNSUPPORTED_VERSION) {
+            sb.append(" (Throttle uykusu kanıtı bu PG sürümünde yok — VacuumDelay wait_event'i PG13'te eklendi.)");
+        }
+
+        return sb.toString();
     }
 
     /**
@@ -2877,17 +3276,22 @@ public class AlertRuleEvaluator {
                     // 1b-ii: "olasi nedenler" degil KESIN sonuc — su an calisan
                     // worker sayisini/limitini de okuyup net soyluyoruz (musteri
                     // talebi 2026-08-24: "bu net teshis degil").
-                    Object[] workerStatus = fetchAutovacuumWorkerStatus(instancePk);
-                    Integer runningWorkers = (Integer) workerStatus[0];
-                    Integer maxWorkers = (Integer) workerStatus[1];
-                    if (runningWorkers != null && maxWorkers != null && runningWorkers >= maxWorkers) {
+                    AutovacuumWorkerEvidence workerStatus = fetchAutovacuumWorkerStatus(instancePk);
+                    Integer runningWorkers = workerStatus.runningWorkers();
+                    // Kapasite karsilastirmasinda PG18'in autovacuum_worker_slots
+                    // sinirini da dikkate alan etkin degeri kullaniyoruz — sadece
+                    // max_workers'a bakmak PG18'de yaniltici olabilir.
+                    Integer maxWorkers = workerStatus.effectiveWorkerCapacity();
+                    boolean workerStatusUsable = runningWorkers != null && maxWorkers != null
+                        && workerStatus.currentWorkerStatus() == EvidenceStatus.AVAILABLE;
+                    if (workerStatusUsable && runningWorkers >= maxWorkers) {
                         return new String[]{
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d autovacuum worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.",
                                 triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
                             "autovacuum_max_workers ayarını artır (postgresql.conf, reload gerektirir) veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
                         };
                     }
-                    if (runningWorkers != null && maxWorkers != null) {
+                    if (workerStatusUsable) {
                         return new String[]{
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d worker çalışıyor (doygunluk yok, boş kapasite var), yani eşiği ÇOK YAKIN ZAMANDA aştı ve autovacuum'un bir sonraki tarama döngüsünü (naptime) henüz beklemiyor.",
                                 triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
@@ -2920,11 +3324,18 @@ public class AlertRuleEvaluator {
             };
         }
 
-        // Senaryo 3: autovacuum sik calisiyor ama yetersiz (Bacak C sinyali)
+        // Senaryo 3: autovacuum sik calisiyor ama yetersiz (Bacak C sinyali).
+        // Kanit katmani (PGSTAT-P1-011): "muhtemelen I/O throttling" gibi bir
+        // tahmin yerine gozlemlenen wait dagilimini ve etkin cost ayarini
+        // ekliyoruz — boylece "cost_delay dusur" onerisinin gecerli olup
+        // olmadigi elle sorgu yazmadan gorulebiliyor.
         if (vacuumIneffective) {
+            AutovacuumWorkerEvidence ev = fetchAutovacuumWorkerStatus(instancePk);
+            Long relid = record.get("relid") instanceof Number rn ? rn.longValue() : null;
             return new String[]{
-                "Autovacuum çalışıyor ama yeterince hızlı temizleyemiyor (muhtemelen I/O throttling veya yüksek yazma hızı).",
-                "autovacuum_vacuum_cost_limit/cost_delay ve autovacuum_max_workers ayarlarını gözden geçir; pg_stat_progress_vacuum ile şu an çalışan vacuum'un ilerleyişini izle."
+                "Autovacuum çalışıyor ama ölü satırları yeterince hızlı temizleyemiyor."
+                    + renderWorkerWaitEvidence(ev),
+                buildCostDelayAction(instancePk, relid, ev)
             };
         }
 
@@ -2942,13 +3353,16 @@ public class AlertRuleEvaluator {
         if (staleAutovacuum && increasingTrendEarly) {
             long hoursSinceLastAutovacuum = java.time.Duration.between(
                 (java.time.OffsetDateTime) lastAutovacuum, java.time.OffsetDateTime.now()).toHours();
-            Object[] workerStatus = fetchAutovacuumWorkerStatus(instancePk);
-            Integer runningWorkers = (Integer) workerStatus[0];
-            Integer maxWorkers = (Integer) workerStatus[1];
-            if (runningWorkers != null && maxWorkers != null && runningWorkers >= maxWorkers) {
+            AutovacuumWorkerEvidence workerStatus = fetchAutovacuumWorkerStatus(instancePk);
+            Integer runningWorkers = workerStatus.runningWorkers();
+            Integer maxWorkers = workerStatus.effectiveWorkerCapacity();
+            if (runningWorkers != null && maxWorkers != null
+                    && workerStatus.currentWorkerStatus() == EvidenceStatus.AVAILABLE
+                    && runningWorkers >= maxWorkers) {
                 return new String[]{
-                    String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — şu an %d/%d worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.",
-                        hoursSinceLastAutovacuum, runningWorkers, maxWorkers),
+                    String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — şu an %d/%d worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.%s",
+                        hoursSinceLastAutovacuum, runningWorkers, maxWorkers,
+                        renderWorkerWaitEvidence(workerStatus)),
                     "autovacuum_max_workers ayarını artır veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
                 };
             }
@@ -2975,8 +3389,10 @@ public class AlertRuleEvaluator {
         // sistem bunu hic tespit edip onermedi — kullanici manuel arastirmayla
         // buldu. Bu senaryo, ayni durumu bir daha otomatik yakalamak icin.
         if (recentAutovacuum && increasingTrend && autovacuumCountSum > 1) {
+            AutovacuumWorkerEvidence ev45 = fetchAutovacuumWorkerStatus(instancePk);
             return new String[]{
-                String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.", autovacuumCountSum),
+                String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.%s",
+                    autovacuumCountSum, renderWorkerWaitEvidence(ev45)),
                 "Bu tablo için ALTER TABLE <şema.tablo> SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha düşük bir eşik ayarla (özellikle sık UPSERT/UPDATE alan büyük tablolarda varsayılan %20 oranı çok geç tetiklenir)."
             };
         }

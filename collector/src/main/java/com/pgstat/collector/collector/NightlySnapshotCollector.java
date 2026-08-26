@@ -41,6 +41,7 @@ public class NightlySnapshotCollector {
           'effective_cache_size', 'wal_buffers',
           'checkpoint_timeout', 'checkpoint_completion_target',
           'max_wal_size', 'min_wal_size', 'wal_compression',
+          'autovacuum', 'autovacuum_worker_slots',
           'autovacuum_vacuum_scale_factor', 'autovacuum_analyze_scale_factor',
           'autovacuum_vacuum_threshold', 'autovacuum_max_workers',
           'autovacuum_freeze_max_age', 'autovacuum_naptime',
@@ -114,16 +115,23 @@ public class NightlySnapshotCollector {
           and n.nspname not like 'pg_toast_temp_%'
         """;
 
-    // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 13 parametre.
+    // Sıcak (hot) refresh için sadece alert hesabında kullanılan kritik 17 parametre.
     // 3 saatte bir yenilenir → ALTER SYSTEM sonrası alert eski değer görmesin.
+    // autovacuum/vacuum_cost_* burada da olmalı (PGSTAT-P1-011): bunlar
+    // dead_tuple_ratio teşhisinin etkin cost ayarı zincirinde kullanılıyor,
+    // sadece gece listesinde olsalardı ALTER SYSTEM sonrası 24 saate kadar
+    // eski değer görülürdü. autovacuum_worker_slots PG18+'ta etkin worker
+    // kapasitesini max_workers'tan daha sıkı sınırlayabiliyor.
     private static final String HOT_SETTINGS_QUERY = """
         select name, setting, unit, context, source from pg_settings
         where name in (
           'work_mem', 'maintenance_work_mem', 'shared_buffers',
           'effective_cache_size', 'max_connections',
           'max_wal_size', 'checkpoint_timeout', 'checkpoint_completion_target',
+          'autovacuum', 'autovacuum_worker_slots',
           'autovacuum_vacuum_scale_factor', 'autovacuum_max_workers',
           'autovacuum_vacuum_cost_limit', 'autovacuum_vacuum_cost_delay',
+          'vacuum_cost_limit', 'vacuum_cost_delay',
           'random_page_cost'
         )
         """;
