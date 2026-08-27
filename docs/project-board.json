@@ -3128,7 +3128,8 @@
         "Before computing a ratio or a trigger threshold, the diagnosis must assess whether n_live_tup can be trusted, using the signals already collected: whether the table has ever been analyzed or vacuumed, and whether the live estimate is implausible next to the dead-tuple count.",
         "When statistics are untrustworthy the alert must not present a ratio as fact. Decide whether to suppress entirely or to alert with a different diagnosis that recommends running ANALYZE first - the customer constraint from 2026-08-27 still applies, genuine cannot-keep-up cases must not be lost.",
         "The check must not silence real bloat on tables that legitimately have few live rows and many dead ones, which is a real pattern for queue and staging tables. Distinguishing the two is the substance of this task, not an edge case to wave through.",
-        "The same trustworthiness signal should be available to the message so an operator can see why the alert did or did not fire."
+        "The same trustworthiness signal should be available to the message so an operator can see why the alert did or did not fire.",
+        "The gate must key on whether the table has been analyzed or vacuumed since pg_stat_database.stats_reset, because both n_live_tup and n_dead_tup are derived from the same reset counters and are unreliable together."
       ],
       "acceptance_criteria": [
         {
@@ -3183,7 +3184,10 @@
         "Measured on the target host 2026-08-27: security.user select count(*) = 26257 against n_live_tup = 6 and n_dead_tup = 3224, last_analyze and last_autoanalyze both null, table size 14 MB.",
         "Four more tables on the same instance share the shape: t_ext_hotel_payment_types (413 live / 6770 dead), t_content_update (99 / 4945), t_ext_hotel_product (99 / 1804), t_supplier_rez (62 / 907), none ever analyzed or vacuumed.",
         "Autovacuum itself was ruled out as the problem: autovacuum = on, no table-level override, no long transaction, no replication slot, no wraparound pressure, and the launcher had processed another table on that instance 40 minutes earlier.",
-        "pg_stat_database.stats_reset on etsrooms was 2026-03-04, 176 days before the observation, which is why the insert-counter-derived live estimate never recovered."
+        "pg_stat_database.stats_reset on etsrooms was 2026-03-04, 176 days before the observation, which is why the insert-counter-derived live estimate never recovered.",
+        "Post-ANALYZE measurement on 2026-08-27 proves all five alerts were false and quantifies the error. security.user 99.81 -> 11.01 percent (26257 live, not 6); t_ext_hotel_payment_types 94.25 -> 4.70 (232458 live, not 413); t_content_update 98.04 -> 2.07 (3647581 live, not 99); t_supplier_rez 93.60 -> 0.26 (4593352 live, not 62); t_ext_hotel_product 94.80 -> 0.06 (329196 live, not 99). Every one is below even the 20 percent warning threshold, so none should ever have alerted.",
+        "n_dead_tup is unreliable too, not only n_live_tup: t_supplier_rez read 907 dead before ANALYZE and 11879 after. The gate therefore cannot be built on the dead-tuple side either - it must key on whether the table has been analyzed or vacuumed since the statistics reset.",
+        "The false alerts accused autovacuum of a failure it had not committed. For t_supplier_rez the real trigger threshold is 50 + 0.2 x 4593352 = about 918720 dead rows against 11879 actual, so skipping the table was correct; the corrupted estimate made the threshold look like 62 and the reading look like 907, i.e. exceeded."
       ]
     }
   ]
