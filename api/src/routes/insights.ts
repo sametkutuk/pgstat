@@ -214,7 +214,13 @@ async function fetchQueryTrend(id: string, seriesId: string, fromIso: string, to
     : source === 'pgss_hourly' ? 'min(d.min_exec_time_ms)::double precision' : 'null::double precision';
   const avgExpr = source === 'pgss_delta'
     ? 'avg(d.mean_exec_time_ms)::double precision'
-    : source === 'pgss_hourly' ? 'avg(d.avg_exec_time_ms)::double precision' : 'null::double precision';
+    // Cagri-sayisi agirlikli ortalama: toplam sure / toplam cagri.
+    // avg(avg_exec_time_ms) YANLIS olurdu — 10.000 cagrilik bir ornekle
+    // 10 cagrilik bir ornegi esit agirlikta sayardi (musteri sorusu
+    // 2026-08-27). Ayni formulu statements.ts zaten kullaniyor.
+    : source === 'pgss_hourly'
+      ? '(case when sum(d.calls_sum) > 0 then sum(d.exec_time_ms_sum) / sum(d.calls_sum) else 0 end)::double precision'
+      : 'null::double precision';
   const maxExpr = source === 'pgss_delta'
     ? 'max(d.max_exec_time_ms)::double precision'
     : source === 'pgss_hourly' ? 'max(d.max_exec_time_ms)::double precision' : 'null::double precision';

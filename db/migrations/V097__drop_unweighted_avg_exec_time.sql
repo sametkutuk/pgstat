@@ -1,0 +1,32 @@
+-- V097: agg.pgss_hourly.avg_exec_time_ms kolonunu kaldir
+--
+-- Musteri sorusu (2026-08-27): "gereksiz veri tutmayacagiz dimi, yanlis
+-- hesaplama da yapilmayacak sql duzeltince?"
+--
+-- Kolon V085 ile eklenmisti ve degeri avg(mean_exec_time_ms) ile
+-- hesaplaniyordu — yani "ortalamalarin ortalamasi". Bu, alt gruplar farkli
+-- buyuklukteyse yanlis sonuc verir: 10.000 cagrilik bir ornekle 10 cagrilik
+-- bir ornek esit agirlikta sayiliyordu.
+--
+-- Somut ornek (bir saatte 4 ornek):
+--   10.000 cagri @ 5ms, 10 cagri @ 500ms, 10 cagri @ 500ms, 10 cagri @ 500ms
+--   Eski hesap: (5+500+500+500)/4        = 376 ms   <- yanlis
+--   Dogru hesap: (50.000+15.000)/10.030  = 6.5 ms
+--   Sapma: ~58 kat
+--
+-- Kolonu SAKLAMAYA gerek yok cunku dogru deger zaten mevcut iki alandan
+-- turetilebiliyor: exec_time_ms_sum / calls_sum. Bu, gecmis satirlar icin de
+-- calisir (backfill gerekmez) — o yuzden veri kaybi yok.
+--
+-- Tek okuyucusu api/src/routes/insights.ts idi ve o da bu migration ile ayni
+-- commit'te dogru formule gecirildi. statements.ts zaten fact.pgss_delta
+-- uzerinden dogru agirlikli hesabi yapiyordu; alert degerlendirmesi bu
+-- kolonu hic kullanmiyordu (fact.pgss_delta.total_exec_time_ms_delta
+-- uzerinden calisiyor). Yani alarm davranisi degismiyor.
+--
+-- NOT: "avg_exec_time_ms" ADI baska yerlerde de geciyor (alert kural metrigi,
+-- UI etiketleri, statements.ts'in kendi hesabi) — onlar FARKLI seyler ve bu
+-- migration onlara dokunmuyor.
+
+alter table agg.pgss_hourly
+    drop column if exists avg_exec_time_ms;

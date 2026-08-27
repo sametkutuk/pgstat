@@ -16,7 +16,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 100 |
+| Migrations scanned | 101 |
 | Tables discovered | 95 |
 | Columns discovered | 1172 |
 | Indexes discovered | 125 |
@@ -40,7 +40,7 @@ This generated inventory is the bridge between code and the manual project docum
 | agg.pg_wal_daily | 6 | no |  | V061__wal_daily_rollup.sql | V061__wal_daily_rollup.sql |
 | agg.pg_wal_hourly | 10 | no |  | V055__snapshot_hourly_rollup.sql | V084__pg_wal_hourly_agg.sql |
 | agg.pgss_daily | 9 | yes | bucket_start | V005__agg_tables.sql | V005__agg_tables.sql |
-| agg.pgss_hourly | 15 | yes | bucket_start | V005__agg_tables.sql | V085__pgss_hourly_wal_and_latency.sql |
+| agg.pgss_hourly | 15 | yes | bucket_start | V005__agg_tables.sql | V097__drop_unweighted_avg_exec_time.sql |
 
 <details><summary>agg.pg_activity_hourly columns (10)</summary>
 

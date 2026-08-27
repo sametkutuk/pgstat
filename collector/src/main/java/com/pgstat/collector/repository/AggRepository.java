@@ -39,7 +39,6 @@ public class AggRepository {
               wal_records_sum,
               wal_fpi_sum,
               min_exec_time_ms,
-              avg_exec_time_ms,
               max_exec_time_ms
             )
             select
@@ -56,7 +55,6 @@ public class AggRepository {
               sum(coalesce(wal_records_delta, 0))::bigint  as wal_records_sum,
               sum(coalesce(wal_fpi_delta, 0))::bigint      as wal_fpi_sum,
               min(min_exec_time_ms)                        as min_exec_time_ms,
-              avg(mean_exec_time_ms)                       as avg_exec_time_ms,
               max(max_exec_time_ms)                        as max_exec_time_ms
             from fact.pgss_delta
             where sample_ts >= date_trunc('hour', now() - interval '1 hour')
@@ -73,7 +71,6 @@ public class AggRepository {
                   wal_records_sum       = excluded.wal_records_sum,
                   wal_fpi_sum           = excluded.wal_fpi_sum,
                   min_exec_time_ms      = excluded.min_exec_time_ms,
-                  avg_exec_time_ms      = excluded.avg_exec_time_ms,
                   max_exec_time_ms      = excluded.max_exec_time_ms
             """);
     }
