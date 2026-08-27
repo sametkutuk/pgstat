@@ -3031,6 +3031,89 @@
         "Production state at diagnosis: ops.alert 112959 open/critical, first_seen_at 2026-08-21 15:29, last_seen_at 2026-08-27 15:48 (frozen 2h10m) while control.alert_rule_last_eval showed last_evaluated_at 17:48 with current_severity critical — proving evaluation was running but ops.alert was never updated.",
         "control.bloat_scenario_streak held exactly one row for instance 2 (scenario_1b_ii, streak_count 2, last_dead_tup 80399) while five tables were above threshold, and the worst (security.user, 6 live / 3224 dead, never vacuumed) had a flat count that kept resetting its counter."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-039",
+      "order": 49,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord.",
+      "title": "Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible",
+      "problem": "evaluateThresholdPerRecord builds a single alert per rule and instance (alert_key = rule:{ruleId}:instance:{instancePk}) and renders only exceeding.get(0), the worst record. Every other table over the threshold is invisible: it never appears in a message, never gets its own lifecycle, and never enters control.bloat_scenario_streak, which is keyed per table. The customer hit this directly on 2026-08-27: five tables on instance 2 were over the dead-tuple threshold (security.user 99.81%, t_content_update 98.04%, t_ext_hotel_product 94.80%, t_ext_hotel_payment_types 94.25%, t_supplier_rez 93.60%), all never vacuumed, but only one was named. After fixing the table the alert named, the next worst simply took its place, so the operator has to fix one, wait a cycle, and discover the next - with no way to see the real size of the problem. The customer called the behaviour nonsensical and asked for it to be fixed. The same collapse applies to statement_metric and index_metric, which share this code path.",
+      "requirements": [
+        "Each record over the threshold must get its own alert with its own key, so it opens, updates and resolves independently of the others.",
+        "Notifications must not fan out one-per-alert: the delivery layer sends a single summary message per rule and instance per evaluation listing the affected records, so five broken tables do not mean five Telegram messages.",
+        "Existing open instance-level alerts from the old key format must be resolved by a migration with a superseded note, so the two formats never coexist confusingly.",
+        "The per-table persistence counter (control.bloat_scenario_streak) must now be consulted for every exceeding record, not only the worst one - that is the point of splitting the alerts.",
+        "Alert volume must stay bounded in the pathological case: a newly onboarded instance where dozens of tables are simultaneously over threshold must not open an unbounded number of alerts in one evaluation. Decide and document the cap and what happens to records beyond it."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "alert_key for granular threshold alerts identifies the record, not just the instance (for table_metric: rule, instance, dbid and relid), so each offending table has an independent alert row in ops.alert.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Every record over the threshold is evaluated - diagnosis, suppression and streak counter all run per record - instead of only exceeding.get(0).",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Notification delivery batches per rule and instance per evaluation: opening five table alerts produces five ops.alert rows but a single outbound summary message naming the affected tables.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "A migration resolves open alerts whose alert_key matches the old instance-level format for granular rules, recording a superseded reason.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "A documented cap bounds how many per-record alerts one evaluation may open, with the overflow surfaced rather than silently dropped.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "mvn compile and mvn test pass, with unit coverage for the new key construction and the batching decision.",
+          "status": "pending"
+        },
+        {
+          "id": "AC7",
+          "text": "Live verification on instance 2: all five currently offending tables appear as separate alerts, fixing one resolves only that alert, and the batch notification lists them together.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "AlertRuleEvaluator.evaluateThresholdPerRecord: replace the single-record path with a loop over exceeding, building a per-record alert key and running diagnosis/suppression/streak for each; keep the instance-level key only for non-granular metric types.",
+        "Resolve handling: records that dropped below threshold since the last evaluation must have their per-record alerts resolved - compare the current exceeding set against currently open alerts for this rule and instance.",
+        "NotificationService: add batching so alerts raised within one evaluation of the same rule and instance produce one summary notification instead of one per alert.",
+        "db/migrations: resolve open granular alerts using the old instance-level key format.",
+        "docs/dead-tuple-ratio-alert-readme.md and docs/alert-reference.md: describe per-table alerts and the batched notification behaviour."
+      ],
+      "verification_plan": [
+        "mvn -o compile && mvn -o test",
+        "Live on instance 2: confirm five separate alerts appear, that vacuuming one resolves only its own alert, and that a single summary notification was delivered rather than five."
+      ],
+      "required_docs": [
+        "docs/dead-tuple-ratio-alert-readme.md",
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-038"
+      ],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reaction on 2026-08-27 to the explanation that only the worst table is shown: bu cok sacma bunu duzeltelim yarin.",
+        "Production evidence: control.bloat_scenario_streak held exactly one row for instance 2 while five tables were over threshold, confirming the other four were never evaluated at all.",
+        "Design decisions taken with the customer on 2026-08-27: separate alerts per table with a single batched notification, and a migration resolving the old instance-level alerts rather than letting both formats coexist."
+      ]
     }
   ]
 }

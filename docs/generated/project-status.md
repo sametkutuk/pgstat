@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 48 |
+| Total tasks | 49 |
 | Done tasks | 16 |
-| Remaining tasks | 32 |
+| Remaining tasks | 33 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,13 +34,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 16 |
 | in_progress | 8 |
-| planned | 24 |
+| planned | 25 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 4 |
+| alerting | 5 |
 | collector | 3 |
 | contracts | 2 |
 | governance | 5 |
@@ -105,6 +105,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 46 | PGSTAT-P1-011 | P1 | collector | planned | Add observational autovacuum-pressure evidence (I/O operation counts, wait-event distribution) to the existing bloat alert | AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi. |
 | 47 | PGSTAT-P0-037 | P0 | retention | planned | Partition drop threshold counts retention policies no active instance uses, so partitions live far past their retention | Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL. |
 | 48 | PGSTAT-P0-038 | P0 | alerting | planned | Bloat suppression froze an already-open alert and never fired on tables whose dead tuples stopped growing | Deploy, then confirm the frozen alert on rule 14 / instance 2 either updates to the currently worst table or resolves, and that security.user style tables (never vacuumed, dead tuples flat) start alerting after three evaluations. |
+| 49 | PGSTAT-P0-039 | P0 | alerting | planned | Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible | Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord. |
 
 ## Dependency Map
 
@@ -157,7 +158,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-010 | - | PGSTAT-P1-011 |
 | PGSTAT-P1-011 | PGSTAT-P1-010, PGSTAT-P0-036 | - |
 | PGSTAT-P0-037 | - | - |
-| PGSTAT-P0-038 | - | - |
+| PGSTAT-P0-038 | - | PGSTAT-P0-039 |
+| PGSTAT-P0-039 | PGSTAT-P0-038 | - |
 
 ## Closure Rules
 
