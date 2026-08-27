@@ -110,14 +110,9 @@ public class PurgeEvaluator {
 
         if (instanceCutoffs.isEmpty()) return;
 
-        // Hard drop siniri = en uzun retention
-        LocalDate hardDropBefore = jdbc.queryForObject("""
-            select (current_date - max(coalesce(p.raw_retention_days, p.raw_retention_months * 30)))::date
-            from control.retention_policy p
-            where p.is_active and p.purge_enabled
-            """,
-            LocalDate.class
-        );
+        // Hard drop siniri = kullanilan politikalar arasindaki en uzun retention
+        LocalDate hardDropBefore = longestUsedRetentionCutoff(
+            "coalesce(p.raw_retention_days, p.raw_retention_months * 30)");
         if (hardDropBefore == null) return;
 
         log.info("Raw delta fact purge: hard drop siniri = {}", hardDropBefore);
@@ -161,14 +156,11 @@ public class PurgeEvaluator {
 
         if (instanceCutoffs.isEmpty()) return;
 
-        // Hard drop siniri (en uzun snapshot retention): partition drop icin
-        LocalDate hardDropBefore = jdbc.queryForObject("""
-            select (current_date - ceil(max(coalesce(p.snapshot_retention_hours, 48)) / 24.0)::int - 1)::date
-            from control.retention_policy p
-            where p.is_active and p.purge_enabled
-            """,
-            LocalDate.class
-        );
+        // Hard drop siniri (kullanilan politikalardaki en uzun snapshot retention)
+        // Not: gun-bazli partition ile saat-bazli retention arasinda 1 gun
+        // guvenlik payi birakilir (orijinal davranis korundu: -1 gun geri).
+        LocalDate hardDropBefore = longestUsedRetentionCutoff(
+            "ceil(coalesce(p.snapshot_retention_hours, 48) / 24.0)::int - 1");
 
         if (hardDropBefore != null) {
             log.info("Snapshot fact purge: partition drop siniri = {}", hardDropBefore);
@@ -201,13 +193,8 @@ public class PurgeEvaluator {
 
     private void purgeTableFreezeFacts() {
         try {
-            LocalDate hardDropBefore = jdbc.queryForObject("""
-                select (current_date - max(coalesce(p.table_freeze_retention_days, 90)))::date
-                from control.retention_policy p
-                where p.is_active and p.purge_enabled
-                """,
-                LocalDate.class
-            );
+            LocalDate hardDropBefore = longestUsedRetentionCutoff(
+                "coalesce(p.table_freeze_retention_days, 90)");
             if (hardDropBefore == null) return;
 
             log.info("Table freeze fact purge: hard drop siniri = {}", hardDropBefore);
@@ -246,13 +233,8 @@ public class PurgeEvaluator {
 
     private void purgeNightlySnapshotFacts() {
         try {
-            LocalDate hardDropBefore = jdbc.queryForObject("""
-                select (current_date - max(coalesce(p.nightly_snapshot_retention_days, 180)))::date
-                from control.retention_policy p
-                where p.is_active and p.purge_enabled
-                """,
-                LocalDate.class
-            );
+            LocalDate hardDropBefore = longestUsedRetentionCutoff(
+                "coalesce(p.nightly_snapshot_retention_days, 180)");
             if (hardDropBefore == null) return;
 
             log.info("Nightly snapshot fact purge: hard drop siniri = {}", hardDropBefore);
@@ -291,13 +273,8 @@ public class PurgeEvaluator {
     // =========================================================================
 
     private void purgeHourlyAgg() {
-        LocalDate dropBefore = jdbc.queryForObject("""
-            select (current_date - max(coalesce(p.hourly_retention_days, p.hourly_retention_months * 30)))::date
-            from control.retention_policy p
-            where p.is_active and p.purge_enabled
-            """,
-            LocalDate.class
-        );
+        LocalDate dropBefore = longestUsedRetentionCutoff(
+            "coalesce(p.hourly_retention_days, p.hourly_retention_months * 30)");
         if (dropBefore == null) return;
 
         log.info("Hourly agg purge: drop siniri = {}", dropBefore);
@@ -307,13 +284,8 @@ public class PurgeEvaluator {
     }
 
     private void purgeDailyAgg() {
-        LocalDate dropBefore = jdbc.queryForObject("""
-            select (current_date - max(coalesce(p.daily_retention_days, p.daily_retention_months * 30)))::date
-            from control.retention_policy p
-            where p.is_active and p.purge_enabled
-            """,
-            LocalDate.class
-        );
+        LocalDate dropBefore = longestUsedRetentionCutoff(
+            "coalesce(p.daily_retention_days, p.daily_retention_months * 30)");
         if (dropBefore == null) return;
 
         log.info("Daily agg purge: drop siniri = {}", dropBefore);
@@ -323,6 +295,41 @@ public class PurgeEvaluator {
     // =========================================================================
     // Yardimci metotlar
     // =========================================================================
+
+    /**
+     * Partition drop siniri = en uzun retention — ama SADECE gercekten
+     * kullanilan politikalar arasindan.
+     *
+     * Neden instance_inventory'ye JOIN: retention_policy tablosunda hicbir
+     * aktif instance'in kullanmadigi politikalar da duruyor (ileride
+     * kullanilmak uzere tanimli birakiliyorlar — bu dogru bir kullanim).
+     * Eski hali sadece "p.is_active and p.purge_enabled" filtreliyordu, yani
+     * bos duran bir politika da max()'a giriyordu.
+     *
+     * Somut sonuc (2026-08-27, uretim): 25 instance'in 24'u r3-short (7 gun),
+     * 1'i r6-default (14 gun) kullaniyordu; r12-long (30 gun) hicbir instance
+     * tarafindan kullanilmiyordu ama aktif oldugu icin max() 30 donuyordu.
+     * Partition'lar 14 gun yerine 30 gun duruyordu. Bu partition'larda
+     * instance bazli DELETE calistigi icin satirlar siliniyor, ama partition
+     * durdugu ve o gune bir daha yazilmadigi icin bosalan sayfalar OS'a geri
+     * donmuyordu (autovacuum sadece "yeniden kullanilabilir" isaretler).
+     * pgstattuple olcumu: pgss_delta partition'larinda ~%30-45 bos alan,
+     * toplam ~3 GB. Manuel VACUUM FULL disinda geri alinamiyordu.
+     *
+     * @param retentionExpr max() icine girecek SQL ifadesi (ornegin
+     *                      "coalesce(p.raw_retention_days, p.raw_retention_months * 30)")
+     * @return drop siniri; hic aktif instance/politika yoksa null
+     */
+    private LocalDate longestUsedRetentionCutoff(String retentionExpr) {
+        return jdbc.queryForObject(
+            "select (current_date - max(" + retentionExpr + "))::date" +
+            "  from control.instance_inventory i" +
+            "  join control.retention_policy p" +
+            "    on p.retention_policy_id = i.retention_policy_id" +
+            " where i.is_active and p.is_active and p.purge_enabled",
+            LocalDate.class
+        );
+    }
 
     /** Belirtilen tarihten onceki partisyonlari DETACH + DROP eder. */
     private void dropPartitionsBefore(String parentTable, LocalDate beforeDate) {

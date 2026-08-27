@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 46 |
+| Total tasks | 47 |
 | Done tasks | 16 |
-| Remaining tasks | 30 |
+| Remaining tasks | 31 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 16 |
 | in_progress | 8 |
-| planned | 22 |
+| planned | 23 |
 
 ## Workstream Counts
 
@@ -47,6 +47,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | operations | 13 |
 | pgdbaagent | 5 |
 | release | 1 |
+| retention | 1 |
 | security | 1 |
 | telemetry | 7 |
 | ui | 3 |
@@ -102,6 +103,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 44 | PGSTAT-P1-009 | P2 | collector | planned | Collector restart loses one collection cycle per table/statement due to in-memory prev-value caches | Schedule a dedicated design session: survey all collectors for the same in-memory-cache-on-restart pattern, design the persisted raw-state table and rehydration logic, then implement and verify before closing. |
 | 45 | PGSTAT-P1-010 | P1 | collector | in_progress | agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow | AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state. |
 | 46 | PGSTAT-P1-011 | P1 | collector | planned | Add observational autovacuum-pressure evidence (I/O operation counts, wait-event distribution) to the existing bloat alert | AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi. |
+| 47 | PGSTAT-P0-037 | P0 | retention | planned | Partition drop threshold counts retention policies no active instance uses, so partitions live far past their retention | Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL. |
 
 ## Dependency Map
 
@@ -153,6 +155,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-009 | - | - |
 | PGSTAT-P1-010 | - | PGSTAT-P1-011 |
 | PGSTAT-P1-011 | PGSTAT-P1-010, PGSTAT-P0-036 | - |
+| PGSTAT-P0-037 | - | - |
 
 ## Closure Rules
 

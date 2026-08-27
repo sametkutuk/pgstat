@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-07-17",
+  "updated_at": "2026-08-27",
   "project": {
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
@@ -2894,6 +2894,72 @@
         "mvn compile and mvn test pass with the new vacuum_note context field and updated template."
       ],
       "next_action": "Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan."
+    },
+    {
+      "id": "PGSTAT-P0-037",
+      "order": 47,
+      "priority": "P0",
+      "workstream": "retention",
+      "status": "planned",
+      "title": "Partition drop threshold counts retention policies no active instance uses, so partitions live far past their retention",
+      "problem": "PurgeEvaluator computed every partition-drop cutoff as max(retention) over control.retention_policy filtered only by p.is_active and p.purge_enabled — it never joined control.instance_inventory, so a policy that exists but is assigned to no active instance still widened the window. In production on 2026-08-27 that meant r12-long (30 days, 0 active instances) set the cutoff instead of r6-default (14 days, 1 instance) / r3-short (7 days, 24 instances): raw delta partitions were kept 30 days instead of 14. The wasted-space consequence is worse than the extra partitions: instance-scoped batched DELETE still ran on those retained partitions, so 24 of 25 instances had their rows deleted while the partition itself stayed. Because a past day partition is never written again, the pages autovacuum freed were marked reusable but never reused and never returned to the OS. pgstattuple measured ~30-45% free space in pgss_delta partitions (289-296 MB each) and roughly 3 GB total across the delta families, with n_dead_tup = 0 — invisible to any dead-tuple based check. The customer had been reclaiming this by hand with periodic VACUUM FULL, which took an ACCESS EXCLUSIVE lock and refilled within days.",
+      "requirements": [
+        "Every partition-drop cutoff must be derived only from retention policies that at least one active instance actually references, so an unused policy cannot widen the retention window.",
+        "Retention policies must remain defined and active even when unused — the customer keeps r12-long available to assign later, so the fix must not require deleting or deactivating policy rows.",
+        "The fix must cover all six cutoff computations in PurgeEvaluator (raw delta, snapshot, table freeze, nightly snapshot, hourly agg, daily agg), not just the raw delta path where it was first observed.",
+        "The snapshot path converts hours to days; its existing 1-day safety margin must be preserved exactly, since day-granularity partitions must not be dropped while part of the retention window still falls inside them."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "PurgeEvaluator has a single longestUsedRetentionCutoff(String retentionExpr) helper that joins control.instance_inventory to control.retention_policy and filters on i.is_active and p.is_active and p.purge_enabled, and all six cutoff sites call it — no remaining query selects from control.retention_policy without the instance join.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The snapshot cutoff keeps its original arithmetic: max(ceil(hours/24) - 1) is equivalent to the previous ceil(max(hours)/24) - 1 because ceil is monotonic, so the drop boundary is unchanged apart from which policies are considered.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "mvn compile and mvn test pass (52/52).",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification after deploy: the raw delta cutoff moves from 2026-07-28 to 2026-08-13, the nightly purge drops the partitions older than the new cutoff, and total database size falls by roughly 10 GB without any manual VACUUM FULL.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Customer confirms that periodic manual VACUUM FULL is no longer needed to keep the database size stable.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "collector/src/main/java/com/pgstat/collector/service/PurgeEvaluator.java: add private LocalDate longestUsedRetentionCutoff(String retentionExpr) in the helper section, documenting the production measurement that motivated it.",
+        "Replace the six inline jdbc.queryForObject cutoff queries (purgeRawDeltaFacts, purgeSnapshotFacts, purgeTableFreezeFacts, purgeNightlySnapshotFacts, purgeHourlyAgg, purgeDailyAgg) with calls to the helper, passing each one its own retention expression."
+      ],
+      "verification_plan": [
+        "mvn -o compile && mvn -o test",
+        "SQL: compare the old cutoff (policy-only max) against the new one (instance-joined max) — expect 2026-07-28 vs 2026-08-13 on the production board database.",
+        "Live: deploy, wait for the nightly maintenance run, then confirm the oldest fact.pgss_delta / fact.pg_index_stat_delta partition matches the new cutoff and that pg_database_size has dropped."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Found while investigating the customer report that pgstat own database size only ever fell after a manual VACUUM FULL and otherwise grew without bound.",
+        "Diagnosis chain: partition inventory showed en_eski = 20260728 (30 days) across six delta families totalling 21.7 GB; control.retention_policy showed r12-long = 30 days with kullanan_aktif_instance = 0 while 24 instances used r3-short (7) and 1 used r6-default (14); pgstattuple on the retained partitions showed dead_tuple_percent 0.0 with free_space 289-296 MB per pgss_delta partition, confirming the space was freed-but-unreturned pages rather than dead tuples.",
+        "Ruled out first: purge row deletion was working (n_tup_del 650-720k per partition, partitions older than 14 days held only 4 MB total), autovacuum was healthy (last_autovacuum current on every large table, n_dead_tup 0), and there was no bloat in the dead-tuple sense — which is why no existing alert caught it."
+      ],
+      "next_action": "Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL."
     }
   ]
 }
