@@ -2957,7 +2957,8 @@
       "verification_evidence": [
         "Found while investigating the customer report that pgstat own database size only ever fell after a manual VACUUM FULL and otherwise grew without bound.",
         "Diagnosis chain: partition inventory showed en_eski = 20260728 (30 days) across six delta families totalling 21.7 GB; control.retention_policy showed r12-long = 30 days with kullanan_aktif_instance = 0 while 24 instances used r3-short (7) and 1 used r6-default (14); pgstattuple on the retained partitions showed dead_tuple_percent 0.0 with free_space 289-296 MB per pgss_delta partition, confirming the space was freed-but-unreturned pages rather than dead tuples.",
-        "Ruled out first: purge row deletion was working (n_tup_del 650-720k per partition, partitions older than 14 days held only 4 MB total), autovacuum was healthy (last_autovacuum current on every large table, n_dead_tup 0), and there was no bloat in the dead-tuple sense — which is why no existing alert caught it."
+        "Ruled out first: purge row deletion was working (n_tup_del 650-720k per partition, partitions older than 14 days held only 4 MB total), autovacuum was healthy (last_autovacuum current on every large table, n_dead_tup 0), and there was no bloat in the dead-tuple sense — which is why no existing alert caught it.",
+        "SQL dogrulamasi (2026-08-27, uretim DB): eski politika-only max() 2026-07-28, yeni instance-joined max() 2026-08-13 donuyor — tahmin edilen 16 gunluk fark birebir dogrulandi. Deploy sonrasi gece bakiminda bu cutoff'tan eski partitionlarin drop edilmesi bekleniyor."
       ],
       "next_action": "Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL."
     }
