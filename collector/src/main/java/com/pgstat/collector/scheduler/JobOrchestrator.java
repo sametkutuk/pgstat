@@ -500,6 +500,59 @@ public class JobOrchestrator {
      * TUM tablolarini hemen toplar (interval'a bakmaz). Vacuum sonrasi UI'dan
      * "Simdi Topla" ile tetiklenir. Her trigger ayri instance, sirayla islenir.
      */
+    /**
+     * "Simdi Degerlendir" butonunun ilk adimi: acik alarmi olan
+     * instance'lardan TAZE veri toplar.
+     *
+     * Neden gerekli: alertRuleEvaluator fact tablolarindan okur, kaynak
+     * PostgreSQL'e gitmez. Toplama araligi 15 dakika oldugu icin, kullanici
+     * bir sorunu duzeltip butona bastiginda kural hala 15 dakikalik eski
+     * veriyi gorup alarmi acik birakabiliyordu. Once toplayip sonra
+     * degerlendirince buton gercekten "su an durum ne" sorusuna cevap veriyor.
+     *
+     * Kapsam bilincli olarak dar: sadece ACIK alarmi olan instance'lar. Tum
+     * filoyu toplamak dakikalar surerdi ve butonun amaci disinda olurdu.
+     * Hatalar yutulur — toplama basarisiz olsa bile degerlendirme yapilmali.
+     */
+    private void refreshDataForOpenAlerts() {
+        List<Long> instancePks;
+        try {
+            instancePks = jdbc.queryForList(
+                "select distinct instance_pk from ops.alert " +
+                "where status = 'open' and instance_pk is not null",
+                Long.class);
+        } catch (Exception e) {
+            log.debug("Acik alarm instance listesi okunamadi: {}", e.getMessage());
+            return;
+        }
+        if (instancePks.isEmpty()) return;
+
+        log.info("Manuel degerlendirme: {} instance icin taze veri toplaniyor", instancePks.size());
+        for (Long instancePk : instancePks) {
+            // Cluster metrikleri (activity/io/wait-event) — bloat teshisinin
+            // worker kanitlari buradan geliyor.
+            try {
+                com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
+                if (inst != null) clusterCollector.collect(inst);
+            } catch (Exception e) {
+                log.debug("Manuel degerlendirme cluster toplama hatasi instance={}: {}", instancePk, e.getMessage());
+            }
+            // Tablo istatistikleri — dead_tuple_ratio bunlari okuyor.
+            try {
+                for (DbObjectsTarget target : inventoryRepo.findDbObjectsByInstance(instancePk)) {
+                    try {
+                        dbObjectsCollector.collect(target);
+                    } catch (Exception e) {
+                        log.debug("Manuel degerlendirme db_objects hatasi instance={} dbid={}: {}",
+                            instancePk, target.dbid(), e.getMessage());
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Manuel degerlendirme db listesi okunamadi instance={}: {}", instancePk, e.getMessage());
+            }
+        }
+    }
+
     private void processManualDbObjectsTriggers() {
         List<Long> triggerIds;
         try {
@@ -792,6 +845,14 @@ public class JobOrchestrator {
                             com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
                             if (inst != null) nightlySnapshotCollector.collectHotSettings(inst);
                         } else if ("evaluate_alerts".equals(cmd)) {
+                            // Once ACIK alarmlarin oldugu instance'lardan TAZE veri
+                            // topla, sonra degerlendir. Aksi halde buton "su an
+                            // durum ne" sorusuna degil "en son toplanan veriyle
+                            // kurallari tekrar calistir" sorusuna cevap verirdi —
+                            // 15 dakikalik toplama araliginda tablo temizlenmis
+                            // olsa bile alarm acik gorunmeye devam ederdi
+                            // (musteri gozlemi 2026-08-27).
+                            refreshDataForOpenAlerts();
                             // Tüm acute + rolling actionable + user-defined rule'ları hemen değerlendir
                             alertRuleEvaluator.evaluate();
                             // 1) Kanit-bazli auto-resolve (high_temp_files + temp-related user_defined_rule).

@@ -187,7 +187,7 @@ export default function Alerts() {
                 <div className="flex items-center gap-3">
                     <button onClick={() => evaluateNowMut.mutate()}
                         disabled={evaluateNowMut.isPending}
-                        title="Tüm alert kurallarını şimdi yeniden değerlendir — parametre/sorgu değişimi sonrası alert'lerin güncellenmesi için"
+                        title="Açık alert'i olan instance'lardan taze veri toplar, sonra tüm kuralları yeniden değerlendirir. Bir sorunu düzelttikten sonra alert'in kapandığını beklemeden görmek için — toplama nedeniyle 30-60 saniye sürebilir."
                         className="px-3 py-1.5 text-xs bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded disabled:opacity-50">
                         {evaluateNowMut.isPending ? 'Gönderildi...' : '🔄 Şimdi Değerlendir'}
                     </button>
