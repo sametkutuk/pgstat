@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 50 |
+| Total tasks | 51 |
 | Done tasks | 16 |
-| Remaining tasks | 34 |
+| Remaining tasks | 35 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,13 +34,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 16 |
 | in_progress | 8 |
-| planned | 26 |
+| planned | 27 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 6 |
+| alerting | 7 |
 | collector | 3 |
 | contracts | 2 |
 | governance | 5 |
@@ -107,6 +107,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 48 | PGSTAT-P0-038 | P0 | alerting | planned | Bloat suppression froze an already-open alert and never fired on tables whose dead tuples stopped growing | Deploy, then confirm the frozen alert on rule 14 / instance 2 either updates to the currently worst table or resolves, and that security.user style tables (never vacuumed, dead tuples flat) start alerting after three evaluations. |
 | 49 | PGSTAT-P0-039 | P0 | alerting | planned | Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible | Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord. |
 | 50 | PGSTAT-P0-040 | P0 | alerting | planned | Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables | Add a statistics-trustworthiness gate to diagnoseBloat that runs before any ratio or threshold arithmetic, and decide what the alert says when statistics cannot be trusted. |
+| 51 | PGSTAT-P1-012 | P1 | alerting | planned | No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics | Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken. |
 
 ## Dependency Map
 
@@ -162,6 +163,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-038 | - | PGSTAT-P0-039 |
 | PGSTAT-P0-039 | PGSTAT-P0-038 | - |
 | PGSTAT-P0-040 | - | - |
+| PGSTAT-P1-012 | - | - |
 
 ## Closure Rules
 

@@ -3189,6 +3189,82 @@
         "n_dead_tup is unreliable too, not only n_live_tup: t_supplier_rez read 907 dead before ANALYZE and 11879 after. The gate therefore cannot be built on the dead-tuple side either - it must key on whether the table has been analyzed or vacuumed since the statistics reset.",
         "The false alerts accused autovacuum of a failure it had not committed. For t_supplier_rez the real trigger threshold is 50 + 0.2 x 4593352 = about 918720 dead rows against 11879 actual, so skipping the table was correct; the corrupted estimate made the threshold look like 62 and the reading look like 907, i.e. exceeded."
       ]
+    },
+    {
+      "id": "PGSTAT-P1-012",
+      "order": 51,
+      "priority": "P1",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken.",
+      "title": "No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics",
+      "problem": "Nothing surfaces tables whose statistics have gone stale. PostgreSQL corrects n_live_tup and n_dead_tup only during ANALYZE or VACUUM; until then they are derived from counters that a statistics reset can leave arbitrarily wrong. The primary damage is to query plans - the planner sizes joins from these estimates, so a table believed to hold 62 rows while actually holding 4.6 million gets placed on the inner side of a nested loop. The secondary damage is to this system own diagnostics, demonstrated on 2026-08-27 when five dead_tuple_ratio alerts fired on instance 2 with ratios between 93 and 99 percent that ANALYZE revealed to be between 0.06 and 11 percent. That specific false-positive path is handled separately by PGSTAT-P0-040; this task is about telling the operator that statistics need refreshing at all, which no rule currently does. On instance 2, 547 of 574 tables had never been autoanalyzed.",
+      "requirements": [
+        "The rule must key on n_mod_since_analyze rather than n_live_tup, because that counter is reset by ANALYZE itself and is therefore independent of the corrupted live and dead estimates the alert is meant to warn about.",
+        "Three conditions must hold together - the table is being written, its last analyze is old or absent, and the change is large enough to matter - so that unchanging lookup tables stay silent. A plain age threshold would have flagged 547 tables on one instance.",
+        "One summary alert per instance, not one per table: the remedy is a single instance-wide command (vacuumdb --analyze-only), so splitting per table would produce noise without producing separate work.",
+        "The message must name the worst offenders concretely - table, rows changed since last analyze, and how long since it was analyzed - so the operator can judge urgency without writing a query.",
+        "Thresholds must be operator-tunable per instance through the existing alert rule configuration, since what counts as a large change differs by workload."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A stale_statistics rule exists in control.alert_rule with a message template, evaluated per instance and keyed on n_mod_since_analyze, last_analyze and last_autoanalyze from fact.pg_table_stat_delta - no new collector work or migration for new columns, since all three are already collected.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "The rule fires only when all three conditions hold: rows changed since last analyze exceeds the threshold, the last analyze is older than the age threshold or absent entirely, and the table qualifies as significant. Tables that are never written stay silent regardless of how old their statistics are.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Exactly one alert per instance, whose message names the worst offenders with their changed-row counts and analyze ages, and states the total count when more tables qualify than are listed.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "Shipped default thresholds are justified by the calibration already measured, and are overridable per instance.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn compile and mvn test pass, with unit coverage for the three-condition gate including the never-analyzed case where last_analyze and last_autoanalyze are both null.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "Live verification: the alert fires on the instances that currently qualify, names the right tables, and clears after ANALYZE is run on them.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations: insert the stale_statistics rule into control.alert_rule and its message template into control.alert_message_template.",
+        "AlertRuleEvaluator: add the evaluation branch reading the latest per-table row from fact.pg_table_stat_delta, applying the three-condition gate and building the per-instance summary.",
+        "Unit tests for the gate predicate, covering never-analyzed, stale-but-idle, and fresh-but-heavily-changed tables.",
+        "docs/alert-reference.md and a short operator note on why stale statistics matter for planning, not only for this system diagnostics."
+      ],
+      "verification_plan": [
+        "mvn -o compile && mvn -o test",
+        "Live: confirm the alert appears for the qualifying instances, that its table list matches the calibration query, and that running ANALYZE on the named tables clears it."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer asked for this directly on 2026-08-27 after the false bloat alerts were traced to stale statistics: o zaman analyze cok eskiyse bunu da alert olarak uretmek gerekmiyor mu sistem sagligi icin.",
+        "Calibration on instance 2 with an age threshold of 7 days: a changed-rows threshold of 1000 selects 23 tables, 5000 selects 10, 10000 selects 7, and 50000 selects 4. The value 10000 is the knee - 5000 grows quickly while 50000 would drop real cases such as t_ext_discount_percent, changed 13617 rows with no analyze in 127 days.",
+        "Fleet-wide noise measured at the 10000 and 7-day settings: 13 of 25 instances qualify, the largest with 8 tables, so a per-instance summary alert never needs to elide a long list.",
+        "Severity of the worst cases justifies the alert: instance 4 has a table with 2594508 rows changed since its last analyze, instance 6 has 817760, instance 8 has 516298, and on instance 2 public.t_currency_rate has changed all 1153450 of its rows with no analyze ever recorded.",
+        "All required inputs are already collected - n_mod_since_analyze in V004, last_autoanalyze added in V066 - so this is a rule and evaluator change with no collector or schema work."
+      ]
     }
   ]
 }
