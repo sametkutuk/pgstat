@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 99 |
-| Tables discovered | 94 |
-| Columns discovered | 1164 |
-| Indexes discovered | 124 |
+| Migrations scanned | 100 |
+| Tables discovered | 95 |
+| Columns discovered | 1172 |
+| Indexes discovered | 125 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
 | API ColumnRegistry objects discovered | 33 |
@@ -224,6 +224,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |
 | control.baseline_trigger | 8 | no |  | V020__baseline_trigger.sql | V020__baseline_trigger.sql |
 | control.baseline_version | 11 | no |  | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |
+| control.bloat_scenario_streak | 8 | no |  | V096__bloat_scenario_streak.sql | V096__bloat_scenario_streak.sql |
 | control.collector_command | 7 | no |  | V057__collector_command.sql | V057__collector_command.sql |
 | control.database_access_subscription | 8 | no |  | V082__database_access_subscription.sql | V082__database_access_subscription.sql |
 | control.database_action_log | 9 | no |  | V065__alert_intervals_and_cleanup.sql | V065__alert_intervals_and_cleanup.sql |
@@ -404,6 +405,21 @@ This generated inventory is the bridge between code and the manual project docum
 | baseline_end | timestamptz | V018__adaptive_alerting.sql |
 | is_active | boolean | V018__adaptive_alerting.sql |
 | created_at | timestamptz | V018__adaptive_alerting.sql |
+
+</details>
+
+<details><summary>control.bloat_scenario_streak columns (8)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| instance_pk | bigint | V096__bloat_scenario_streak.sql |
+| dbid | oid | V096__bloat_scenario_streak.sql |
+| relid | oid | V096__bloat_scenario_streak.sql |
+| scenario | text | V096__bloat_scenario_streak.sql |
+| streak_count | integer | V096__bloat_scenario_streak.sql |
+| first_seen_at | timestamptz | V096__bloat_scenario_streak.sql |
+| last_seen_at | timestamptz | V096__bloat_scenario_streak.sql |
+| last_dead_tup | bigint | V096__bloat_scenario_streak.sql |
 
 </details>
 
@@ -2031,7 +2047,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/repository/ReportHistoryRepository.java | ops.report_history |
 | collector/src/main/java/com/pgstat/collector/repository/StateRepository.java | control.database_state, control.instance_inventory, control.instance_state |
 | collector/src/main/java/com/pgstat/collector/service/AlertMessageRenderer.java | control.alert_message_template |
-| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, control.alert_rule, control.alert_rule_last_eval, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
+| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, control.alert_rule, control.alert_rule_last_eval, control.bloat_scenario_streak, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/AlertService.java | control.instance_inventory, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java | control.baseline_trigger, control.instance_inventory, control.metric_baseline, fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java | control.instance_inventory, control.long_query_subscription, fact.pg_activity_snapshot, ops.alert |

@@ -1999,9 +1999,21 @@ public class AlertRuleEvaluator {
             // ileride kullanilirsa bos satir gorunmesin diye jenerik fallback
             // her zaman set edilir.
             if ("dead_tuple_ratio".equals(metricName)) {
-                String[] diagnosis = diagnoseBloat(top, instancePk);
-                ctx.put("diagnosis", "Teşhis: " + diagnosis[0] + "\n");
-                ctx.put("bloat_action", diagnosis[1]);
+                BloatDiagnosis diagnosis = diagnoseBloat(top, instancePk);
+                // "Autovacuum henuz yetismemis olabilir" durumu cogu zaman
+                // toplama anina denk gelmis gecici bir birikimdir ve kendi
+                // kendine duzelir — israr etmedigi surece alert acmiyoruz
+                // (musteri talebi 2026-08-27). Kacirma riski yok: gercekten
+                // yetisemeyen tablolar karar agacinda DAHA ONCE gelen
+                // senaryo 2/3/3.5/4.5'e takilir ve aninda alert uretir.
+                if (diagnosis.suppressAlert()) {
+                    log.debug("Bloat alert bastirildi (gecici birikim, israr esigi asilmadi): {}.{} instance={}",
+                        top.get("schemaname"), top.get("relname"), instancePk);
+                    updateLastEval(ruleId, instancePk, currentVal, severity);
+                    continue;
+                }
+                ctx.put("diagnosis", "Teşhis: " + diagnosis.diagnosis() + "\n");
+                ctx.put("bloat_action", diagnosis.action());
             } else {
                 ctx.put("diagnosis", "");
                 ctx.put("bloat_action", "Tablo istatistiklerine ve autovacuum/index ihtiyacına bak.");
@@ -3428,7 +3440,163 @@ public class AlertRuleEvaluator {
         return null;
     }
 
-    private String[] diagnoseBloat(Map<String, Object> record, long instancePk) {
+    /**
+     * Aksiyon metinlerinde kullanilacak, kopyalanip calistirilabilir tam tablo
+     * adi ("sema"."tablo"). Kimlik ancak kucuk harf/rakam/alt cizgi iceriyorsa
+     * ve rakamla baslamiyorsa tirnaksiz birakilir; aksi halde cift tirnak
+     * icine alinir (PG kimlik kurallari). Ad okunamazsa eski yer tutucuya
+     * duser — bozuk bir komut uretmektense yer tutucu daha guvenli.
+     */
+    static String qualifiedTableName(Map<String, Object> record) {
+        Object schema = record.get("schemaname");
+        Object table = record.get("relname");
+        if (!(schema instanceof String s) || !(table instanceof String t)
+                || s.isBlank() || t.isBlank()) {
+            return "<şema.tablo>";
+        }
+        return quoteIdentIfNeeded(s) + "." + quoteIdentIfNeeded(t);
+    }
+
+    private static final java.util.regex.Pattern SAFE_IDENT =
+        java.util.regex.Pattern.compile("[a-z_][a-z0-9_]*");
+
+    private static String quoteIdentIfNeeded(String ident) {
+        if (SAFE_IDENT.matcher(ident).matches()) {
+            return ident;
+        }
+        // Ic tirnaklari PG kuralina gore ikile
+        return "\"" + ident.replace("\"", "\"\"") + "\"";
+    }
+
+    /**
+     * diagnoseBloat() sonucu. suppressAlert=true ise cagiran taraf alert
+     * ACMAZ — durum gecici kabul edilir ve sadece israr sayaci ilerletilir.
+     */
+    record BloatDiagnosis(String diagnosis, String action, boolean suppressAlert) {
+        static BloatDiagnosis of(String diagnosis, String action) {
+            return new BloatDiagnosis(diagnosis, action, false);
+        }
+        static BloatDiagnosis suppressed() {
+            return new BloatDiagnosis("", "", true);
+        }
+    }
+
+    /** Senaryo 4'un alert'e donusmesi icin gereken ust uste gorulme sayisi. */
+    private static final int SCENARIO_4_STREAK_THRESHOLD = 3;
+
+    /**
+     * Israr sayacini bir artirir ve guncel degeri doner (V096).
+     *
+     * Sayac KALICI bir tabloda tutulur, in-memory degil: collector her
+     * deploy'da yeniden baslar ve in-memory bir sayac her restart'ta
+     * sifirlanirdi — israrli bir sorun bu yuzden hicbir zaman esige
+     * ulasamazdi (PGSTAT-P1-009'da belgelenen ayni tuzak).
+     *
+     * Trend kontrolu: olu satir sayisi bir onceki degerlendirmeden BUYUK
+     * degilse streak ilerletilmez (1'e resetlenir). Boylece "artiyor" degil
+     * "sabit kalmis" bir durum, sirf tekrar gorulduğu icin alert'e
+     * donusmez.
+     *
+     * @return guncellenmis streak degeri; okuma/yazma hatasinda esik degeri
+     *         (guvenli taraf: sayac calismiyorsa alert'i bastirma)
+     */
+    private int bumpScenarioStreak(Map<String, Object> record, long instancePk,
+                                    String scenario, Long currentDeadTup) {
+        Long dbid = record.get("dbid") instanceof Number n ? n.longValue() : null;
+        Long relid = record.get("relid") instanceof Number n ? n.longValue() : null;
+        if (dbid == null || relid == null) {
+            // Kimlik yoksa sayac tutulamaz — bastirma, alert'i ac.
+            return SCENARIO_4_STREAK_THRESHOLD;
+        }
+        try {
+            // Trend hala artiyor mu? Artmiyorsa streak'i 1'e resetle.
+            jdbc.update("""
+                insert into control.bloat_scenario_streak
+                  (instance_pk, dbid, relid, scenario, streak_count,
+                   first_seen_at, last_seen_at, last_dead_tup)
+                values (?, ?, ?, ?, 1, now(), now(), ?)
+                on conflict (instance_pk, dbid, relid, scenario) do update set
+                  streak_count = case
+                    when excluded.last_dead_tup is null
+                      or control.bloat_scenario_streak.last_dead_tup is null
+                      or excluded.last_dead_tup > control.bloat_scenario_streak.last_dead_tup
+                    then control.bloat_scenario_streak.streak_count + 1
+                    else 1
+                  end,
+                  first_seen_at = case
+                    when excluded.last_dead_tup is not null
+                      and control.bloat_scenario_streak.last_dead_tup is not null
+                      and excluded.last_dead_tup <= control.bloat_scenario_streak.last_dead_tup
+                    then now()
+                    else control.bloat_scenario_streak.first_seen_at
+                  end,
+                  last_seen_at = now(),
+                  last_dead_tup = excluded.last_dead_tup
+                """,
+                instancePk, dbid, relid, scenario, currentDeadTup);
+
+            Integer streak = jdbc.queryForObject(
+                "select streak_count from control.bloat_scenario_streak " +
+                "where instance_pk = ? and dbid = ? and relid = ? and scenario = ?",
+                Integer.class, instancePk, dbid, relid, scenario);
+            return streak != null ? streak : SCENARIO_4_STREAK_THRESHOLD;
+        } catch (Exception e) {
+            log.debug("bloat streak sayaci guncellenemedi instance={} relid={}: {}",
+                instancePk, relid, e.getMessage());
+            // Sayac calismiyorsa alert'i bastirma — kacirmak, fazladan
+            // uyarmaktan daha zararli.
+            return SCENARIO_4_STREAK_THRESHOLD;
+        }
+    }
+
+    /** Senaryo artik gecerli degilse sayaci temizler. */
+    private void clearScenarioStreak(Map<String, Object> record, long instancePk, String scenario) {
+        Long dbid = record.get("dbid") instanceof Number n ? n.longValue() : null;
+        Long relid = record.get("relid") instanceof Number n ? n.longValue() : null;
+        if (dbid == null || relid == null) return;
+        try {
+            jdbc.update("delete from control.bloat_scenario_streak " +
+                "where instance_pk = ? and dbid = ? and relid = ? and scenario = ?",
+                instancePk, dbid, relid, scenario);
+        } catch (Exception e) {
+            log.debug("bloat streak sayaci temizlenemedi instance={}: {}", instancePk, e.getMessage());
+        }
+    }
+
+    /** Mesajda gosterilecek trend ozeti: "1.2M -> 1.5M" gibi. */
+    private static String formatStreakTrend(Map<String, Object> record) {
+        Object prev = record.get("prev_dead_tup");
+        Object curr = record.get("dead_tup");
+        if (prev instanceof Number p && curr instanceof Number c) {
+            return String.format("%,d → %,d ölü satır", p.longValue(), c.longValue());
+        }
+        return "ölü satır sayısı artıyor";
+    }
+
+    /** Israrın ne zaman baslamis oldugunu okur; okunamazsa jenerik metin. */
+    private String formatStreakFirstSeen(Map<String, Object> record, long instancePk, String scenario) {
+        Long dbid = record.get("dbid") instanceof Number n ? n.longValue() : null;
+        Long relid = record.get("relid") instanceof Number n ? n.longValue() : null;
+        if (dbid == null || relid == null) return "bilinmiyor";
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "select first_seen_at from control.bloat_scenario_streak " +
+                "where instance_pk = ? and dbid = ? and relid = ? and scenario = ?",
+                instancePk, dbid, relid, scenario);
+            if (rows.isEmpty()) return "bilinmiyor";
+            java.time.OffsetDateTime firstSeen = asOffsetDateTime(rows.get(0).get("first_seen_at"));
+            if (firstSeen == null) return "bilinmiyor";
+            long minutes = java.time.Duration.between(
+                firstSeen, java.time.OffsetDateTime.now()).toMinutes();
+            return minutes < 60
+                ? String.format("%d dakika önce", minutes)
+                : String.format("%d saat önce", minutes / 60);
+        } catch (Exception e) {
+            return "bilinmiyor";
+        }
+    }
+
+    private BloatDiagnosis diagnoseBloat(Map<String, Object> record, long instancePk) {
         // timestamptz kolonlari queryForList()'ten java.sql.Timestamp olarak
         // gelir — normalize etmeden instanceof OffsetDateTime kontrolleri
         // her zaman false doner (bkz. asOffsetDateTime javadoc'u).
@@ -3440,6 +3608,10 @@ public class AlertRuleEvaluator {
         Object prevDeadTupObj = record.get("prev_dead_tup");
         Long currentDeadTup = record.get("dead_tup") instanceof Number n ? n.longValue() : null;
         Long liveTup = record.get("live_tup") instanceof Number n ? n.longValue() : null;
+        // Aksiyon metinlerinde <sema.tablo> yer tutucusu yerine GERCEK adi
+        // kullaniyoruz — kullanici komutu dogrudan kopyalayip calistirabilsin
+        // (musteri talebi 2026-08-27).
+        String qualifiedName = qualifiedTableName(record);
 
         // Senaryo 1: hic vacuum edilmemis (otomatik veya manuel). "Kontrol et"
         // demek yerine elimizdeki gercek veriyle (fact.pg_settings_snapshot,
@@ -3452,10 +3624,10 @@ public class AlertRuleEvaluator {
             Long avThreshold = (Long) settings[2];
 
             if (Boolean.FALSE.equals(autovacuumOn)) {
-                return new String[]{
+                return BloatDiagnosis.of(
                     "Bu tablo hiç vacuum edilmemiş — instance genelinde autovacuum kapalı (autovacuum=off)." ,
-                    "postgresql.conf'ta autovacuum=on yap ve reload et; bu tablo için manuel VACUUM ANALYZE çalıştırarak mevcut bloat'u hemen temizle."
-                };
+                    String.format("postgresql.conf'ta autovacuum=on yap ve reload et; ardından VACUUM ANALYZE %s; ile mevcut bloat'u hemen temizle.", qualifiedName)
+                );
             }
             if (scaleFactor != null && avThreshold != null && liveTup != null) {
                 long triggerThreshold = avThreshold + scaleFactor.multiply(BigDecimal.valueOf(liveTup)).longValue();
@@ -3465,11 +3637,12 @@ public class AlertRuleEvaluator {
                     Boolean tableAutovacuumOverride = fetchTableAutovacuumOverride(
                         instancePk, (String) record.get("schemaname"), (String) record.get("relname"));
                     if (Boolean.FALSE.equals(tableAutovacuumOverride)) {
-                        return new String[]{
+                        return BloatDiagnosis.of(
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum genel olarak açık (autovacuum=on) ve tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — ama bu TABLOYA ÖZEL autovacuum_enabled=false override'ı var (pg_class.reloptions), bu yüzden hiç çalışmadı.",
                                 triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
-                            "ALTER TABLE <şema.tablo> RESET (autovacuum_enabled); ile bu tabloya özel override'ı kaldır, ardından manuel VACUUM ANALYZE çalıştır."
-                        };
+                            String.format("ALTER TABLE %s RESET (autovacuum_enabled); ile bu tabloya özel override'ı kaldır, ardından VACUUM ANALYZE %s; çalıştır.",
+                                qualifiedName, qualifiedName)
+                        );
                     }
                     // 1b-ii: "olasi nedenler" degil KESIN sonuc — su an calisan
                     // worker sayisini/limitini de okuyup net soyluyoruz (musteri
@@ -3483,43 +3656,43 @@ public class AlertRuleEvaluator {
                     boolean workerStatusUsable = runningWorkers != null && maxWorkers != null
                         && workerStatus.currentWorkerStatus() == EvidenceStatus.AVAILABLE;
                     if (workerStatusUsable && runningWorkers >= maxWorkers) {
-                        return new String[]{
+                        return BloatDiagnosis.of(
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d autovacuum worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.",
                                 triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
-                            "autovacuum_max_workers ayarını artır (postgresql.conf, reload gerektirir) veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
-                        };
+                            String.format("autovacuum_max_workers ayarını artır (postgresql.conf, reload gerektirir) veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi VACUUM ANALYZE %s; ile öne al.", qualifiedName)
+                        );
                     }
                     if (workerStatusUsable) {
-                        return new String[]{
+                        return BloatDiagnosis.of(
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d worker çalışıyor (doygunluk yok, boş kapasite var), yani eşiği ÇOK YAKIN ZAMANDA aştı ve autovacuum'un bir sonraki tarama döngüsünü (naptime) henüz beklemiyor.",
                                 triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
-                            "Bir sonraki autovacuum_naptime (varsayılan 1dk) döngüsünü bekle; birkaç döngü sonra da tetiklenmezse manuel VACUUM ANALYZE çalıştır."
-                        };
+                            String.format("Bir sonraki autovacuum_naptime (varsayılan 1dk) döngüsünü bekle; birkaç döngü sonra da tetiklenmezse VACUUM ANALYZE %s; çalıştır.", qualifiedName)
+                        );
                     }
-                    return new String[]{
+                    return BloatDiagnosis.of(
                         String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — worker durumu okunamadı (fact.pg_activity_snapshot/pg_settings_snapshot henüz toplanmamış olabilir).",
                             triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup),
-                        "Manuel VACUUM ANALYZE çalıştır; bir toplama döngüsü sonrası bu alert tekrar tetiklenirse worker durumu netleşecek."
-                    };
+                        String.format("VACUUM ANALYZE %s; çalıştır; bir toplama döngüsü sonrası bu alert tekrar tetiklenirse worker durumu netleşecek.", qualifiedName)
+                    );
                 }
-                return new String[]{
+                return BloatDiagnosis.of(
                     String.format("Bu tablo hiç vacuum edilmemiş ama henüz gerekmiyor olabilir — autovacuum tetikleme eşiği (%d = %d + %.2f × %d canlı satır) şu an %d ölü satırla henüz aşılmamış.",
                         triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup != null ? currentDeadTup : 0),
-                    "Bu tablo mutlak dead-tuple eşiğiyle (Bacak B) yakalandı, oran eşiğinden değil — düşük satır sayılı ama kritik bir tablo olabilir; manuel VACUUM ANALYZE ile temizle."
-                };
+                    String.format("Bu tablo mutlak dead-tuple eşiğiyle (Bacak B) yakalandı, oran eşiğinden değil — düşük satır sayılı ama kritik bir tablo olabilir; VACUUM ANALYZE %s; ile temizle.", qualifiedName)
+                );
             }
-            return new String[]{
+            return BloatDiagnosis.of(
                 "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel); global autovacuum ayarları henüz toplanmamış (fact.pg_settings_snapshot boş veya gece toplaması yapılmamış), kesin eşik hesabı yapılamadı.",
-                "Manuel VACUUM ANALYZE çalıştır; bir gece toplaması geçtikten sonra bu alert tekrar tetiklenirse eşik hesabı otomatik olarak netleşecek."
-            };
+                String.format("VACUUM ANALYZE %s; çalıştır; bir gece toplaması geçtikten sonra bu alert tekrar tetiklenirse eşik hesabı otomatik olarak netleşecek.", qualifiedName)
+            );
         }
 
         // Senaryo 2: autovacuum calisiyor ama xmin horizon engelliyor
         if (autovacuumCountSum > 0 && hasXminHorizonRisk(instancePk)) {
-            return new String[]{
+            return BloatDiagnosis.of(
                 "Autovacuum çalışıyor ama uzun süren bir transaction/kullanılmayan replication slot ölü satırların temizlenmesini engelliyor (xmin horizon).",
                 "pg_stat_activity'de xact_start'ı eski olan bağlantıları ve pg_replication_slots'ta aktif olmayan slot'ları kontrol et; gerekirse sonlandır/sil."
-            };
+            );
         }
 
         // Senaryo 3: autovacuum sik calisiyor ama yetersiz (Bacak C sinyali).
@@ -3530,12 +3703,12 @@ public class AlertRuleEvaluator {
         if (vacuumIneffective) {
             AutovacuumWorkerEvidence ev = fetchAutovacuumWorkerStatus(instancePk);
             Long relid = record.get("relid") instanceof Number rn ? rn.longValue() : null;
-            return new String[]{
+            return BloatDiagnosis.of(
                 "Autovacuum çalışıyor ama ölü satırları yeterince hızlı temizleyemiyor."
                     + renderWorkerWaitEvidence(ev)
                     + renderIoImpactEvidence(fetchAutovacuumIoImpact(instancePk)),
                 buildCostDelayAction(instancePk, relid, ev)
-            };
+            );
         }
 
         // Senaryo 3.5: son vacuum ESKI (>24 saat) ve bloat artmaya devam ediyor
@@ -3558,18 +3731,18 @@ public class AlertRuleEvaluator {
             if (runningWorkers != null && maxWorkers != null
                     && workerStatus.currentWorkerStatus() == EvidenceStatus.AVAILABLE
                     && runningWorkers >= maxWorkers) {
-                return new String[]{
+                return BloatDiagnosis.of(
                     String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — şu an %d/%d worker çalışıyor, TÜM WORKER'LAR DOLU, bu yüzden bu tablo sıraya girip beklemiş.%s",
                         hoursSinceLastAutovacuum, runningWorkers, maxWorkers,
                         renderWorkerWaitEvidence(workerStatus)),
-                    "autovacuum_max_workers ayarını artır veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi manuel VACUUM ANALYZE ile öne al."
-                };
+                    String.format("autovacuum_max_workers ayarını artır veya diğer tabloların vacuum yükünü azalt; bu tabloyu şimdi VACUUM ANALYZE %s; ile öne al.", qualifiedName)
+                );
             }
-            return new String[]{
+            return BloatDiagnosis.of(
                 String.format("Son autovacuum %d saat önce çalışmış, o zamandan beri bir daha çalışmadı ve ölü satır sayısı artmaya devam ediyor — worker doygunluğu yok, bu yüzden neden tekrar tetiklenmediği ayrıca araştırılmalı (olası nedenler: bu süre içinde tetikleme eşiği hâlâ aşılmamış olabilir, ya da autovacuum_naptime uzun ayarlanmış olabilir).",
                     hoursSinceLastAutovacuum),
-                "postgresql.conf'ta autovacuum_naptime ayarını kontrol et; sürekli artış devam ediyorsa manuel VACUUM ANALYZE ile hemen temizle."
-            };
+                String.format("postgresql.conf'ta autovacuum_naptime ayarını kontrol et; sürekli artış devam ediyorsa VACUUM ANALYZE %s; ile hemen temizle.", qualifiedName)
+            );
         }
 
         // Senaryo 4: yeni olusmus/artan trend, autovacuum henuz yetismemis olabilir
@@ -3589,26 +3762,47 @@ public class AlertRuleEvaluator {
         // buldu. Bu senaryo, ayni durumu bir daha otomatik yakalamak icin.
         if (recentAutovacuum && increasingTrend && autovacuumCountSum > 1) {
             AutovacuumWorkerEvidence ev45 = fetchAutovacuumWorkerStatus(instancePk);
-            return new String[]{
+            return BloatDiagnosis.of(
                 String.format("Autovacuum kronik olarak çalışıyor (bu pencerede %d kez) ve son çalışması yakın zamanda oldu, ama ölü satır sayısı hâlâ artmaya devam ediyor — bu, tablonun güncelleme hızına göre autovacuum tetikleme eşiğinin (autovacuum_vacuum_scale_factor/threshold) çok yüksek kaldığını gösterir.%s%s",
                     autovacuumCountSum, renderWorkerWaitEvidence(ev45),
                     renderIoImpactEvidence(fetchAutovacuumIoImpact(instancePk))),
-                "Bu tablo için ALTER TABLE <şema.tablo> SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha düşük bir eşik ayarla (özellikle sık UPSERT/UPDATE alan büyük tablolarda varsayılan %20 oranı çok geç tetiklenir)."
-            };
+                String.format("Bu tablo için ALTER TABLE %s SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_vacuum_threshold = 5000); gibi daha düşük bir eşik ayarla (özellikle sık UPSERT/UPDATE alan büyük tablolarda varsayılan %%20 oranı çok geç tetiklenir).",
+                    qualifiedName)
+            );
         }
 
+        // Senaryo 4: autovacuum yakin zamanda calismis ve trend artiyor ama
+        // yukaridaki daha kesin senaryolarin HICBIRINE takilmamis. Bu, cogu
+        // zaman toplama anina denk gelmis GECICI bir olu satir birikimidir —
+        // autovacuum zaten calisiyor, bir-iki dongude temizleyecek.
+        //
+        // Bu yuzden ilk goruslerde alert ACMIYORUZ, sadece israr sayacini
+        // ilerletiyoruz. Ust uste SCENARIO_4_STREAK_THRESHOLD kez ayni tabloda
+        // ayni durumu gorursek (ve olu satir sayisi her seferinde artmaya devam
+        // ediyorsa) artik "gecici" degil "gercekten yetisemiyor" kabul edip
+        // alert aciyoruz (musteri talebi 2026-08-27).
         if (recentAutovacuum && increasingTrend) {
-            return new String[]{
-                "Bloat yeni oluşmuş/artıyor, autovacuum henüz yetişmemiş olabilir.",
-                "Kısa süre gözlemle — autovacuum döngüsü kendiliğinden düzeltebilir; düzelmezse manuel VACUUM ANALYZE çalıştır."
-            };
+            int streak = bumpScenarioStreak(record, instancePk, "scenario_4", currentDeadTup);
+            if (streak < SCENARIO_4_STREAK_THRESHOLD) {
+                return BloatDiagnosis.suppressed();
+            }
+            return BloatDiagnosis.of(
+                String.format("Autovacuum çalışıyor ama yetişemiyor: ölü satır sayısı üst üste %d değerlendirmede artmaya devam etti (%s). İlk fark edilme: %s. Bu artık geçici bir birikim değil — autovacuum döngüsü bu tablonun güncelleme hızına yetişemiyor.",
+                    streak, formatStreakTrend(record), formatStreakFirstSeen(record, instancePk, "scenario_4")),
+                String.format("Önce VACUUM ANALYZE %s; ile mevcut birikimi temizle; ardından bu tablo için autovacuum_vacuum_scale_factor/threshold değerlerini düşürerek autovacuum'un daha sık tetiklenmesini sağla.",
+                    qualifiedName)
+            );
         }
+        // Trend artmiyorsa veya autovacuum yakin zamanda calismadiysa senaryo 4
+        // gecerli degil — varsa eski sayaci temizle ki gelecekte sifirdan
+        // baslasin (kesintili artislar birikip yanlis alert uretmesin).
+        clearScenarioStreak(record, instancePk, "scenario_4");
 
         // Senaryo 5: varsayilan
-        return new String[]{
+        return BloatDiagnosis.of(
             "Autovacuum ayarları veya iş yükü tabloyu dengede tutmaya yetmiyor.",
-            "Manuel VACUUM ANALYZE çalıştır; sürekli tekrarlıyorsa autovacuum_vacuum_scale_factor'ü düşürmeyi değerlendir."
-        };
+            String.format("VACUUM ANALYZE %s; çalıştır; sürekli tekrarlıyorsa autovacuum_vacuum_scale_factor'ü düşürmeyi değerlendir.", qualifiedName)
+        );
     }
 
     private static String sanitizeOperator(String op) {

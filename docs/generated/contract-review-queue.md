@@ -13,9 +13,9 @@ node scripts/generate-doc-inventory.mjs
 
 | Queue | Count | Action |
 | --- | --- | --- |
-| Table/data-family contracts needing semantic review | 48 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 920 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 614 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Table/data-family contracts needing semantic review | 49 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
+| Field contracts needing exact source/version review | 928 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 622 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -41,6 +41,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_snooze | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.baseline_trigger | control/config | 8 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.baseline_version | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
+| control.bloat_scenario_streak | control/config | 8 | not detected | not detected | not detected | generated default; needs review |
 | control.collector_command | control/config | 7 | not detected | api/src/routes/alerts.ts (5 routes)<br>api/src/routes/instances.ts (71 routes) | ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx | generated default; needs review |
 | control.database_access_subscription | control/config | 8 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.database_action_log | control/config | 9 | not detected | api/src/routes/databaseCleanup.ts (4 routes) | not detected | generated default; needs review |
@@ -224,6 +225,14 @@ node scripts/generate-doc-inventory.mjs
 | control.baseline_version.pg_version | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.baseline_version.version_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.baseline_version.version_number | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.dbid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.first_seen_at | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.instance_pk | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.last_dead_tup | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.last_seen_at | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.relid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.scenario | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.bloat_scenario_streak.streak_count | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.collector_command.command | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.collector_command.command_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.collector_command.error_message | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

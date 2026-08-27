@@ -16,12 +16,12 @@ This file answers the operational contract questions at table/data-family level.
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 94 |
+| Tables analyzed | 95 |
 | Seeded semantic contracts | 46 |
-| Generated defaults needing review | 48 |
+| Generated defaults needing review | 49 |
 | Tables with detected API consumers | 78 |
 | Tables with inferred UI consumers | 60 |
-| Tables with alert/report/notification consumers | 50 |
+| Tables with alert/report/notification consumers | 51 |
 
 ## Contract Matrix
 
@@ -45,6 +45,7 @@ This file answers the operational contract questions at table/data-family level.
 | control.alert_snooze | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | notifications/telegram | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.baseline_trigger | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.baseline_version | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
+| control.bloat_scenario_streak | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | not detected | not detected | alerts | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.collector_command | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/alerts.ts (5 routes)<br>api/src/routes/instances.ts (71 routes) | ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.database_access_subscription | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |
 | control.database_action_log | control/config | pgstat application/control plane | pgstat central database | not source-PG specific | event-driven or operator-configured | not detected | not detected | not detected | not detected | api/src/routes/databaseCleanup.ts (4 routes) | not detected | not detected | control/context when explicitly contracted | configuration/control metadata; review before export | not applicable | generated default; needs review |

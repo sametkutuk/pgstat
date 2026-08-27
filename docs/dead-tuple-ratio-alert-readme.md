@@ -39,6 +39,7 @@ ve hangisi geçerliyse ona uygun teşhis + aksiyon üretir:
 | 1b-i | Bu tabloda `autovacuum_enabled = false` override'ı var | Override'ı kaldır |
 | 1b-ii | Eşik aşılmış, override yok, ama worker doygunluğu var | `autovacuum_max_workers` artır |
 | 1c/1d | Eşik henüz aşılmamış / tablo yeni | Aksiyon yok, bilgi amaçlı |
+| 4 | Autovacuum çalışıyor, trend artıyor, ama henüz ısrar etmiyor | **Alarm açılmaz** — bkz. aşağıdaki not |
 | 2 | Uzun transaction veya pasif replication slot xmin horizon'u tutuyor | Transaction'ı/slot'u temizle |
 | 3 | Autovacuum çalışıyor ama etkisiz | Eşik ayarına bak |
 | 3.5 | Son vacuum 24 saatten eski, bloat artıyor | Worker/eşik ayarına bak |
@@ -46,6 +47,33 @@ ve hangisi geçerliyse ona uygun teşhis + aksiyon üretir:
 
 Sıra önemlidir: en kesin/en acil senaryo önce değerlendirilir, ilk
 eşleşen kazanır.
+
+### Neden bazı durumlar alarm üretmez (senaryo 4)
+
+Bir tablo eşiği aştığında, autovacuum zaten çalışıyorsa ve trend
+artıyorsa bu **çoğu zaman toplama anına denk gelmiş geçici bir
+birikimdir** — autovacuum bir-iki döngüde temizler. Bu duruma her
+seferinde alarm üretmek gürültü yaratır.
+
+Bu yüzden senaryo 4'te alarm hemen açılmaz. Bunun yerine
+`control.bloat_scenario_streak` tablosunda bir ısrar sayacı tutulur:
+
+- Her değerlendirmede aynı tabloda senaryo 4 görülüyor **ve** ölü satır
+  sayısı bir öncekinden büyükse sayaç artar.
+- Sayaç **3**'e ulaşınca durum artık "geçici" sayılmaz, alarm açılır ve
+  mesajda kaç değerlendirmedir sürdüğü + ne zamandır fark edildiği yazar.
+- Trend artmayı bırakır ya da başka bir senaryoya geçilirse sayaç silinir.
+
+**Bu, gerçek sorunları kaçırmaz.** Senaryo 4, karar ağacında senaryo 2
+(xmin horizon), 3 (vacuum yetersiz), 3.5 (24 saattir vacuum yok) ve 4.5
+(eşik yanlış kalibre) senaryolarından **sonra** gelir. Gerçekten
+yetişemeyen bir tablo zaten o daha kesin testlere takılır ve **anında**
+alarm üretir. Senaryo 4'e düşen bir kayıt, tanımı gereği onların
+hiçbirine takılmamış demektir.
+
+Sayaç kalıcı bir tabloda tutulur, bellekte değil — collector her
+deploy'da yeniden başlar ve bellekteki bir sayaç her seferinde
+sıfırlanırdı; o zaman ısrarlı bir sorun eşiğe hiç ulaşamazdı.
 
 ## Autovacuum kanıt katmanı (PGSTAT-P1-011 — planlandı, henüz kodlanmadı)
 

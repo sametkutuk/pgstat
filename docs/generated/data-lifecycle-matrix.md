@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 94 |
-| Tables without detected retention mapping | 43 |
+| Tables analyzed | 95 |
+| Tables without detected retention mapping | 44 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 3 |
@@ -45,6 +45,7 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 | control.alert_snooze | control/config | 11 | created_at | no | not detected | not detected | no | not detected | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql | collector/service/NotificationService.java<br>collector/service/TelegramCommandPoller.java |
 | control.baseline_trigger | control/config | 8 | completed_at, requested_at, started_at | no | not detected | not detected | no | not detected | V020__baseline_trigger.sql | V020__baseline_trigger.sql | collector/service/BaselineCalculator.java |
 | control.baseline_version | control/config | 11 | created_at, invalidated_at | no | not detected | not detected | no | not detected | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |  |
+| control.bloat_scenario_streak | control/config | 8 | first_seen_at, last_seen_at | no | not detected | not detected | no | not detected | V096__bloat_scenario_streak.sql | V096__bloat_scenario_streak.sql | collector/service/AlertRuleEvaluator.java |
 | control.collector_command | control/config | 7 | processed_at, requested_at | no | not detected | not detected | no | not detected | V057__collector_command.sql | V057__collector_command.sql |  |
 | control.database_access_subscription | control/config | 8 | created_at, updated_at | no | not detected | not detected | no | not detected | V082__database_access_subscription.sql | V082__database_access_subscription.sql |  |
 | control.database_action_log | control/config | 9 | actioned_at | no | not detected | not detected | no | not detected | V065__alert_intervals_and_cleanup.sql | V065__alert_intervals_and_cleanup.sql | collector/collector/DiscoveryCollector.java |

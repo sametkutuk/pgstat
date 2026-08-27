@@ -398,6 +398,70 @@ class AutovacuumEvidenceTest {
         assertThat(norm.isAfter(java.time.OffsetDateTime.now().minusHours(24))).isTrue();
     }
 
+    // ---------------------------------------------------------------
+    // Aksiyon metninde gercek sema/tablo adi
+    // ---------------------------------------------------------------
+
+    @Test
+    void actionTextUsesRealTableNameInsteadOfPlaceholder() {
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("schemaname", "agg");
+        rec.put("relname", "pg_table_stat_hourly");
+
+        assertThat(AlertRuleEvaluator.qualifiedTableName(rec))
+            .isEqualTo("agg.pg_table_stat_hourly");
+    }
+
+    @Test
+    void identifiersNeedingQuotesAreQuotedForCopyPasteSafety() {
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("schemaname", "MixedCase");
+        rec.put("relname", "tablo adi");
+
+        assertThat(AlertRuleEvaluator.qualifiedTableName(rec))
+            .isEqualTo("\"MixedCase\".\"tablo adi\"");
+    }
+
+    @Test
+    void embeddedQuotesAreDoubledPerPostgresRules() {
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("schemaname", "public");
+        rec.put("relname", "wei\"rd");
+
+        assertThat(AlertRuleEvaluator.qualifiedTableName(rec))
+            .isEqualTo("public.\"wei\"\"rd\"");
+    }
+
+    @Test
+    void fallsBackToPlaceholderRatherThanEmittingBrokenSql() {
+        // Ad okunamazsa bozuk bir komut uretmektense yer tutucu daha guvenli.
+        assertThat(AlertRuleEvaluator.qualifiedTableName(new java.util.HashMap<>()))
+            .isEqualTo("<şema.tablo>");
+    }
+
+    // ---------------------------------------------------------------
+    // Senaryo 4 bastirma sozlesmesi
+    // ---------------------------------------------------------------
+
+    @Test
+    void suppressedDiagnosisCarriesTheSuppressFlagAndNoText() {
+        AlertRuleEvaluator.BloatDiagnosis d = AlertRuleEvaluator.BloatDiagnosis.suppressed();
+
+        assertThat(d.suppressAlert()).isTrue();
+        assertThat(d.diagnosis()).isEmpty();
+        assertThat(d.action()).isEmpty();
+    }
+
+    @Test
+    void normalDiagnosisNeverSuppresses() {
+        AlertRuleEvaluator.BloatDiagnosis d =
+            AlertRuleEvaluator.BloatDiagnosis.of("teşhis", "aksiyon");
+
+        assertThat(d.suppressAlert()).isFalse();
+        assertThat(d.diagnosis()).isEqualTo("teşhis");
+        assertThat(d.action()).isEqualTo("aksiyon");
+    }
+
     @Test
     void fallbackMessageIsUnchangedWhenThereIsNoDiagnosisToAdd() {
         // dead_tuple_ratio disindaki metrikler icin diagnosis bos string —
