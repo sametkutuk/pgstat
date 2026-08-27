@@ -3617,6 +3617,12 @@ public class AlertRuleEvaluator {
         // demek yerine elimizdeki gercek veriyle (fact.pg_settings_snapshot,
         // canli/olu satir) KESIN teshis yapiyoruz — musteri talebi 2026-08-24:
         // "biz de tum veriler var, neden olabilir kontrol et diyorsun".
+        if (lastAutovacuum != null || lastVacuum != null) {
+            // Tablo artik vacuum edilmis — senaryo 1b-ii israri sona erdi,
+            // sayaci temizle ki gelecekte sifirdan baslasin.
+            clearScenarioStreak(record, instancePk, "scenario_1b_ii");
+        }
+
         if (lastAutovacuum == null && lastVacuum == null) {
             Object[] settings = fetchAutovacuumSettings(instancePk);
             Boolean autovacuumOn = (Boolean) settings[0];
@@ -3663,10 +3669,25 @@ public class AlertRuleEvaluator {
                         );
                     }
                     if (workerStatusUsable) {
+                        // Esik asilmis, worker doygunlugu YOK, ama autovacuum
+                        // yine de tetiklenmemis. Ilk goruslerde bu gercekten
+                        // "naptime dongusunu bekliyor" olabilir — o yuzden
+                        // alert acmiyoruz, israr sayacini ilerletiyoruz.
+                        // Israr ederse "birazdan calisacak" demek yanlis olur:
+                        // eski kod bunu 6 gun boyunca soyluyordu (musteri
+                        // gozlemi 2026-08-27, instance 14).
+                        int waitStreak = bumpScenarioStreak(record, instancePk,
+                            "scenario_1b_ii", currentDeadTup);
+                        if (waitStreak < SCENARIO_4_STREAK_THRESHOLD) {
+                            return BloatDiagnosis.suppressed();
+                        }
                         return BloatDiagnosis.of(
-                            String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum açık (autovacuum=on, tablo düzeyinde override yok) ama tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — şu an %d/%d worker çalışıyor (doygunluk yok, boş kapasite var), yani eşiği ÇOK YAKIN ZAMANDA aştı ve autovacuum'un bir sonraki tarama döngüsünü (naptime) henüz beklemiyor.",
-                                triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup, runningWorkers, maxWorkers),
-                            String.format("Bir sonraki autovacuum_naptime (varsayılan 1dk) döngüsünü bekle; birkaç döngü sonra da tetiklenmezse VACUUM ANALYZE %s; çalıştır.", qualifiedName)
+                            String.format("Bu tablo hiç vacuum edilmemiş ve bu durum ISRAR EDİYOR: üst üste %d değerlendirmedir tetikleme eşiği (%d = %d + %.2f × %d canlı satır) aşılmış (%d ölü satır) ve worker doygunluğu da yok (%d/%d çalışıyor, boş kapasite var) — yani autovacuum'un bu tabloyu almasını engelleyen şey naptime beklemesi DEĞİL. İlk fark edilme: %s.",
+                                waitStreak, triggerThreshold, avThreshold, scaleFactor, liveTup,
+                                currentDeadTup, runningWorkers, maxWorkers,
+                                formatStreakFirstSeen(record, instancePk, "scenario_1b_ii")),
+                            String.format("Bu tablonun autovacuum'a hiç alınmama nedenini araştır: autovacuum launcher çalışıyor mu, bu database autovacuum'dan dışlanmış mı, tabloda ANALYZE hiç çalışmamış olabilir mi (n_live_tup=%d güvenilir mi). Geçici çözüm: VACUUM ANALYZE %s; çalıştır.",
+                                liveTup, qualifiedName)
                         );
                     }
                     return BloatDiagnosis.of(

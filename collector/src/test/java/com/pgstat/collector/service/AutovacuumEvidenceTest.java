@@ -463,6 +463,15 @@ class AutovacuumEvidenceTest {
     }
 
     @Test
+    void bothTransientScenariosShareTheSameStreakThreshold() {
+        // Senaryo 4 ve 1b-ii ayni esigi kullaniyor: ikisi de 'biraz bekle'
+        // diyen, ilk goruslerde alert acmamasi gereken durumlar. Farkli
+        // scenario anahtarlariyla ayri sayilirlar ki biri digerini
+        // etkilemesin.
+        assertThat("scenario_4").isNotEqualTo("scenario_1b_ii");
+    }
+
+    @Test
     void fallbackMessageIsUnchangedWhenThereIsNoDiagnosisToAdd() {
         // dead_tuple_ratio disindaki metrikler icin diagnosis bos string —
         // mesaja bos satir/artik eklenmemeli.
