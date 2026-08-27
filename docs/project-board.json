@@ -2961,6 +2961,76 @@
         "SQL dogrulamasi (2026-08-27, uretim DB): eski politika-only max() 2026-07-28, yeni instance-joined max() 2026-08-13 donuyor — tahmin edilen 16 gunluk fark birebir dogrulandi. Deploy sonrasi gece bakiminda bu cutoff'tan eski partitionlarin drop edilmesi bekleniyor."
       ],
       "next_action": "Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL."
+    },
+    {
+      "id": "PGSTAT-P0-038",
+      "order": 48,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Deploy, then confirm the frozen alert on rule 14 / instance 2 either updates to the currently worst table or resolves, and that security.user style tables (never vacuumed, dead tuples flat) start alerting after three evaluations.",
+      "title": "Bloat suppression froze an already-open alert and never fired on tables whose dead tuples stopped growing",
+      "problem": "The transient-bloat suppression added on 2026-08-27 (PGSTAT-P1-011 follow-up) had two defects that surfaced together in production on the same day. First, control.bloat_scenario_streak only advanced when the dead-tuple count was strictly greater than the previous reading, so a table that had already bottomed out stayed invisible forever: security.user on instance 2 sat at 6 live / 3224 dead, never vacuumed, reporting the same count every evaluation, so the streak reset to 1 each time and the alert threshold was never reached. Second, the suppression branch called updateLastEval with the computed severity and then continued without touching ops.alert. That wrote last_alert_at = now() (falsely arming the 60-minute cooldown) and left current_severity populated (making the next cycle resolve condition misleading), while an alert opened before suppression existed was left frozen: alert 112959 stayed open with a message from 2026-08-21 naming public.t_currency_rate_active, a table the customer had already vacuumed, while five other tables on the same instance were above threshold and last_seen_at had not moved for over two hours.",
+      "requirements": [
+        "The persistence counter must measure how long the scenario has persisted, not whether dead tuples keep climbing, so a table that stopped growing while still un-vacuumed is not silently ignored.",
+        "Transient accumulations must still be suppressed — they are handled by the counter row being deleted once the table stops exceeding the threshold or moves to another scenario, not by resetting on a flat reading.",
+        "Suppression must not write a severity into control.alert_rule_last_eval, since a suppressed evaluation means no alert is being raised.",
+        "Suppression must not leave an already-open alert untouched; if the situation is not worth alerting on, an open alert is resolved rather than frozen with a stale message."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "bumpScenarioStreak advances the counter on every evaluation and resets to 1 only when the dead-tuple count strictly falls; the rule is mirrored in a pure static shouldResetStreak(previous, current) that the SQL case expression matches.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The suppression branch calls updateLastEval with a null severity and, when a previous severity exists and auto_resolve is on, resolves the open alert before continuing.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Four unit tests cover the counter rule: flat count advances, growing count advances, falling count resets, unknown previous count advances. mvn compile and mvn test pass (56/56).",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "docs/dead-tuple-ratio-alert-readme.md describes the persistence rule and the open-alert behaviour, including why the previous growth-based rule hid bottomed-out tables.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "Live verification: the frozen alert on rule 14 / instance 2 either updates to name the currently worst table or resolves, and never-vacuumed tables with flat dead-tuple counts raise an alert after three consecutive evaluations.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "AlertRuleEvaluator.bumpScenarioStreak: invert the case expression so the counter advances by default and resets only on a strictly falling dead-tuple count; keep first_seen_at aligned with the reset.",
+        "AlertRuleEvaluator: add static shouldResetStreak(Long, Long) mirroring that rule so it can be unit tested, with a comment tying it to the SQL.",
+        "AlertRuleEvaluator.evaluateThresholdPerRecord suppression branch: pass null severity to updateLastEval and resolve the open alert when prevSeverity is set and autoResolve is on.",
+        "AutovacuumEvidenceTest: four cases for shouldResetStreak.",
+        "docs/dead-tuple-ratio-alert-readme.md: rewrite the counter section and add the open-alert subsection."
+      ],
+      "verification_plan": [
+        "mvn -o compile && mvn -o test (expect 56/56)",
+        "Live: after deploy, watch alert 112959 on the next evaluation cycle — it must either be resolved or re-rendered naming the current worst table.",
+        "Live: confirm control.bloat_scenario_streak rows for instance 2 advance past 2 instead of oscillating."
+      ],
+      "required_docs": [
+        "docs/dead-tuple-ratio-alert-readme.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer reported that after running ALTER TABLE ... RESET (autovacuum_enabled) and VACUUM ANALYZE on public.t_currency_rate_active, the alert stayed open and the Evaluate Now button reported no change.",
+        "Production state at diagnosis: ops.alert 112959 open/critical, first_seen_at 2026-08-21 15:29, last_seen_at 2026-08-27 15:48 (frozen 2h10m) while control.alert_rule_last_eval showed last_evaluated_at 17:48 with current_severity critical — proving evaluation was running but ops.alert was never updated.",
+        "control.bloat_scenario_streak held exactly one row for instance 2 (scenario_1b_ii, streak_count 2, last_dead_tup 80399) while five tables were above threshold, and the worst (security.user, 6 live / 3224 dead, never vacuumed) had a flat count that kept resetting its counter."
+      ]
     }
   ]
 }

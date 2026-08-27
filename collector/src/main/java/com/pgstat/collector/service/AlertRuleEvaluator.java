@@ -2009,7 +2009,27 @@ public class AlertRuleEvaluator {
                 if (diagnosis.suppressAlert()) {
                     log.debug("Bloat alert bastirildi (gecici birikim, israr esigi asilmadi): {}.{} instance={}",
                         top.get("schemaname"), top.get("relname"), instancePk);
-                    updateLastEval(ruleId, instancePk, currentVal, severity);
+                    // severity DEGIL null yazilir. Bastirma "su an alert yok"
+                    // demektir; severity yazmak iki sey bozuyordu:
+                    //  1) last_alert_at = now() olup cooldown'u tetikliyor, boylece
+                    //     bastirma kalktiginda bile alert 60dk daha acilamiyordu,
+                    //  2) current_severity dolu kaldigi icin bir sonraki cycle'da
+                    //     resolve kosulu (prevSeverity != null) yaniltici sekilde
+                    //     sagleniyordu.
+                    updateLastEval(ruleId, instancePk, currentVal, null);
+                    // Zaten ACIK bir alert varsa bastirma onu oldugu gibi
+                    // birakmamali. Bastirmanin amaci YENI alert acmamakti
+                    // (musteri talebi 2026-08-27: "birazdan calisacak diyor,
+                    // alert olarak vermeyelim"); ama acik bir alert guncellenmeden
+                    // birakilinca zombi hale geliyordu: uretimde alert 21 Agustos'ta
+                    // acilmis, sonra bastirma devreye girmis ve mesaj 2 saat boyunca
+                    // artik gecerli olmayan bir tabloyu gostermeye devam etmisti
+                    // (kullanici o tabloyu VACUUM'lamis, alert hala onu yaziyordu).
+                    // Bastirilan durum "alert edilecek kadar ciddi degil" demek
+                    // oldugundan, acik alert varsa kapatilir.
+                    if (prevSeverity != null && autoResolve) {
+                        resolveAlert(alertKey, rule, instancePk, recordLabel(top, metricType));
+                    }
                     continue;
                 }
                 ctx.put("diagnosis", "Teşhis: " + diagnosis.diagnosis() + "\n");
@@ -3509,7 +3529,25 @@ public class AlertRuleEvaluator {
             return SCENARIO_4_STREAK_THRESHOLD;
         }
         try {
-            // Trend hala artiyor mu? Artmiyorsa streak'i 1'e resetle.
+            // Sayac, senaryonun ust uste kac degerlendirmedir SURDUGUNU sayar —
+            // olu satirin artmaya devam edip etmedigini degil.
+            //
+            // Onceki hali "olu satir bir onceki olcumden buyukse ilerle, degilse
+            // 1'e resetle" idi. Bu, dibe vurup orada duran tablolari kalici olarak
+            // gorunmez yapiyordu: uretimde security.user (6 canli / 3224 olu, hic
+            // vacuum edilmemis) her degerlendirmede ayni olu satir sayisini
+            // gosterdigi icin sayac hep 1'e donuyor ve esik hicbir zaman
+            // asilmiyordu (2026-08-27). Oysa hic vacuum edilmemis bir tablo,
+            // artmayi biraksa da duzeltilmesi gereken bir durumdur.
+            //
+            // Gecici birikimler yine bastirilir, ama farkli bir mekanizmayla:
+            // autovacuum tabloyu temizleyince kayit esigi asmayi birakir ya da
+            // baska bir senaryoya gecer, her iki durumda da clearScenarioStreak()
+            // satiri siler. Yani "kendi kendine duzelen" durum sayaci hic
+            // doldurmaya firsat bulamaz.
+            //
+            // Sayac yalnizca olu satir GERILEDIGINDE sifirlanir: bu, kismi bir
+            // vacuum'un ise yaradigi anlamina gelir, israr sayilmaz.
             jdbc.update("""
                 insert into control.bloat_scenario_streak
                   (instance_pk, dbid, relid, scenario, streak_count,
@@ -3517,16 +3555,16 @@ public class AlertRuleEvaluator {
                 values (?, ?, ?, ?, 1, now(), now(), ?)
                 on conflict (instance_pk, dbid, relid, scenario) do update set
                   streak_count = case
-                    when excluded.last_dead_tup is null
-                      or control.bloat_scenario_streak.last_dead_tup is null
-                      or excluded.last_dead_tup > control.bloat_scenario_streak.last_dead_tup
-                    then control.bloat_scenario_streak.streak_count + 1
-                    else 1
+                    when excluded.last_dead_tup is not null
+                      and control.bloat_scenario_streak.last_dead_tup is not null
+                      and excluded.last_dead_tup < control.bloat_scenario_streak.last_dead_tup
+                    then 1
+                    else control.bloat_scenario_streak.streak_count + 1
                   end,
                   first_seen_at = case
                     when excluded.last_dead_tup is not null
                       and control.bloat_scenario_streak.last_dead_tup is not null
-                      and excluded.last_dead_tup <= control.bloat_scenario_streak.last_dead_tup
+                      and excluded.last_dead_tup < control.bloat_scenario_streak.last_dead_tup
                     then now()
                     else control.bloat_scenario_streak.first_seen_at
                   end,
@@ -3547,6 +3585,24 @@ public class AlertRuleEvaluator {
             // uyarmaktan daha zararli.
             return SCENARIO_4_STREAK_THRESHOLD;
         }
+    }
+
+    /**
+     * Sayac ilerlemeli mi, yoksa sifirlanmali mi?
+     *
+     * Yukaridaki SQL'deki case ifadesinin bire bir karsiligi — SQL'i test
+     * edemedigimiz icin karar kurali burada da duruyor ve testler bunu
+     * dogruluyor. Ikisi degisirse birlikte degismeli.
+     *
+     * Kural: sayac her gorulmede ilerler; yalnizca olu satir GERILEDIGINDE
+     * sifirlanir (kismi vacuum ise yaramis demektir, israr sayilmaz).
+     * Olu satirin sabit kalmasi israrin bittigi anlamina gelmez.
+     *
+     * @return true ise sayac 1'e sifirlanir, false ise +1 ilerler
+     */
+    static boolean shouldResetStreak(Long previousDeadTup, Long currentDeadTup) {
+        if (previousDeadTup == null || currentDeadTup == null) return false;
+        return currentDeadTup < previousDeadTup;
     }
 
     /** Senaryo artik gecerli degilse sayaci temizler. */

@@ -471,6 +471,40 @@ class AutovacuumEvidenceTest {
         assertThat("scenario_4").isNotEqualTo("scenario_1b_ii");
     }
 
+    // =========================================================================
+    // Israr sayaci ilerletme kurali (shouldResetStreak)
+    // =========================================================================
+
+    @Test
+    void streakKeepsAdvancingWhenDeadTuplesStayFlat() {
+        // Uretimde bulunan hata (2026-08-27): security.user tablosu 6 canli /
+        // 3224 olu satirla hic vacuum edilmemis durumdaydi ve olu satir sayisi
+        // artik ARTMIYORDU. Sayac "artiyor mu" kuralini kullandigi icin her
+        // degerlendirmede 1'e donuyor, esik hicbir zaman asilmiyor ve bu tablo
+        // kalici olarak gorunmez kaliyordu. Sabit kalmak, sorunun bittigi
+        // anlamina gelmez.
+        assertThat(AlertRuleEvaluator.shouldResetStreak(3224L, 3224L)).isFalse();
+    }
+
+    @Test
+    void streakAdvancesWhenDeadTuplesGrow() {
+        assertThat(AlertRuleEvaluator.shouldResetStreak(1000L, 1500L)).isFalse();
+    }
+
+    @Test
+    void streakResetsOnlyWhenDeadTuplesActuallyFall() {
+        // Gerileme = kismi vacuum ise yaramis; israr sayilmaz, bastan sayilir.
+        assertThat(AlertRuleEvaluator.shouldResetStreak(1500L, 1000L)).isTrue();
+    }
+
+    @Test
+    void streakAdvancesWhenPreviousCountIsUnknown() {
+        // Ilk gorulme ya da okunamayan onceki deger: bilinmeyeni "duzelme"
+        // saymayiz, cunku bu sayaci sonsuza kadar sifirda tutabilirdi.
+        assertThat(AlertRuleEvaluator.shouldResetStreak(null, 500L)).isFalse();
+        assertThat(AlertRuleEvaluator.shouldResetStreak(500L, null)).isFalse();
+    }
+
     @Test
     void fallbackMessageIsUnchangedWhenThereIsNoDiagnosisToAdd() {
         // dead_tuple_ratio disindaki metrikler icin diagnosis bos string —

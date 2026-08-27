@@ -58,11 +58,36 @@ seferinde alarm üretmek gürültü yaratır.
 Bu yüzden senaryo 4'te alarm hemen açılmaz. Bunun yerine
 `control.bloat_scenario_streak` tablosunda bir ısrar sayacı tutulur:
 
-- Her değerlendirmede aynı tabloda senaryo 4 görülüyor **ve** ölü satır
-  sayısı bir öncekinden büyükse sayaç artar.
+- Her değerlendirmede aynı tabloda aynı senaryo görülüyorsa sayaç artar.
 - Sayaç **3**'e ulaşınca durum artık "geçici" sayılmaz, alarm açılır ve
   mesajda kaç değerlendirmedir sürdüğü + ne zamandır fark edildiği yazar.
-- Trend artmayı bırakır ya da başka bir senaryoya geçilirse sayaç silinir.
+- Sayaç yalnızca ölü satır sayısı **gerilediğinde** sıfırlanır — bu, kısmi
+  bir vacuum'un işe yaradığı anlamına gelir. Sabit kalması ısrarın bittiği
+  anlamına gelmez.
+- Tablo eşiği aşmayı bırakır ya da başka bir senaryoya geçerse kayıt
+  tamamen silinir; kendi kendine düzelen durum sayacı doldurmaya fırsat
+  bulamaz.
+
+Sayaç önceleri "ölü satır artmaya devam ediyor mu" kuralını kullanıyordu.
+Bu, dibe vurup orada duran tabloları kalıcı olarak görünmez yapıyordu:
+üretimde `security.user` (6 canlı / 3224 ölü, hiç vacuum edilmemiş) her
+değerlendirmede aynı sayıyı gösterdiği için sayaç sürekli 1'e dönüyor ve
+eşik hiç aşılmıyordu. Hiç vacuum edilmemiş bir tablo, artmayı bıraksa da
+düzeltilmesi gereken bir durumdur.
+
+### Bastırma açık bir alarmı dondurmaz
+
+Bastırma **yeni** alarm açmamak içindir. Zaten açık bir alarm varsa
+bastırılan değerlendirmede o alarm kapatılır (`auto_resolve` açıksa) —
+güncellenmeden açık bırakılmaz.
+
+Önceki hali açık alarmı dokunmadan geçiyordu ve alarm "zombi" hale
+geliyordu: üretimde bir alarm 21 Ağustos'ta açılmış, sonra bastırma
+devreye girmiş, ve mesaj iki saat boyunca kullanıcının çoktan
+`VACUUM`'ladığı bir tabloyu göstermeye devam etmişti. Bastırma sırasında
+`alert_rule_last_eval`'e severity yazılmaz (null yazılır); severity
+yazmak hem cooldown'u yanlış tetikliyor hem de bir sonraki döngüde
+resolve koşulunu yanıltıyordu.
 
 **Bu, gerçek sorunları kaçırmaz.** Senaryo 4, karar ağacında senaryo 2
 (xmin horizon), 3 (vacuum yetersiz), 3.5 (24 saattir vacuum yok) ve 4.5
