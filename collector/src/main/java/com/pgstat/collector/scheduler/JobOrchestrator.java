@@ -527,21 +527,28 @@ public class JobOrchestrator {
         }
         if (instancePks.isEmpty()) return;
 
-        log.info("Manuel degerlendirme: {} instance icin taze veri toplaniyor", instancePks.size());
+        log.info("Manuel degerlendirme: {} instance icin taze veri kontrol ediliyor", instancePks.size());
+        int collected = 0, skipped = 0;
         for (Long instancePk : instancePks) {
             // Cluster metrikleri (activity/io/wait-event) — bloat teshisinin
             // worker kanitlari buradan geliyor.
-            try {
-                com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
-                if (inst != null) clusterCollector.collect(inst);
-            } catch (Exception e) {
-                log.debug("Manuel degerlendirme cluster toplama hatasi instance={}: {}", instancePk, e.getMessage());
+            if (recentlyCollected("select last_cluster_collect_at from control.instance_state where instance_pk = ?", instancePk)) {
+                skipped++;
+            } else {
+                try {
+                    com.pgstat.collector.model.InstanceInfo inst = inventoryRepo.findByPk(instancePk);
+                    if (inst != null) { clusterCollector.collect(inst); collected++; }
+                } catch (Exception e) {
+                    log.debug("Manuel degerlendirme cluster toplama hatasi instance={}: {}", instancePk, e.getMessage());
+                }
             }
             // Tablo istatistikleri — dead_tuple_ratio bunlari okuyor.
             try {
                 for (DbObjectsTarget target : inventoryRepo.findDbObjectsByInstance(instancePk)) {
+                    if (recentlyCollectedDb(instancePk, target.dbid())) { skipped++; continue; }
                     try {
                         dbObjectsCollector.collect(target);
+                        collected++;
                     } catch (Exception e) {
                         log.debug("Manuel degerlendirme db_objects hatasi instance={} dbid={}: {}",
                             instancePk, target.dbid(), e.getMessage());
@@ -550,6 +557,43 @@ public class JobOrchestrator {
             } catch (Exception e) {
                 log.debug("Manuel degerlendirme db listesi okunamadi instance={}: {}", instancePk, e.getMessage());
             }
+        }
+        log.info("Manuel degerlendirme toplama: {} yapildi, {} atlandi (son {} sn icinde toplanmis)",
+            collected, skipped, MANUAL_REFRESH_MIN_AGE_SECONDS);
+    }
+
+    /**
+     * Butona arka arkaya basilmasina karsi koruma: son toplama bu esikten
+     * yeniyse tekrar toplamiyoruz. Hedef PostgreSQL'e gereksiz yuk binmesin
+     * ve agg.pgss_hourly'nin avg(mean_exec_time_ms) alani fazladan orneklerle
+     * kaymasin diye (o alan cagri-sayisi agirlikli degil, her ornek esit
+     * agirlikta sayiliyor).
+     */
+    private static final int MANUAL_REFRESH_MIN_AGE_SECONDS = 120;
+
+    private boolean recentlyCollected(String sql, long instancePk) {
+        try {
+            java.util.List<java.time.OffsetDateTime> rows =
+                jdbc.queryForList(sql, java.time.OffsetDateTime.class, instancePk);
+            if (rows.isEmpty() || rows.get(0) == null) return false;
+            return rows.get(0).isAfter(
+                java.time.OffsetDateTime.now().minusSeconds(MANUAL_REFRESH_MIN_AGE_SECONDS));
+        } catch (Exception e) {
+            return false; // okunamazsa topla — kacirmak, fazladan toplamaktan kotu
+        }
+    }
+
+    private boolean recentlyCollectedDb(long instancePk, long dbid) {
+        try {
+            java.util.List<java.time.OffsetDateTime> rows = jdbc.queryForList(
+                "select last_db_objects_collect_at from control.database_state " +
+                "where instance_pk = ? and dbid = ?",
+                java.time.OffsetDateTime.class, instancePk, dbid);
+            if (rows.isEmpty() || rows.get(0) == null) return false;
+            return rows.get(0).isAfter(
+                java.time.OffsetDateTime.now().minusSeconds(MANUAL_REFRESH_MIN_AGE_SECONDS));
+        } catch (Exception e) {
+            return false;
         }
     }
 
