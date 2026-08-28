@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 51 |
+| Total tasks | 52 |
 | Done tasks | 16 |
-| Remaining tasks | 35 |
+| Remaining tasks | 36 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 16 |
 | in_progress | 8 |
-| planned | 27 |
+| planned | 28 |
 
 ## Workstream Counts
 
@@ -50,7 +50,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | retention | 1 |
 | security | 1 |
 | telemetry | 7 |
-| ui | 3 |
+| ui | 4 |
 | validation | 3 |
 
 ## Task Board
@@ -108,6 +108,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 49 | PGSTAT-P0-039 | P0 | alerting | planned | Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible | Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord. |
 | 50 | PGSTAT-P0-040 | P0 | alerting | planned | Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables | Add a statistics-trustworthiness gate to diagnoseBloat that runs before any ratio or threshold arithmetic, and decide what the alert says when statistics cannot be trusted. |
 | 51 | PGSTAT-P1-012 | P1 | alerting | planned | No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics | Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken. |
+| 52 | PGSTAT-P2-006 | P2 | ui | planned | Instance list does not show which retention policy each instance uses | Deploy with the next api and ui build, then confirm the column renders and decide whether samet-ets-01 should move from r6-default to r3-short. |
 
 ## Dependency Map
 
@@ -164,6 +165,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-039 | PGSTAT-P0-038 | - |
 | PGSTAT-P0-040 | - | - |
 | PGSTAT-P1-012 | - | - |
+| PGSTAT-P2-006 | - | - |
 
 ## Closure Rules
 

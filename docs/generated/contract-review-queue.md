@@ -64,7 +64,7 @@ node scripts/generate-doc-inventory.mjs
 | control.pgss_reset_schedule | control/config | 11 | not detected | not detected | not detected | generated default; needs review |
 | control.report_config | control/config | 9 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/reports.ts (7 routes) | ui/src/pages/ReportHistory.tsx | generated default; needs review |
 | control.report_trigger | control/config | 9 | not detected | api/src/routes/reports.ts (7 routes) | ui/src/pages/ReportHistory.tsx | generated default; needs review |
-| control.retention_policy | control/config | 20 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/insights.ts (21 routes)<br>api/src/routes/retentionPolicies.ts (4 routes) | ui/src/pages/Insights.tsx<br>ui/src/pages/Settings.tsx | generated default; needs review |
+| control.retention_policy | control/config | 20 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/retentionPolicies.ts (4 routes) | ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/Settings.tsx | generated default; needs review |
 | control.schedule_profile | control/config | 17 | not detected | api/src/routes/scheduleProfiles.ts (4 routes) | ui/src/pages/Settings.tsx | generated default; needs review |
 | control.slot_lifecycle_subscription | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |
 | control.slot_observation_state | control/config | 10 | not detected | api/src/routes/adaptiveAlerting.ts (41 routes) | not detected | generated default; needs review |

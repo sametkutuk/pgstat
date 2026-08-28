@@ -24,6 +24,9 @@ interface Instance {
     ssl_root_cert_path: string | null; collector_group: string | null;
     collector_username: string;
     schedule_profile_id: number; retention_policy_id: number; notes: string | null;
+    // Retention politikasinin okunabilir hali — id yerine ad ve gun degeri
+    retention_policy_code: string | null; retention_raw_days: number | null;
+    retention_hourly_days: number | null; retention_daily_days: number | null;
     last_error: string | null; last_error_at: string | null;
 }
 
@@ -255,6 +258,31 @@ export default function Instances() {
         { key: 'environment', header: 'Ortam', render: (r: Instance) => r.environment || '—' },
         { key: 'service_group', header: 'Servis Grubu', render: (r: Instance) => r.service_group || '—' },
         { key: 'last_cluster_collect_at', header: 'Son Cluster', render: (r: Instance) => <TimeAgo date={r.last_cluster_collect_at} /> },
+        {
+            // Retention, hemen yanindaki "Collector DB" kolonunun sebebi: bir
+            // instance ne kadar uzun sure veri tutuyorsa o kadar yer kaplar.
+            // Ayrica partition drop siniri butun instance'lar icin ortaktir
+            // (en uzun KULLANILAN retention), yani tek bir instance'in uzun
+            // politikasi digerlerinin diskini de mesgul eder — bu yuzden
+            // hangi instance'in hangi politikada oldugu tek bakista gorulmeli.
+            key: 'retention_policy_code', header: 'Retention', render: (r: Instance) => {
+                if (!r.retention_policy_code) return '—';
+                const days = r.retention_raw_days;
+                const tip = [
+                    `Ham veri: ${days ?? '?'} gun`,
+                    r.retention_hourly_days != null ? `Saatlik ozet: ${r.retention_hourly_days} gun` : null,
+                    r.retention_daily_days != null ? `Gunluk ozet: ${r.retention_daily_days} gun` : null,
+                ].filter(Boolean).join('\n');
+                return (
+                    <div className="min-w-[90px]" title={tip}>
+                        <div className="text-xs text-[#1E293B]">{r.retention_policy_code}</div>
+                        {days != null && (
+                            <div className="text-[10px] text-[#94A3B8]">{days} gun ham veri</div>
+                        )}
+                    </div>
+                );
+            }
+        },
         {
             key: 'collector_bytes', header: 'Collector DB', render: (r: Instance) => {
                 const s = storageMap.get(Number(r.instance_pk));

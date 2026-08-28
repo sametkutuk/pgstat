@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-08-27",
+  "updated_at": "2026-08-28",
   "project": {
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
@@ -3264,6 +3264,64 @@
         "Fleet-wide noise measured at the 10000 and 7-day settings: 13 of 25 instances qualify, the largest with 8 tables, so a per-instance summary alert never needs to elide a long list.",
         "Severity of the worst cases justifies the alert: instance 4 has a table with 2594508 rows changed since its last analyze, instance 6 has 817760, instance 8 has 516298, and on instance 2 public.t_currency_rate has changed all 1153450 of its rows with no analyze ever recorded.",
         "All required inputs are already collected - n_mod_since_analyze in V004, last_autoanalyze added in V066 - so this is a rule and evaluator change with no collector or schema work."
+      ]
+    },
+    {
+      "id": "PGSTAT-P2-006",
+      "order": 52,
+      "priority": "P2",
+      "workstream": "ui",
+      "status": "planned",
+      "next_action": "Deploy with the next api and ui build, then confirm the column renders and decide whether samet-ets-01 should move from r6-default to r3-short.",
+      "title": "Instance list does not show which retention policy each instance uses",
+      "problem": "Finding out which retention policy an instance uses required querying control.instance_inventory joined to control.retention_policy by hand. The instances API returned retention_policy_id as a bare number and the UI consumed it only inside the edit form, so the list screen showed nothing. This is not merely cosmetic: the partition drop boundary is shared across the whole fleet, computed as the longest retention any active instance actually uses, so a single instance on a long policy keeps partitions alive for every other instance. On 2026-08-28 that was live - samet-ets-01 was the only instance on r6-default (14 days) while the other 24 used r3-short (7 days), and in the resulting 7-day gap purge emptied partitions that then sat on disk unreclaimed, for example pgss_delta_20260820 holding 11740 live rows in 637 MB. Without the policy visible next to disk usage there was no way to notice that one instance was setting the retention for all of them.",
+      "requirements": [
+        "The instance list must show the retention policy of each instance without requiring a query.",
+        "It must show the raw retention window in days, since that is the number that drives partition retention and therefore disk usage.",
+        "It should sit next to the existing collector disk usage column, because the retention window is the cause of the number in that column."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "GET /api/instances joins control.retention_policy and returns policy_code plus the raw, hourly and daily retention day counts.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The instance list renders a Retention column showing the policy code and raw retention days, with the hourly and daily windows in its tooltip, placed next to Collector DB.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "tsc --noEmit passes for both api and ui.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Live verification: the column renders for all 25 instances and correctly shows samet-ets-01 as the only one on r6-default.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "api/src/routes/instances.ts: left join control.retention_policy in the list query and expose policy_code with the three day-count columns.",
+        "ui/src/pages/Instances.tsx: extend the Instance interface and add the Retention column definition after Son Cluster."
+      ],
+      "verification_plan": [
+        "npx tsc --noEmit in api and ui",
+        "Live: open the instances page and confirm every row shows a policy, and that samet-ets-01 is the only r6-default row."
+      ],
+      "required_docs": [
+        "docs/generated/project-inventory.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer asked for it on 2026-08-28 while investigating why the database was still 33 GB: bunu instances sekmesinde gorsem iyi olabilir yada ayarlarda hangi instance hangi retention configinde onu gosterebiliriz.",
+        "The request arose directly from the shared-boundary problem: the query proving samet-ets-01 was the sole r6-default instance had to be written by hand, which is what prompted the ask."
       ]
     }
   ]

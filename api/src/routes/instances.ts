@@ -74,6 +74,15 @@ router.get('/', async (req, res, next) => {
         i.admin_dbname, i.collector_username, i.secret_ref, i.ssl_mode,
         i.ssl_root_cert_path, i.collector_group, i.notes,
         i.schedule_profile_id, i.retention_policy_id,
+        -- Retention politikasinin adi ve gun degerleri: liste ekraninda hangi
+        -- instance'in ne kadar veri tuttugunu SQL yazmadan gorebilmek icin
+        -- (musteri talebi 2026-08-28). Partition drop siniri butun instance'lar
+        -- icin ortak oldugundan (en uzun kullanilan retention), tek bir
+        -- instance'in uzun politikasi digerlerinin de diskini mesgul eder.
+        rp.policy_code as retention_policy_code,
+        rp.raw_retention_days as retention_raw_days,
+        rp.hourly_retention_days as retention_hourly_days,
+        rp.daily_retention_days as retention_daily_days,
         c.pg_major, c.is_reachable, c.is_primary, c.collector_sql_family,
         s.last_cluster_collect_at, s.last_statements_collect_at,
         s.consecutive_failures, s.backoff_until,
@@ -81,6 +90,7 @@ router.get('/', async (req, res, next) => {
       from control.instance_inventory i
       left join control.instance_capability c on c.instance_pk = i.instance_pk
       left join control.instance_state s on s.instance_pk = i.instance_pk
+      left join control.retention_policy rp on rp.retention_policy_id = i.retention_policy_id
       order by i.display_name
     `);
     res.json(result.rows.map((r: any) => ({ ...r, secret_ref: maskSecretRef(r.secret_ref) })));
