@@ -273,6 +273,14 @@ public class DbObjectsCollector {
                 java.time.OffsetDateTime lastIdxScan = rs.getObject("last_idx_scan", java.time.OffsetDateTime.class);
                 long nTupNewpageUpd = rs.getLong("n_tup_newpage_upd");
 
+                // pg_class.reltuples — autovacuum'un esik hesabinda kullandigi
+                // deger ve istatistik sifirlamasindan etkilenmeyen tek satir
+                // sayisi tahmini (V100). PG14+'ta -1 "bilinmiyor" demek; negatif
+                // ya da NULL degerleri kullanmiyoruz, tuketen taraf
+                // n_live_tup_estimate'e dusuyor.
+                Long reltuples = rs.getObject("reltuples", Long.class);
+                if (reltuples != null && reltuples < 0) reltuples = null;
+
                 // V067 Madde 4: PG18 vacuum/analyze time (monotonik counter → delta)
                 // double precision — Map<String,Long>'a koymuyoruz, precision kaybi olur
                 double totalVacuumTime = rs.getDouble("total_vacuum_time");
@@ -308,7 +316,7 @@ public class DbObjectsCollector {
                     nLiveTup, nDeadTup, nModSinceAnalyze,
                     lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
                     nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd,
-                    vtDelta0, vtDelta1, vtDelta2, vtDelta3
+                    vtDelta0, vtDelta1, vtDelta2, vtDelta3, reltuples
                 );
                 rows++;
             }

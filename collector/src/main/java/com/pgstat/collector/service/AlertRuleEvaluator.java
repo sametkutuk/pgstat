@@ -3051,8 +3051,16 @@ public class AlertRuleEvaluator {
 
         return jdbc.queryForList(
             "select t.schemaname, t.relname, t.dbid, t.relid," +
-            "       100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) as current_val," +
-            "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
+            // Oranin paydasi: reltuples varsa O kullanilir. n_live_tup, istatistik
+            // sifirlanip ANALYZE calismadiginda sifirda kalir ve oran %100
+            // gorunur; uretimde t_ets_hotel_transaction_log 30.4M satirlik bir
+            // tabloyken n_live_tup=0 ile %100 bloat raporlandi, gercek oran %1.7
+            // idi (2026-08-28). reltuples katalogda durur, restart'i atlatir.
+            "       100.0 * t.n_dead_tup_estimate::numeric" +
+            "         / nullif(coalesce(t.reltuples, t.n_live_tup_estimate) + t.n_dead_tup_estimate, 0) as current_val," +
+            "       t.n_dead_tup_estimate as dead_tup," +
+            "       coalesce(t.reltuples, t.n_live_tup_estimate) as live_tup," +
+            "       t.reltuples, t.n_live_tup_estimate as stat_live_tup, dbr.datname," +
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
             "       t.last_autovacuum, t.last_vacuum, t.autovacuum_count_sum," +
             "       t.last_analyze, t.last_autoanalyze," +
@@ -3073,6 +3081,11 @@ public class AlertRuleEvaluator {
             "    select distinct on (instance_pk, schemaname, relname, dbid)" +
             "           instance_pk, schemaname, relname, dbid, relid," +
             "           n_dead_tup_estimate, n_live_tup_estimate," +
+            // reltuples: autovacuum'un esik hesabinda kullandigi satir sayisi
+            // ve istatistik sifirlamasindan etkilenmeyen tek tahmin (V100).
+            // NULL/negatif ise bilinmiyor demektir, tuketen taraf
+            // n_live_tup_estimate'e duser.
+            "           nullif(reltuples, -1) as reltuples," +
             "           last_autovacuum, last_vacuum," +
             // Istatistik guvenilirlik kapisi icin (bkz. statsUntrustworthy):
             // n_live_tup/n_dead_tup sadece ANALYZE veya VACUUM sirasinda gercek
@@ -3107,9 +3120,11 @@ public class AlertRuleEvaluator {
             "     order by d2.sample_ts desc limit 1" +
             "  ) dbs on true" +
             "  where (" +
-            // Bacak A: oran + minimum satir sayisi
-            "    (t.n_live_tup_estimate + t.n_dead_tup_estimate) >= ?" +
-            "    and 100.0 * t.n_dead_tup_estimate::numeric / nullif(t.n_live_tup_estimate + t.n_dead_tup_estimate, 0) " + op + " ?" +
+            // Bacak A: oran + minimum satir sayisi. Payda yukaridakiyle AYNI
+            // olmali, yoksa secilen kayitla raporlanan oran birbirini tutmaz.
+            "    (coalesce(t.reltuples, t.n_live_tup_estimate) + t.n_dead_tup_estimate) >= ?" +
+            "    and 100.0 * t.n_dead_tup_estimate::numeric" +
+            "        / nullif(coalesce(t.reltuples, t.n_live_tup_estimate) + t.n_dead_tup_estimate, 0) " + op + " ?" +
             "  ) or (" +
             // Bacak B: mutlak dead-tuple sayisi, satir sayisindan bagimsiz
             "    t.n_dead_tup_estimate >= ?" +
@@ -4053,6 +4068,13 @@ public class AlertRuleEvaluator {
     }
 
     static boolean statsUntrustworthy(Map<String, Object> record) {
+        // reltuples biliniyorsa oran guvenilirdir, dort zaman damgasi bos olsa
+        // bile: reltuples KATALOGDA durur ve sifirlamayi atlatir, yani
+        // sifirlamadan onceki bir VACUUM/ANALYZE'in gercek olcumunu tasir.
+        // Bu ayrim onemli — uretimde 30.4M satirlik bir tabloda dort damga da
+        // bosken reltuples dogru degeri veriyordu ve oran %100 degil %1.7'ydi.
+        if (record.get("reltuples") instanceof Number n && n.longValue() > 0) return false;
+
         return record.get("last_analyze") == null
             && record.get("last_autoanalyze") == null
             && record.get("last_vacuum") == null

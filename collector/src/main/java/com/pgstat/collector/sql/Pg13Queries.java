@@ -92,7 +92,11 @@ public class Pg13Queries extends Pg11_12Queries {
               0::double precision as total_autovacuum_time,
               0::double precision as total_analyze_time,
               0::double precision as total_autoanalyze_time,
-              array_to_string(c.reloptions, ',') as reloptions_raw
+              array_to_string(c.reloptions, ',') as reloptions_raw,
+              -- Autovacuum'un KENDI esik hesabi reltuples'i kullanir,
+              -- n_live_tup'u degil; ayrica katalogda durdugu icin istatistik
+              -- sifirlamasini/restart'i atlatir (PGSTAT-P0-041).
+              c.reltuples::bigint as reltuples
             from pg_stat_user_tables s
             left join pg_statio_user_tables io on io.relid = s.relid
             left join pg_class c on c.oid = s.relid

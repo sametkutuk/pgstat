@@ -205,7 +205,11 @@ public class Pg14_16Queries extends Pg13Queries {
               coalesce((src.j->>'total_autovacuum_time')::double precision, 0) as total_autovacuum_time,
               coalesce((src.j->>'total_analyze_time')::double precision, 0) as total_analyze_time,
               coalesce((src.j->>'total_autoanalyze_time')::double precision, 0) as total_autoanalyze_time,
-              array_to_string(c.reloptions, ',') as reloptions_raw
+              array_to_string(c.reloptions, ',') as reloptions_raw,
+              -- Autovacuum'un KENDI esik hesabi reltuples'i kullanir,
+              -- n_live_tup'u degil; ayrica katalogda durdugu icin istatistik
+              -- sifirlamasini/restart'i atlatir (PGSTAT-P0-041).
+              c.reltuples::bigint as reltuples
             from pg_stat_user_tables s
             join src on src.relid = s.relid
             left join pg_statio_user_tables io on io.relid = s.relid

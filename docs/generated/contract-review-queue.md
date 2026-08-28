@@ -23,7 +23,7 @@ node scripts/generate-doc-inventory.mjs
 | Priority | Table | Why first | Columns | Promoted fields | Current status |
 | --- | --- | --- | --- | --- | --- |
 | 1 | fact.pgss_delta | query workload, temp spill, WAL spike, cache hit, latency evidence | 52 | 52 | seeded semantic contract |
-| 2 | fact.pg_table_stat_delta | vacuum lag, bloat proxy, table health, index advice context | 41 | 41 | seeded semantic contract |
+| 2 | fact.pg_table_stat_delta | vacuum lag, bloat proxy, table health, index advice context | 42 | 42 | seeded semantic contract |
 | 3 | fact.pg_database_delta | database workload, TPS, temp, cache, session evidence | 32 | 32 | seeded semantic contract |
 | 4 | fact.pg_index_stat_delta | unused/inefficient index and write-risk evidence | 18 | 18 | seeded semantic contract |
 | 5 | fact.pg_settings_snapshot | parameter tuning and risk context | 7 | 7 | seeded semantic contract |

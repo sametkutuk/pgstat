@@ -3549,6 +3549,80 @@
         "The gap had already bitten in production the same day: repeated adaptive long_running_query notifications on emh-dev-test could not be suppressed without silencing every other alert of that severity.",
         "Customer asked for select and unselect controls and a better picker after the first version shipped as a plain checkbox list. The list now groups codes by source - rule, adaptive, system - because those are different kinds of thing and read badly mixed together, and each row carries the template description, the severity last seen for that code and how often it fired in 30 days, so a code like slot_inactive_long does not have to be guessed at. Search matches the description too, so typing a Turkish phrase finds the code."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-041",
+      "order": 55,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Deploy with V100, wait one collection cycle, then confirm on instance 8 that the affected tables report their real ratios and that the false critical alerts resolve on their own.",
+      "title": "Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart",
+      "problem": "Both the reported bloat ratio and the autovacuum trigger threshold in the diagnosis were derived from pg_stat_user_tables.n_live_tup. That is wrong twice over. PostgreSQL computes its own thresholds from pg_class.reltuples - anlthresh = analyze_threshold + analyze_scale_factor * reltuples, and the same shape for vacuum - so the threshold the alert quoted was never the threshold autovacuum actually applies. And n_live_tup is derived from statistics counters, which are lost when a server restarts without recovering its statistics; reltuples lives in the catalog and survives. Measured on 2026-08-28 on db1.dc-etstur.com-test: the server had restarted 29 days earlier and statistics were not recovered (stats_reset was three seconds after postmaster_start_time), so n_live_tup for public.t_ets_hotel_transaction_log read 0 while the catalog held 30,404,328 rows across 5.3 GB. The alert reported 100 percent dead and raised a critical; the real ratio was 1.7 percent. Autovacuum had correctly skipped the table for 29 days - its real analyze threshold is 1,520,266 against 516,298 changes, 34 percent of the way there. At least 15 tables on that instance were in the same state.",
+      "requirements": [
+        "The ratio denominator and the quoted autovacuum threshold must both come from pg_class.reltuples, so the alert reasons about the same number PostgreSQL does.",
+        "reltuples must fall back to n_live_tup when it is unknown - PG14 and later store -1 for a relation never vacuumed or analyzed, and older versions leave it at 0 - rather than treating an unknown as a measurement.",
+        "The untrustworthy-statistics gate must stop firing when reltuples is known, since a catalog value carries a real measurement from before the reset even when every timestamp is null.",
+        "The record selection and the reported ratio must use the same denominator, or a table can be selected on one number and reported with another."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "pg_class.reltuples is collected into fact.pg_table_stat_delta for every supported PostgreSQL version, with negative values normalised to null at collection time.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "findBloatedTables computes the ratio, the minimum-rows leg and the reported live count from coalesce(reltuples, n_live_tup_estimate), the same expression in all three places.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "The autovacuum trigger threshold quoted in the diagnosis derives from the same coalesced value, so it matches what autovacuum would compute.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "statsUntrustworthy returns false when reltuples is a positive number, and stays true when it is null or zero; unit tests cover all three.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn test passes (72 tests).",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "Live verification: on instance 8 the affected tables report ratios matching the catalog rather than 100 percent, and the false critical alerts resolve without intervention.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Add c.reltuples to tableStatsQuery in Pg11_12Queries, Pg13Queries and Pg14_16Queries; Pg17_18Queries inherits.",
+        "V100 migration: nullable reltuples column on fact.pg_table_stat_delta.",
+        "DbObjectsCollector: read reltuples, normalise negatives to null, pass through to FactRepository.",
+        "AlertRuleEvaluator.findBloatedTables: select nullif(reltuples, -1) and use coalesce(reltuples, n_live_tup_estimate) as the denominator, in the ratio, the min-rows leg and the reported live_tup.",
+        "AlertRuleEvaluator.statsUntrustworthy: treat a positive reltuples as sufficient evidence."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: after deploy and one collection cycle, compare the reported ratio for t_ets_hotel_transaction_log against pg_class.reltuples on the target, and confirm the critical alerts on instance 8 resolve."
+      ],
+      "required_docs": [
+        "docs/dead-tuple-ratio-alert-readme.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Found by following the customer question of why these tables had gone so long without an ANALYZE. The answer turned out to be that they did not need one, and that our own numbers were the thing that was wrong.",
+        "Instance 8 evidence: autovacuum on, three workers, no lock held on the table at all, and the daemon had analyzed another table minutes earlier - so nothing was blocking it. The table simply had not reached its real threshold.",
+        "Divergence measured across the instance: 15 tables where the catalog reported millions of rows while the statistics reported single digits or zero, including t_ets_member_login_log at 12.5 million versus 154 and t_ets_mobile_device at 7.8 million versus 4."
+      ]
     }
   ]
 }

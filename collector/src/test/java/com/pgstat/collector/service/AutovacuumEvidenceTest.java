@@ -615,6 +615,38 @@ class AutovacuumEvidenceTest {
     }
 
     @Test
+    void aKnownReltuplesMakesTheRatioTrustworthyEvenWithNoTimestamps() {
+        // Uretim vakasi (2026-08-28, t_ets_hotel_transaction_log): dort zaman
+        // damgasi da bos, n_live_tup = 0, ama katalog 30.404.328 satir diyor.
+        // reltuples KATALOGDA durur ve istatistik sifirlamasini atlatir, yani
+        // sifirlamadan onceki gercek bir olcumu tasir — oran %100 degil %1.7.
+        java.util.Map<String, Object> r = bloatRecord(null, null, null, null);
+        r.put("reltuples", 30404328L);
+
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(r)).isFalse();
+    }
+
+    @Test
+    void anUnknownReltuplesLeavesTheStatisticsUntrustworthy() {
+        // PG14+ reltuples = -1 "hic vacuum/analyze edilmedi" demek; sorgu bunu
+        // NULL'a cevirir. Bu durumda geriye guvenilecek bir sey kalmaz.
+        java.util.Map<String, Object> r = bloatRecord(null, null, null, null);
+        r.put("reltuples", null);
+
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(r)).isTrue();
+    }
+
+    @Test
+    void aZeroReltuplesIsNotTreatedAsAMeasurement() {
+        // 0, "olculdu ve bos" ile "hic olculmedi" arasinda ayrim yapmaz;
+        // guvenli taraf, olcum saymamak.
+        java.util.Map<String, Object> r = bloatRecord(null, null, null, null);
+        r.put("reltuples", 0L);
+
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(r)).isTrue();
+    }
+
+    @Test
     void statsAreUntrustworthyWhenNothingHasEverCorrectedThem() {
         // Uretim vakasi (2026-08-27, security.user): dort zaman damgasi da NULL.
         // n_live_tup=6 / n_dead_tup=3224 bildiriliyordu, yani %99.81 olu oran ve

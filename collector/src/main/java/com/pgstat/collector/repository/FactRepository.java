@@ -399,7 +399,8 @@ public class FactRepository {
                                      long nInsSinceVacuum, OffsetDateTime lastSeqScan,
                                      OffsetDateTime lastIdxScan, long nTupNewpageUpd,
                                      double totalVacuumTimeMsDelta, double totalAutovacuumTimeMsDelta,
-                                     double totalAnalyzeTimeMsDelta, double totalAutoanalyzeTimeMsDelta) {
+                                     double totalAnalyzeTimeMsDelta, double totalAutoanalyzeTimeMsDelta,
+                                     Long reltuples) {
         jdbc.update("""
             insert into fact.pg_table_stat_delta (
               sample_ts, instance_pk, dbid, relid, schemaname, relname,
@@ -415,10 +416,11 @@ public class FactRepository {
               last_vacuum, last_autovacuum, last_analyze, last_autoanalyze,
               n_ins_since_vacuum, last_seq_scan, last_idx_scan, n_tup_newpage_upd,
               total_vacuum_time_ms_delta, total_autovacuum_time_ms_delta,
-              total_analyze_time_ms_delta, total_autoanalyze_time_ms_delta
+              total_analyze_time_ms_delta, total_autoanalyze_time_ms_delta,
+              reltuples
             )
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             sampleTs, instancePk, dbid, relid, schemaname, relname,
@@ -434,7 +436,8 @@ public class FactRepository {
             lastVacuum, lastAutovacuum, lastAnalyze, lastAutoanalyze,
             nInsSinceVacuum, lastSeqScan, lastIdxScan, nTupNewpageUpd,
             totalVacuumTimeMsDelta, totalAutovacuumTimeMsDelta,
-            totalAnalyzeTimeMsDelta, totalAutoanalyzeTimeMsDelta
+            totalAnalyzeTimeMsDelta, totalAutoanalyzeTimeMsDelta,
+            reltuples
         );
     }
 

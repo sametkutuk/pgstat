@@ -16,9 +16,9 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 103 |
+| Migrations scanned | 104 |
 | Tables discovered | 96 |
-| Columns discovered | 1175 |
+| Columns discovered | 1176 |
 | Indexes discovered | 127 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
@@ -1149,7 +1149,7 @@ This generated inventory is the bridge between code and the manual project docum
 | fact.pg_slru_snapshot | 11 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V026__slru_subscription_prefetch_functions.sql |
 | fact.pg_subscription_snapshot | 24 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_table_freeze_snapshot | 10 | yes | snapshot_ts | V078__table_freeze_snapshot.sql | V078__table_freeze_snapshot.sql |
-| fact.pg_table_stat_delta | 41 | yes | sample_ts | V004__fact_tables.sql | V067__missing_stat_columns_phase2.sql |
+| fact.pg_table_stat_delta | 42 | yes | sample_ts | V004__fact_tables.sql | V100__table_reltuples.sql |
 | fact.pg_user_function_snapshot | 9 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V026__slru_subscription_prefetch_functions.sql |
 | fact.pg_wal_receiver_snapshot | 17 | yes | sample_ts | V067__missing_stat_columns_phase2.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_wal_snapshot | 7 | yes | sample_ts | V023__wal_archiver_tables.sql | V023__wal_archiver_tables.sql |
@@ -1713,7 +1713,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>fact.pg_table_stat_delta columns (41)</summary>
+<details><summary>fact.pg_table_stat_delta columns (42)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -1758,6 +1758,7 @@ This generated inventory is the bridge between code and the manual project docum
 | total_autovacuum_time_ms_delta | double precision | V067__missing_stat_columns_phase2.sql |
 | total_analyze_time_ms_delta | double precision | V067__missing_stat_columns_phase2.sql |
 | total_autoanalyze_time_ms_delta | double precision | V067__missing_stat_columns_phase2.sql |
+| reltuples | bigint | V100__table_reltuples.sql |
 
 </details>
 
