@@ -58,3 +58,65 @@ degeridir; bu nedenle global `ALTER SYSTEM SET work_mem` degisikligi otomatik
 onerilmez. `high_temp_sqls_daily` icin SQL basina minimum temp yazimi ilk fazda
 sabit 100MB'dir; `threshold_value` sadece kac SQL'den sonra alert uretilecegini
 belirler.
+
+## Hangi bildirim nereye gider
+
+Bir alarmın **açılması** ile **bildirilmesi** ayrı şeylerdir. Alarm her
+zaman `ops.alert`'e yazılır ve UI'da görünür; bildirim gönderilip
+gönderilmeyeceğini dört ayrı mekanizma belirler. Hepsi bugün mevcut ve
+UI'dan ayarlanabilir.
+
+### 1. Kanal bazlı severity eşiği
+
+`control.notification_channel.min_severity` — o kanal yalnızca bu
+seviyeden **itibaren** bildirim alır. Sıralama:
+`info < warning < error < critical < emergency`.
+
+**Bildirim Kanalları** ekranından ayarlanır. Tipik kullanım:
+
+| Kanal | `min_severity` | Amaç |
+|---|---|---|
+| Telegram | `critical` | Anında müdahale gerektirenler |
+| E-posta | `warning` | Günlük gözden geçirme |
+
+Bu ayarla warning'ler UI'da görünmeye devam eder, sadece telefona
+düşmez. `NULL` bırakılırsa kanal her seviyeyi alır.
+
+### 2. Kural bazlı kanal seçimi
+
+`control.alert_rule_notification_channel` — bir kuralın bildirimleri
+yalnızca seçilen kanallara gider. **Alert Rules** ekranında kuralı
+düzenlerken seçilir. Hiç kanal seçilmezse kural tüm uygun kanallara
+gider (severity filtresine tabi).
+
+**Sınır:** bu eşleme yalnızca kural kaynaklı alarmlar için çalışır.
+Sistem alarmlarının (`alert_source = 'system'`) bir `rule_id`'si
+olmadığı için bu filtreden geçmezler; onlar sadece severity eşiğine
+tabidir.
+
+### 3. Susturma (snooze)
+
+`control.alert_snooze` — belirli bir `alert_key`, `alert_code` veya
+instance için bildirimleri geçici olarak durdurur. Çözülme bildirimleri
+susturmadan **etkilenmez**.
+
+### 4. Bakım penceresi
+
+`control.maintenance_window` — belirtilen gün/saat aralığında, seçilen
+instance'lar için bildirim gönderilmez.
+
+### Ayrıca her zaman geçerli olan spam koruması
+
+Aynı alarm için cooldown süresi içinde aynı veya daha düşük severity'de
+zaten bildirim gönderilmişse tekrar gönderilmez
+(`ops.notification_log` üzerinden). Severity yükselirse bu koruma
+otomatik devre dışı kalır — kötüleşen bir durum susturulmaz.
+
+Çözülme bildirimleri (`Resolved:` önekli) cooldown'ı bilerek **bypass
+eder**: bir sorunun düzeldiği her zaman bildirilmelidir.
+
+### Granular kurallarda toplama
+
+Tablo/indeks/sorgu bazlı kurallar kayıt başına ayrı alarm açar ama
+değerlendirme başına **tek** bildirim gönderir — beş bozuk tablo beş
+alarm, bir mesaj. Çözülme tarafı da aynı şekilde toplanır.
