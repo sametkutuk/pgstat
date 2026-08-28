@@ -3093,6 +3093,11 @@
           "id": "AC7",
           "text": "Live verification on instance 2: all five currently offending tables appear as separate alerts, fixing one resolves only that alert, and the batch notification lists them together.",
           "status": "pending"
+        },
+        {
+          "id": "AC8",
+          "text": "Notifications carry only a title and a one-line summary per record - object, value and threshold - with the full diagnosis and action left in ops.alert for the UI. This applies to single-record notifications too, which previously sent the whole rendered body.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3133,7 +3138,9 @@
         "V098 resolves the old instance-level alerts. It parses the rule id out of alert_key rather than joining on ops.alert.rule_id, because the previous code path (the eight-argument AlertRepository.upsert) never wrote that column - a join on rule_id would have matched nothing. A regex guard ensures the cast is only applied to well-formed keys. The migration also adds a partial text_pattern_ops index for the prefix lookups.",
         "Test suite grew from 60 to 67, covering distinct keys per table, same table name in different databases, the relid-less fallback, rule and instance scoping, statement and index key shapes, prefix matching for every type, and that the old instance-level key is not matched by the new prefix.",
         "Live verification 2026-08-28: five separate alerts opened on instance 2 within the same second, each keyed by its own relid, and Telegram received one summary rather than five. A fifth table appeared beyond the four expected - t_ext_hotel_quota_2026_05 at 80.40 percent - which sat below the absolute dead-tuple filter used in the earlier investigation and which the old single-record code would never have evaluated at all.",
-        "Per-record alerting immediately exposed a pre-existing defect it had been masking. Scenario 1c diagnosed that autovacuum had not reached its own trigger threshold - so nothing needed doing - and raised an alert regardless, contradicting the README which documents that scenario as informational. Its action text also asserted the record was caught by the absolute dead-tuple leg without checking: drr_test_suite_entries arrived with 61 live and 46 dead rows, far below the 500 absolute threshold, so it had come via the ratio leg. Customer called the resulting alerts absurd. The branch now suppresses, which also resolves the alerts already open."
+        "Per-record alerting immediately exposed a pre-existing defect it had been masking. Scenario 1c diagnosed that autovacuum had not reached its own trigger threshold - so nothing needed doing - and raised an alert regardless, contradicting the README which documents that scenario as informational. Its action text also asserted the record was caught by the absolute dead-tuple leg without checking: drr_test_suite_entries arrived with 61 live and 46 dead rows, far below the 500 absolute threshold, so it had come via the ratio leg. Customer called the resulting alerts absurd. The branch now suppresses, which also resolves the alerts already open.",
+        "Customer reviewed the first batch of per-record notifications on 2026-08-28 and asked for two changes: drop the trailing line explaining that a separate alert was opened for each record, and keep Telegram to a title plus a very short summary with the detail visible in the UI instead. Both applied; the single-record path was shortened the same way rather than left sending the full body.",
+        "The same batch confirmed the scenario 1c defect was the dominant noise source: five of the six warning alerts across three instances were that branch, holding 46, 26, 27, 23 and 45 dead rows respectively. Only user_daily_goal_summary was a genuine scenario 3 finding."
       ]
     },
     {

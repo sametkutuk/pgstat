@@ -2156,7 +2156,7 @@ public class AlertRuleEvaluator {
 
                 stillAlerting.add(recordKey);
                 raised.add(new RaisedRecordAlert(alertId, recordKey, severity,
-                    recordLabel(record, metricType), currentVal, rendered[0], rendered[1]));
+                    recordLabel(record, metricType), currentVal, threshold, rendered[0]));
             }
 
             // Bu degerlendirmede artik esigi asmayan kayitlarin alert'lerini
@@ -2171,15 +2171,18 @@ public class AlertRuleEvaluator {
                 }
             }
 
-            notifyRaisedBatch(raised, rule, instancePk, ruleName);
+            notifyRaisedBatch(raised, instancePk, ruleName);
             updateLastEval(ruleId, instancePk, worstVal, worstSeverity);
         }
     }
 
-    /** Bir degerlendirmede acilan tek bir kayit-alert'i (ozet bildirim icin). */
+    /**
+     * Bir degerlendirmede acilan tek bir kayit-alert'i (ozet bildirim icin).
+     * message tasinmiyor: bildirim kisa tutuluyor, tam metin ops.alert'te.
+     */
     private record RaisedRecordAlert(long alertId, String alertKey, String severity,
-                                      String label, BigDecimal value,
-                                      String title, String message) {}
+                                      String label, BigDecimal value, BigDecimal threshold,
+                                      String title) {}
 
     /** severity siralamasi: critical > error > warning > info. */
     private static boolean isMoreSevere(String candidate, String current) {
@@ -2198,58 +2201,67 @@ public class AlertRuleEvaluator {
     }
 
     /**
-     * Bir degerlendirmede acilan kayit-alert'leri icin TEK ozet bildirim.
+     * Bir degerlendirmede acilan kayit-alert'leri icin TEK, KISA bildirim.
      *
      * Kayit basina alert acmak dogru, ama kayit basina bildirim gondermek
-     * degil: uretimde tek bir instance'ta ayni anda dort tablo esigin ustundeydi
-     * ve bu dort ayri Telegram mesaji demek olurdu. Musteri karari (2026-08-28):
+     * degil: uretimde tek bir instance'ta ayni anda bes tablo esigin ustundeydi
+     * ve bu bes ayri Telegram mesaji demek olurdu. Musteri karari (2026-08-28):
      * "alert ayri ayri acilsin, bildirim tek ozet mesajda toplansin".
      *
-     * Tek kayit varsa ozetlemeye gerek yok — alert'in kendi basligi ve mesaji
-     * oldugu gibi gonderilir.
+     * Bildirim bilincli olarak KISA: baslik + hangi nesne + hangi deger. Tam
+     * teshis ve aksiyon metni ops.alert'te duruyor ve UI'da goruluyor —
+     * musteri talebi (2026-08-28): "telegram alertleri baslik ve cok kisa ozet
+     * olmali, detayi UI'dan gorebilmeliyim". Bu, tek kayitlik bildirimler icin
+     * de gecerli: eskiden alert'in tum govdesi (teshis + aksiyon paragraflari)
+     * oldugu gibi gonderiliyordu.
      */
     private void notifyRaisedBatch(java.util.List<RaisedRecordAlert> raised,
-                                    Map<String, Object> rule, long instancePk, String ruleName) {
+                                    long instancePk, String ruleName) {
         if (raised.isEmpty()) return;
 
-        // Ozet, gruptaki en ciddi alert'e baglanir: NotificationService'in spam
-        // korumasi, snooze ve bakim penceresi kontrolleri alert_id/alert_key
+        // Bildirim, gruptaki en ciddi alert'e baglanir: NotificationService'in
+        // spam korumasi, snooze ve bakim penceresi kontrolleri alert_id/alert_key
         // uzerinden calisiyor.
         RaisedRecordAlert worst = raised.get(0);
         for (RaisedRecordAlert r : raised) {
             if (isMoreSevere(r.severity(), worst.severity())) worst = r;
         }
 
+        String title;
+        String body;
         if (raised.size() == 1) {
-            alertRepo.notifySummary(worst.alertId(), worst.alertKey(),
-                AlertCode.USER_DEFINED_RULE.getCode(), worst.severity(), instancePk,
-                worst.title(), worst.message());
-            return;
+            // Alert'in kendi basligi zaten instance ve nesne adini tasiyor
+            // (sablondan gelir); govde tek satira iner.
+            title = worst.title();
+            body = summaryLine(worst);
+        } else {
+            title = String.format("%s — %s: %d kayit",
+                lookupInstanceName(instancePk), ruleName, raised.size());
+            StringBuilder sb = new StringBuilder();
+            int shown = 0;
+            for (RaisedRecordAlert r : raised) {
+                if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
+                sb.append("• ").append(summaryLine(r)).append('\n');
+            }
+            if (raised.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
+                sb.append(String.format("… ve %d kayit daha",
+                    raised.size() - BATCH_NOTIFICATION_LIST_LIMIT));
+            }
+            body = sb.toString().stripTrailing();
         }
-
-        String instanceName = lookupInstanceName(instancePk);
-        String title = String.format("%s — %s: %d kayit esigin ustunde",
-            instanceName, ruleName, raised.size());
-
-        StringBuilder body = new StringBuilder();
-        body.append(String.format("%s kuralinda %d kayit esigi asti:%n%n", ruleName, raised.size()));
-        int shown = 0;
-        for (RaisedRecordAlert r : raised) {
-            if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
-            body.append(String.format("• [%s] %s — %s%n",
-                r.severity().toUpperCase(),
-                r.label() != null ? r.label() : r.alertKey(),
-                r.value() != null ? formatValue(r.value()) : "?"));
-        }
-        if (raised.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
-            body.append(String.format("… ve %d kayit daha%n", raised.size() - BATCH_NOTIFICATION_LIST_LIMIT));
-        }
-        body.append("\nHer kayit icin ayri bir alarm acildi; tek tek incelemek ve"
-            + " kapatmak icin Alarmlar ekranina bakin.");
 
         alertRepo.notifySummary(worst.alertId(), worst.alertKey(),
             AlertCode.USER_DEFINED_RULE.getCode(), worst.severity(), instancePk,
-            title, body.toString());
+            title, body);
+    }
+
+    /** Bildirimde bir kaydin tek satirlik ozeti: nesne — deger (esik). */
+    private static String summaryLine(RaisedRecordAlert r) {
+        String label = r.label() != null ? r.label() : r.alertKey();
+        String value = r.value() != null ? formatValue(r.value()) : "?";
+        return r.threshold() != null
+            ? String.format("%s — %s (esik: %s)", label, value, formatValue(r.threshold()))
+            : String.format("%s — %s", label, value);
     }
 
     /** Ozet bildirimde deger gosterimi — gereksiz ondalik basamak birakmaz. */
