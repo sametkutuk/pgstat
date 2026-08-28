@@ -3131,7 +3131,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Add a statistics-trustworthiness gate to diagnoseBloat that runs before any ratio or threshold arithmetic, and decide what the alert says when statistics cannot be trusted.",
+      "next_action": "Deploy, then confirm the five affected tables on instance 2 no longer claim ratios above 90 percent and that the ANALYZE-first diagnosis renders correctly.",
       "title": "Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables",
       "problem": "The dead_tuple_ratio rule computes its ratio and the autovacuum trigger threshold directly from pg_stat_user_tables.n_live_tup, which is only an estimate. PostgreSQL corrects that estimate during ANALYZE or VACUUM; on a table that has never been analyzed since the last statistics reset it is derived from the insert and delete counters and can be arbitrarily wrong. Production case on instance 2 (etsrooms) on 2026-08-27: security.user reported n_live_tup = 6 and n_dead_tup = 3224, giving a 99.81 percent dead ratio and a critical alert, while select count(*) returned 26257 live rows - the true ratio is about 11 percent, comfortably below the 20 percent warning threshold. Both last_analyze and last_autoanalyze were null, and pg_stat_database showed stats_reset 176 days earlier, so the counters had been reset and never corrected. Four other tables on the same instance had the same shape. The rendered diagnosis even printed the contradiction - trigger threshold (50 = 50 + 0.20 x 0 live rows) already exceeded (1233280 dead rows) - since a table with zero live rows cannot hold over a million dead ones, but nothing in the code treated that as a signal to stop.",
       "requirements": [
@@ -3145,22 +3145,22 @@
         {
           "id": "AC1",
           "text": "diagnoseBloat gates on statistics trustworthiness before any ratio or threshold arithmetic, using last_analyze, last_autoanalyze, last_vacuum, last_autovacuum and the relationship between n_live_tup and n_dead_tup.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC2",
-          "text": "A table that has never been analyzed and whose live estimate is implausible relative to its dead count does not produce a bloat alert claiming a false ratio; it either stays silent or produces a distinct diagnosis recommending ANALYZE.",
-          "status": "pending"
+          "text": "A table that has never been analyzed or vacuumed produces a distinct diagnosis stating the statistics are untrustworthy and recommending ANALYZE, instead of a bloat ratio presented as fact.",
+          "status": "done"
         },
         {
           "id": "AC3",
           "text": "A table with genuinely few live rows and many dead ones - a real queue or staging pattern with current statistics - still alerts as before; unit tests cover both this case and the untrustworthy case so the two are provably distinguished.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC4",
           "text": "mvn compile and mvn test pass.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC5",
@@ -3197,7 +3197,10 @@
         "pg_stat_database.stats_reset on etsrooms was 2026-03-04, 176 days before the observation, which is why the insert-counter-derived live estimate never recovered.",
         "Post-ANALYZE measurement on 2026-08-27 proves all five alerts were false and quantifies the error. security.user 99.81 -> 11.01 percent (26257 live, not 6); t_ext_hotel_payment_types 94.25 -> 4.70 (232458 live, not 413); t_content_update 98.04 -> 2.07 (3647581 live, not 99); t_supplier_rez 93.60 -> 0.26 (4593352 live, not 62); t_ext_hotel_product 94.80 -> 0.06 (329196 live, not 99). Every one is below even the 20 percent warning threshold, so none should ever have alerted.",
         "n_dead_tup is unreliable too, not only n_live_tup: t_supplier_rez read 907 dead before ANALYZE and 11879 after. The gate therefore cannot be built on the dead-tuple side either - it must key on whether the table has been analyzed or vacuumed since the statistics reset.",
-        "The false alerts accused autovacuum of a failure it had not committed. For t_supplier_rez the real trigger threshold is 50 + 0.2 x 4593352 = about 918720 dead rows against 11879 actual, so skipping the table was correct; the corrupted estimate made the threshold look like 62 and the reading look like 907, i.e. exceeded."
+        "The false alerts accused autovacuum of a failure it had not committed. For t_supplier_rez the real trigger threshold is 50 + 0.2 x 4593352 = about 918720 dead rows against 11879 actual, so skipping the table was correct; the corrupted estimate made the threshold look like 62 and the reading look like 907, i.e. exceeded.",
+        "Implemented 2026-08-28: findBloatedTables now selects last_analyze and last_autoanalyze alongside the vacuum timestamps, and diagnoseBloat gates on a pure statsUntrustworthy(record) predicate before the scenario tree runs. When all four timestamps are absent the alert reports that the estimates cannot be trusted and recommends ANALYZE on the named table, rather than asserting a ratio.",
+        "The gate deliberately ignores the live-row count. Genuine queue and staging tables do have few live rows and many dead ones, and they must keep alerting; a unit test asserts that a table with only last_autoanalyze set is still treated as trustworthy, which is what separates the two cases.",
+        "Test suite grew from 56 to 60: never-corrected, queue-shaped-but-current, each single correcting operation sufficing, and missing keys treated as never-corrected (safe side)."
       ]
     },
     {

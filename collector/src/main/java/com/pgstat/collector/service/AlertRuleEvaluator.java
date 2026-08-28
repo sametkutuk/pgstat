@@ -2760,6 +2760,7 @@ public class AlertRuleEvaluator {
             "       t.n_dead_tup_estimate as dead_tup, t.n_live_tup_estimate as live_tup, dbr.datname," +
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
             "       t.last_autovacuum, t.last_vacuum, t.autovacuum_count_sum," +
+            "       t.last_analyze, t.last_autoanalyze," +
             "       t.prev_dead_tup" +
             "  from (" +
             // n_dead_tup_estimate/n_live_tup_estimate pencerenin EN SON ornegine
@@ -2777,6 +2778,11 @@ public class AlertRuleEvaluator {
             "           instance_pk, schemaname, relname, dbid, relid," +
             "           n_dead_tup_estimate, n_live_tup_estimate," +
             "           last_autovacuum, last_vacuum," +
+            // Istatistik guvenilirlik kapisi icin (bkz. statsUntrustworthy):
+            // n_live_tup/n_dead_tup sadece ANALYZE veya VACUUM sirasinda gercek
+            // sayimla duzeltilir; hicbiri calismamissa sayaclardan turetilir ve
+            // keyfi bicimde yanlis olabilir.
+            "           last_analyze, last_autoanalyze," +
             "           sum(coalesce(autovacuum_count_delta, 0)) over (" +
             "             partition by instance_pk, schemaname, relname, dbid" +
             "           ) as autovacuum_count_sum," +
@@ -3652,7 +3658,70 @@ public class AlertRuleEvaluator {
         }
     }
 
+    /**
+     * Bu tablonun canli/olu satir tahminlerine guvenilebilir mi?
+     *
+     * n_live_tup ve n_dead_tup istatistiktir, olcum degil. PostgreSQL bunlari
+     * sadece ANALYZE veya VACUUM sirasinda gercek sayimla duzeltir; ikisi de hic
+     * calismamissa degerler insert/delete sayaclarindan turetilir ve
+     * pg_stat_database.stats_reset sonrasi keyfi bicimde yanlis olabilir —
+     * cunku sayaclar sifirlanirken tablodaki mevcut satirlar sayilmaz.
+     *
+     * Uretimde olculen (2026-08-27, instance 2 / etsrooms): security.user
+     * n_live_tup=6 ve n_dead_tup=3224 bildiriyordu, yani %99.81 olu oran ve
+     * kritik alert. select count(*) ise 26257 dondu — gercek oran ~%11, uyari
+     * esiginin bile altinda. last_analyze ve last_autoanalyze ikisi de NULL'di,
+     * stats_reset 176 gun oncesineydi. Ayni sekilde t_supplier_rez 62 canli
+     * satir sanilirken gercekte 4.593.352 satir tutuyordu. Bes tablo icin bes
+     * yanlis alert uretildi.
+     *
+     * Uretilen teshis metni celiskiyi kendisi yaziyordu — "esik (50 = 50 + 0.20
+     * x 0 canli satir) coktan asilmis (1233280 olu satir)" — sifir canli satirli
+     * bir tabloda 1.2M olu satir fiziksel olarak imkansiz, ama hicbir kontrol
+     * bunu durdurmuyordu.
+     *
+     * Neden sadece "analiz edilmis mi" sorusu: olu satir tarafina da
+     * guvenilemez. Ayni olcumde t_supplier_rez ANALYZE oncesi 907, sonrasi
+     * 11879 olu satir gosterdi — iki sayac da ayni sifirlamadan besleniyor.
+     * Tek saglam ayrim, degerlerin duzeltilmis olup olmadigi.
+     *
+     * Bilincli olarak canli satir sayisina BAKMIYOR: gercekten az canli + cok
+     * olu satirli tablolar vardir (kuyruk/staging tablolari) ve onlar
+     * istatistikleri guncel oldugu surece alert uretmeye devam etmeli.
+     */
+    static boolean statsUntrustworthy(Map<String, Object> record) {
+        return record.get("last_analyze") == null
+            && record.get("last_autoanalyze") == null
+            && record.get("last_vacuum") == null
+            && record.get("last_autovacuum") == null;
+    }
+
     private BloatDiagnosis diagnoseBloat(Map<String, Object> record, long instancePk) {
+        // Istatistik guvenilirlik kapisi — karar agacindan ONCE. Buradan sonraki
+        // her senaryo n_live_tup/n_dead_tup uzerinden oran ve tetikleme esigi
+        // hesapliyor; degerler duzeltilmemisse o aritmetigin tamami anlamsiz.
+        if (statsUntrustworthy(record)) {
+            Long dead = record.get("dead_tup") instanceof Number n ? n.longValue() : null;
+            Long live = record.get("live_tup") instanceof Number n ? n.longValue() : null;
+            String name = qualifiedTableName(record);
+            return BloatDiagnosis.of(
+                String.format(
+                    "Bu tablonun istatistikleri GÜVENİLMEZ — hiç ANALYZE ve hiç VACUUM"
+                    + " görmemiş. PostgreSQL canlı/ölü satır sayılarını yalnızca bu iki"
+                    + " işlem sırasında gerçek sayımla düzeltir; öncesinde değerler"
+                    + " insert/delete sayaçlarından tahmin edilir ve istatistik sıfırlaması"
+                    + " sonrası gerçekle ilişkisi kalmayabilir. Bu yüzden bildirilen oran"
+                    + " (%s canlı / %s ölü satır) gerçek durumu yansıtmıyor olabilir —"
+                    + " tabloda göründüğünden çok daha fazla canlı satır bulunabilir.",
+                    live != null ? String.format("%,d", live) : "?",
+                    dead != null ? String.format("%,d", dead) : "?"),
+                String.format(
+                    "Önce ANALYZE %s; çalıştır, sonra bu alarmı yeniden değerlendir."
+                    + " İstatistikler düzeldikten sonra tablo gerçekten eşiğin üstündeyse"
+                    + " alarm doğru teşhisle yeniden açılır; değilse kendiliğinden kapanır.",
+                    name));
+        }
+
         // timestamptz kolonlari queryForList()'ten java.sql.Timestamp olarak
         // gelir — normalize etmeden instanceof OffsetDateTime kontrolleri
         // her zaman false doner (bkz. asOffsetDateTime javadoc'u).

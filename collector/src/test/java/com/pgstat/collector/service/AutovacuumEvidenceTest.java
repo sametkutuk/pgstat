@@ -472,6 +472,65 @@ class AutovacuumEvidenceTest {
     }
 
     // =========================================================================
+    // Istatistik guvenilirlik kapisi (statsUntrustworthy)
+    // =========================================================================
+
+    /** Bloat kaydi uretici — sadece kapinin baktigi dort zaman damgasi. */
+    private static java.util.Map<String, Object> bloatRecord(
+            Object lastAnalyze, Object lastAutoanalyze,
+            Object lastVacuum, Object lastAutovacuum) {
+        java.util.Map<String, Object> r = new java.util.HashMap<>();
+        r.put("last_analyze", lastAnalyze);
+        r.put("last_autoanalyze", lastAutoanalyze);
+        r.put("last_vacuum", lastVacuum);
+        r.put("last_autovacuum", lastAutovacuum);
+        return r;
+    }
+
+    private static final java.sql.Timestamp SOME_TIME =
+        java.sql.Timestamp.valueOf("2026-08-27 12:00:00");
+
+    @Test
+    void statsAreUntrustworthyWhenNothingHasEverCorrectedThem() {
+        // Uretim vakasi (2026-08-27, security.user): dort zaman damgasi da NULL.
+        // n_live_tup=6 / n_dead_tup=3224 bildiriliyordu, yani %99.81 olu oran ve
+        // kritik alert; select count(*) 26257 dondu, gercek oran ~%11 — uyari
+        // esiginin bile altinda. Bes tablo icin bes yanlis alert uretilmisti.
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            bloatRecord(null, null, null, null))).isTrue();
+    }
+
+    @Test
+    void aQueueShapedTableWithCurrentStatisticsStillAlerts() {
+        // KRITIK ayrim: gercekten az canli + cok olu satirli tablolar vardir
+        // (kuyruk/staging). Kapi canli satir sayisina bakmaz, sadece degerlerin
+        // duzeltilip duzeltilmedigine bakar — bu tablo autoanalyze gormus, yani
+        // oran gercek ve alert uretilmeli.
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            bloatRecord(null, SOME_TIME, null, null))).isFalse();
+    }
+
+    @Test
+    void anyOneCorrectingOperationIsEnoughToTrustTheEstimates() {
+        // ANALYZE de VACUUM da gercek sayim yapar; hangisi calistiysa degerler
+        // duzelmistir. Dordunun her biri tek basina yeterli.
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            bloatRecord(SOME_TIME, null, null, null))).isFalse();
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            bloatRecord(null, null, SOME_TIME, null))).isFalse();
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            bloatRecord(null, null, null, SOME_TIME))).isFalse();
+    }
+
+    @Test
+    void missingKeysAreTreatedAsNeverCorrected() {
+        // Kolon sorgudan hic gelmezse (eski surum, kismi sorgu) guvenli taraf:
+        // "duzeltilmemis" sayilir, cunku duzeltildigine dair kanit yok.
+        assertThat(AlertRuleEvaluator.statsUntrustworthy(
+            new java.util.HashMap<>())).isTrue();
+    }
+
+    // =========================================================================
     // Israr sayaci ilerletme kurali (shouldResetStreak)
     // =========================================================================
 

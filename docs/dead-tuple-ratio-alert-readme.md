@@ -16,6 +16,34 @@ dayalı bir teşhis.
 - "Diskte X MB israf var." Ölü satır sayısı `pg_stat_user_tables`'ın
   istatistiksel bir **tahminidir**, fiziksel disk israfının ölçümü
   değil (onun için `pgstattuple` gibi bir extension gerekir).
+
+### İstatistikler güvenilmezse oran hesaplanmaz
+
+`n_live_tup` ve `n_dead_tup` yalnızca `ANALYZE` veya `VACUUM` sırasında
+gerçek sayımla düzeltilir. İkisi de hiç çalışmamışsa değerler
+insert/delete sayaçlarından türetilir ve `pg_stat_database.stats_reset`
+sonrasında gerçekle ilişkisi kalmayabilir — sayaçlar sıfırlanırken
+tablodaki mevcut satırlar sayılmaz.
+
+Bu yüzden alarm, karar ağacına girmeden önce şunu sorar: **bu tablo hiç
+`ANALYZE` veya `VACUUM` gördü mü?** Dördü de (`last_analyze`,
+`last_autoanalyze`, `last_vacuum`, `last_autovacuum`) boşsa oran
+hesaplanmaz; onun yerine "istatistikler güvenilmez, önce `ANALYZE`
+çalıştır" teşhisi verilir.
+
+Kapı **canlı satır sayısına bakmaz**. Gerçekten az canlı + çok ölü
+satırlı tablolar vardır (kuyruk ve staging tabloları) ve istatistikleri
+güncel olduğu sürece normal şekilde alarm üretmeye devam ederler.
+
+Üretimde ölçülen (2026-08-27, `etsrooms`): `security.user` 6 canlı /
+3224 ölü satır bildiriyordu — %99.81 oran ve kritik alarm. Gerçek satır
+sayısı **26.257**, gerçek oran **%11**, yani %20'lik uyarı eşiğinin bile
+altında. Aynı instance'ta beş tablo için beş yanlış alarm üretilmişti;
+`ANALYZE` sonrası oranlar %0.06 ile %11 arasına indi.
+
+Üretilen teşhis metni çelişkiyi kendisi yazıyordu — "eşik (50 = 50 +
+0.20 × **0 canlı satır**) çoktan aşılmış (**1.233.280 ölü satır**)" —
+ama hiçbir kontrol bunu durdurmuyordu.
 - "Bu tablo için doğru autovacuum eşiği şudur." Alarm somut bir ayar
   önerebilir, ama bu tablonun ölçülen güncelleme hızından
   **hesaplanmış** bir değer değil — genel bir tavsiyedir.
