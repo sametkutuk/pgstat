@@ -32,9 +32,10 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
+| codex_verified | 1 |
 | done | 22 |
 | in_progress | 4 |
-| planned | 29 |
+| planned | 28 |
 
 ## Workstream Counts
 
@@ -111,7 +112,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 52 | PGSTAT-P2-006 | P2 | ui | done | Instance list does not show which retention policy or schedule profile each instance uses | Done - the column ships with the next api and ui build; the retention half is already verified in production. |
 | 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it. |
 | 54 | PGSTAT-P1-014 | P1 | alerting | planned | Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them | Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there. |
-| 55 | PGSTAT-P0-041 | P0 | alerting | planned | Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart | Deploy with V100, wait one collection cycle, then confirm on instance 8 that the affected tables report their real ratios and that the false critical alerts resolve on their own. |
+| 55 | PGSTAT-P0-041 | P0 | alerting | codex_verified | Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart | Awaiting customer sign-off; the false criticals on instance 8 resolved on their own in the first collection cycle after deploy. |
 
 ## Dependency Map
 

@@ -3555,8 +3555,8 @@
       "order": 55,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy with V100, wait one collection cycle, then confirm on instance 8 that the affected tables report their real ratios and that the false critical alerts resolve on their own.",
+      "status": "codex_verified",
+      "next_action": "Awaiting customer sign-off; the false criticals on instance 8 resolved on their own in the first collection cycle after deploy.",
       "title": "Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart",
       "problem": "Both the reported bloat ratio and the autovacuum trigger threshold in the diagnosis were derived from pg_stat_user_tables.n_live_tup. That is wrong twice over. PostgreSQL computes its own thresholds from pg_class.reltuples - anlthresh = analyze_threshold + analyze_scale_factor * reltuples, and the same shape for vacuum - so the threshold the alert quoted was never the threshold autovacuum actually applies. And n_live_tup is derived from statistics counters, which are lost when a server restarts without recovering its statistics; reltuples lives in the catalog and survives. Measured on 2026-08-28 on db1.dc-etstur.com-test: the server had restarted 29 days earlier and statistics were not recovered (stats_reset was three seconds after postmaster_start_time), so n_live_tup for public.t_ets_hotel_transaction_log read 0 while the catalog held 30,404,328 rows across 5.3 GB. The alert reported 100 percent dead and raised a critical; the real ratio was 1.7 percent. Autovacuum had correctly skipped the table for 29 days - its real analyze threshold is 1,520,266 against 516,298 changes, 34 percent of the way there. At least 15 tables on that instance were in the same state.",
       "requirements": [
@@ -3594,7 +3594,7 @@
         {
           "id": "AC6",
           "text": "Live verification: on instance 8 the affected tables report ratios matching the catalog rather than 100 percent, and the false critical alerts resolve without intervention.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3621,7 +3621,8 @@
       "verification_evidence": [
         "Found by following the customer question of why these tables had gone so long without an ANALYZE. The answer turned out to be that they did not need one, and that our own numbers were the thing that was wrong.",
         "Instance 8 evidence: autovacuum on, three workers, no lock held on the table at all, and the daemon had analyzed another table minutes earlier - so nothing was blocking it. The table simply had not reached its real threshold.",
-        "Divergence measured across the instance: 15 tables where the catalog reported millions of rows while the statistics reported single digits or zero, including t_ets_member_login_log at 12.5 million versus 154 and t_ets_mobile_device at 7.8 million versus 4."
+        "Divergence measured across the instance: 15 tables where the catalog reported millions of rows while the statistics reported single digits or zero, including t_ets_member_login_log at 12.5 million versus 154 and t_ets_mobile_device at 7.8 million versus 4.",
+        "Live verification 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, without intervention. The catalog value of 30,404,328 moved the reported ratio from 100 percent to about 1.7, below the warning threshold, so the record stopped being selected at all."
       ]
     }
   ]
