@@ -2288,7 +2288,7 @@
       "order": 39,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index",
       "problem": "Customer reported (2026-08-19) a run of 'Uzun suren sorgu' (long-running query) WARN alerts between 05:00-06:05 on the pgstat central database itself, all the same statement: 'delete from ops.job_run where ctid in (select ctid from ops.job_run where started_at < now() - $1::interval limit 10000)' — this is PurgeEvaluator.purgeJobRunHistory()'s own nightly batched delete. Root cause confirmed live: ops.job_run has 1,023,900 rows (225 MB) but only 9,503 (~1%) are older than the 30-day retention window; ops.job_run_instance has 2,237,533 rows (518 MB). Neither table has an index with started_at as the leading column — ix_job_run_type_started and ix_job_run_status_started both lead with job_type/status, so PostgreSQL sequential-scans the full ~1M/~2.2M row tables on every 10k-row batch iteration of the purge loop, taking 5-20 minutes per batch instead of milliseconds.",
       "requirements": [
@@ -2315,7 +2315,7 @@
         {
           "id": "AC4",
           "text": "Live verification: after running ./pgstat migrate, the next nightly purge cycle (02:00 UTC) completes the job_run/job_run_instance batched deletes in a fraction of the previous time, and no more long-running-query alerts fire for this statement.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2333,22 +2333,24 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed on 2026-08-28: yaptin simdilik hizli okey. The nightly purge now completes quickly and no further long-running-query alerts fired for this statement."
       },
       "verification_evidence": [
         "Customer shared a batch of 'Uzun suren sorgu' WARN alerts (05:00-06:05, 2026-08-19) all showing the same ops.job_run purge DELETE statement running 5-20 minutes.",
         "Live-confirmed with the customer: ops.job_run has 1,023,900 rows (225 MB), only 9,503 older than 30 days; ops.job_run_instance has 2,237,533 rows (518 MB); pg_indexes confirmed neither table has a started_at-leading index (both existing indexes lead with job_type/status).",
-        "Fix applied: V088 migration adds CREATE INDEX CONCURRENTLY on job_run(started_at), job_run_instance(started_at), and preventively alert(resolved_at) partial index (audit_log/report_history already had their equivalent). No Java code change — the existing PurgeEvaluator query already matches the new index shape. mvn test passes."
+        "Fix applied: V088 migration adds CREATE INDEX CONCURRENTLY on job_run(started_at), job_run_instance(started_at), and preventively alert(resolved_at) partial index (audit_log/report_history already had their equivalent). No Java code change — the existing PurgeEvaluator query already matches the new index shape. mvn test passes.",
+        "Customer confirmed on 2026-08-28: yaptin simdilik hizli okey. The nightly purge now completes quickly and no further long-running-query alerts fired for this statement."
       ],
-      "next_action": "Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements."
+      "next_action": "Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements.",
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P0-033",
       "order": 40,
       "priority": "P0",
       "workstream": "operations",
-      "status": "in_progress",
+      "status": "done",
       "title": "TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files",
       "problem": "Customer reported (2026-08-21) recurring temp file WARN log lines on two monitored source instances, e.g. 'temporary file: path base/pgsql_tmp/pgsql_tmp1951006.1, size 9526206' appearing every ~1 minute from user=pgstats_collector. Raising work_mem 2MB->4MB on the target instance only shrank, not eliminated, the temp files, ruling out work_mem sizing as the real fix. Live pg_stat_statements query on the target instance identified the exact two collector-issued statements responsible: the pgssStatsQuery-style CTE around pg_stat_statements($1) (~10MB temp/call) and 'select queryid, query from pg_stat_statements($1)' (~3MB temp/call) — both from TextEnricher.enrich(). Root cause: TextEnricher.pgssTextQuery() called pg_stat_statements(true) with no WHERE clause at all, so PostgreSQL materializes the query-text column (often the largest part of the view) for every actively tracked statement on the instance, not just the handful of queryids TextEnricher actually needs (the pendingSeries batch, size = batchSize). On instances with many/long tracked statements this exceeds work_mem and spills to disk every enrichment cycle. Also relevant: the target instance was PG12 at initial diagnosis and has since been upgraded to PG17 mid-investigation; the fix must apply to every PG version family since pgssTextQuery has no per-version override.",
       "requirements": [
@@ -2409,8 +2411,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed on 2026-08-28: cozuldu."
       },
       "verification_evidence": [
         "Customer shared postgres logs showing repeating temp_file WARN lines (9.5MB and 3.1MB, roughly every minute) from user=pgstats_collector on a source instance; raising work_mem 2MB->4MB reduced but did not eliminate them.",
@@ -2421,16 +2423,18 @@
         "Preventive fix applied to ./pgstat's upgrade command: the UI-only --no-cache rebuild was extended to also force --no-cache for the collector service, so future deploys can't silently keep a stale jar behind a fresh-looking image. api is not yet covered by this protection (same risk theoretically possible, not reported so far) — flagged for follow-up if a similar symptom recurs there.",
         "Third, larger root cause found via fleet-wide analysis (2026-08-21, after re-checking a specific source instance that still showed 9.5MB temp files post-deploy): querying fact.pgss_delta centrally across all monitored instances for query_text ilike '%pg_stat_statements%' with temp_blks_written_delta > 0 revealed the dominant temp-file producer was NOT TextEnricher's pgssTextQuery at all, but StatementsCollector's per-cycle pgssStatsQuery() CTE (the one wrapping pg_stat_statements(false), used for stats collection, no query text) — accounting for 20-24MB of accumulated temp per high-traffic instance over 3 days on 5+ instances (etscore-dev-test-253.50, emh-dev-test-142.80, archdb-dev-142.49, moneasy-dev-147.50, moneasy-test-167.50, and others), dwarfing the original TextEnricher issue. EXPLAIN (ANALYZE, BUFFERS) on the highest-volume instance confirmed the temp write originates in the pg_stat_statements(false) Function Scan itself (4758 rows, before to_jsonb/CTE even runs) — this query cannot be narrowed with a WHERE filter since it legitimately needs every tracked statement's stats every cycle, unlike pgssTextQuery. Also separately confirmed (unrelated false alarm during this same investigation): a handful of unfiltered pgssTextQuery calls (old query shape) were still showing up fleet-wide with recent timestamps in the same result set, alongside the new filtered shape — worth continued monitoring but not the dominant contributor.",
         "Fix applied for the pgssStatsQuery/SRF-materialization cause: SourceConnectionFactory.configureSession() now also sets work_mem='32MB' on every ephemeral source connection (alongside the existing statement_timeout/lock_timeout SETs), scoped to the collector's own session only. mvn compile and mvn test pass.",
-        "Deployed to production 2026-08-21 ~16:07 +03 (collector container restart confirmed via docker inspect State.StartedAt=2026-08-21T13:07:22Z / 16:07:22+03; jar content confirmed via grep -a on the extracted class file inside the running container, 'SET work_mem = ''%dMB''' literal present). First fleet-wide check right after restart (window 16:08+) showed zero temp_blks_written from any collector-issued pg_stat_statements query (only the diagnostic 'select count(*) from pg_stat_statements' the user ran manually appeared). Second fleet-wide check ~1 hour later, filtered strictly to sample_ts > restart time (16:07:22+03), confirmed the same: zero rows from collector's own pgssStatsQuery or pgssTextQuery across all monitored instances, including the five previously highest-volume ones (etscore-dev-test-253.50, emh-dev-test-142.80, archdb-dev-142.49, moneasy-dev-147.50, moneasy-test-167.50). The only matching row was again the user's own manual diagnostic query. Fix confirmed durable across a ~1 hour post-restart window."
+        "Deployed to production 2026-08-21 ~16:07 +03 (collector container restart confirmed via docker inspect State.StartedAt=2026-08-21T13:07:22Z / 16:07:22+03; jar content confirmed via grep -a on the extracted class file inside the running container, 'SET work_mem = ''%dMB''' literal present). First fleet-wide check right after restart (window 16:08+) showed zero temp_blks_written from any collector-issued pg_stat_statements query (only the diagnostic 'select count(*) from pg_stat_statements' the user ran manually appeared). Second fleet-wide check ~1 hour later, filtered strictly to sample_ts > restart time (16:07:22+03), confirmed the same: zero rows from collector's own pgssStatsQuery or pgssTextQuery across all monitored instances, including the five previously highest-volume ones (etscore-dev-test-253.50, emh-dev-test-142.80, archdb-dev-142.49, moneasy-dev-147.50, moneasy-test-167.50). The only matching row was again the user's own manual diagnostic query. Fix confirmed durable across a ~1 hour post-restart window.",
+        "Customer confirmed on 2026-08-28: cozuldu."
       ],
-      "next_action": "Continue passive monitoring for a few more days (no action needed unless a new temp-file report surfaces); consider closing the task fully and moving customer_acceptance to accepted once the customer explicitly signs off."
+      "next_action": "Continue passive monitoring for a few more days (no action needed unless a new temp-file report surfaces); consider closing the task fully and moving customer_acceptance to accepted once the customer explicitly signs off.",
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P0-034",
       "order": 41,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "in_progress",
+      "status": "done",
       "title": "dead_tuple_ratio alert rule redesigned with a 3-signal bloat/vacuum-ineffectiveness model",
       "problem": "Customer reported (2026-08-21) that pgstat's own central database has ongoing autovacuum-vs-delete-rate imbalance (continuous DELETE workload, autovacuum not keeping up, dead tuple / wasted size growing) but no alert had ever fired. Investigation found dead_tuple_ratio alert rules existed but were disabled (is_enabled=false), and the underlying evaluation logic was a single-signal design: percentage-only, gated by a >1000 total-row minimum that silently excluded small-but-important tables (e.g. ops.alert at 592 rows with 22% dead tuples never qualified for evaluation at all). Customer explicitly asked for a more principled design that avoids false positives while still catching real bloat, and asked for a market-practice comparison (check_postgres, Datadog, pganalyze, Citus) before implementing.",
       "requirements": [
@@ -2522,8 +2526,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer confirmed on 2026-08-28: bu denemistik okey. The redesigned rule has been running in production since deployment, producing real diagnoses on live instances."
       },
       "verification_evidence": [
         "Customer live query on the central pgstat database confirmed n_dead_tup/n_live_tup growth with no alert ever firing; alert_rule query confirmed dead_tuple_ratio rules existed but were disabled and used a single-signal, >1000-row-gated design.",
@@ -2535,10 +2539,12 @@
         "After deploying the DISTINCT ON fix, the same alert (rule_id=14, instance_pk=3, accounting.docs_inf_document) still showed 'open' in the UI, still in the old pre-V090 message format. docker inspect confirmed the collector container restarted well after the customer's fix; postgres logs confirmed AlertRuleEvaluator was actively re-evaluating rule_id=14 every few seconds after restart. Querying ops.alert directly showed last_seen_at frozen at the pre-restart timestamp, never updated after restart — the evaluator was running but silently skipping this rule/instance every cycle. Root cause: evaluateThresholdPerRecord's isInCooldown(...) check (control.alert_rule_last_eval.last_alert_at within cooldown_minutes, 60 here) was a blanket 'continue' at the top of the per-instance loop, skipping the resolve branches (exceeding.isEmpty() / severity==null) along with the raise-new-alert branch — so once an alert fired, no resolve could happen until the full 60-minute cooldown expired, regardless of whether the underlying problem was already fixed. This affects every metric_type routed through evaluateThresholdPerRecord (statement/table/index granular thresholds), not just dead_tuple_ratio. evaluateThreshold (the non-granular sibling) already had the correct pattern (cooldown gates raising, not resolving) — evaluateThresholdPerRecord was rewritten to match it: the cooldown check moved after computing exceeding/severity, and only gates the branch that would raise or escalate a still-active alert.",
         "Live-confirmed the cooldown/resolve fix worked: after deploy, ops.alert for rule:14:instance:3 transitioned to status='resolved', resolved_at populated, within one evaluator cycle post-deploy — control.alert_rule_last_eval showed last_evaluated_at moving forward and current_severity clearing to null/empty at the same time.",
         "Customer then asked why no 'resolved' notification appeared in Telegram even though the alert correctly closed in the UI/DB. Investigation: alertRepo.resolve(alertKey) across the entire collector (12 call sites in AlertRuleEvaluator plus AlertService/LongRunningQueryEvaluator/SlotLifecycleEvaluator) only ever updated ops.alert's status column — none of them called the existing alertRepo.resolveAndNotify(alertKey, title, message), which is the only path that fires a 'Resolved: ...' notification. This was pre-existing behavior across the whole codebase, not something introduced by today's fixes. Fixed by switching every resolve() call site to resolveAndNotify(), adding a resolveAlert() helper in AlertRuleEvaluator (builds a generic 'instance - rule_name' title since exact original alert text isn't reliably available at every call site) and a fetchOpenAlertTitle() helper in AlertService (looks up the still-open alert's title from ops.alert, since those methods don't receive title as a parameter).",
-        "SERIOUS REGRESSION found shortly after that deploy: customer reported the entire dead_tuple_ratio alert list had gone empty in the UI, even though they had only manually fixed one table. Querying ops.alert for alert_key like 'rule:14:instance:%' showed all 11 instances had transitioned to status='resolved' within a ~2-minute window (18:29-18:31) right after the cooldown/resolve-separation deploy — clearly not 11 simultaneous real fixes. Cross-checked the actual data: querying fact.pg_table_stat_delta directly for the specific bloated tables (test-etsrooms-166-52's and sam-ets's t_currency_rate_active, both previously ~99%+) showed they were STILL at ~99% bloat at query time, unresolved. Running findBloatedTables()'s exact SQL by hand for one affected instance correctly returned the bloated table in the exceeding set — so the SQL itself was fine. The actual root cause: at the exact moment the evaluator ran right after deploy, that instance's fact.pg_table_stat_delta had no sample newer than 'now() - windowMinutes' (its ~15-30 minute collection cycle happened to leave a gap spanning the evaluation window) — findRecordsExceedingThreshold legitimately found zero rows, which the evaluator's exceeding.isEmpty() branch could not distinguish from 'the bloat is actually gone,' so it auto-resolved 11 alerts that were still genuinely critical. This gap between collection interval and evaluation window is a pre-existing structural risk in evaluateThresholdPerRecord that the cooldown fix (which finally let resolve execute) made visible for the first time — cooldown was previously masking it by coincidence. Fixed with a new hasRecentData(instancePk, metricType, windowMinutes) guard: before auto-resolving on an empty exceeding list, confirm at least one row exists for that instance in the relevant fact table within the window; if not, skip (don't resolve, don't update last_eval) and let the next cycle re-check once fresh data has landed."
+        "SERIOUS REGRESSION found shortly after that deploy: customer reported the entire dead_tuple_ratio alert list had gone empty in the UI, even though they had only manually fixed one table. Querying ops.alert for alert_key like 'rule:14:instance:%' showed all 11 instances had transitioned to status='resolved' within a ~2-minute window (18:29-18:31) right after the cooldown/resolve-separation deploy — clearly not 11 simultaneous real fixes. Cross-checked the actual data: querying fact.pg_table_stat_delta directly for the specific bloated tables (test-etsrooms-166-52's and sam-ets's t_currency_rate_active, both previously ~99%+) showed they were STILL at ~99% bloat at query time, unresolved. Running findBloatedTables()'s exact SQL by hand for one affected instance correctly returned the bloated table in the exceeding set — so the SQL itself was fine. The actual root cause: at the exact moment the evaluator ran right after deploy, that instance's fact.pg_table_stat_delta had no sample newer than 'now() - windowMinutes' (its ~15-30 minute collection cycle happened to leave a gap spanning the evaluation window) — findRecordsExceedingThreshold legitimately found zero rows, which the evaluator's exceeding.isEmpty() branch could not distinguish from 'the bloat is actually gone,' so it auto-resolved 11 alerts that were still genuinely critical. This gap between collection interval and evaluation window is a pre-existing structural risk in evaluateThresholdPerRecord that the cooldown fix (which finally let resolve execute) made visible for the first time — cooldown was previously masking it by coincidence. Fixed with a new hasRecentData(instancePk, metricType, windowMinutes) guard: before auto-resolving on an empty exceeding list, confirm at least one row exists for that instance in the relevant fact table within the window; if not, skip (don't resolve, don't update last_eval) and let the next cycle re-check once fresh data has landed.",
+        "Customer confirmed on 2026-08-28: bu denemistik okey. The redesigned rule has been running in production since deployment, producing real diagnoses on live instances."
       ],
       "next_action": "Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted.",
-      "customer_acceptance_note": "Customer confirmed after deploying the hasRecentData guard: the 11 alerts correctly reopened. Two new pieces of feedback surfaced from watching the live notification stream, tracked separately as PGSTAT-P0-036: (1) repeat notifications for the same still-open alert felt too frequent — root cause is the rule's cooldown_minutes=60 setting, not a bug, and the customer was pointed to the existing AlertRules UI control (Step 4, 'Tekrar Alert Cooldown' dropdown, up to 360 minutes) to self-adjust; (2) the resolve notification only named the instance, not which specific table had recovered, and the fixed action text ('tablo istatistiklerine ve autovacuum/index ihtiyacına bak') never varied by root cause."
+      "customer_acceptance_note": "Customer confirmed after deploying the hasRecentData guard: the 11 alerts correctly reopened. Two new pieces of feedback surfaced from watching the live notification stream, tracked separately as PGSTAT-P0-036: (1) repeat notifications for the same still-open alert felt too frequent — root cause is the rule's cooldown_minutes=60 setting, not a bug, and the customer was pointed to the existing AlertRules UI control (Step 4, 'Tekrar Alert Cooldown' dropdown, up to 360 minutes) to self-adjust; (2) the resolve notification only named the instance, not which specific table had recovered, and the fixed action text ('tablo istatistiklerine ve autovacuum/index ihtiyacına bak') never varied by root cause.",
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P0-036",
@@ -2637,7 +2643,7 @@
       "order": 45,
       "priority": "P1",
       "workstream": "collector",
-      "status": "in_progress",
+      "status": "done",
       "title": "agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow",
       "problem": "Customer asked a conceptual question after watching the bloat alert system work all day: 'pgstat's own DB has ongoing DELETE-driven bloat, why doesn't autovacuum ever recover the space, shouldn't autovacuum let new writes reuse dead tuple space?' Investigated with fact.pg_relation_size_snapshot (nightly-collected real table size, not just dead_tup ratio) and found agg.pg_table_stat_hourly_202608 grew from 1457MB to 2723MB over 14 days (~87%) while agg fact-table partitions grew for the expected reason (new daily data). Live query on fact.pg_table_stat_delta showed n_live_tup_estimate=7,062,216 constant while n_dead_tup_estimate climbed from 1,121,145 to 1,194,965 within a few hours — live count NOT changing, dead count climbing: a strong signal of repeated UPDATE, not INSERT growth. control.table_relopts_snapshot confirmed no per-table autovacuum_enabled override; last_autovacuum was ~9 hours old with autovacuum_count_delta=0 since. Root-caused via code read (Explore agent): AggRepository.rollupTableStatHourly()/rollupPgssHourly() UPSERT (on conflict on the full PK: bucket_start/instance_pk/dbid/relid or equivalent) the SAME current-hour bucket rows every ~5 minutes (JobOrchestrator's readHourlyRollupIntervalSec guard, default 300s) — roughly 12 real UPDATEs per row per hour, each leaving a dead tuple via MVCC. At this table's scale (~7M rows), the default autovacuum trigger (threshold=50 + scale_factor=0.2 × live_tup ≈ 1.4M dead tuples) takes far too long to reach relative to the actual update rate, so the table bloats for days before autovacuup ever fires — not a bug in the rollup logic (which is correct and necessary), but a mismatch between this table's write pattern (small delta, many updates) and Postgres's row-count-scaled default vacuum threshold.",
       "requirements": [
@@ -2655,7 +2661,7 @@
         {
           "id": "AC2",
           "text": "Live verification: after deploying and waiting a full autovacuum_naptime + threshold-crossing period, confirm via fact.pg_table_stat_delta that last_autovacuum advances on the current-month partition and n_dead_tup_estimate stops climbing unbounded, and via fact.pg_relation_size_snapshot that the partition's total_size_bytes growth rate slows.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC3",
@@ -2684,9 +2690,9 @@
       ],
       "dependencies": [],
       "customer_acceptance": {
-        "required": false,
-        "status": "pending",
-        "evidence": ""
+        "required": true,
+        "status": "accepted",
+        "evidence": "Customer confirmed on 2026-08-28: cozuldu diyebiliriz. The V094 per-table autovacuum settings brought the UPSERT-driven growth under control."
       },
       "verification_evidence": [
         "Customer asked a first-principles question ('autovacuum should let writes reuse dead tuple space, why does disk keep growing') that led to auditing pgstat's own database with fact.pg_relation_size_snapshot — found agg.pg_table_stat_hourly_202608 growing far faster (87% in 14 days) than its actual data volume justified (n_live_tup_estimate was CONSTANT at 7,062,216 across samples).",
@@ -2695,16 +2701,18 @@
         "AC3: customer then asked why the bloat alert never caught agg.pg_table_stat_hourly at all. Checked rule:14:instance:23 directly — it WAS open/critical the whole time (last_seen_at fresh), but its title pointed at control.instance_state (76% ratio, only 83 dead rows) instead of agg.pg_table_stat_hourly (1.2M+ dead rows). Ran findBloatedTables()'s query by hand for instance_pk=23: confirmed both tables ARE in the exceeding set, but the query's ORDER BY current_val desc put the tiny-table-high-ratio row first. Re-ran the same query with ORDER BY dead_tup desc: agg.pg_table_stat_hourly_202608 (1,255,613 dead) correctly sorted to the top ahead of agg.pgss_hourly_202608 (280,007) and every fact.*_delta partition. Fixed the code to match, mvn compile/mvn test pass.",
         "AC1 first-deploy failure: customer ran ./pgstat upgrade, got 'psql:...V094...: ERROR: unrecognized parameter \"autovacuum_vacuum_scale_factor\"' on line 28 (the ALTER TABLE on the parent) — migration correctly recorded as failed (not applied to schema_migrations, so the fix could be re-run via the same version file). Web research confirmed VACUUM-side reloptions are architecturally unsupported on partitioned parents in every PostgreSQL version — this was a genuine design mistake in the first V094, not a PG15-specific quirk. Rewrote the migration to target existing leaf partitions individually via pg_inherits, and added AC4 (PartitionManager change) so future partitions don't need a manual fix-up migration each time.",
         "AC1 second-deploy failure: re-running ./pgstat upgrade hit a NEW error — 'must be owner of table pg_table_stat_hourly_202606'. Queried pg_tables in the pgstat database directly: partitions 202606/202607/202608 are owned by a stale role 'primeit', all others by the current app role 'pgstatuser' — a pre-existing ownership inconsistency unrelated to this migration, surfaced only because this was the first time anything tried to ALTER those specific partitions. The OWNER TO fix itself then also failed with the same 'must be owner' error — this proved migrations run as pgstatuser, NOT the postgres superuser, so pgstatuser cannot reassign ownership away from another role. Had the customer manually run `ALTER TABLE ... OWNER TO pgstatuser` for the 3 stale-owned partitions as the actual postgres superuser (one-time fix, outside the migration).",
-        "AC1 third deploy succeeded (1 new migration applied, 0 failed). Verified directly via pg_class.reloptions on all four affected partitions (pg_table_stat_hourly_202606/07/08, pgss_hourly_202608): all show {autovacuum_vacuum_scale_factor=0.02,autovacuum_vacuum_threshold=5000} — confirmed applied, not just 'migration ran without error'."
+        "AC1 third deploy succeeded (1 new migration applied, 0 failed). Verified directly via pg_class.reloptions on all four affected partitions (pg_table_stat_hourly_202606/07/08, pgss_hourly_202608): all show {autovacuum_vacuum_scale_factor=0.02,autovacuum_vacuum_threshold=5000} — confirmed applied, not just 'migration ran without error'.",
+        "Customer confirmed on 2026-08-28: cozuldu diyebiliriz. The V094 per-table autovacuum settings brought the UPSERT-driven growth under control."
       ],
-      "next_action": "AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state."
+      "next_action": "AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state.",
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P1-011",
       "order": 46,
       "priority": "P1",
       "workstream": "collector",
-      "status": "planned",
+      "status": "done",
       "title": "Add observational autovacuum-pressure evidence (I/O operation counts, wait-event distribution) to the existing bloat alert",
       "problem": "After PGSTAT-P1-010's fix (lowering autovacuum thresholds on two high-UPSERT hourly rollup tables) and PGSTAT-P0-036 AC7 (a new alert scenario that recommends lowering thresholds for chronically-updated tables), the customer asked a sharp follow-up: 'autovacuum'un etkisini de ölçmeliyiz, sık sık devreye girerek sistemi yavaşlatıyor da olabilir' (we should measure autovacuum's impact too — frequent triggering could be slowing the system down). The concern is real and well-documented (worker saturation, cost-based throttling misconfiguration), and pgstat currently has no instrumentation for it: fetchAutovacuumWorkerStatus() only counts running workers (and does so incorrectly, via count(*) instead of distinct pid), fact.pg_progress_vacuum_snapshot only has progress metrics, and fact.pg_io_stat_delta's backend_type column could isolate autovacuum-worker I/O but nothing aggregates it. This means every 'lower your autovacuum threshold' recommendation pgstat makes is one-sided — it addresses bloat with no counter-evidence about autovacuum pressure. SCOPE NOTE (revised after four review rounds): the achievable goal is OBSERVATIONAL evidence, not a causal cost measurement. PostgreSQL exposes no per-process CPU time, pg_stat_io is cluster-wide operation counts (not bytes, not disk IOPS, not per-table), and wait-event data is point-in-time sampling that cannot prove backlog or single-cause attribution. The task therefore adds carefully-worded observational evidence sentences to the existing dead_tuple_ratio alert — it does NOT deliver a causal 'autovacuum cost' metric, and the earlier framing of this task (title mentioning CPU, requirements asking for an 'X MB/s' chart) was not achievable as stated.",
       "requirements": [
@@ -2751,9 +2759,9 @@
         "PGSTAT-P0-036"
       ],
       "customer_acceptance": {
-        "required": false,
-        "status": "pending",
-        "evidence": ""
+        "required": true,
+        "status": "accepted",
+        "evidence": "Customer confirmed on 2026-08-28: yaptin calisiyor dendik. All five evidence paths were verified in a real alert message during live verification."
       },
       "verification_evidence": [
         "Customer's question was well-founded per background research: real-world case studies (perun.au 'five failure patterns', a dev.to postmortem) document autovacuum worker saturation causing checkpoint pressure, buffer pool contention, and query latency spikes — this is a genuine, bidirectional risk (the same research also found cases where MORE aggressive autovacuum fixed performance problems, so the risk cuts both ways and can't be resolved by intuition alone).",
@@ -2777,9 +2785,11 @@
         "Canli gozlem (2026-08-27, deploy sonrasi): AC4-un ilk versiyonu sadece senaryo 4-u bastiriyordu, ama uretimdeki gercek gurultu kaynagi senaryo 1b-ii cikti. instance_pk=14: 122 olu satir (esik 114 — 8 satirla asmis), 21 Agustos-tan beri ACIK, 353 tekrar, ve mesaj hala \"esigi COK YAKIN ZAMANDA asti, naptime bekliyor\" diyordu — 6 gundur. instance_pk=8: 515.738 olu satir / 0 canli satir, ayni mesaj, ayni sure. Ikisinde de worker doygunlugu YOK (0/3 calisiyor), yani mesajin varsayimi (birazdan alinacak) olguyla celisiyordu. Duzeltme: senaryo 1b-ii de ayni israr sayacini kullaniyor (scenario_1b_ii anahtariyla, senaryo 4-ten ayri sayilir). Ilk 3 degerlendirmede bastirilir (gercekten naptime bekliyor olabilir); israr ederse alert acilir ama mesaj tamamen degisir: \"ISRAR EDIYOR: ust uste N degerlendirmedir esik asilmis ve worker doygunlugu da yok — yani engelleyen sey naptime beklemesi DEGIL\" der ve aksiyon olarak launcher/database dislanmasi/ANALYZE guvenilirligi arastirmasini onerir. Tablo vacuum edilir edilmez (lastAutovacuum veya lastVacuum dolunca) sayac silinir. 52/52 test geciyor.",
         "Simdi Degerlendir butonu duzeltildi (2026-08-27): Buton alertRuleEvaluator.evaluate() cagiriyordu ama bu fact tablolarindan okur, kaynak PostgreSQL-e gitmez. Toplama araligi 15 dakika oldugu icin kullanici bir sorunu duzeltip butona bastiginda kural hala 15 dakikalik eski veriyi gorup alarmi acik birakabiliyordu — buton adi \"Simdi Degerlendir\" iken davranisi \"en son toplanan veriyle kurallari tekrar calistir\" idi. Duzeltme: refreshDataForOpenAlerts() eklendi, evaluate() oncesinde ACIK alarmi olan instance-lardan taze veri topluyor (clusterCollector + dbObjectsCollector). Kapsam bilincli olarak dar tutuldu: sadece acik alarmi olan instance-lar, tum filo degil (dakikalar surerdi). Toplama hatalari yutuluyor — basarisiz olsa bile degerlendirme yapilmali. UI tooltip-i de guncellendi (30-60 saniye surebilecegi belirtiliyor). Bilinen sinir: buton cooldown-u atlamiyor, yani son alarmdan bu yana cooldown_minutes gecmemisse mesaj yenilenmez.",
         "Simdi Degerlendir butonuna arka arkaya basma korumasi eklendi (2026-08-27): son toplama 120 saniyeden yeniyse tekrar toplanmiyor, sadece degerlendirme calisiyor. Iki gerekce: (a) hedef PostgreSQL-e gereksiz yuk binmesin (etki kucuk ama sifir degil); (b) agg.pgss_hourly-nin avg(mean_exec_time_ms) alani fazladan orneklerle kaysin istemiyoruz — o alan cagri-sayisi agirlikli DEGIL, her ornek esit agirlikta sayiliyor, yani sakin bir anda alinan ek ornekler saatlik ortalamayi asagi ceker. Diger tum agg alanlari sum() kullandigi icin fazladan orneklemeden etkilenmiyor. NOT (ayri gorev adayi): avg(mean_exec_time_ms) zaten zayif bir metrik — 1 cagrilik ornekle 10.000 cagrilik ornek esit agirlikta; exec_time_ms_sum/calls_sum ile dogru agirlikli ortalama hesaplanabilir ama bu agg semasini etkileyen ayri bir is.",
-        "agg.pgss_hourly.avg_exec_time_ms kaldirildi (2026-08-27, V097): Kolon avg(mean_exec_time_ms) ile hesaplaniyordu — ortalamalarin ortalamasi, yani alt gruplar farkli buyuklukteyse yanlis. Ornek: bir saatte 10.000 cagri @ 5ms + uc kez 10 cagri @ 500ms icin eski hesap 376ms, dogru hesap 6.5ms — 58 kat sapma. Kolonu saklamaya gerek yoktu cunku dogru deger mevcut iki alandan turetilebiliyor (exec_time_ms_sum / calls_sum) ve bu gecmis satirlar icin de calisiyor, backfill gerekmiyor. Uc adim: (1) tek okuyucu olan insights.ts dogru agirlikli formule gecirildi; (2) AggRepository artik bu kolonu yazmiyor; (3) V097 kolonu drop ediyor. ETKI ANALIZI: alert degerlendirmesi bu kolonu HIC kullanmiyordu (fact.pgss_delta.total_exec_time_ms_delta uzerinden calisiyor) — yanlis alarm riski yoktu ve alarm davranisi degismiyor. statements.ts zaten dogru formulu (sum/sum) kullaniyordu — yani kod tabaninda ayni metrik iki yerde iki farkli sekilde hesaplaniyordu, o tutarsizlik da giderildi. Tek etkilenen yer Insights sayfasinin saatlik gorunumu idi."
+        "agg.pgss_hourly.avg_exec_time_ms kaldirildi (2026-08-27, V097): Kolon avg(mean_exec_time_ms) ile hesaplaniyordu — ortalamalarin ortalamasi, yani alt gruplar farkli buyuklukteyse yanlis. Ornek: bir saatte 10.000 cagri @ 5ms + uc kez 10 cagri @ 500ms icin eski hesap 376ms, dogru hesap 6.5ms — 58 kat sapma. Kolonu saklamaya gerek yoktu cunku dogru deger mevcut iki alandan turetilebiliyor (exec_time_ms_sum / calls_sum) ve bu gecmis satirlar icin de calisiyor, backfill gerekmiyor. Uc adim: (1) tek okuyucu olan insights.ts dogru agirlikli formule gecirildi; (2) AggRepository artik bu kolonu yazmiyor; (3) V097 kolonu drop ediyor. ETKI ANALIZI: alert degerlendirmesi bu kolonu HIC kullanmiyordu (fact.pgss_delta.total_exec_time_ms_delta uzerinden calisiyor) — yanlis alarm riski yoktu ve alarm davranisi degismiyor. statements.ts zaten dogru formulu (sum/sum) kullaniyordu — yani kod tabaninda ayni metrik iki yerde iki farkli sekilde hesaplaniyordu, o tutarsizlik da giderildi. Tek etkilenen yer Insights sayfasinin saatlik gorunumu idi.",
+        "Customer confirmed on 2026-08-28: yaptin calisiyor dendik. All five evidence paths were verified in a real alert message during live verification."
       ],
-      "next_action": "AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi."
+      "next_action": "AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi.",
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P1-009",
@@ -3322,6 +3332,93 @@
       "verification_evidence": [
         "Customer asked for it on 2026-08-28 while investigating why the database was still 33 GB: bunu instances sekmesinde gorsem iyi olabilir yada ayarlarda hangi instance hangi retention configinde onu gosterebiliriz.",
         "The request arose directly from the shared-boundary problem: the query proving samet-ets-01 was the sole r6-default instance had to be written by hand, which is what prompted the ask."
+      ]
+    },
+    {
+      "id": "PGSTAT-P1-013",
+      "order": 53,
+      "priority": "P1",
+      "workstream": "retention",
+      "status": "planned",
+      "next_action": "Confirm the ATTACH PARTITION approach against a scratch database first - that a range-partitioned parent accepts a sub-partitioned child alongside plain ones - since the whole plan rests on it.",
+      "title": "Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows",
+      "problem": "Daily fact partitions are keyed on sample_ts alone, so one partition holds that day rows for every instance regardless of their retention policy. A partition can only be dropped once the longest retention among all active instances has elapsed, which makes a per-instance setting behave like a fleet-wide one. Purge does delete the short-retention rows on schedule, but the partition survives, and since a past day is never written again the pages autovacuum frees are marked reusable and never reused - the space is not returned to the operating system. Measured on 2026-08-28: pgss_delta_20260820 held 11740 live rows in 637 MB, and the same shape repeated across every partition in the 7-to-14-day window, roughly 5 GB in total. The customer hit this concretely: samet-ets-01 was the only instance on r6-default (14 days) while 24 others were on r3-short (7 days), so that single instance kept a week of otherwise-droppable partitions alive for everyone. Their objection is the point of this task - moving one instance to a longer retention should not cost the whole fleet its disk - because the current design makes choosing a longer window for a single instance unaffordable.",
+      "requirements": [
+        "A partition must be droppable as soon as the retention of the data inside it has elapsed, independently of what other instances are configured to keep.",
+        "Grouping must be by retention day count rather than by policy identity, so two policies with the same window share a partition and a renamed or re-pointed policy does not strand data.",
+        "The set of groups must follow whatever retention values are actually in use, with no group hardcoded and no policy treated as the default - the customer keeps policies defined for future use and expects any of them to work.",
+        "Reading code must not change. Queries continue to target the parent table, so no UNION across old and new shapes and no transitional table name may appear in any query - the customer rejected that explicitly as future cleanup work.",
+        "Existing partitions must not be rewritten or migrated. They keep their current shape and are dropped by the existing purge as their retention elapses.",
+        "The number of partitions must stay manageable as groups are added; the plan must state what happens if many distinct retention values come into use at once."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "A retention_days column exists on the daily fact tables, populated at insert time from the instance own retention policy, and nullable so pre-existing rows remain valid.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "PartitionManager creates each new day as a sub-partitioned table - range on the date, list on retention_days - with one child per retention value currently in use, attached to the unchanged parent via ATTACH PARTITION.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Old flat partitions and new sub-partitioned ones coexist under the same parent, and every existing query against the parent returns identical results with no query-side change.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "PurgeEvaluator drops each sub-partition on its own retention window read from the partition itself, and the longestUsedRetentionCutoff helper is no longer used for the tables that have moved to the new shape.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Moving an instance between policies is safe without migrating its history: existing rows stay in the group they were written to and expire under that group rule, which the customer accepted as the intended behaviour.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "mvn compile and mvn test pass, with coverage for partition naming, the group set derived from active instances, and the retention read back from a partition name.",
+          "status": "pending"
+        },
+        {
+          "id": "AC7",
+          "text": "Live verification: with instances on two different retention values, the shorter group partitions are dropped on their own schedule while the longer group is untouched, and total database size falls without any manual VACUUM FULL.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Confirm first, before any other work, that PostgreSQL accepts a sub-partitioned child attached to a range-partitioned parent that also holds plain children. The entire no-query-change property depends on this.",
+        "Migration: add a nullable retention_days smallint to the daily fact tables.",
+        "InstanceInfo and InventoryRepository: carry the instance raw_retention_days the same way schedule_profile values are already carried, so the collector knows it at insert time without a per-row lookup.",
+        "FactRepository: populate retention_days on the delta and snapshot inserts.",
+        "PartitionManager: create each future day as CREATE TABLE ... PARTITION BY LIST (retention_days), create one child per distinct retention value in use, then ATTACH it to the parent for that date range.",
+        "PurgeEvaluator: derive each partition retention from its own group instead of the fleet-wide maximum, and drop it when that window has elapsed.",
+        "Docs: describe the two coexisting partition shapes and the fact that the old ones drain away on their own."
+      ],
+      "verification_plan": [
+        "Scratch database: prove ATTACH PARTITION of a sub-partitioned child onto a mixed parent, and that queries against the parent see both shapes.",
+        "mvn -o compile && mvn -o test",
+        "Live: set two instances to different retention values, then confirm across a full retention window that each group drops on its own schedule and that queries against the parent are unaffected."
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer raised the design flaw on 2026-08-28 after being asked to move samet-ets-01 from r6-default to r3-short to reclaim space, objecting that a per-instance setting should not cost the whole fleet its disk.",
+        "Measured cost of the current design: pgss_delta_20260820 held 11740 live rows in 637 MB with n_tup_del at 1148164 and n_dead_tup at 0 - purge had deleted the rows and autovacuum had cleaned them, but the space stayed. Roughly 5 GB sat in this state across the 7-to-14-day window.",
+        "Autovacuum was ruled out as a cause: 1050 of 1112 partitions had been autovacuumed, total dead tuples across 25 GB were 749745, and the highest ratio was 16.63 percent - below the alert threshold.",
+        "Scope measured 2026-08-28: 31 partitioned fact tables, 28 insert methods in FactRepository, PartitionManager at 503 lines, PurgeEvaluator at 896 lines with 7 dropPartitionsBefore call sites.",
+        "Design decisions taken with the customer: group by retention day count rather than policy; keep the parent table unchanged and attach sub-partitioned children so no query changes; leave existing partitions to drain under the current purge rather than migrating 25 GB.",
+        "Priority agreed as not urgent: the immediate 5 GB was recovered by moving the single r6-default instance to r3-short, so this task removes the constraint rather than fixing an outage."
       ]
     }
   ]

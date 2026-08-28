@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 52 |
-| Done tasks | 16 |
-| Remaining tasks | 36 |
+| Total tasks | 53 |
+| Done tasks | 21 |
+| Remaining tasks | 32 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -32,8 +32,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 16 |
-| in_progress | 8 |
+| done | 21 |
+| in_progress | 4 |
 | planned | 28 |
 
 ## Workstream Counts
@@ -47,7 +47,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | operations | 13 |
 | pgdbaagent | 5 |
 | release | 1 |
-| retention | 1 |
+| retention | 2 |
 | security | 1 |
 | telemetry | 7 |
 | ui | 4 |
@@ -95,20 +95,21 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 36 | PGSTAT-P0-029 | P0 | operations | done | Distinguish 'pg_stat_statements missing entirely' from 'installed but not in admin DB' in the degraded-reason banner | Closed. |
 | 37 | PGSTAT-P0-030 | P0 | operations | done | Editing an instance without entering a password silently wipes its secret_ref | Closed. |
 | 38 | PGSTAT-P0-031 | P0 | operations | done | Updating an instance's password does not auto-trigger a bootstrap retry | Closed. |
-| 39 | PGSTAT-P0-032 | P0 | operations | in_progress | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index | Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements. |
-| 40 | PGSTAT-P0-033 | P0 | operations | in_progress | TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files | Continue passive monitoring for a few more days (no action needed unless a new temp-file report surfaces); consider closing the task fully and moving customer_acceptance to accepted once the customer explicitly signs off. |
-| 41 | PGSTAT-P0-034 | P0 | alerting | in_progress | dead_tuple_ratio alert rule redesigned with a 3-signal bloat/vacuum-ineffectiveness model | Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted. |
+| 39 | PGSTAT-P0-032 | P0 | operations | done | Nightly ops.job_run purge takes 5-20 minutes per batch due to a missing started_at index | Run ./pgstat migrate in production (CREATE INDEX CONCURRENTLY takes longer on large tables but does not block writes); live-verify the next nightly purge cycle is fast and no more long-running-query alerts fire for these statements. |
+| 40 | PGSTAT-P0-033 | P0 | operations | done | TextEnricher's pg_stat_statements(true) call materializes the whole view, spilling to temp files | Continue passive monitoring for a few more days (no action needed unless a new temp-file report surfaces); consider closing the task fully and moving customer_acceptance to accepted once the customer explicitly signs off. |
+| 41 | PGSTAT-P0-034 | P0 | alerting | done | dead_tuple_ratio alert rule redesigned with a 3-signal bloat/vacuum-ineffectiveness model | Deploy the hasRecentData guard (./pgstat upgrade) together with the resolve->resolveAndNotify fix; expect the 11 incorrectly-resolved alerts to reopen automatically within one or two evaluator cycles once the guard is live and fresh data confirms they're still bloated — no manual DB fix needed. Ask the customer to confirm the alert list repopulates correctly and that this time resolves only happen for tables that are genuinely fixed. Watch for a few more days before considering this task fully accepted. |
 | 42 | PGSTAT-P0-035 | P1 | alerting | in_progress | table_threshold alert message is too dense to scan when several arrive at once | Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan. |
 | 43 | PGSTAT-P0-036 | P1 | alerting | in_progress | Bloat alert follow-ups: missing API wiring, resolve notification detail, per-rule channel selection, evidence-based action text | Deploy the scenario 4.5 addition (./pgstat upgrade); live-verify against a table with a genuinely chronic autovacuum-vs-update-rate mismatch (or wait for pgstat's own agg.pg_table_stat_hourly to re-trigger before the fresh V094 threshold change fully takes hold) that the diagnosis correctly distinguishes 4.5 from 4. Scenarios 2/3/4/4.5/5 still need a live trigger to confirm end-to-end wording quality beyond 1a/1b-i/1b-ii/3.5, though their logic reuses already-verified data sources. Consider this task customer-accepted once the customer confirms satisfaction with the diagnosis quality across a full alert batch; otherwise keep iterating per feedback. |
 | 44 | PGSTAT-P1-009 | P2 | collector | planned | Collector restart loses one collection cycle per table/statement due to in-memory prev-value caches | Schedule a dedicated design session: survey all collectors for the same in-memory-cache-on-restart pattern, design the persisted raw-state table and rehydration logic, then implement and verify before closing. |
-| 45 | PGSTAT-P1-010 | P1 | collector | in_progress | agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow | AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state. |
-| 46 | PGSTAT-P1-011 | P1 | collector | planned | Add observational autovacuum-pressure evidence (I/O operation counts, wait-event distribution) to the existing bloat alert | AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi. |
+| 45 | PGSTAT-P1-010 | P1 | collector | done | agg.pg_table_stat_hourly / agg.pgss_hourly grow continuously due to frequent UPSERT-driven dead tuples, default autovacuum threshold too slow | AC1 and AC3 fully deployed and confirmed. Remaining: AC2 (monitor over the next several days whether autovacuum starts firing more often and size growth slows) and AC4's live verification (confirm the next monthly partition rollover — for 202611 — creates the partition with the lowered threshold already set, without needing a manual fix). Also live-verify rule:14:instance:23's next message names agg.pg_table_stat_hourly instead of control.instance_state. |
+| 46 | PGSTAT-P1-011 | P1 | collector | done | Add observational autovacuum-pressure evidence (I/O operation counts, wait-event distribution) to the existing bloat alert | AC1-AC4 tamamlandi, kod pushlandi. DEPLOY GEREKLI: ./pgstat upgrade (V096 migration) + collector rebuild (--no-cache). Deploy sonrasi dogrulanacak: (1) senaryo 4 durumunda alert acilmiyor ve control.bloat_scenario_streak-te satir olusuyor; (2) ust uste 3 artan degerlendirmeden sonra alert aciliyor; (3) aksiyon metinlerinde gercek sema.tablo adi goruinuyor. AYRI GOREV OLARAK ACILMALI: (a) DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT=20 esigi 30 dakikalik pencerede cok yuksek, senaryo 3 uretimde pratikte ulasilamaz olabilir; (b) control.bloat_scenario_streak icin purge/retention kurali (eski satirlar birikmesin); (c) byte-hacmi metrigi ve UI gorsellestirmesi. |
 | 47 | PGSTAT-P0-037 | P0 | retention | planned | Partition drop threshold counts retention policies no active instance uses, so partitions live far past their retention | Deploy the PurgeEvaluator fix, then verify after the nightly maintenance run that the raw delta cutoff moved to 2026-08-13, the older partitions were dropped, and database size fell without a manual VACUUM FULL. |
 | 48 | PGSTAT-P0-038 | P0 | alerting | planned | Bloat suppression froze an already-open alert and never fired on tables whose dead tuples stopped growing | Deploy, then confirm the frozen alert on rule 14 / instance 2 either updates to the currently worst table or resolves, and that security.user style tables (never vacuumed, dead tuples flat) start alerting after three evaluations. |
 | 49 | PGSTAT-P0-039 | P0 | alerting | planned | Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible | Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord. |
 | 50 | PGSTAT-P0-040 | P0 | alerting | planned | Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables | Add a statistics-trustworthiness gate to diagnoseBloat that runs before any ratio or threshold arithmetic, and decide what the alert says when statistics cannot be trusted. |
 | 51 | PGSTAT-P1-012 | P1 | alerting | planned | No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics | Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken. |
 | 52 | PGSTAT-P2-006 | P2 | ui | planned | Instance list does not show which retention policy each instance uses | Deploy with the next api and ui build, then confirm the column renders and decide whether samet-ets-01 should move from r6-default to r3-short. |
+| 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | Confirm the ATTACH PARTITION approach against a scratch database first - that a range-partitioned parent accepts a sub-partitioned child alongside plain ones - since the whole plan rests on it. |
 
 ## Dependency Map
 
@@ -166,6 +167,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-040 | - | - |
 | PGSTAT-P1-012 | - | - |
 | PGSTAT-P2-006 | - | - |
+| PGSTAT-P1-013 | - | - |
 
 ## Closure Rules
 
