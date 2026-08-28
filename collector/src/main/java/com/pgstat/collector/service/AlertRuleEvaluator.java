@@ -3056,6 +3056,7 @@ public class AlertRuleEvaluator {
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
             "       t.last_autovacuum, t.last_vacuum, t.autovacuum_count_sum," +
             "       t.last_analyze, t.last_autoanalyze," +
+            "       dbs.stats_reset," +
             "       t.prev_dead_tup" +
             "  from (" +
             // n_dead_tup_estimate/n_live_tup_estimate pencerenin EN SON ornegine
@@ -3090,6 +3091,21 @@ public class AlertRuleEvaluator {
             "     order by instance_pk, schemaname, relname, dbid, sample_ts desc" +
             "  ) t" +
             "  left join dim.database_ref dbr on dbr.instance_pk = t.instance_pk and dbr.dbid = t.dbid" +
+            // Istatistiklerin ne zaman sifirlandigi (pg_stat_database.stats_reset).
+            // last_analyze/last_vacuum'un NULL olmasi "bu tablo hic analiz
+            // edilmedi" DEMEK DEGIL — sadece "sayaclar sifirlandigindan beri
+            // calismadi" demek. Teshis metninde bu tarihi vererek belirsizligi
+            // kaldiriyoruz (musteri itirazi 2026-08-28: "hic derken gercekten mi
+            // hic? hicligin tanimi yok mu?"). 24 saatlik pencere sorguyu
+            // sinirliyor; stats_reset nadiren degisir.
+            "  left join lateral (" +
+            "    select d2.stats_reset" +
+            "      from fact.pg_database_delta d2" +
+            "     where d2.instance_pk = t.instance_pk and d2.dbid = t.dbid" +
+            "       and d2.sample_ts > now() - interval '24 hours'" +
+            "       and d2.stats_reset is not null" +
+            "     order by d2.sample_ts desc limit 1" +
+            "  ) dbs on true" +
             "  where (" +
             // Bacak A: oran + minimum satir sayisi
             "    (t.n_live_tup_estimate + t.n_dead_tup_estimate) >= ?" +
@@ -3977,10 +3993,15 @@ public class AlertRuleEvaluator {
      * Bu tablonun canli/olu satir tahminlerine guvenilebilir mi?
      *
      * n_live_tup ve n_dead_tup istatistiktir, olcum degil. PostgreSQL bunlari
-     * sadece ANALYZE veya VACUUM sirasinda gercek sayimla duzeltir; ikisi de hic
+     * sadece ANALYZE veya VACUUM sirasinda gercek sayimla duzeltir; ikisi de
      * calismamissa degerler insert/delete sayaclarindan turetilir ve
      * pg_stat_database.stats_reset sonrasi keyfi bicimde yanlis olabilir —
      * cunku sayaclar sifirlanirken tablodaki mevcut satirlar sayilmaz.
+     *
+     * NOT: dort zaman damgasinin da NULL olmasi tablonun HIC analiz/vacuum
+     * edilmedigi anlamina gelmez; bu sayaclar istatistik sifirlamasinda silinir.
+     * Dogru ifade "sifirlamadan bu yana"dir — mesajda statsWindowPhrase() ile
+     * kesin tarih verilir.
      *
      * Uretimde olculen (2026-08-27, instance 2 / etsrooms): security.user
      * n_live_tup=6 ve n_dead_tup=3224 bildiriyordu, yani %99.81 olu oran ve
@@ -4004,6 +4025,33 @@ public class AlertRuleEvaluator {
      * olu satirli tablolar vardir (kuyruk/staging tablolari) ve onlar
      * istatistikleri guncel oldugu surece alert uretmeye devam etmeli.
      */
+    /**
+     * "Ne zamandan beri analiz edilmemis" ifadesi.
+     *
+     * last_analyze/last_vacuum'un NULL olmasi tablonun HIC analiz edilmedigi
+     * anlamina gelmez — bu sayaclar istatistikler sifirlandiginda (pg_stat_reset,
+     * ya da bazi surumlerde crash sonrasi) silinir. Yani dogru ifade "sayaclar
+     * sifirlandigindan beri"dir. Musteri bunu 2026-08-28'de dogru biçimde
+     * sorguladi: "hic derken gercekten mi hic? hicligin tanimi yok mu?"
+     *
+     * pg_stat_database.stats_reset okunabiliyorsa kesin tarih ve gecen sure
+     * verilir (uretimde etsrooms icin 2026-03-04, 176 gun). Okunamiyorsa
+     * belirsizlik ITIRAF EDILIR — uydurulmus bir kesinlik yerine.
+     */
+    static String statsWindowPhraseForTest(Map<String, Object> record) {
+        return statsWindowPhrase(record);
+    }
+
+    private static String statsWindowPhrase(Map<String, Object> record) {
+        java.time.OffsetDateTime reset = asOffsetDateTime(record.get("stats_reset"));
+        if (reset == null) {
+            return "istatistik sayaçları sıfırlandığından beri (sıfırlama tarihi okunamadı)";
+        }
+        long days = java.time.Duration.between(reset, java.time.OffsetDateTime.now()).toDays();
+        return String.format("istatistikler %s tarihinde sıfırlanmış (%d gün önce) ve o tarihten beri",
+            reset.toLocalDate(), days);
+    }
+
     static boolean statsUntrustworthy(Map<String, Object> record) {
         return record.get("last_analyze") == null
             && record.get("last_autoanalyze") == null
@@ -4021,13 +4069,15 @@ public class AlertRuleEvaluator {
             String name = qualifiedTableName(record);
             return BloatDiagnosis.of(
                 String.format(
-                    "Bu tablonun istatistikleri GÜVENİLMEZ — hiç ANALYZE ve hiç VACUUM"
-                    + " görmemiş. PostgreSQL canlı/ölü satır sayılarını yalnızca bu iki"
-                    + " işlem sırasında gerçek sayımla düzeltir; öncesinde değerler"
-                    + " insert/delete sayaçlarından tahmin edilir ve istatistik sıfırlaması"
-                    + " sonrası gerçekle ilişkisi kalmayabilir. Bu yüzden bildirilen oran"
-                    + " (%s canlı / %s ölü satır) gerçek durumu yansıtmıyor olabilir —"
-                    + " tabloda göründüğünden çok daha fazla canlı satır bulunabilir.",
+                    "Bu tablonun istatistikleri GÜVENİLMEZ: %s bu tabloda ne ANALYZE ne de"
+                    + " VACUUM çalışmış. PostgreSQL canlı/ölü satır sayılarını yalnızca bu"
+                    + " iki işlem sırasında gerçek sayımla düzeltir; arada değerler"
+                    + " insert/delete sayaçlarından türetilir ve sayaçlar sıfırlanırken"
+                    + " tablodaki mevcut satırlar sayılmadığı için gerçekle ilişkisi"
+                    + " kalmayabilir. Bu yüzden bildirilen oran (%s canlı / %s ölü satır)"
+                    + " gerçek durumu yansıtmıyor olabilir — tabloda göründüğünden çok daha"
+                    + " fazla canlı satır bulunabilir.",
+                    statsWindowPhrase(record),
                     live != null ? String.format("%,d", live) : "?",
                     dead != null ? String.format("%,d", dead) : "?"),
                 String.format(

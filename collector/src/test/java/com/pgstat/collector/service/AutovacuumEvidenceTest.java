@@ -588,6 +588,33 @@ class AutovacuumEvidenceTest {
         java.sql.Timestamp.valueOf("2026-08-27 12:00:00");
 
     @Test
+    void theUntrustworthyWindowIsBoundedByTheStatisticsReset() {
+        // "Hic analiz edilmemis" ifadesi yanlisti: last_analyze/last_vacuum
+        // sayaclari istatistik sifirlandiginda silinir, yani NULL olmalari
+        // tablonun hic analiz edilmedigini DEGIL, sifirlamadan beri
+        // edilmedigini gosterir. Musteri 2026-08-28'de dogru sordu:
+        // "hicligin tanimi yok mu?"
+        java.util.Map<String, Object> r = bloatRecord(null, null, null, null);
+        r.put("stats_reset", java.sql.Timestamp.valueOf("2026-03-04 15:23:26"));
+
+        String phrase = AlertRuleEvaluator.statsWindowPhraseForTest(r);
+
+        assertThat(phrase).contains("2026-03-04");
+        assertThat(phrase).contains("gün önce");
+    }
+
+    @Test
+    void theWindowAdmitsUncertaintyWhenTheResetTimeIsUnknown() {
+        // stats_reset okunamiyorsa uydurulmus bir kesinlik yerine belirsizlik
+        // itiraf edilir.
+        String phrase = AlertRuleEvaluator.statsWindowPhraseForTest(
+            bloatRecord(null, null, null, null));
+
+        assertThat(phrase).contains("okunamadı");
+        assertThat(phrase).doesNotContain("gün önce");
+    }
+
+    @Test
     void statsAreUntrustworthyWhenNothingHasEverCorrectedThem() {
         // Uretim vakasi (2026-08-27, security.user): dort zaman damgasi da NULL.
         // n_live_tup=6 / n_dead_tup=3224 bildiriliyordu, yani %99.81 olu oran ve

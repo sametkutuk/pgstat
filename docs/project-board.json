@@ -3199,6 +3199,11 @@
           "id": "AC5",
           "text": "Live verification on instance 2: the five current alerts on never-analyzed tables stop claiming ratios above 90 percent, and after running ANALYZE on those tables the reported ratios match reality.",
           "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "The diagnosis names the window it is talking about - the statistics reset date and how long ago it was - instead of claiming the table was never analyzed, since the timestamps it reads are themselves cleared by a reset. Where the reset time cannot be read, the message admits the uncertainty rather than inventing precision.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3233,7 +3238,9 @@
         "The false alerts accused autovacuum of a failure it had not committed. For t_supplier_rez the real trigger threshold is 50 + 0.2 x 4593352 = about 918720 dead rows against 11879 actual, so skipping the table was correct; the corrupted estimate made the threshold look like 62 and the reading look like 907, i.e. exceeded.",
         "Implemented 2026-08-28: findBloatedTables now selects last_analyze and last_autoanalyze alongside the vacuum timestamps, and diagnoseBloat gates on a pure statsUntrustworthy(record) predicate before the scenario tree runs. When all four timestamps are absent the alert reports that the estimates cannot be trusted and recommends ANALYZE on the named table, rather than asserting a ratio.",
         "The gate deliberately ignores the live-row count. Genuine queue and staging tables do have few live rows and many dead ones, and they must keep alerting; a unit test asserts that a table with only last_autoanalyze set is still treated as trustworthy, which is what separates the two cases.",
-        "Test suite grew from 56 to 60: never-corrected, queue-shaped-but-current, each single correcting operation sufficing, and missing keys treated as never-corrected (safe side)."
+        "Test suite grew from 56 to 60: never-corrected, queue-shaped-but-current, each single correcting operation sufficing, and missing keys treated as never-corrected (safe side).",
+        "Customer challenged the wording on 2026-08-28 after seeing the live message: hic derken gercekten mi hic, hicligin tanimi yok mu, db up oldugundan beri mi. The objection was correct. last_analyze and last_autoanalyze are cleared by a statistics reset, so their being null means nothing about the table before that reset - on etsrooms the reset was 2026-03-04, 176 days earlier, and any ANALYZE before it is simply invisible.",
+        "Fixed by joining pg_stat_database.stats_reset, which fact.pg_database_delta already collects, into the bloat record query and naming the date and elapsed days in the diagnosis. When stats_reset cannot be read the phrase says so rather than implying a bound that is not known."
       ]
     },
     {
