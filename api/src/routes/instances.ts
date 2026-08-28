@@ -83,6 +83,14 @@ router.get('/', async (req, res, next) => {
         rp.raw_retention_days as retention_raw_days,
         rp.hourly_retention_days as retention_hourly_days,
         rp.daily_retention_days as retention_daily_days,
+        -- Zamanlama profili de ayni kolonda gosteriliyor: ikisi de instance'in
+        -- "nasil izlendigini" tarif ediyor ve ikisi de detay ekranina girmeden
+        -- gorunmuyordu (musteri talebi 2026-08-28). Sadece profil adi; interval
+        -- degerleri tooltip'te.
+        sp.profile_code as schedule_profile_code,
+        sp.cluster_interval_seconds as schedule_cluster_interval_seconds,
+        sp.statements_interval_seconds as schedule_statements_interval_seconds,
+        sp.db_objects_interval_seconds as schedule_db_objects_interval_seconds,
         c.pg_major, c.is_reachable, c.is_primary, c.collector_sql_family,
         s.last_cluster_collect_at, s.last_statements_collect_at,
         s.consecutive_failures, s.backoff_until,
@@ -91,6 +99,7 @@ router.get('/', async (req, res, next) => {
       left join control.instance_capability c on c.instance_pk = i.instance_pk
       left join control.instance_state s on s.instance_pk = i.instance_pk
       left join control.retention_policy rp on rp.retention_policy_id = i.retention_policy_id
+      left join control.schedule_profile sp on sp.schedule_profile_id = i.schedule_profile_id
       order by i.display_name
     `);
     res.json(result.rows.map((r: any) => ({ ...r, secret_ref: maskSecretRef(r.secret_ref) })));

@@ -24,9 +24,13 @@ interface Instance {
     ssl_root_cert_path: string | null; collector_group: string | null;
     collector_username: string;
     schedule_profile_id: number; retention_policy_id: number; notes: string | null;
-    // Retention politikasinin okunabilir hali — id yerine ad ve gun degeri
+    // Retention politikasi ve zamanlama profilinin okunabilir hali — id yerine ad
     retention_policy_code: string | null; retention_raw_days: number | null;
     retention_hourly_days: number | null; retention_daily_days: number | null;
+    schedule_profile_code: string | null;
+    schedule_cluster_interval_seconds: number | null;
+    schedule_statements_interval_seconds: number | null;
+    schedule_db_objects_interval_seconds: number | null;
     last_error: string | null; last_error_at: string | null;
 }
 
@@ -259,23 +263,42 @@ export default function Instances() {
         { key: 'service_group', header: 'Servis Grubu', render: (r: Instance) => r.service_group || '—' },
         { key: 'last_cluster_collect_at', header: 'Son Cluster', render: (r: Instance) => <TimeAgo date={r.last_cluster_collect_at} /> },
         {
-            // Retention, hemen yanindaki "Collector DB" kolonunun sebebi: bir
-            // instance ne kadar uzun sure veri tutuyorsa o kadar yer kaplar.
-            // Ayrica partition drop siniri butun instance'lar icin ortaktir
-            // (en uzun KULLANILAN retention), yani tek bir instance'in uzun
-            // politikasi digerlerinin diskini de mesgul eder — bu yuzden
-            // hangi instance'in hangi politikada oldugu tek bakista gorulmeli.
-            key: 'retention_policy_code', header: 'Retention', render: (r: Instance) => {
-                if (!r.retention_policy_code) return '—';
+            // Retention + zamanlama profili: ikisi de instance'in nasil izlendigini
+            // tarif eder ve ikisi de detay ekranina girmeden gorunmuyordu. Tek
+            // kolonda "retention / profil" olarak gosteriliyor; sayisal degerler
+            // tooltip'te kaliyor ki liste kalabaliklasmasin (musteri talebi
+            // 2026-08-28: "ek kolon eklemeye detay vermeye gerek yok").
+            //
+            // Retention'in yeri ozellikle "Collector DB" kolonunun yani: bir
+            // instance ne kadar uzun sure veri tutuyorsa o kadar yer kaplar. Ayrica
+            // partition drop siniri butun instance'lar icin ortaktir (en uzun
+            // KULLANILAN retention), yani tek bir instance'in uzun politikasi
+            // digerlerinin diskini de mesgul eder.
+            key: 'retention_policy_code', header: 'Retention / Profil', render: (r: Instance) => {
                 const days = r.retention_raw_days;
                 const tip = [
-                    `Ham veri: ${days ?? '?'} gun`,
-                    r.retention_hourly_days != null ? `Saatlik ozet: ${r.retention_hourly_days} gun` : null,
-                    r.retention_daily_days != null ? `Gunluk ozet: ${r.retention_daily_days} gun` : null,
+                    r.retention_policy_code
+                        ? `Retention: ${r.retention_policy_code}` : null,
+                    `  Ham veri: ${days ?? '?'} gun`,
+                    r.retention_hourly_days != null ? `  Saatlik ozet: ${r.retention_hourly_days} gun` : null,
+                    r.retention_daily_days != null ? `  Gunluk ozet: ${r.retention_daily_days} gun` : null,
+                    r.schedule_profile_code
+                        ? `Zamanlama: ${r.schedule_profile_code}` : null,
+                    r.schedule_cluster_interval_seconds != null
+                        ? `  Cluster: ${r.schedule_cluster_interval_seconds}sn` : null,
+                    r.schedule_statements_interval_seconds != null
+                        ? `  Statements: ${r.schedule_statements_interval_seconds}sn` : null,
+                    r.schedule_db_objects_interval_seconds != null
+                        ? `  DB objects: ${r.schedule_db_objects_interval_seconds}sn` : null,
                 ].filter(Boolean).join('\n');
+                if (!r.retention_policy_code && !r.schedule_profile_code) return '—';
                 return (
-                    <div className="min-w-[90px]" title={tip}>
-                        <div className="text-xs text-[#1E293B]">{r.retention_policy_code}</div>
+                    <div className="min-w-[110px]" title={tip}>
+                        <div className="text-xs text-[#1E293B]">
+                            {r.retention_policy_code || '—'}
+                            <span className="text-[#CBD5E1]"> / </span>
+                            {r.schedule_profile_code || '—'}
+                        </div>
                         {days != null && (
                             <div className="text-[10px] text-[#94A3B8]">{days} gun ham veri</div>
                         )}

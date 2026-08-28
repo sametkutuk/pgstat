@@ -14,8 +14,8 @@ node scripts/generate-project-status.mjs
 | Metric | Value |
 | --- | ---: |
 | Total tasks | 53 |
-| Done tasks | 21 |
-| Remaining tasks | 32 |
+| Done tasks | 22 |
+| Remaining tasks | 31 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -32,9 +32,9 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 21 |
+| done | 22 |
 | in_progress | 4 |
-| planned | 28 |
+| planned | 27 |
 
 ## Workstream Counts
 
@@ -108,7 +108,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 49 | PGSTAT-P0-039 | P0 | alerting | planned | Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible | Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord. |
 | 50 | PGSTAT-P0-040 | P0 | alerting | planned | Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables | Add a statistics-trustworthiness gate to diagnoseBloat that runs before any ratio or threshold arithmetic, and decide what the alert says when statistics cannot be trusted. |
 | 51 | PGSTAT-P1-012 | P1 | alerting | planned | No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics | Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken. |
-| 52 | PGSTAT-P2-006 | P2 | ui | planned | Instance list does not show which retention policy each instance uses | Deploy with the next api and ui build, then confirm the column renders and decide whether samet-ets-01 should move from r6-default to r3-short. |
+| 52 | PGSTAT-P2-006 | P2 | ui | done | Instance list does not show which retention policy or schedule profile each instance uses | Done - the column ships with the next api and ui build; the retention half is already verified in production. |
 | 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it. |
 
 ## Dependency Map

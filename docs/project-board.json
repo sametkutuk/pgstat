@@ -3281,14 +3281,15 @@
       "order": 52,
       "priority": "P2",
       "workstream": "ui",
-      "status": "planned",
-      "next_action": "Deploy with the next api and ui build, then confirm the column renders and decide whether samet-ets-01 should move from r6-default to r3-short.",
-      "title": "Instance list does not show which retention policy each instance uses",
+      "status": "done",
+      "next_action": "Done - the column ships with the next api and ui build; the retention half is already verified in production.",
+      "title": "Instance list does not show which retention policy or schedule profile each instance uses",
       "problem": "Finding out which retention policy an instance uses required querying control.instance_inventory joined to control.retention_policy by hand. The instances API returned retention_policy_id as a bare number and the UI consumed it only inside the edit form, so the list screen showed nothing. This is not merely cosmetic: the partition drop boundary is shared across the whole fleet, computed as the longest retention any active instance actually uses, so a single instance on a long policy keeps partitions alive for every other instance. On 2026-08-28 that was live - samet-ets-01 was the only instance on r6-default (14 days) while the other 24 used r3-short (7 days), and in the resulting 7-day gap purge emptied partitions that then sat on disk unreclaimed, for example pgss_delta_20260820 holding 11740 live rows in 637 MB. Without the policy visible next to disk usage there was no way to notice that one instance was setting the retention for all of them.",
       "requirements": [
         "The instance list must show the retention policy of each instance without requiring a query.",
         "It must show the raw retention window in days, since that is the number that drives partition retention and therefore disk usage.",
-        "It should sit next to the existing collector disk usage column, because the retention window is the cause of the number in that column."
+        "It should sit next to the existing collector disk usage column, because the retention window is the cause of the number in that column.",
+        "The schedule profile must be shown alongside the retention policy, since it was equally invisible without opening the detail screen. Names only - the customer asked for no extra column and no numeric detail in the row itself."
       ],
       "acceptance_criteria": [
         {
@@ -3309,12 +3310,19 @@
         {
           "id": "AC4",
           "text": "Live verification: the column renders for all 25 instances and correctly shows samet-ets-01 as the only one on r6-default.",
-          "status": "pending"
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "The same column also shows the schedule profile code, rendered as retention / profile, with the cluster, statements and db_objects intervals in the tooltip rather than in the row.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
         "api/src/routes/instances.ts: left join control.retention_policy in the list query and expose policy_code with the three day-count columns.",
-        "ui/src/pages/Instances.tsx: extend the Instance interface and add the Retention column definition after Son Cluster."
+        "ui/src/pages/Instances.tsx: extend the Instance interface and add the Retention column definition after Son Cluster.",
+        "api/src/routes/instances.ts: also left join control.schedule_profile and expose profile_code with the three interval columns.",
+        "ui/src/pages/Instances.tsx: render retention and profile codes in one column, moving all numeric detail into the tooltip."
       ],
       "verification_plan": [
         "npx tsc --noEmit in api and ui",
@@ -3326,13 +3334,15 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Customer verified the retention column live on 2026-08-28 - bunu test ettim calisiyor - and asked for the schedule profile to appear the same way, since it was equally hidden behind the detail screen. Names only, no extra column: retention adi / zamanlama profili adi yeterli."
       },
       "verification_evidence": [
         "Customer asked for it on 2026-08-28 while investigating why the database was still 33 GB: bunu instances sekmesinde gorsem iyi olabilir yada ayarlarda hangi instance hangi retention configinde onu gosterebiliriz.",
-        "The request arose directly from the shared-boundary problem: the query proving samet-ets-01 was the sole r6-default instance had to be written by hand, which is what prompted the ask."
-      ]
+        "The request arose directly from the shared-boundary problem: the query proving samet-ets-01 was the sole r6-default instance had to be written by hand, which is what prompted the ask.",
+        "Customer confirmed the retention column works in production on 2026-08-28 and requested the schedule profile be added to the same column on the same terms - name only, numeric detail kept out of the row."
+      ],
+      "completed_at": "2026-08-28"
     },
     {
       "id": "PGSTAT-P1-013",
