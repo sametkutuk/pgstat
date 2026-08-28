@@ -4036,11 +4036,25 @@ public class AlertRuleEvaluator {
                         String.format("VACUUM ANALYZE %s; çalıştır; bir toplama döngüsü sonrası bu alert tekrar tetiklenirse worker durumu netleşecek.", qualifiedName)
                     );
                 }
-                return BloatDiagnosis.of(
-                    String.format("Bu tablo hiç vacuum edilmemiş ama henüz gerekmiyor olabilir — autovacuum tetikleme eşiği (%d = %d + %.2f × %d canlı satır) şu an %d ölü satırla henüz aşılmamış.",
-                        triggerThreshold, avThreshold, scaleFactor, liveTup, currentDeadTup != null ? currentDeadTup : 0),
-                    String.format("Bu tablo mutlak dead-tuple eşiğiyle (Bacak B) yakalandı, oran eşiğinden değil — düşük satır sayılı ama kritik bir tablo olabilir; VACUUM ANALYZE %s; ile temizle.", qualifiedName)
-                );
+                // Senaryo 1c: autovacuum'un KENDI tetikleme esigi henuz asilmamis.
+                // Burada yapilacak bir sey yok — PostgreSQL bu tabloyu vacuum
+                // etmeye deger bulmuyor ve esik asilinca kendisi alacak. Alert
+                // acmak, operatore "sorun yok" deyip yine de uyarmak olur.
+                //
+                // Eski hali iki sekilde yanlisti (musteri geri bildirimi
+                // 2026-08-28: "cok sacma alertler"):
+                //  1) Teshis "henuz gerekmiyor olabilir" derken alert aciyordu —
+                //     kendi kendisiyle celisiyordu.
+                //  2) Aksiyon metni kaydin "Bacak B (mutlak dead-tuple esigi) ile
+                //     yakalandigini" IDDIA ediyordu, kontrol etmeden. Uretimde
+                //     drr_test_suite_entries 61 canli / 46 olu satirla geldi: 46,
+                //     Bacak B esiginin (500) cok altinda, yani kayit Bacak A'dan
+                //     (oran + min satir) gecmisti. Metin olgusal olarak yanlisti.
+                //
+                // Bastirma, kaydi tamamen gorunmez yapmaz: gercekten sorunlu
+                // tablolar esik asildiginda bir ustteki dallara duser ve orada
+                // kanita dayali teshisle alert uretirler.
+                return BloatDiagnosis.suppressed();
             }
             return BloatDiagnosis.of(
                 "Bu tablo hiç vacuum edilmemiş (otomatik veya manuel); global autovacuum ayarları henüz toplanmamış (fact.pg_settings_snapshot boş veya gece toplaması yapılmamış), kesin eşik hesabı yapılamadı.",
