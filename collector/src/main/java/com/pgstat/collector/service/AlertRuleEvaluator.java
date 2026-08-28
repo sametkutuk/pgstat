@@ -2023,6 +2023,9 @@ public class AlertRuleEvaluator {
             // alert bazinda ayrica korunuyor.
             boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
 
+            // Cozulen kayitlar toplanir; tek mesaj halinde bildirilir.
+            java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
+
             if (exceeding.isEmpty()) {
                 // exceeding bos olmasi iki sebepten olabilir: (A) gercekten esigi
                 // asan kayit yok — sorun duzelmis, resolve edilmeli, ya da (B) bu
@@ -2034,8 +2037,10 @@ public class AlertRuleEvaluator {
                 boolean hasData = hasRecentData(instancePk, metricType, windowMinutes);
                 if (hasData && autoResolve) {
                     for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
-                        resolveAlert(openKey, rule, instancePk, previousRecordsLabel(openKey, metricType));
+                        resolveRecordDeferred(openKey, instancePk,
+                            previousRecordsLabel(openKey, metricType), resolved);
                     }
+                    notifyResolvedBatch(resolved, instancePk, ruleName);
                     updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 }
                 continue;
@@ -2060,7 +2065,8 @@ public class AlertRuleEvaluator {
 
                 if (severity == null) {
                     if (prevSeverity != null && autoResolve) {
-                        resolveAlert(recordKey, rule, instancePk, recordLabel(record, metricType));
+                        resolveRecordDeferred(recordKey, instancePk,
+                            recordLabel(record, metricType), resolved);
                     }
                     continue;
                 }
@@ -2116,7 +2122,8 @@ public class AlertRuleEvaluator {
                         // Bastirilan durum "alert edilecek kadar ciddi degil" demek
                         // oldugundan, acik alert varsa kapatilir.
                         if (prevSeverity != null && autoResolve) {
-                            resolveAlert(recordKey, rule, instancePk, recordLabel(record, metricType));
+                            resolveRecordDeferred(recordKey, instancePk,
+                                recordLabel(record, metricType), resolved);
                         }
                         continue;
                     }
@@ -2166,12 +2173,14 @@ public class AlertRuleEvaluator {
             if (autoResolve) {
                 for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
                     if (!stillAlerting.contains(openKey)) {
-                        resolveAlert(openKey, rule, instancePk, previousRecordsLabel(openKey, metricType));
+                        resolveRecordDeferred(openKey, instancePk,
+                            previousRecordsLabel(openKey, metricType), resolved);
                     }
                 }
             }
 
             notifyRaisedBatch(raised, instancePk, ruleName);
+            notifyResolvedBatch(resolved, instancePk, ruleName);
             updateLastEval(ruleId, instancePk, worstVal, worstSeverity);
         }
     }
@@ -2253,6 +2262,65 @@ public class AlertRuleEvaluator {
         alertRepo.notifySummary(worst.alertId(), worst.alertKey(),
             AlertCode.USER_DEFINED_RULE.getCode(), worst.severity(), instancePk,
             title, body);
+    }
+
+    /** Bir degerlendirmede cozulen kayit-alert'i (toplu resolve bildirimi icin). */
+    private record ResolvedRecordAlert(long alertId, String alertKey, String severity, String label) {}
+
+    /**
+     * Kayit-alert'ini resolve eder ve bildirimi ERTELER — toplanip tek mesaj
+     * halinde gonderilsin diye listeye eklenir.
+     *
+     * Granular kurallarda bir turda birden fazla kayit ayni anda duzelebilir;
+     * uretimde (2026-08-28 11:11:29) instance 2'de bes bloat alert'i 0.7 saniye
+     * icinde kapandi ve bes ayri Telegram mesaji gitti. Acilis tarafindaki
+     * toplama bunu kapsamiyordu, ustelik resolve bildirimleri "Resolved:"
+     * onekiyle cooldown'i bilerek bypass ettigi icin hicbir spam korumasina da
+     * takilmiyorlardi.
+     */
+    private void resolveRecordDeferred(String alertKey, long instancePk, String label,
+                                        java.util.List<ResolvedRecordAlert> collector) {
+        AlertRepository.ResolvedAlert r = alertRepo.resolveDeferred(alertKey);
+        if (r == null) return; // zaten resolved
+        collector.add(new ResolvedRecordAlert(r.alertId(), alertKey, r.severity(), label));
+    }
+
+    /**
+     * Bir degerlendirmede cozulen kayit-alert'leri icin TEK bildirim.
+     * Acilis bildirimiyle ayni bicim: baslik + kayit basina tek satir.
+     */
+    private void notifyResolvedBatch(java.util.List<ResolvedRecordAlert> resolved,
+                                      long instancePk, String ruleName) {
+        if (resolved.isEmpty()) return;
+
+        ResolvedRecordAlert first = resolved.get(0);
+        String instanceName = lookupInstanceName(instancePk);
+
+        String title;
+        String body;
+        if (resolved.size() == 1) {
+            title = first.label() != null
+                ? String.format("%s - %s (%s)", instanceName, ruleName, first.label())
+                : String.format("%s - %s", instanceName, ruleName);
+            body = "Tekrar normal seviyede.";
+        } else {
+            title = String.format("%s — %s: %d kayit normale dondu",
+                instanceName, ruleName, resolved.size());
+            StringBuilder sb = new StringBuilder();
+            int shown = 0;
+            for (ResolvedRecordAlert r : resolved) {
+                if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
+                sb.append("• ").append(r.label() != null ? r.label() : r.alertKey()).append('\n');
+            }
+            if (resolved.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
+                sb.append(String.format("… ve %d kayit daha",
+                    resolved.size() - BATCH_NOTIFICATION_LIST_LIMIT));
+            }
+            body = sb.toString().stripTrailing();
+        }
+
+        alertRepo.notifyResolvedSummary(first.alertId(), first.alertKey(), first.severity(),
+            instancePk, title, body);
     }
 
     /** Bildirimde bir kaydin tek satirlik ozeti: nesne — deger (esik). */

@@ -382,6 +382,47 @@ public class AlertRepository {
      * bildirimi gonderir. Zaten resolved ise hicbir sey yapmaz (tekrar bildirmez).
      * Title onune "Resolved: " eklenir ki bildirim kanali bunu cozulme olarak gostersin.
      */
+    /** resolveDeferred sonucu — bildirim gonderilmedi, cagiran taraf toplayip gonderir. */
+    public record ResolvedAlert(long alertId, String severity, Long instancePk) {}
+
+    /**
+     * Alert'i resolve eder ama BILDIRIM GONDERMEZ.
+     *
+     * Granular kurallarda bir degerlendirmede birden fazla kayit ayni anda
+     * duzelebilir (orn. senaryo 1c bastirmasi devreye girince bes alert birden
+     * kapanir). Her biri icin ayri "Resolved:" mesaji gitmesi, acilis tarafinda
+     * cozdugumuz spam'in aynasi olurdu — ustelik daha kotusu: resolve
+     * bildirimleri "Resolved:" onekiyle cooldown'i bilerek BYPASS ediyor
+     * (bkz. NotificationService.notifyIfNeeded), yani hicbir spam korumasina
+     * takilmadan hepsi gider.
+     *
+     * @return resolve edilen alert bilgisi; zaten resolved ise null
+     */
+    public ResolvedAlert resolveDeferred(String alertKey) {
+        var rows = jdbc.query("""
+            update ops.alert
+            set status = 'resolved',
+                resolved_at = now(),
+                last_seen_at = now()
+            where alert_key = ?
+              and status <> 'resolved'
+            returning alert_id, severity, instance_pk
+            """,
+            (rs, n) -> new ResolvedAlert(rs.getLong("alert_id"), rs.getString("severity"),
+                                          (Long) rs.getObject("instance_pk")),
+            alertKey
+        );
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /** Toplu resolve bildirimi — cagiran taraf metni kendisi kurar. */
+    public void notifyResolvedSummary(long alertId, String alertKey, String severity,
+                                       Long instancePk, String title, String message) {
+        // "Resolved:" oneki NotificationService'te cooldown bypass'ini tetikler.
+        fireNotification(alertId, alertKey, "adaptive_resolved", severity, instancePk,
+            "Resolved: " + title, message);
+    }
+
     public void resolveAndNotify(String alertKey, String title, String message) {
         // Once severity'yi al (bildirim icin) ve resolve et — tek transaction'da
         // RETURNING ile gercekten guncellenen satiri yakala.

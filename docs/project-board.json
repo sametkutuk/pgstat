@@ -3098,6 +3098,11 @@
           "id": "AC8",
           "text": "Notifications carry only a title and a one-line summary per record - object, value and threshold - with the full diagnosis and action left in ops.alert for the UI. This applies to single-record notifications too, which previously sent the whole rendered body.",
           "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "Resolve notifications are batched the same way raises are: several records recovering in one evaluation produce one message, not one per record.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3140,7 +3145,9 @@
         "Live verification 2026-08-28: five separate alerts opened on instance 2 within the same second, each keyed by its own relid, and Telegram received one summary rather than five. A fifth table appeared beyond the four expected - t_ext_hotel_quota_2026_05 at 80.40 percent - which sat below the absolute dead-tuple filter used in the earlier investigation and which the old single-record code would never have evaluated at all.",
         "Per-record alerting immediately exposed a pre-existing defect it had been masking. Scenario 1c diagnosed that autovacuum had not reached its own trigger threshold - so nothing needed doing - and raised an alert regardless, contradicting the README which documents that scenario as informational. Its action text also asserted the record was caught by the absolute dead-tuple leg without checking: drr_test_suite_entries arrived with 61 live and 46 dead rows, far below the 500 absolute threshold, so it had come via the ratio leg. Customer called the resulting alerts absurd. The branch now suppresses, which also resolves the alerts already open.",
         "Customer reviewed the first batch of per-record notifications on 2026-08-28 and asked for two changes: drop the trailing line explaining that a separate alert was opened for each record, and keep Telegram to a title plus a very short summary with the detail visible in the UI instead. Both applied; the single-record path was shortened the same way rather than left sending the full body.",
-        "The same batch confirmed the scenario 1c defect was the dominant noise source: five of the six warning alerts across three instances were that branch, holding 46, 26, 27, 23 and 45 dead rows respectively. Only user_daily_goal_summary was a genuine scenario 3 finding."
+        "The same batch confirmed the scenario 1c defect was the dominant noise source: five of the six warning alerts across three instances were that branch, holding 46, 26, 27, 23 and 45 dead rows respectively. Only user_daily_goal_summary was a genuine scenario 3 finding.",
+        "ops.notification_log proved the batching was only half done. At 11:11:29 on 2026-08-28 the five bloat alerts on instance 2 all resolved within 0.7 seconds and sent five separate Telegram messages - log ids 11345 to 11349, every one against a resolved alert. Raises were batched, resolves were not, and resolve notifications are worse in this respect because the Resolved prefix deliberately bypasses the notification cooldown, so nothing throttled them.",
+        "Mass resolution is now the normal case rather than an edge case: the scenario 1c suppression fix closes every alert it silences, so without batching a single deploy would have sent one message per silenced table."
       ]
     },
     {
