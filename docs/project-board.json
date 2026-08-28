@@ -3340,7 +3340,7 @@
       "priority": "P1",
       "workstream": "retention",
       "status": "planned",
-      "next_action": "Confirm the ATTACH PARTITION approach against a scratch database first - that a range-partitioned parent accepts a sub-partitioned child alongside plain ones - since the whole plan rests on it.",
+      "next_action": "On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it.",
       "title": "Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows",
       "problem": "Daily fact partitions are keyed on sample_ts alone, so one partition holds that day rows for every instance regardless of their retention policy. A partition can only be dropped once the longest retention among all active instances has elapsed, which makes a per-instance setting behave like a fleet-wide one. Purge does delete the short-retention rows on schedule, but the partition survives, and since a past day is never written again the pages autovacuum frees are marked reusable and never reused - the space is not returned to the operating system. Measured on 2026-08-28: pgss_delta_20260820 held 11740 live rows in 637 MB, and the same shape repeated across every partition in the 7-to-14-day window, roughly 5 GB in total. The customer hit this concretely: samet-ets-01 was the only instance on r6-default (14 days) while 24 others were on r3-short (7 days), so that single instance kept a week of otherwise-droppable partitions alive for everyone. Their objection is the point of this task - moving one instance to a longer retention should not cost the whole fleet its disk - because the current design makes choosing a longer window for a single instance unaffordable.",
       "requirements": [
@@ -3418,7 +3418,8 @@
         "Autovacuum was ruled out as a cause: 1050 of 1112 partitions had been autovacuumed, total dead tuples across 25 GB were 749745, and the highest ratio was 16.63 percent - below the alert threshold.",
         "Scope measured 2026-08-28: 31 partitioned fact tables, 28 insert methods in FactRepository, PartitionManager at 503 lines, PurgeEvaluator at 896 lines with 7 dropPartitionsBefore call sites.",
         "Design decisions taken with the customer: group by retention day count rather than policy; keep the parent table unchanged and attach sub-partitioned children so no query changes; leave existing partitions to drain under the current purge rather than migrating 25 GB.",
-        "Priority agreed as not urgent: the immediate 5 GB was recovered by moving the single r6-default instance to r3-short, so this task removes the constraint rather than fixing an outage."
+        "Priority agreed as not urgent: the immediate 5 GB was recovered by moving the single r6-default instance to r3-short, so this task removes the constraint rather than fixing an outage.",
+        "Deferred on 2026-08-28 at the customer request - sub partitionu beklemeye al - in favour of the alerting correctness work (P0-040 first). Nothing blocks it technically; the immediate disk symptom was already resolved by moving the single long-retention instance."
       ]
     }
   ]
