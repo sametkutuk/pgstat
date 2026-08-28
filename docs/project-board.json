@@ -3048,7 +3048,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Start by deciding the alert_key format and how notification batching hooks into NotificationService, then implement per-record alert keys in evaluateThresholdPerRecord.",
+      "next_action": "Deploy with the V098 migration, then verify on instance 2 that the four tables above threshold each get their own alert, that a single summary notification was delivered rather than four, and that vacuuming one resolves only its own alert.",
       "title": "Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible",
       "problem": "evaluateThresholdPerRecord builds a single alert per rule and instance (alert_key = rule:{ruleId}:instance:{instancePk}) and renders only exceeding.get(0), the worst record. Every other table over the threshold is invisible: it never appears in a message, never gets its own lifecycle, and never enters control.bloat_scenario_streak, which is keyed per table. The customer hit this directly on 2026-08-27: five tables on instance 2 were over the dead-tuple threshold (security.user 99.81%, t_content_update 98.04%, t_ext_hotel_product 94.80%, t_ext_hotel_payment_types 94.25%, t_supplier_rez 93.60%), all never vacuumed, but only one was named. After fixing the table the alert named, the next worst simply took its place, so the operator has to fix one, wait a cycle, and discover the next - with no way to see the real size of the problem. The customer called the behaviour nonsensical and asked for it to be fixed. The same collapse applies to statement_metric and index_metric, which share this code path.",
       "requirements": [
@@ -3062,32 +3062,32 @@
         {
           "id": "AC1",
           "text": "alert_key for granular threshold alerts identifies the record, not just the instance (for table_metric: rule, instance, dbid and relid), so each offending table has an independent alert row in ops.alert.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC2",
           "text": "Every record over the threshold is evaluated - diagnosis, suppression and streak counter all run per record - instead of only exceeding.get(0).",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC3",
           "text": "Notification delivery batches per rule and instance per evaluation: opening five table alerts produces five ops.alert rows but a single outbound summary message naming the affected tables.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC4",
           "text": "A migration resolves open alerts whose alert_key matches the old instance-level format for granular rules, recording a superseded reason.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC5",
           "text": "A documented cap bounds how many per-record alerts one evaluation may open, with the overflow surfaced rather than silently dropped.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC6",
           "text": "mvn compile and mvn test pass, with unit coverage for the new key construction and the batching decision.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC7",
@@ -3122,7 +3122,16 @@
       "verification_evidence": [
         "Customer reaction on 2026-08-27 to the explanation that only the worst table is shown: bu cok sacma bunu duzeltelim yarin.",
         "Production evidence: control.bloat_scenario_streak held exactly one row for instance 2 while five tables were over threshold, confirming the other four were never evaluated at all.",
-        "Design decisions taken with the customer on 2026-08-27: separate alerts per table with a single batched notification, and a migration resolving the old instance-level alerts rather than letting both formats coexist."
+        "Design decisions taken with the customer on 2026-08-27: separate alerts per table with a single batched notification, and a migration resolving the old instance-level alerts rather than letting both formats coexist.",
+        "Caught live again on 2026-08-28, this time hiding tables that are genuinely over the critical threshold. On instance 2 findBloatedTables orders by absolute dead tuples and only exceeding.get(0) is evaluated, so security.user leads with 3250 dead rows at an 11 percent ratio - below the warning threshold, therefore no alert - while user_token (3064 dead, 55.2 percent), t_ext_hotel_content_general (1466, 93.6 percent), t_ext_hotel_quota_room (705, 74.9 percent) and t_ext_hotel_content_general_approve_queue (622, 92.6 percent) are never evaluated at all. Three of the four sit above the 50 percent critical threshold.",
+        "This is the mirror image of the original complaint: fixing the leading table does not reveal the next one when the leading table falls below threshold rather than being fixed - it simply keeps the whole instance silent while four real cases go unreported.",
+        "Implemented 2026-08-28. Alert keys are now per record - rule:{id}:instance:{pk}:rec:db:{dbid}:rel:{relid} for tables, with a schema.name fallback where the query does not select relid, and equivalent shapes for index and statement records. dbid is always part of the key because the same schema.table name in two databases is two different objects, which production already showed with t_currency_rate_active.",
+        "Per-record previous severity is read from ops.alert itself rather than control.alert_rule_last_eval, whose primary key is (rule_id, instance_pk) and cannot hold per-record state. This also removes the drift that caused the frozen alert of 2026-08-27, where the shadow row said critical while ops.alert had not been updated for two hours. alert_rule_last_eval keeps being written per instance with the worst record, since the AlertRules API page and the baseline cache read it.",
+        "Notifications are batched via a new NotifyMode.DEFERRED: each record upserts its own alert without notifying, and one summary is sent afterwards through the most severe alert of the group, so that NotificationService spam protection, snooze and maintenance-window checks still apply. A single raised record sends its own message unchanged rather than a pointless summary.",
+        "Records that fell below threshold are resolved by comparing the open alerts under the instance key prefix against the set still alerting; without that step a table that recovered would keep its alert open forever, since the loop never visits a record that dropped out of the query.",
+        "The cap is now explicit: queries select PER_RECORD_QUERY_LIMIT + 1 rows so overflow is detectable, and the extra row triggers a warning log naming the rule, instance and metric before the list is trimmed. Silent truncation would read as full coverage.",
+        "V098 resolves the old instance-level alerts. It parses the rule id out of alert_key rather than joining on ops.alert.rule_id, because the previous code path (the eight-argument AlertRepository.upsert) never wrote that column - a join on rule_id would have matched nothing. A regex guard ensures the cast is only applied to well-formed keys. The migration also adds a partial text_pattern_ops index for the prefix lookups.",
+        "Test suite grew from 60 to 67, covering distinct keys per table, same table name in different databases, the relid-less fallback, rule and instance scoping, statement and index key shapes, prefix matching for every type, and that the old instance-level key is not matched by the new prefix."
       ]
     },
     {

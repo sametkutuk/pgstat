@@ -207,6 +207,59 @@ public class AlertRuleEvaluator {
      * bildiriminde kullanilir. DB=... oneki dahil — ayni sema.tablo adi farkli
      * database'lerde ayri anlam tasiyabilir (musteri talebi 2026-08-24).
      */
+    /**
+     * Granular (per-record) kurallarda bir instance'in TUM kayitlarinin ortak
+     * alert_key oneki. Bu instance icin acik kalmis ama artik esigi asmayan
+     * kayitlarin alert'lerini bulup kapatmak icin kullanilir.
+     */
+    static String recordAlertKeyPrefix(long ruleId, long instancePk) {
+        return "rule:" + ruleId + ":instance:" + instancePk + ":rec:";
+    }
+
+    /**
+     * Bir kaydin kendi alert anahtari.
+     *
+     * Eskiden granular kurallar instance basina TEK anahtar kullaniyordu
+     * ("rule:14:instance:2") ve sadece listenin ilk kaydi degerlendiriliyordu;
+     * ayni instance'taki diger bozuk tablolar hic gorunmuyordu. Uretimde
+     * (2026-08-28, instance 2) security.user 3250 olu satirla listenin basinda
+     * ama %11 oraniyla esigin ALTINDA oldugu icin hicbir alert acilmiyor, onun
+     * altindaki user_token (%55.2), t_ext_hotel_content_general (%93.6),
+     * t_ext_hotel_quota_room (%74.9) ve approve_queue (%92.6) hic
+     * degerlendirilmiyordu — ucu kritik esigin ustunde.
+     *
+     * Anahtar, kaydi tekil olarak tanimlayan alanlardan kurulur; boylece her
+     * tablo/index/sorgu kendi alert'ini acar, gunceller ve bagimsiz kapanir.
+     * dbid her tipte yer alir cunku ayni sema.tablo adi farkli veritabanlarinda
+     * farkli nesnelerdir (uretimde t_currency_rate_active hem public hem engine
+     * seemasinda ve iki ayri DB'de vardi).
+     *
+     * relid varsa tercih edilir (yeniden adlandirmaya dayanikli); yoksa
+     * sema.ad kullanilir — generic table_metric ve index_metric sorgulari
+     * relid secmiyor.
+     */
+    static String recordAlertKey(long ruleId, long instancePk,
+                                  Map<String, Object> record, String metricType) {
+        String prefix = recordAlertKeyPrefix(ruleId, instancePk);
+        Object dbid = record.get("dbid");
+        String dbPart = "db:" + (dbid != null ? dbid : "?");
+        return switch (metricType) {
+            case "table_metric" -> {
+                Object relid = record.get("relid");
+                yield prefix + dbPart + (relid != null
+                    ? ":rel:" + relid
+                    : ":tbl:" + record.get("schemaname") + "." + record.get("relname"));
+            }
+            case "index_metric" -> prefix + dbPart
+                + ":idx:" + record.get("schemaname") + "." + record.get("indexrelname");
+            case "statement_metric" -> prefix + dbPart
+                + ":series:" + record.get("statement_series_id");
+            // Bilinmeyen tip: instance basina tek anahtara duser (eski davranis).
+            // Yeni bir granular tip eklenirse burasi bilinclice guncellenmeli.
+            default -> prefix + "unknown";
+        };
+    }
+
     private static String recordLabel(Map<String, Object> record, String metricType) {
         String db = "DB=" + (record.get("datname") != null ? record.get("datname") : "?") + " ";
         return switch (metricType) {
@@ -1926,7 +1979,9 @@ public class AlertRuleEvaluator {
         for (Map<String, Object> target : targets) {
             long instancePk = toLong(target.get("instance_pk"));
             String serviceGroup = (String) target.get("service_group");
-            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+            // Her kayit kendi alert'ini alir; bu onek o instance'in tum
+            // kayit-alert'lerini bulmaya yarar (bkz. recordAlertKey).
+            String keyPrefix = recordAlertKeyPrefix(ruleId, instancePk);
 
             // Esigi asan kayitlari bul (max threshold = warning, critical varsa hari)
             BigDecimal probeThreshold = warningThreshold != null ? warningThreshold : criticalThreshold;
@@ -1942,16 +1997,30 @@ public class AlertRuleEvaluator {
             List<Map<String, Object>> exceeding = findRecordsExceedingThreshold(
                 instancePk, metricType, metricName, windowMinutes, operator, probeThreshold,
                 bloatMinRows, bloatAbsDeadTup, bloatVacuumIneffectiveCount);
+
+            // Sorgular LIMIT+1 ceker: fazlasi varsa kirpma OLDUGU anlasilir.
+            // Kirpilan kayitlar sessizce yutulmaz, loglanir — aksi halde
+            // "bu instance'ta N sorun var" mesaji eksik oldugu belli olmadan
+            // tam gibi okunur.
+            if (exceeding.size() > PER_RECORD_QUERY_LIMIT) {
+                log.warn("Granular alert kirpildi: rule={} instance={} metric={} — esigi asan"
+                        + " kayit sayisi {} sinirinin uzerinde, sadece en ciddi {} tanesi"
+                        + " degerlendirildi",
+                    ruleId, instancePk, metricName, PER_RECORD_QUERY_LIMIT, PER_RECORD_QUERY_LIMIT);
+                exceeding = new java.util.ArrayList<>(exceeding.subList(0, PER_RECORD_QUERY_LIMIT));
+            }
+
             enrichStatementRecords(instancePk, exceeding, metricType, windowMinutes);
 
-            String prevSeverity = getPrevSeverity(ruleId, instancePk);
-
-            // Cooldown, YENI alert tetiklemeyi/severity yukseltmeyi geciktirir —
-            // ama sorun zaten duzelmisse (exceeding bos veya severity null) resolve
-            // her zaman calismali, cooldown'dan bagimsiz. Eskiden cooldown kontrolu
-            // buradan once (tum mantigi atlayarak) yapiliyordu — bu, cooldown suresi
-            // boyunca (varsayilan 60dk) manuel duzeltmelerin (orn. VACUUM) alert'i
-            // resolve etmesini de blokluyordu (musteri raporu 2026-08-21).
+            // Cooldown, YENI alert acilmasini geciktirir — ama zaten acik bir
+            // alert'in mesaji her zaman guncellenir ve sorun duzelmisse resolve
+            // her zaman calisir, cooldown'dan bagimsiz. Eskiden cooldown tum
+            // mantigi atlayarak calisiyordu; bu iki hataya yol aciyordu: manuel
+            // duzeltmelerin (orn. VACUUM) alert'i resolve etmesi 60dk
+            // blokleniyordu (musteri raporu 2026-08-21) ve acik alert'in mesaji
+            // donuyordu (2026-08-27, 2 saat boyunca artik gecerli olmayan bir
+            // tabloyu gosterdi). Bildirim spam'i zaten NotificationService'te
+            // alert bazinda ayrica korunuyor.
             boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
 
             if (exceeding.isEmpty()) {
@@ -1963,105 +2032,231 @@ public class AlertRuleEvaluator {
                 // 2026-08-21: instance hala %99 bloat'liydi ama toplama araligi
                 // bosluguna denk gelince yanlislikla resolve edildi).
                 boolean hasData = hasRecentData(instancePk, metricType, windowMinutes);
-                if (hasData && prevSeverity != null && autoResolve) {
-                    resolveAlert(alertKey, rule, instancePk, previousRecordsLabel(alertKey, metricType));
+                if (hasData && autoResolve) {
+                    for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
+                        resolveAlert(openKey, rule, instancePk, previousRecordsLabel(openKey, metricType));
+                    }
                     updateLastEval(ruleId, instancePk, BigDecimal.ZERO, null);
                 }
                 continue;
             }
 
-            // En yuksek deger ana hedef
-            Map<String, Object> top = exceeding.get(0);
-            BigDecimal currentVal = toBDSafe(top.get("current_val"));
-            String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
-            if (severity == null) {
-                if (prevSeverity != null && autoResolve) {
-                    resolveAlert(alertKey, rule, instancePk, recordLabel(top, metricType));
-                }
-                updateLastEval(ruleId, instancePk, currentVal, null);
-                continue;
-            }
-            if (inCooldown) continue;
-            BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
+            // Her kayit ayri degerlendirilir. Eskiden sadece exceeding.get(0)
+            // isleniyordu ve ayni instance'taki diger bozuk kayitlar hic
+            // gorunmuyordu (bkz. recordAlertKey javadoc'undaki uretim vakasi).
+            java.util.Set<String> stillAlerting = new java.util.HashSet<>();
+            java.util.List<RaisedRecordAlert> raised = new java.util.ArrayList<>();
+            // updateLastEval instance bazli kalir (API'deki AlertRules sayfasi ve
+            // baseline cache oradan okuyor) — en ciddi kaydin degeri yazilir.
+            BigDecimal worstVal = null;
+            String worstSeverity = null;
 
-            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
-            ctx.put("value", currentVal);
-            ctx.put("current_value", currentVal);
-            ctx.put("threshold", threshold);
-            ctx.put("window", windowMinutes);
-            populateRecordCtx(ctx, top, metricType);
+            for (Map<String, Object> record : exceeding) {
+                String recordKey = recordAlertKey(ruleId, instancePk, record, metricType);
+                BigDecimal currentVal = toBDSafe(record.get("current_val"));
+                String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
+                String prevSeverity = alertRepo.openSeverity(recordKey);
+                if (worstVal == null) worstVal = currentVal;
 
-            // dead_tuple_ratio icin kanita dayali teshis+aksiyon (PGSTAT-P0-036
-            // AC6, bkz. docs/bloat-diagnosis-decision-tree.md) — sabit "tablo
-            // istatistiklerine ve autovacuum/index ihtiyacina bak" yerine.
-            // Diger table_metric kurallari icin sablon bu placeholder'lari
-            // kullanmiyor (V092 sadece table_threshold'u degistirdi), ama
-            // ileride kullanilirsa bos satir gorunmesin diye jenerik fallback
-            // her zaman set edilir.
-            if ("dead_tuple_ratio".equals(metricName)) {
-                BloatDiagnosis diagnosis = diagnoseBloat(top, instancePk);
-                // "Autovacuum henuz yetismemis olabilir" durumu cogu zaman
-                // toplama anina denk gelmis gecici bir birikimdir ve kendi
-                // kendine duzelir — israr etmedigi surece alert acmiyoruz
-                // (musteri talebi 2026-08-27). Kacirma riski yok: gercekten
-                // yetisemeyen tablolar karar agacinda DAHA ONCE gelen
-                // senaryo 2/3/3.5/4.5'e takilir ve aninda alert uretir.
-                if (diagnosis.suppressAlert()) {
-                    log.debug("Bloat alert bastirildi (gecici birikim, israr esigi asilmadi): {}.{} instance={}",
-                        top.get("schemaname"), top.get("relname"), instancePk);
-                    // severity DEGIL null yazilir. Bastirma "su an alert yok"
-                    // demektir; severity yazmak iki sey bozuyordu:
-                    //  1) last_alert_at = now() olup cooldown'u tetikliyor, boylece
-                    //     bastirma kalktiginda bile alert 60dk daha acilamiyordu,
-                    //  2) current_severity dolu kaldigi icin bir sonraki cycle'da
-                    //     resolve kosulu (prevSeverity != null) yaniltici sekilde
-                    //     sagleniyordu.
-                    updateLastEval(ruleId, instancePk, currentVal, null);
-                    // Zaten ACIK bir alert varsa bastirma onu oldugu gibi
-                    // birakmamali. Bastirmanin amaci YENI alert acmamakti
-                    // (musteri talebi 2026-08-27: "birazdan calisacak diyor,
-                    // alert olarak vermeyelim"); ama acik bir alert guncellenmeden
-                    // birakilinca zombi hale geliyordu: uretimde alert 21 Agustos'ta
-                    // acilmis, sonra bastirma devreye girmis ve mesaj 2 saat boyunca
-                    // artik gecerli olmayan bir tabloyu gostermeye devam etmisti
-                    // (kullanici o tabloyu VACUUM'lamis, alert hala onu yaziyordu).
-                    // Bastirilan durum "alert edilecek kadar ciddi degil" demek
-                    // oldugundan, acik alert varsa kapatilir.
+                if (severity == null) {
                     if (prevSeverity != null && autoResolve) {
-                        resolveAlert(alertKey, rule, instancePk, recordLabel(top, metricType));
+                        resolveAlert(recordKey, rule, instancePk, recordLabel(record, metricType));
                     }
                     continue;
                 }
-                ctx.put("diagnosis", "Teşhis: " + diagnosis.diagnosis() + "\n");
-                ctx.put("bloat_action", diagnosis.action());
-            } else {
-                ctx.put("diagnosis", "");
-                ctx.put("bloat_action", "Tablo istatistiklerine ve autovacuum/index ihtiyacına bak.");
+                if (worstSeverity == null || isMoreSevere(severity, worstSeverity)) {
+                    worstSeverity = severity;
+                    worstVal = currentVal;
+                }
+                // Cooldown yalnizca YENI alert acilmasini engeller; zaten acik olan
+                // guncellenmeye devam eder ki mesaji donmasin.
+                if (inCooldown && prevSeverity == null) continue;
+                BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
+
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", currentVal);
+                ctx.put("current_value", currentVal);
+                ctx.put("threshold", threshold);
+                ctx.put("window", windowMinutes);
+                populateRecordCtx(ctx, record, metricType);
+
+                // dead_tuple_ratio icin kanita dayali teshis+aksiyon (PGSTAT-P0-036
+                // AC6, bkz. docs/bloat-diagnosis-decision-tree.md) — sabit "tablo
+                // istatistiklerine ve autovacuum/index ihtiyacina bak" yerine.
+                // Diger table_metric kurallari icin sablon bu placeholder'lari
+                // kullanmiyor (V092 sadece table_threshold'u degistirdi), ama
+                // ileride kullanilirsa bos satir gorunmesin diye jenerik fallback
+                // her zaman set edilir.
+                if ("dead_tuple_ratio".equals(metricName)) {
+                    BloatDiagnosis diagnosis = diagnoseBloat(record, instancePk);
+                    // "Autovacuum henuz yetismemis olabilir" durumu cogu zaman
+                    // toplama anina denk gelmis gecici bir birikimdir ve kendi
+                    // kendine duzelir — israr etmedigi surece alert acmiyoruz
+                    // (musteri talebi 2026-08-27). Kacirma riski yok: gercekten
+                    // yetisemeyen tablolar karar agacinda DAHA ONCE gelen
+                    // senaryo 2/3/3.5/4.5'e takilir ve aninda alert uretir.
+                    if (diagnosis.suppressAlert()) {
+                        log.debug("Bloat alert bastirildi (gecici birikim, israr esigi asilmadi): {}.{} instance={}",
+                            record.get("schemaname"), record.get("relname"), instancePk);
+                        // severity DEGIL null yazilir. Bastirma "su an alert yok"
+                        // demektir; severity yazmak iki sey bozuyordu:
+                        //  1) last_alert_at = now() olup cooldown'u tetikliyor, boylece
+                        //     bastirma kalktiginda bile alert 60dk daha acilamiyordu,
+                        //  2) current_severity dolu kaldigi icin bir sonraki cycle'da
+                        //     resolve kosulu (prevSeverity != null) yaniltici sekilde
+                        //     sagleniyordu.
+                        // Zaten ACIK bir alert varsa bastirma onu oldugu gibi
+                        // birakmamali. Bastirmanin amaci YENI alert acmamakti
+                        // (musteri talebi 2026-08-27: "birazdan calisacak diyor,
+                        // alert olarak vermeyelim"); ama acik bir alert guncellenmeden
+                        // birakilinca zombi hale geliyordu: uretimde alert 21 Agustos'ta
+                        // acilmis, sonra bastirma devreye girmis ve mesaj 2 saat boyunca
+                        // artik gecerli olmayan bir tabloyu gostermeye devam etmisti
+                        // (kullanici o tabloyu VACUUM'lamis, alert hala onu yaziyordu).
+                        // Bastirilan durum "alert edilecek kadar ciddi degil" demek
+                        // oldugundan, acik alert varsa kapatilir.
+                        if (prevSeverity != null && autoResolve) {
+                            resolveAlert(recordKey, rule, instancePk, recordLabel(record, metricType));
+                        }
+                        continue;
+                    }
+                    ctx.put("diagnosis", "Teşhis: " + diagnosis.diagnosis() + "\n");
+                    ctx.put("bloat_action", diagnosis.action());
+                } else {
+                    ctx.put("diagnosis", "");
+                    ctx.put("bloat_action", "Tablo istatistiklerine ve autovacuum/index ihtiyacına bak.");
+                }
+
+                // Fallback mesaja da teshis/aksiyon eklenir: template render
+                // basarisiz olursa (kod bulunamadi/placeholder hatasi) eskiden
+                // sadece jenerik "Tablo esigi asti: ..." satiri kaliyordu ve
+                // diagnoseBloat()'un urettigi tum kanit sessizce kayboluyordu
+                // (PGSTAT-P1-011 kod onkosulu 4).
+                String fallbackMsg = appendDiagnosisToFallback(
+                    buildPerRecordThresholdMessage(metricType, metricName, record,
+                        operator, threshold, windowMinutes),
+                    ctx);
+                // details_json artik SADECE bu kaydi tasir — alert kayit bazli
+                // oldugu icin "hangi kayit duzeldi" bilgisi de kayit bazli olmali
+                // (previousRecordsLabel bu diziyi okuyor).
+                String detailsJson = buildPerRecordsJson(java.util.List.of(record), metricType,
+                    windowMinutes, threshold.toPlainString(), "exceeding_threshold");
+
+                // Template kodu: granular tip icin uygun statement_spike-benzeri code,
+                // yoksa user_defined_rule
+                String alertCodeForTemplate = templateCodeForType(metricType, "threshold");
+                String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, alertCodeForTemplate);
+
+                // DEFERRED: bildirim burada gitmez. Bes bozuk tablo bes ayri
+                // ops.alert satiri olusturur ama tek ozet bildirim gonderilir
+                // (musteri karari 2026-08-28) — dongu bitince asagida.
+                long alertId = alertRepo.upsertWithSeverity(recordKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId, detailsJson,
+                    AlertRepository.NotifyMode.DEFERRED);
+
+                stillAlerting.add(recordKey);
+                raised.add(new RaisedRecordAlert(alertId, recordKey, severity,
+                    recordLabel(record, metricType), currentVal, rendered[0], rendered[1]));
             }
 
-            // Fallback mesaja da teshis/aksiyon eklenir: template render
-            // basarisiz olursa (kod bulunamadi/placeholder hatasi) eskiden
-            // sadece jenerik "Tablo esigi asti: ..." satiri kaliyordu ve
-            // diagnoseBloat()'un urettigi tum kanit sessizce kayboluyordu
-            // (PGSTAT-P1-011 kod onkosulu 4).
-            String fallbackMsg = appendDiagnosisToFallback(
-                buildPerRecordThresholdMessage(metricType, metricName, top,
-                    operator, threshold, windowMinutes),
-                ctx);
-            String detailsJson = buildPerRecordsJson(exceeding, metricType, windowMinutes,
-                threshold.toPlainString(), "exceeding_threshold");
+            // Bu degerlendirmede artik esigi asmayan kayitlarin alert'lerini
+            // kapat. Kayit listeden dustugu icin yukaridaki dongu ona hic
+            // ugramaz; bu adim olmazsa duzelen bir tablonun alert'i sonsuza
+            // kadar acik kalirdi.
+            if (autoResolve) {
+                for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
+                    if (!stillAlerting.contains(openKey)) {
+                        resolveAlert(openKey, rule, instancePk, previousRecordsLabel(openKey, metricType));
+                    }
+                }
+            }
 
-            // Template kodu: granular tip icin uygun statement_spike-benzeri code,
-            // yoksa user_defined_rule
-            String alertCodeForTemplate = templateCodeForType(metricType, "threshold");
-            String[] rendered = renderWithCode(rule, ctx, ruleName, fallbackMsg, alertCodeForTemplate);
-
-            alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
-                instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
-
-            updateLastEval(ruleId, instancePk, currentVal, severity);
+            notifyRaisedBatch(raised, rule, instancePk, ruleName);
+            updateLastEval(ruleId, instancePk, worstVal, worstSeverity);
         }
+    }
+
+    /** Bir degerlendirmede acilan tek bir kayit-alert'i (ozet bildirim icin). */
+    private record RaisedRecordAlert(long alertId, String alertKey, String severity,
+                                      String label, BigDecimal value,
+                                      String title, String message) {}
+
+    /** severity siralamasi: critical > error > warning > info. */
+    private static boolean isMoreSevere(String candidate, String current) {
+        return severityRank(candidate) > severityRank(current);
+    }
+
+    private static int severityRank(String severity) {
+        if (severity == null) return -1;
+        return switch (severity) {
+            case "critical" -> 3;
+            case "error"    -> 2;
+            case "warning"  -> 1;
+            case "info"     -> 0;
+            default -> -1;
+        };
+    }
+
+    /**
+     * Bir degerlendirmede acilan kayit-alert'leri icin TEK ozet bildirim.
+     *
+     * Kayit basina alert acmak dogru, ama kayit basina bildirim gondermek
+     * degil: uretimde tek bir instance'ta ayni anda dort tablo esigin ustundeydi
+     * ve bu dort ayri Telegram mesaji demek olurdu. Musteri karari (2026-08-28):
+     * "alert ayri ayri acilsin, bildirim tek ozet mesajda toplansin".
+     *
+     * Tek kayit varsa ozetlemeye gerek yok — alert'in kendi basligi ve mesaji
+     * oldugu gibi gonderilir.
+     */
+    private void notifyRaisedBatch(java.util.List<RaisedRecordAlert> raised,
+                                    Map<String, Object> rule, long instancePk, String ruleName) {
+        if (raised.isEmpty()) return;
+
+        // Ozet, gruptaki en ciddi alert'e baglanir: NotificationService'in spam
+        // korumasi, snooze ve bakim penceresi kontrolleri alert_id/alert_key
+        // uzerinden calisiyor.
+        RaisedRecordAlert worst = raised.get(0);
+        for (RaisedRecordAlert r : raised) {
+            if (isMoreSevere(r.severity(), worst.severity())) worst = r;
+        }
+
+        if (raised.size() == 1) {
+            alertRepo.notifySummary(worst.alertId(), worst.alertKey(),
+                AlertCode.USER_DEFINED_RULE.getCode(), worst.severity(), instancePk,
+                worst.title(), worst.message());
+            return;
+        }
+
+        String instanceName = lookupInstanceName(instancePk);
+        String title = String.format("%s — %s: %d kayit esigin ustunde",
+            instanceName, ruleName, raised.size());
+
+        StringBuilder body = new StringBuilder();
+        body.append(String.format("%s kuralinda %d kayit esigi asti:%n%n", ruleName, raised.size()));
+        int shown = 0;
+        for (RaisedRecordAlert r : raised) {
+            if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
+            body.append(String.format("• [%s] %s — %s%n",
+                r.severity().toUpperCase(),
+                r.label() != null ? r.label() : r.alertKey(),
+                r.value() != null ? formatValue(r.value()) : "?"));
+        }
+        if (raised.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
+            body.append(String.format("… ve %d kayit daha%n", raised.size() - BATCH_NOTIFICATION_LIST_LIMIT));
+        }
+        body.append("\nHer kayit icin ayri bir alarm acildi; tek tek incelemek ve"
+            + " kapatmak icin Alarmlar ekranina bakin.");
+
+        alertRepo.notifySummary(worst.alertId(), worst.alertKey(),
+            AlertCode.USER_DEFINED_RULE.getCode(), worst.severity(), instancePk,
+            title, body.toString());
+    }
+
+    /** Ozet bildirimde deger gosterimi — gereksiz ondalik basamak birakmaz. */
+    private static String formatValue(BigDecimal value) {
+        return value.stripTrailingZeros().scale() <= 0
+            ? value.stripTrailingZeros().toPlainString()
+            : value.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     /** Granular tip + evaluation type icin uygun template code'u secer. */
@@ -2677,7 +2872,7 @@ public class AlertRuleEvaluator {
                     "  where d.instance_pk = ? and d.sample_ts > now() - ?::interval" +
                     "  group by ss.statement_series_id, ss.queryid, ss.dbid, ss.userid, qt.query_text, dbr.datname, rr.rolname" +
                     "  having sum(d." + toFactColumn(metricName, "statement_metric") + ")::numeric " + op + " ?" +
-                    "  order by current_val desc limit 10",
+                    "  order by current_val desc limit " + (PER_RECORD_QUERY_LIMIT + 1),
                     instancePk, windowMinutes + " minutes", threshold);
 
                 case "table_metric" -> {
@@ -2696,7 +2891,7 @@ public class AlertRuleEvaluator {
                         "  where t.instance_pk = ? and t.sample_ts > now() - ?::interval" +
                         "  group by t.schemaname, t.relname, t.dbid, dbr.datname" +
                         "  having sum(t." + col + ")::numeric " + op + " ?" +
-                        "  order by current_val desc limit 10",
+                        "  order by current_val desc limit " + (PER_RECORD_QUERY_LIMIT + 1),
                         instancePk, windowMinutes + " minutes", threshold);
                 }
 
@@ -2710,7 +2905,7 @@ public class AlertRuleEvaluator {
                         "  where i.instance_pk = ? and i.sample_ts > now() - ?::interval" +
                         "  group by i.schemaname, i.indexrelname, i.table_relname, i.dbid, dbr.datname" +
                         "  having sum(i." + col + ")::numeric " + op + " ?" +
-                        "  order by current_val desc limit 10",
+                        "  order by current_val desc limit " + (PER_RECORD_QUERY_LIMIT + 1),
                         instancePk, windowMinutes + " minutes", threshold);
                 }
 
@@ -2810,7 +3005,7 @@ public class AlertRuleEvaluator {
             // Gercek disk/performans etkisi mutlak satir sayisiyla orantili,
             // yuzdeyle degil — bu yuzden en cok etkiye sahip tablo alert
             // mesajinda gorunmeliydi ama gorunmedi.
-            "  order by dead_tup desc nulls last limit 10",
+            "  order by dead_tup desc nulls last limit " + (PER_RECORD_QUERY_LIMIT + 1),
             vacuumIneffectiveCount, absDeadTup,
             instancePk, windowMinutes + " minutes",
             minRows, threshold,
@@ -3509,6 +3704,26 @@ public class AlertRuleEvaluator {
 
     /** Senaryo 4'un alert'e donusmesi icin gereken ust uste gorulme sayisi. */
     private static final int SCENARIO_4_STREAK_THRESHOLD = 3;
+
+    /**
+     * Ozet bildirimde en fazla kac kayit listelenir. Kalanlar "… ve N kayit
+     * daha" olarak GORUNUR — sessizce kirpilmaz, cunku o durumda mesaj her seyi
+     * kapsiyormus gibi okunur.
+     */
+    private static final int BATCH_NOTIFICATION_LIST_LIMIT = 5;
+
+    /**
+     * Bir degerlendirmede bir instance icin en fazla kac kayit alert acabilir.
+     *
+     * Bu ayni zamanda alert sayisinin ust siniridir: kayit basina bir alert
+     * acildigi icin (PGSTAT-P0-039), yeni eklenen ve onlarca tablosu birden
+     * bozuk olan bir instance sinirsiz alert uretememelidir.
+     *
+     * Sorgular bilerek LIMIT+1 satir ceker: donen satir sayisi limiti asiyorsa
+     * kirpma OLDUGU anlasilir ve loglanir. Sessiz kirpma, "her sey kapsandi"
+     * gibi okunur — oysa kapsanmamistir.
+     */
+    private static final int PER_RECORD_QUERY_LIMIT = 10;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).

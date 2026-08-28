@@ -48,6 +48,35 @@ ama hiçbir kontrol bunu durdurmuyordu.
   önerebilir, ama bu tablonun ölçülen güncelleme hızından
   **hesaplanmış** bir değer değil — genel bir tavsiyedir.
 
+## Her tablo kendi alarmını alır
+
+Eşiği aşan her tablo **ayrı** bir alarm açar ve bağımsız kapanır. Birini
+`VACUUM`'ladığında yalnızca onun alarmı çözülür, diğerleri açık kalır.
+
+Önceden instance başına tek alarm vardı ve yalnızca listenin ilk kaydı
+değerlendiriliyordu. Bu iki yönde de yanlış sonuç veriyordu: bozuk
+tablolardan sadece biri görünüyordu, ve daha kötüsü, listenin başındaki
+tablo eşiğin **altına** düştüğünde altındakiler hiç değerlendirilmediği
+için bütün instance susuyordu. Üretimde (2026-08-28) tam olarak bu oldu —
+`security.user` en çok ölü satıra sahip olduğu için listenin başındaydı
+ama oranı %11'e düştüğü için alarm üretmiyordu; altındaki dört tablonun
+üçü kritik eşiğin üstündeydi ve hiçbiri bildirilmedi.
+
+**Bildirim tek mesajda toplanır.** Beş tablo aynı anda eşiği aşarsa beş
+ayrı alarm açılır ama tek özet bildirim gider:
+
+```
+dev-etsrooms-140-52 — Dead Tuple Oranı: 4 kayit esigin ustunde
+
+• [CRITICAL] DB=etsrooms public.t_ext_hotel_content_general — 93.6
+• [CRITICAL] DB=etsrooms public.t_ext_hotel_quota_room — 74.9
+• [CRITICAL] DB=etsrooms security.user_token — 55.2
+...
+```
+
+Bir instance için bir değerlendirmede en fazla **10** kayıt alarm açar.
+Daha fazlası varsa collector log'una uyarı yazılır — sessizce kırpılmaz.
+
 ## Alarm mesajını okuma
 
 Mesaj üç parçadan oluşur:

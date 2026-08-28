@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 101 |
+| Migrations scanned | 102 |
 | Tables discovered | 95 |
 | Columns discovered | 1172 |
-| Indexes discovered | 125 |
+| Indexes discovered | 126 |
 | Collector SQL family files | 5 |
 | API routes discovered | 211 |
 | API ColumnRegistry objects discovered | 33 |
@@ -2037,7 +2037,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/collector/StatementsCollector.java | dim.role_ref, dim.statement_series, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/collector/TextEnricher.java | dim.query_text, dim.statement_series |
 | collector/src/main/java/com/pgstat/collector/repository/AggRepository.java | agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_table_stat_delta, fact.pgss_delta |
-| collector/src/main/java/com/pgstat/collector/repository/AlertRepository.java | ops.alert |
+| collector/src/main/java/com/pgstat/collector/repository/AlertRepository.java | control.alert_rule_last_eval, ops.alert |
 | collector/src/main/java/com/pgstat/collector/repository/CapabilityRepository.java | control.instance_capability |
 | collector/src/main/java/com/pgstat/collector/repository/DimensionRepository.java | dim.database_ref, dim.query_text, dim.relation_ref, dim.role_ref, dim.statement_series |
 | collector/src/main/java/com/pgstat/collector/repository/FactRepository.java | control.table_relopts_snapshot, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |

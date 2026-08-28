@@ -2,8 +2,12 @@ package com.pgstat.collector.repository;
 
 import com.pgstat.collector.model.AlertCode;
 import com.pgstat.collector.service.NotificationService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+
+import java.util.List;
 
 /**
  * ops.alert tablosu icin upsert ve resolve islemleri.
@@ -19,7 +23,20 @@ public class AlertRepository {
      *                degisiminde bildir. Ayni severity'de acik kalan alert sessiz kalir.
      *                (XID warning gibi: ilk kez + critical'e yukselince bildir, arada sus.)
      */
-    public enum NotifyMode { ALWAYS, FIRST_ONLY }
+    /**
+     * ALWAYS      — her upsert'te bildir.
+     * FIRST_ONLY  — ayni severity'de acik kalan alert sessiz; yeni/reopen/
+     *               severity-degisimi bildirilir.
+     * DEFERRED    — bu upsert hic bildirim uretmez. Cagiran taraf, bir
+     *               degerlendirmede acilan alert'leri toplayip TEK ozet
+     *               bildirim gonderir. Granular kurallar kayit basina ayri
+     *               alert actigi icin gerekli: bes bozuk tablo bes ayri
+     *               ops.alert satiri olusturur ama tek mesaj gonderilir
+     *               (musteri karari 2026-08-28).
+     */
+    public enum NotifyMode { ALWAYS, FIRST_ONLY, DEFERRED }
+
+    private static final Logger log = LoggerFactory.getLogger(AlertRepository.class);
 
     private final JdbcTemplate jdbc;
     private NotificationService notificationService;
@@ -241,6 +258,14 @@ public class AlertRepository {
     public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
                                    Long instancePk, String serviceGroup,
                                    String title, String message, Long ruleId, String detailsJson) {
+        return upsertWithSeverity(alertKey, alertCode, severity, instancePk, serviceGroup,
+            title, message, ruleId, detailsJson, NotifyMode.ALWAYS);
+    }
+
+    public long upsertWithSeverity(String alertKey, AlertCode alertCode, String severity,
+                                   Long instancePk, String serviceGroup,
+                                   String title, String message, Long ruleId, String detailsJson,
+                                   NotifyMode notifyMode) {
         String alertSource = ruleId != null ? "user_rule" : "system";
         long alertId = jdbc.queryForObject("""
             insert into ops.alert (
@@ -276,10 +301,66 @@ public class AlertRepository {
             instancePk, serviceGroup, title, message, ruleId, detailsJson, alertSource
         );
 
-        // Bildirim gönder
-        fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
+        // DEFERRED modda bildirim burada gonderilmez — cagiran taraf
+        // degerlendirme sonunda tek ozet bildirim gonderir.
+        if (notifyMode != NotifyMode.DEFERRED) {
+            fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
+        }
 
         return alertId;
+    }
+
+    /**
+     * DEFERRED modda acilan alert'ler icin tek ozet bildirim.
+     *
+     * alertId ve alertKey, gruptaki EN CIDDI alert'e aittir: NotificationService'in
+     * spam korumasi, snooze ve bakim penceresi kontrolleri alert_id/alert_key
+     * uzerinden calisiyor, dolayisiyla ozetin de gercek bir alert'e baglanmasi
+     * gerekiyor.
+     */
+    public void notifySummary(long alertId, String alertKey, String alertCode, String severity,
+                              Long instancePk, String title, String message) {
+        fireNotification(alertId, alertKey, alertCode, severity, instancePk, title, message);
+    }
+
+    /**
+     * Bir alert'in su anki severity'si — kapali/olmayan alert icin null.
+     *
+     * Granular kurallarda kayit basina "onceki severity" gerekiyor, ama
+     * control.alert_rule_last_eval instance bazli (PK: rule_id, instance_pk),
+     * yani kayit basina durum tutamiyor. Alert'in kendi satirini okumak hem
+     * dogru granulerligi veriyor hem de golge durumun surüklenme riskini
+     * ortadan kaldiriyor: 2026-08-27'de alert_rule_last_eval "critical" derken
+     * ops.alert guncellenmeden 2 saat donmus kalmisti.
+     */
+    public String openSeverity(String alertKey) {
+        try {
+            List<String> rows = jdbc.queryForList(
+                "select severity from ops.alert where alert_key = ? and status <> 'resolved'",
+                String.class, alertKey);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.debug("openSeverity okunamadi alertKey={}: {}", alertKey, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Verilen onekle baslayan ACIK alert anahtarlari. Granular kurallarda, bu
+     * degerlendirmede artik esigi asmayan (dolayisiyla listede yer almayan)
+     * kayitlarin alert'lerini bulup kapatmak icin kullanilir — aksi halde bir
+     * tablo duzeldiginde alert'i sonsuza kadar acik kalirdi.
+     */
+    public List<String> openAlertKeysWithPrefix(String prefix) {
+        try {
+            return jdbc.queryForList(
+                "select alert_key from ops.alert" +
+                " where alert_key like ? escape '\\' and status <> 'resolved'",
+                String.class, prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+        } catch (Exception e) {
+            log.debug("openAlertKeysWithPrefix okunamadi prefix={}: {}", prefix, e.getMessage());
+            return java.util.Collections.emptyList();
+        }
     }
 
     /** Alert'i resolved olarak isaretler. Zaten resolved ise degismez. */

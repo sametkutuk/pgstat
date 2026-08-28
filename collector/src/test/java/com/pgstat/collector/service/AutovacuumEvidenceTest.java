@@ -472,6 +472,103 @@ class AutovacuumEvidenceTest {
     }
 
     // =========================================================================
+    // Kayit bazli alert anahtari (recordAlertKey) — PGSTAT-P0-039
+    // =========================================================================
+
+    @Test
+    void eachTableGetsItsOwnAlertKeySoTheyDoNotShareOneAlert() {
+        // Uretim vakasi (2026-08-28, instance 2): bes tablo esigin ustundeydi
+        // ama hepsi tek "rule:14:instance:2" anahtarini paylastigi icin sadece
+        // listenin ilki degerlendiriliyordu.
+        java.util.Map<String, Object> a = new java.util.HashMap<>();
+        a.put("dbid", 16385L); a.put("relid", 2128608L);
+        java.util.Map<String, Object> b = new java.util.HashMap<>();
+        b.put("dbid", 16385L); b.put("relid", 2128999L);
+
+        String keyA = AlertRuleEvaluator.recordAlertKey(14, 2, a, "table_metric");
+        String keyB = AlertRuleEvaluator.recordAlertKey(14, 2, b, "table_metric");
+
+        assertThat(keyA).isNotEqualTo(keyB);
+        assertThat(keyA).startsWith(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2));
+        assertThat(keyB).startsWith(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2));
+    }
+
+    @Test
+    void sameTableNameInDifferentDatabasesGetsDifferentKeys() {
+        // Uretimde t_currency_rate_active hem public hem engine semasinda ve
+        // iki ayri veritabaninda vardi; ayni ada sahip olmalari onlari ayni
+        // nesne yapmaz.
+        java.util.Map<String, Object> db1 = new java.util.HashMap<>();
+        db1.put("dbid", 16385L); db1.put("schemaname", "public"); db1.put("relname", "t_currency_rate_active");
+        java.util.Map<String, Object> db2 = new java.util.HashMap<>();
+        db2.put("dbid", 16999L); db2.put("schemaname", "public"); db2.put("relname", "t_currency_rate_active");
+
+        assertThat(AlertRuleEvaluator.recordAlertKey(14, 2, db1, "table_metric"))
+            .isNotEqualTo(AlertRuleEvaluator.recordAlertKey(14, 2, db2, "table_metric"));
+    }
+
+    @Test
+    void tableKeyFallsBackToNameWhenRelidIsNotSelected() {
+        // Generic table_metric ve index_metric sorgulari relid secmiyor —
+        // anahtar yine de tekil olmali.
+        java.util.Map<String, Object> noRelid = new java.util.HashMap<>();
+        noRelid.put("dbid", 16385L);
+        noRelid.put("schemaname", "public");
+        noRelid.put("relname", "t_content_update");
+
+        assertThat(AlertRuleEvaluator.recordAlertKey(14, 2, noRelid, "table_metric"))
+            .isEqualTo(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2)
+                + "db:16385:tbl:public.t_content_update");
+    }
+
+    @Test
+    void keysAreScopedPerRuleAndPerInstance() {
+        // Ayni tablo farkli kural ya da farkli instance altinda ayri alert alir.
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("dbid", 16385L); rec.put("relid", 2128608L);
+
+        String r14i2 = AlertRuleEvaluator.recordAlertKey(14, 2, rec, "table_metric");
+        assertThat(r14i2).isNotEqualTo(AlertRuleEvaluator.recordAlertKey(15, 2, rec, "table_metric"));
+        assertThat(r14i2).isNotEqualTo(AlertRuleEvaluator.recordAlertKey(14, 3, rec, "table_metric"));
+    }
+
+    @Test
+    void statementAndIndexTypesGetTheirOwnKeyShapes() {
+        java.util.Map<String, Object> stmt = new java.util.HashMap<>();
+        stmt.put("dbid", 16385L); stmt.put("statement_series_id", 77L);
+        java.util.Map<String, Object> idx = new java.util.HashMap<>();
+        idx.put("dbid", 16385L); idx.put("schemaname", "public"); idx.put("indexrelname", "ix_foo");
+
+        assertThat(AlertRuleEvaluator.recordAlertKey(14, 2, stmt, "statement_metric"))
+            .isEqualTo(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2) + "db:16385:series:77");
+        assertThat(AlertRuleEvaluator.recordAlertKey(14, 2, idx, "index_metric"))
+            .isEqualTo(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2) + "db:16385:idx:public.ix_foo");
+    }
+
+    @Test
+    void everyRecordKeyIsMatchedByItsOwnPrefix() {
+        // openAlertKeysWithPrefix bu onek ile arama yapiyor; uretilen her
+        // anahtar o aramaya takilmali, yoksa duzelen kayitlarin alert'i
+        // kapatilamaz.
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("dbid", 16385L); rec.put("relid", 2128608L);
+        String prefix = AlertRuleEvaluator.recordAlertKeyPrefix(14, 2);
+
+        for (String type : new String[]{"table_metric", "index_metric", "statement_metric"}) {
+            assertThat(AlertRuleEvaluator.recordAlertKey(14, 2, rec, type)).startsWith(prefix);
+        }
+    }
+
+    @Test
+    void theOldInstanceLevelKeyIsNotMatchedByTheRecordPrefix() {
+        // V098 migration'i eski anahtarlari kapatiyor; yeni onek onlari
+        // yakalamamali, yoksa migration'in kapattigi alert'ler tekrar
+        // resolve edilmeye calisilirdi.
+        String oldKey = "rule:14:instance:2";
+        assertThat(oldKey).doesNotStartWith(AlertRuleEvaluator.recordAlertKeyPrefix(14, 2));
+    }
+
+    // =========================================================================
     // Istatistik guvenilirlik kapisi (statsUntrustworthy)
     // =========================================================================
 
