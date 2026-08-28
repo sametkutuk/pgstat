@@ -1014,12 +1014,78 @@ router.post('/notification-channels/detect-chat', async (req, res) => {
 router.get('/notification-channels', async (_req, res, next) => {
     try {
         const result = await pool.query(
-            `select channel_id, channel_name, channel_type, config, min_severity,
-                    instance_pks, metric_categories, is_enabled, created_at
-             from control.notification_channel
-             order by channel_name`
+            // alert_codes: bu kanalin kabul ettigi alarm tipleri (V099).
+            // Bos dizi = kisitlama yok, kanal butun kodlari alir. Bu ayrim
+            // onemli: "hicbirini alma" degil "hepsini al" demek.
+            `select c.channel_id, c.channel_name, c.channel_type, c.config, c.min_severity,
+                    c.instance_pks, c.metric_categories, c.is_enabled, c.created_at,
+                    coalesce(
+                      (select array_agg(acc.alert_code order by acc.alert_code)
+                         from control.alert_code_notification_channel acc
+                        where acc.channel_id = c.channel_id),
+                      '{}'::text[]
+                    ) as alert_codes
+             from control.notification_channel c
+             order by c.channel_name`
         );
         res.json(result.rows);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// PUT /api/notification-channels/:channel_id/alert-codes
+// Bir kanalin kabul ettigi alarm tiplerini degistirir. Bos dizi gonderilirse
+// kisitlama kaldirilir (kanal her kodu alir) — bu, min_severity ve kural bazli
+// kanal secimiyle birlikte calisir, onlarin yerine gecmez.
+router.put('/notification-channels/:channel_id/alert-codes', async (req, res, next) => {
+    const client = await pool.connect();
+    try {
+        const id = parseInt(req.params.channel_id, 10);
+        if (!id) return res.status(400).json({ error: 'Geçersiz channel_id' });
+
+        const codes: unknown = req.body?.alert_codes;
+        if (!Array.isArray(codes) || codes.some(c => typeof c !== 'string')) {
+            return res.status(400).json({ error: 'alert_codes bir metin dizisi olmalı' });
+        }
+        const unique = Array.from(new Set(codes as string[])).filter(c => c.trim().length > 0);
+
+        await client.query('begin');
+        await client.query(
+            'delete from control.alert_code_notification_channel where channel_id = $1', [id]);
+        if (unique.length > 0) {
+            await client.query(
+                `insert into control.alert_code_notification_channel (channel_id, alert_code)
+                 select $1, unnest($2::text[])`,
+                [id, unique]
+            );
+        }
+        await client.query('commit');
+        res.json({ channel_id: id, alert_codes: unique, message: 'Alarm tipleri güncellendi' });
+    } catch (err) {
+        await client.query('rollback').catch(() => {});
+        next(err);
+    } finally {
+        client.release();
+    }
+});
+
+// GET /api/notification-channels/alert-codes
+// UI'in secim listesi icin: sistemde kullanilan alarm kodlari. Kodlar
+// collector'daki AlertCode enum'unda tanimli; burada gecmiste uretilmis
+// alarmlardan ve kayitli sablonlardan turetiliyor ki liste kendini gunceller.
+router.get('/notification-channels/alert-codes', async (_req, res, next) => {
+    try {
+        const result = await pool.query(
+            `select distinct alert_code from (
+               select alert_code from ops.alert
+               union
+               select alert_code from control.alert_message_template
+             ) x
+             where alert_code is not null
+             order by alert_code`
+        );
+        res.json(result.rows.map((r: any) => r.alert_code));
     } catch (err) {
         next(err);
     }

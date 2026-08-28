@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 95 |
-| Tables without detected retention mapping | 44 |
+| Tables analyzed | 96 |
+| Tables without detected retention mapping | 45 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 3 |
@@ -37,6 +37,7 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 | agg.pg_wal_hourly | aggregate | 10 | hour_ts | no | not detected | control.retention_policy.hourly_snapshot_retention_days | yes | source -> agg.pg_wal_daily; target <- fact.pg_wal_snapshot, fact.pgss_delta | V055__snapshot_hourly_rollup.sql | V084__pg_wal_hourly_agg.sql | collector/repository/AggRepository.java<br>collector/service/PurgeEvaluator.java<br>collector/service/ReportGenerator.java |
 | agg.pgss_daily | aggregate | 9 | bucket_start | yes (bucket_start) | yearly partitions by PartitionManager | control.retention_policy.daily_retention_days/daily_retention_months | yes | target <- agg.pgss_hourly | V005__agg_tables.sql | V005__agg_tables.sql | collector/repository/AggRepository.java<br>collector/service/PartitionManager.java<br>collector/service/PurgeEvaluator.java |
 | agg.pgss_hourly | aggregate | 15 | bucket_start | yes (bucket_start) | monthly partitions by PartitionManager | control.retention_policy.hourly_retention_days/hourly_retention_months | yes | source -> agg.pgss_daily; target <- fact.pgss_delta | V005__agg_tables.sql | V097__drop_unweighted_avg_exec_time.sql | collector/repository/AggRepository.java<br>collector/service/PartitionManager.java<br>collector/service/PurgeEvaluator.java |
+| control.alert_code_notification_channel | control/config | 3 | created_at | no | not detected | not detected | no | not detected | V099__channel_alert_code_filter.sql | V099__channel_alert_code_filter.sql | collector/service/NotificationService.java |
 | control.alert_message_template | control/config | 6 | updated_at | no | not detected | not detected | no | not detected | V030__alert_message_templates.sql | V030__alert_message_templates.sql | collector/service/AlertMessageRenderer.java |
 | control.alert_notification | control/config | 9 | sent_at | no | not detected | not detected | no | not detected | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |  |
 | control.alert_rule | control/config | 36 | created_at, updated_at | no | not detected | not detected | no | not detected | V011__alert_rules.sql | V089__bloat_alert_thresholds.sql | collector/service/AlertRuleEvaluator.java<br>collector/service/NotificationService.java |

@@ -17,6 +17,9 @@ interface NotificationChannel {
     config: any;
     min_severity: string | null;
     is_enabled: boolean;
+    // Bu kanalin kabul ettigi alarm tipleri; BOS DIZI = kisitlama yok,
+    // kanal tum tipleri alir (V099).
+    alert_codes?: string[];
 }
 
 const TYPE_ICONS: Record<string, string> = {
@@ -84,7 +87,14 @@ function ChannelsPanel() {
                                     {!c.is_enabled && <span className="ml-1 text-[10px] bg-[#FEF2F2] text-[#DC2626] px-1.5 py-0.5 rounded">devre dışı</span>}
                                 </div>
                                 <div className="text-xs text-[#94A3B8] mt-0.5">
-                                    {c.min_severity && `Min: ${c.min_severity}`}
+                                    {[
+                                        c.min_severity ? `Min: ${c.min_severity}` : null,
+                                        // Kisitlama varsa gorunur olmali: kanalin sessiz
+                                        // kalmasinin sebebi burasi olabilir.
+                                        c.alert_codes && c.alert_codes.length > 0
+                                            ? `${c.alert_codes.length} alarm tipi`
+                                            : null,
+                                    ].filter(Boolean).join(' · ')}
                                 </div>
                             </div>
                             <button onClick={() => testMut.mutate(c.channel_id)}
@@ -124,6 +134,8 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
         channel_name: channel?.channel_name ?? '',
         channel_type: (channel?.channel_type ?? 'telegram') as NotificationChannel['channel_type'],
         min_severity: channel?.min_severity ?? '',
+        // Bos dizi = kisitlama yok (kanal tum alarm tiplerini alir)
+        alert_codes: (channel?.alert_codes ?? []) as string[],
         // config alanları (mevcut kanaldan doldurulur)
         webhook_url: existingConfig.webhook_url ?? '',
         channel: existingConfig.channel ?? '',
@@ -218,17 +230,32 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
         return config;
     };
 
+    // Secim listesi: sistemde kullanilan alarm kodlari
+    const { data: alertCodes = [] } = useQuery<string[]>({
+        queryKey: ['alert-codes'],
+        queryFn: () => apiGet('/adaptive-alerting/notification-channels/alert-codes'),
+    });
+
     const saveMut = useMutation({
-        mutationFn: () => {
+        mutationFn: async () => {
             const body = {
                 channel_name: form.channel_name,
                 channel_type: form.channel_type,
                 config: buildConfig(),
                 min_severity: form.min_severity || null,
             };
-            return isEdit
-                ? apiPut(`/adaptive-alerting/notification-channels/${channel!.channel_id}`, body)
-                : apiPost('/adaptive-alerting/notification-channels', { ...body, instance_pks: null, metric_categories: null });
+            // Alarm tipleri ayri endpoint'te tutuluyor (ayri tablo), bu yuzden
+            // kanal kaydedildikten SONRA yaziliyor — yeni kanalda channel_id
+            // ancak insert sonrasi biliniyor.
+            const saved: any = isEdit
+                ? await apiPut(`/adaptive-alerting/notification-channels/${channel!.channel_id}`, body)
+                : await apiPost('/adaptive-alerting/notification-channels', { ...body, instance_pks: null, metric_categories: null });
+            const channelId = channel?.channel_id ?? saved?.channel_id;
+            if (channelId) {
+                await apiPut(`/adaptive-alerting/notification-channels/${channelId}/alert-codes`,
+                    { alert_codes: form.alert_codes });
+            }
+            return saved;
         },
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['channels'] });
@@ -478,6 +505,49 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                         <option value="critical">Critical+</option>
                         <option value="emergency">Emergency</option>
                     </select>
+                </div>
+
+                {/* Alarm tipi filtresi: severity SEVIYEYE, bu TIPE gore filtreler.
+                    Ikisi birlikte calisir. Hicbiri secilmezse kisitlama yoktur —
+                    "hicbirini alma" degil "hepsini al" demektir, bu yuzden bos
+                    durum acikca yaziyor. */}
+                <div>
+                    <label className="block text-xs font-medium text-[#475569] mb-1">
+                        Alarm Tipleri
+                        <InfoTip text="Bu kanalın hangi alarm tiplerini alacağını sınırlar. Hiçbiri seçilmezse kanal tüm tipleri alır. Minimum Severity ile birlikte çalışır: her ikisini de geçen alarmlar gönderilir." className="ml-1" />
+                    </label>
+                    {alertCodes.length === 0 ? (
+                        <div className="text-xs text-[#94A3B8] py-2">Alarm tipi listesi yükleniyor…</div>
+                    ) : (
+                        <>
+                            <div className="flex items-center gap-2 mb-1.5">
+                                <span className="text-xs text-[#64748B]">
+                                    {form.alert_codes.length === 0
+                                        ? 'Tümü (kısıtlama yok)'
+                                        : `${form.alert_codes.length} tip seçili`}
+                                </span>
+                                {form.alert_codes.length > 0 && (
+                                    <button type="button" onClick={() => set('alert_codes', [])}
+                                        className="text-xs text-[#3B82F6] hover:underline">
+                                        Kısıtlamayı kaldır
+                                    </button>
+                                )}
+                            </div>
+                            <div className="max-h-40 overflow-y-auto border border-[#CBD5E1] rounded-md p-2 space-y-1">
+                                {alertCodes.map(code => (
+                                    <label key={code} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-[#F8FAFC] px-1 py-0.5 rounded">
+                                        <input type="checkbox"
+                                            checked={form.alert_codes.includes(code)}
+                                            onChange={e => set('alert_codes',
+                                                e.target.checked
+                                                    ? [...form.alert_codes, code]
+                                                    : form.alert_codes.filter(c => c !== code))} />
+                                        <span className="font-mono text-[#334155]">{code}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </>
+                    )}
                 </div>
             </div>
             <ModalFooter onClose={onClose} onSave={() => saveMut.mutate()} busy={saveMut.isPending} />

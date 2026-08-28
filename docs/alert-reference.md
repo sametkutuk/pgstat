@@ -94,13 +94,31 @@ Sistem alarmlarının (`alert_source = 'system'`) bir `rule_id`'si
 olmadığı için bu filtreden geçmezler; onlar sadece severity eşiğine
 tabidir.
 
-### 3. Susturma (snooze)
+### 3. Kanal bazlı alarm tipi filtresi
+
+`control.alert_code_notification_channel` — bir kanalın hangi alarm
+**tiplerini** kabul ettiğini sınırlar. **Bildirim Kanalları** ekranında,
+kanalı düzenlerken "Alarm Tipleri" listesinden seçilir.
+
+Hiçbiri seçilmezse kısıtlama yoktur; kanal tüm tipleri alır. Yani boş
+liste "hiçbirini alma" değil **"hepsini al"** demektir.
+
+Bu filtre 2 numaralı mekanizmanın kapsamadığı boşluk için var:
+`AlertCode` enum'undaki 21 kodun 20'si `system` ya da `adaptive`
+kaynaklı olduğu için `rule_id` taşımaz ve kural→kanal eşlemesinden hiç
+geçmez. Onlar için alarm tipine göre yönlendirmenin tek yolu budur.
+
+Üç filtre birlikte uygulanır: severity **seviyeyi**, kural→kanal bir
+kuralın **hangi kanallara** gideceğini, kanal→kod bir kanalın **hangi
+tipleri** kabul ettiğini sınırlar.
+
+### 4. Susturma (snooze)
 
 `control.alert_snooze` — belirli bir `alert_key`, `alert_code` veya
 instance için bildirimleri geçici olarak durdurur. Çözülme bildirimleri
 susturmadan **etkilenmez**.
 
-### 4. Bakım penceresi
+### 5. Bakım penceresi
 
 `control.maintenance_window` — belirtilen gün/saat aralığında, seçilen
 instance'lar için bildirim gönderilmez.

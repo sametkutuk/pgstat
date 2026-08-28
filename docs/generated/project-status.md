@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 53 |
+| Total tasks | 54 |
 | Done tasks | 22 |
-| Remaining tasks | 31 |
+| Remaining tasks | 32 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,13 +34,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 22 |
 | in_progress | 4 |
-| planned | 27 |
+| planned | 28 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 7 |
+| alerting | 8 |
 | collector | 3 |
 | contracts | 2 |
 | governance | 5 |
@@ -110,6 +110,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 51 | PGSTAT-P1-012 | P1 | alerting | planned | No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics | Add the stale_statistics rule to control.alert_rule with a message template, wire the evaluator branch, and calibrate the shipped default thresholds against the measurements already taken. |
 | 52 | PGSTAT-P2-006 | P2 | ui | done | Instance list does not show which retention policy or schedule profile each instance uses | Done - the column ships with the next api and ui build; the retention half is already verified in production. |
 | 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it. |
+| 54 | PGSTAT-P1-014 | P1 | alerting | planned | Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them | Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there. |
 
 ## Dependency Map
 
@@ -168,6 +169,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-012 | - | - |
 | PGSTAT-P2-006 | - | - |
 | PGSTAT-P1-013 | - | - |
+| PGSTAT-P1-014 | - | - |
 
 ## Closure Rules
 

@@ -3474,6 +3474,80 @@
         "Priority agreed as not urgent: the immediate 5 GB was recovered by moving the single r6-default instance to r3-short, so this task removes the constraint rather than fixing an outage.",
         "Deferred on 2026-08-28 at the customer request - sub partitionu beklemeye al - in favour of the alerting correctness work (P0-040 first). Nothing blocks it technically; the immediate disk symptom was already resolved by moving the single long-retention instance."
       ]
+    },
+    {
+      "id": "PGSTAT-P1-014",
+      "order": 54,
+      "priority": "P1",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there.",
+      "title": "Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them",
+      "problem": "Two routing mechanisms existed and neither covered the common case. control.notification_channel.min_severity filters on level alone, so two different alert types at the same severity - a bloat alert and a replication lag alert, both critical - cannot be separated. control.alert_rule_notification_channel selects channels per rule, but only alerts carrying a rule_id pass through it, and 20 of the 21 codes in the AlertCode enum are system or adaptive sourced and carry none. In production this was concrete: the customer could not stop repeated adaptive long_running_query notifications without also silencing everything else at that severity. The customer asked for control over which notifications reach which channel.",
+      "requirements": [
+        "A channel must be restrictable to specific alert types, independently of severity, and this must work for system and adaptive alerts which have no rule behind them.",
+        "An empty configuration must mean no restriction rather than no delivery, so the migration cannot silence an existing installation.",
+        "The new filter must compose with the two existing ones rather than replace them: severity gates the level, rule-to-channel gates which channels a rule reaches, and this gates which types a channel accepts.",
+        "A channel that is restricted must show it in the list view, since a silent channel is otherwise indistinguishable from a broken one.",
+        "The collector must keep delivering if the new table is missing, because a collector can run ahead of its migration; staying silent is worse than sending an extra notification."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "control.alert_code_notification_channel maps channels to alert codes, with no rows for a channel meaning the channel accepts every code.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "NotificationService applies the code filter alongside the severity and rule filters, and falls back to the previous behaviour with a warning if the table cannot be queried.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "The channels API returns each channel alert_codes array, accepts a replacement list, and exposes the set of codes in use for the picker.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "The channel edit form offers the alert types as checkboxes, states plainly that selecting none means all, and offers a one-click way to clear a restriction; the list view shows when a channel is restricted.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn test passes and tsc --noEmit is clean for api and ui.",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "Live verification: restricting a channel to a subset of codes stops other codes reaching it while their alerts still open normally, and clearing the restriction restores delivery.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "db/migrations/V099__channel_alert_code_filter.sql: the mapping table plus an index on alert_code.",
+        "NotificationService.loadEnabledChannels: take the alert code, add the not-exists-or-exists filter, and catch a missing table by falling back.",
+        "api/src/routes/adaptiveAlerting.ts: return alert_codes with each channel, add PUT :channel_id/alert-codes, and add GET notification-channels/alert-codes for the picker.",
+        "ui/src/pages/NotificationChannels.tsx: checkbox list in the edit modal, written after the channel is saved since a new channel has no id until then, plus a restriction badge in the list."
+      ],
+      "verification_plan": [
+        "mvn -o test; npx tsc --noEmit in api and ui",
+        "Live: restrict a channel to two codes, confirm a third code opens an alert but delivers nothing there, then clear the restriction and confirm delivery resumes."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer asked on 2026-08-28 for a way to choose which notifications reach which channel, giving keeping warnings off Telegram as the example. That specific case was already solvable with min_severity, which turned out to be built and exposed but undocumented - fixed separately in docs/alert-reference.md.",
+        "Investigating that request surfaced the real gap: per-rule channel selection cannot route system or adaptive alerts, which is 20 of the 21 AlertCode values, so those could only ever be filtered by severity.",
+        "The gap had already bitten in production the same day: repeated adaptive long_running_query notifications on emh-dev-test could not be suppressed without silencing every other alert of that severity."
+      ]
     }
   ]
 }

@@ -107,7 +107,7 @@ public class NotificationService {
             }
 
             // Aktif kanalları yükle — kural bazlı kanal secimi varsa ona gore filtrelenir
-            List<Map<String, Object>> channels = loadEnabledChannels(severity, alertId);
+            List<Map<String, Object>> channels = loadEnabledChannels(severity, alertId, alertCode);
             if (channels.isEmpty()) return;
 
             for (Map<String, Object> channel : channels) {
@@ -716,7 +716,23 @@ public class NotificationService {
      * hicbir kanal secmemis) eski davranis devam eder — tum aktif kanallara
      * gonderilir. Bu, mevcut kurallari sessizce bildirimsiz birakmaz.
      */
-    private List<Map<String, Object>> loadEnabledChannels(String severity, long alertId) {
+    /**
+     * Bu alarmi almasi gereken kanallar. Uc filtre birlikte uygulanir:
+     *
+     *  1. min_severity — kanal bu SEVIYEDEN itibaren bildirim alir.
+     *  2. Kural->kanal esleme — bir KURALIN hangi kanallara gidecegini kisitlar.
+     *     Yalnizca rule_id tasiyan (kural kaynakli) alarmlar icin gecerli.
+     *  3. Kanal->kod esleme (V099) — bir KANALIN hangi alarm TIPLERINI kabul
+     *     ettigini kisitlar. Bu, 2'nin kapsamadigi bosluk icin var: AlertCode
+     *     enum'undaki 21 kodun 20'si system ya da adaptive kaynakli oldugu icin
+     *     rule_id tasimiyor ve kural eslemesinden hic gecmiyordu; onlar yalnizca
+     *     severity ile filtreleniyordu, yani ayni seviyedeki iki farkli alarm
+     *     tipi birbirinden ayrilamiyordu (musteri talebi 2026-08-28).
+     *
+     * Ikisi de "satir varsa kisitla, yoksa hepsini gecir" semantigi kullanir,
+     * yani bos konfigurasyon mevcut davranisi degistirmez.
+     */
+    private List<Map<String, Object>> loadEnabledChannels(String severity, long alertId, String alertCode) {
         // 5 severity seviyesi: info < warning < error < critical < emergency.
         // Onceki bug: 'error' siralamada yoktu -> error severity alert'leri (job_failed gibi)
         // bircok kanal filtresinden gecemiyordu.
@@ -748,9 +764,29 @@ public class NotificationService {
             "         when 'emergency' then 4 else 0 end) " +
             ruleFilter;
 
-        return hasChannelSelection
-            ? jdbc.queryForList(sql, severity, ruleId)
-            : jdbc.queryForList(sql, severity);
+        // Kanal->kod filtresi: kanalin hic kod satiri yoksa gecer (mevcut
+        // davranis), varsa kod listede olmali.
+        String codeFilter =
+            "  and (not exists (select 1 from control.alert_code_notification_channel acc" +
+            "                    where acc.channel_id = notification_channel.channel_id)" +
+            "       or exists (select 1 from control.alert_code_notification_channel acc" +
+            "                   where acc.channel_id = notification_channel.channel_id" +
+            "                     and acc.alert_code = ?)) ";
+
+        try {
+            return hasChannelSelection
+                ? jdbc.queryForList(sql + codeFilter, severity, ruleId, alertCode)
+                : jdbc.queryForList(sql + codeFilter, severity, alertCode);
+        } catch (Exception e) {
+            // Tablo henuz olusmamis olabilir (migration uygulanmadan calisan
+            // collector). Bildirimi engellemek yerine kod filtresiz devam
+            // ediyoruz — sessiz kalmak, fazladan bildirimden daha zararli.
+            log.warn("Kanal-kod filtresi uygulanamadi, yalnizca severity/kural filtresi kullanilacak: {}",
+                e.getMessage());
+            return hasChannelSelection
+                ? jdbc.queryForList(sql, severity, ruleId)
+                : jdbc.queryForList(sql, severity);
+        }
     }
 
     private boolean isAlertSnoozed(String alertKey, String alertCode, Long instancePk) {
