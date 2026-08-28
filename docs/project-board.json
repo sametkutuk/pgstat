@@ -3048,7 +3048,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Deploy with the V098 migration, then verify on instance 2 that the four tables above threshold each get their own alert, that a single summary notification was delivered rather than four, and that vacuuming one resolves only its own alert.",
+      "next_action": "Redeploy urgently: between 12:23 and this fix no granular alert could open at all. Then confirm on instance 8 that t_ets_hotel_transaction_log raises with the untrustworthy-statistics diagnosis.",
       "title": "Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible",
       "problem": "evaluateThresholdPerRecord builds a single alert per rule and instance (alert_key = rule:{ruleId}:instance:{instancePk}) and renders only exceeding.get(0), the worst record. Every other table over the threshold is invisible: it never appears in a message, never gets its own lifecycle, and never enters control.bloat_scenario_streak, which is keyed per table. The customer hit this directly on 2026-08-27: five tables on instance 2 were over the dead-tuple threshold (security.user 99.81%, t_content_update 98.04%, t_ext_hotel_product 94.80%, t_ext_hotel_payment_types 94.25%, t_supplier_rez 93.60%), all never vacuumed, but only one was named. After fixing the table the alert named, the next worst simply took its place, so the operator has to fix one, wait a cycle, and discover the next - with no way to see the real size of the problem. The customer called the behaviour nonsensical and asked for it to be fixed. The same collapse applies to statement_metric and index_metric, which share this code path.",
       "requirements": [
@@ -3103,6 +3103,11 @@
           "id": "AC9",
           "text": "Resolve notifications are batched the same way raises are: several records recovering in one evaluation produce one message, not one per record.",
           "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "Cooldown is applied per record - a record whose own alert resolved within the cooldown window is not reopened - rather than per rule and instance, which deadlocked the per-record path.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3147,7 +3152,10 @@
         "Customer reviewed the first batch of per-record notifications on 2026-08-28 and asked for two changes: drop the trailing line explaining that a separate alert was opened for each record, and keep Telegram to a title plus a very short summary with the detail visible in the UI instead. Both applied; the single-record path was shortened the same way rather than left sending the full body.",
         "The same batch confirmed the scenario 1c defect was the dominant noise source: five of the six warning alerts across three instances were that branch, holding 46, 26, 27, 23 and 45 dead rows respectively. Only user_daily_goal_summary was a genuine scenario 3 finding.",
         "ops.notification_log proved the batching was only half done. At 11:11:29 on 2026-08-28 the five bloat alerts on instance 2 all resolved within 0.7 seconds and sent five separate Telegram messages - log ids 11345 to 11349, every one against a resolved alert. Raises were batched, resolves were not, and resolve notifications are worse in this respect because the Resolved prefix deliberately bypasses the notification cooldown, so nothing throttled them.",
-        "Mass resolution is now the normal case rather than an edge case: the scenario 1c suppression fix closes every alert it silences, so without batching a single deploy would have sent one message per silenced table."
+        "Mass resolution is now the normal case rather than an edge case: the scenario 1c suppression fix closes every alert it silences, so without batching a single deploy would have sent one message per silenced table.",
+        "Live verification on 2026-08-28 afternoon found a deadlock introduced by this task. control.alert_rule_last_eval showed instance 8 at current_severity critical with last_value 100.00, refreshed six seconds earlier, while ops.alert held no open per-record alert for that rule at all. Ten tables across four instances were above threshold with the autovacuum trigger genuinely crossed, so scenario 1c was not the explanation.",
+        "Cause: worstSeverity was assigned as soon as a severity was determined, before suppression and before the cooldown gate, and the end-of-instance updateLastEval then wrote it - refreshing last_alert_at every cycle. isInCooldown reads last_alert_at, so cooldown became permanently active; with no alert open the guard if (inCooldown and prevSeverity == null) skipped every record forever. A rule-and-instance cooldown cannot gate per-record alerts: one record raising silences all the others.",
+        "Fix: cooldown is now per record via AlertRepository.resolvedWithin, which blocks reopening a record whose own alert resolved inside the window - the flapping case cooldown exists for. worstSeverity is computed only from records that actually raised, so alert_rule_last_eval stops claiming a severity that corresponds to no alert, the same shadow-state drift P0-038 fixed elsewhere."
       ]
     },
     {

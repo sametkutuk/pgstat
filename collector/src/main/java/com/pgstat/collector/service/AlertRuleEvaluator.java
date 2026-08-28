@@ -2012,16 +2012,14 @@ public class AlertRuleEvaluator {
 
             enrichStatementRecords(instancePk, exceeding, metricType, windowMinutes);
 
-            // Cooldown, YENI alert acilmasini geciktirir — ama zaten acik bir
-            // alert'in mesaji her zaman guncellenir ve sorun duzelmisse resolve
-            // her zaman calisir, cooldown'dan bagimsiz. Eskiden cooldown tum
-            // mantigi atlayarak calisiyordu; bu iki hataya yol aciyordu: manuel
-            // duzeltmelerin (orn. VACUUM) alert'i resolve etmesi 60dk
-            // blokleniyordu (musteri raporu 2026-08-21) ve acik alert'in mesaji
-            // donuyordu (2026-08-27, 2 saat boyunca artik gecerli olmayan bir
-            // tabloyu gosterdi). Bildirim spam'i zaten NotificationService'te
+            // Cooldown bu yolda KAYIT bazinda uygulanir (asagida
+            // alertRepo.resolvedWithin), kural/instance bazinda degil — sebebi
+            // orada aciklandi. Sorun duzelmisse resolve her zaman calisir ve
+            // acik alert'in mesaji her turda guncellenir; bunlarin cooldown ile
+            // geciktirilmesi 2026-08-21 ve 2026-08-27'de iki ayri musteri
+            // sikayeti uretmisti (VACUUM sonrasi resolve olmayan alert, ve iki
+            // saat donmus mesaj). Bildirim spam'i zaten NotificationService'te
             // alert bazinda ayrica korunuyor.
-            boolean inCooldown = isInCooldown(ruleId, instancePk, cooldownMinutes);
 
             // Cozulen kayitlar toplanir; tek mesaj halinde bildirilir.
             java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
@@ -2070,13 +2068,22 @@ public class AlertRuleEvaluator {
                     }
                     continue;
                 }
-                if (worstSeverity == null || isMoreSevere(severity, worstSeverity)) {
-                    worstSeverity = severity;
-                    worstVal = currentVal;
+                // Cooldown KAYIT bazli: bu kaydin alert'i az once resolve
+                // edildiyse hemen yeniden acma (flapping korumasi). Zaten acik
+                // olan her turda guncellenir ki mesaji donmasin.
+                //
+                // Kural seviyesindeki isInCooldown() burada KULLANILAMAZ ve
+                // kullanildiginda uretimde kilitlenme uretti (2026-08-28): o
+                // kontrol control.alert_rule_last_eval.last_alert_at'e bakiyor,
+                // last_alert_at ise dongu sonundaki updateLastEval tarafindan her
+                // turda yaziliyordu; bu da "cooldown surekli aktif + hic acik
+                // alert yok" durumunu kalici hale getirip HICBIR granular alert'in
+                // acilamamasina yol aciyordu. Instance 8'de dead_tuple_ratio
+                // %100.00 olcup current_severity=critical yazarken tek bir alert
+                // bile acilmiyordu.
+                if (prevSeverity == null && alertRepo.resolvedWithin(recordKey, cooldownMinutes)) {
+                    continue;
                 }
-                // Cooldown yalnizca YENI alert acilmasini engeller; zaten acik olan
-                // guncellenmeye devam eder ki mesaji donmasin.
-                if (inCooldown && prevSeverity == null) continue;
                 BigDecimal threshold = "critical".equals(severity) ? criticalThreshold : warningThreshold;
 
                 Map<String, Object> ctx = baseContext(rule, instancePk, severity);
@@ -2164,6 +2171,19 @@ public class AlertRuleEvaluator {
                 stillAlerting.add(recordKey);
                 raised.add(new RaisedRecordAlert(alertId, recordKey, severity,
                     recordLabel(record, metricType), currentVal, threshold, rendered[0]));
+
+                // worstSeverity/worstVal SADECE gercekten alert acan kayitlardan
+                // hesaplanir. Daha once dongunun basinda, severity belirlenir
+                // belirlenmez yaziliyordu; o hali bastirilan ya da cooldown'a
+                // takilan kayitlar icin de severity yazdirdigindan
+                // control.alert_rule_last_eval "critical" derken ortada tek bir
+                // alert olmuyordu — P0-038'de duzeltilen golge-durum sapmasinin
+                // aynisi, ve last_alert_at'i her turda tazeleyerek yukaridaki
+                // kilitlenmeyi besleyen sey de buydu.
+                if (worstSeverity == null || isMoreSevere(severity, worstSeverity)) {
+                    worstSeverity = severity;
+                    worstVal = currentVal;
+                }
             }
 
             // Bu degerlendirmede artik esigi asmayan kayitlarin alert'lerini

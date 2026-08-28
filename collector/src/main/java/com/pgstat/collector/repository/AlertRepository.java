@@ -324,6 +324,31 @@ public class AlertRepository {
     }
 
     /**
+     * Bu kaydin alert'i son N dakika icinde resolve edilmis mi?
+     *
+     * Kayit bazli cooldown: amaci "flapping"i onlemek, yani bir kayit
+     * duzelip hemen bozulduğunda alert'in acilip kapanip acilmasini
+     * geciktirmek. Kural seviyesindeki (instance bazli) cooldown bu is icin
+     * kullanilamaz — kayit basina alert acilan bir dunyada bir kaydin alert
+     * acmasi digerlerini susturur.
+     */
+    public boolean resolvedWithin(String alertKey, int minutes) {
+        if (minutes <= 0) return false;
+        try {
+            Boolean recent = jdbc.queryForObject(
+                "select exists (select 1 from ops.alert" +
+                "   where alert_key = ? and status = 'resolved'" +
+                "     and resolved_at is not null" +
+                "     and resolved_at >= now() - (? * interval '1 minute'))",
+                Boolean.class, alertKey, minutes);
+            return Boolean.TRUE.equals(recent);
+        } catch (Exception e) {
+            log.debug("resolvedWithin okunamadi alertKey={}: {}", alertKey, e.getMessage());
+            return false; // hata durumunda alert'i engelleme
+        }
+    }
+
+    /**
      * Bir alert'in su anki severity'si — kapali/olmayan alert icin null.
      *
      * Granular kurallarda kayit basina "onceki severity" gerekiyor, ama
