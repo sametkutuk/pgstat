@@ -1071,21 +1071,41 @@ router.put('/notification-channels/:channel_id/alert-codes', async (req, res, ne
 });
 
 // GET /api/notification-channels/alert-codes
-// UI'in secim listesi icin: sistemde kullanilan alarm kodlari. Kodlar
-// collector'daki AlertCode enum'unda tanimli; burada gecmiste uretilmis
-// alarmlardan ve kayitli sablonlardan turetiliyor ki liste kendini gunceller.
+// UI'in secim listesi icin. Kodlar collector'daki AlertCode enum'unda tanimli;
+// burada gecmiste uretilmis alarmlardan ve kayitli sablonlardan turetiliyor ki
+// liste kendini gunceller. Aciklama ve kaynak da donuyor: UI kodlari kaynagina
+// gore gruplayabilsin ve kullanici 'slot_inactive_long' gibi bir kodun ne
+// oldugunu tahmin etmek zorunda kalmasin.
 router.get('/notification-channels/alert-codes', async (_req, res, next) => {
     try {
         const result = await pool.query(
-            `select distinct alert_code from (
-               select alert_code from ops.alert
+            `with codes as (
+               select alert_code from ops.alert where alert_code is not null
                union
                select alert_code from control.alert_message_template
-             ) x
-             where alert_code is not null
-             order by alert_code`
+             ),
+             -- Kaynak ve seviye, o kodun EN SON uretilmis alarmindan okunur;
+             -- hic uretilmemis kodlarda null kalir ve UI 'diger' grubuna koyar.
+             latest as (
+               select distinct on (alert_code)
+                      alert_code, alert_source, severity
+                 from ops.alert
+                where alert_code is not null
+                order by alert_code, last_seen_at desc
+             )
+             select c.alert_code,
+                    t.description,
+                    l.alert_source,
+                    l.severity as last_severity,
+                    (select count(*) from ops.alert a
+                      where a.alert_code = c.alert_code
+                        and a.first_seen_at > now() - interval '30 days') as count_30d
+               from codes c
+               left join control.alert_message_template t on t.alert_code = c.alert_code
+               left join latest l on l.alert_code = c.alert_code
+              order by c.alert_code`
         );
-        res.json(result.rows.map((r: any) => r.alert_code));
+        res.json(result.rows);
     } catch (err) {
         next(err);
     }

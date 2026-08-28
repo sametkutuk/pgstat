@@ -3509,7 +3509,7 @@
         },
         {
           "id": "AC4",
-          "text": "The channel edit form offers the alert types as checkboxes, states plainly that selecting none means all, and offers a one-click way to clear a restriction; the list view shows when a channel is restricted.",
+          "text": "The channel edit form lists alert types grouped by source, each with its description, last severity and 30-day count; it offers select-all, clear, per-group toggles and a search that matches description as well as code; it states plainly that selecting none means all; and the list view shows when a channel is restricted.",
           "status": "done"
         },
         {
@@ -3546,7 +3546,8 @@
       "verification_evidence": [
         "Customer asked on 2026-08-28 for a way to choose which notifications reach which channel, giving keeping warnings off Telegram as the example. That specific case was already solvable with min_severity, which turned out to be built and exposed but undocumented - fixed separately in docs/alert-reference.md.",
         "Investigating that request surfaced the real gap: per-rule channel selection cannot route system or adaptive alerts, which is 20 of the 21 AlertCode values, so those could only ever be filtered by severity.",
-        "The gap had already bitten in production the same day: repeated adaptive long_running_query notifications on emh-dev-test could not be suppressed without silencing every other alert of that severity."
+        "The gap had already bitten in production the same day: repeated adaptive long_running_query notifications on emh-dev-test could not be suppressed without silencing every other alert of that severity.",
+        "Customer asked for select and unselect controls and a better picker after the first version shipped as a plain checkbox list. The list now groups codes by source - rule, adaptive, system - because those are different kinds of thing and read badly mixed together, and each row carries the template description, the severity last seen for that code and how often it fired in 30 days, so a code like slot_inactive_long does not have to be guessed at. Search matches the description too, so typing a Turkish phrase finds the code."
       ]
     }
   ]

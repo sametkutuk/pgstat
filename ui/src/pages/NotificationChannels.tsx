@@ -26,6 +26,40 @@ const TYPE_ICONS: Record<string, string> = {
     email: '📧', slack: '💬', pagerduty: '🚨', teams: '👥', webhook: '🔗', telegram: '✈️',
 };
 
+// Kanal bazli alarm tipi filtresi (V099) icin secim listesi kaydi
+interface AlertCodeInfo {
+    alert_code: string;
+    description: string | null;
+    alert_source: string | null;
+    last_severity: string | null;
+    count_30d: number | string;
+}
+
+// Alarm kodlari kaynagina gore gruplanir: sistem alarmlari (collector'in kendi
+// sagligi), adaptive alarmlar (canli gozlem) ve kullanici kurallari birbirinden
+// farkli seyler; karisik tek liste okunmuyor.
+const CODE_GROUPS = [
+    { key: 'user_rule', label: 'Kural alarmları' },
+    { key: 'adaptive', label: 'Canlı gözlem alarmları' },
+    { key: 'system', label: 'Sistem sağlığı alarmları' },
+    { key: 'other', label: 'Diğer' },
+] as const;
+
+/** Hic uretilmemis kodlarin kaynagi bilinmez; onlar "diger" grubuna duser. */
+function codeGroupOf(c: AlertCodeInfo): string {
+    const src = c.alert_source;
+    if (src === 'user_rule' || src === 'adaptive' || src === 'system') return src;
+    return 'other';
+}
+
+const SEVERITY_STYLES: Record<string, string> = {
+    info: 'bg-[#EFF6FF] text-[#2563EB]',
+    warning: 'bg-[#FEFCE8] text-[#A16207]',
+    error: 'bg-[#FFF7ED] text-[#C2410C]',
+    critical: 'bg-[#FEF2F2] text-[#DC2626]',
+    emergency: 'bg-[#FDF2F8] text-[#BE185D]',
+};
+
 // Settings sayfasi bu component'i sekme icinde render eder.
 export default function NotificationChannelsTab() {
     return <ChannelsPanel />;
@@ -230,10 +264,20 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
         return config;
     };
 
-    // Secim listesi: sistemde kullanilan alarm kodlari
-    const { data: alertCodes = [] } = useQuery<string[]>({
+    // Secim listesi: sistemde kullanilan alarm kodlari (aciklama + kaynak ile)
+    const { data: alertCodes = [] } = useQuery<AlertCodeInfo[]>({
         queryKey: ['alert-codes'],
         queryFn: () => apiGet('/adaptive-alerting/notification-channels/alert-codes'),
+    });
+
+    const [search, setSearch] = useState('');
+    // Arama hem kodda hem aciklamada eslesir — kullanici kodu ezbere bilmek
+    // zorunda kalmasin ("uzun sorgu" yazip long_running_query'yi bulabilsin).
+    const visibleCodes = alertCodes.filter(c => {
+        const q = search.trim().toLowerCase();
+        if (!q) return true;
+        return c.alert_code.toLowerCase().includes(q)
+            || (c.description ?? '').toLowerCase().includes(q);
     });
 
     const saveMut = useMutation({
@@ -519,34 +563,94 @@ function ChannelFormModal({ channel, onClose }: { channel?: NotificationChannel;
                     {alertCodes.length === 0 ? (
                         <div className="text-xs text-[#94A3B8] py-2">Alarm tipi listesi yükleniyor…</div>
                     ) : (
-                        <>
-                            <div className="flex items-center gap-2 mb-1.5">
-                                <span className="text-xs text-[#64748B]">
-                                    {form.alert_codes.length === 0
-                                        ? 'Tümü (kısıtlama yok)'
-                                        : `${form.alert_codes.length} tip seçili`}
-                                </span>
-                                {form.alert_codes.length > 0 && (
-                                    <button type="button" onClick={() => set('alert_codes', [])}
-                                        className="text-xs text-[#3B82F6] hover:underline">
-                                        Kısıtlamayı kaldır
-                                    </button>
+                        <div className="border border-[#CBD5E1] rounded-md overflow-hidden">
+                            {/* Ust serit: durum + toplu islemler + arama */}
+                            <div className="bg-[#F8FAFC] border-b border-[#E2E8F0] px-2.5 py-2 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className={`text-xs font-medium ${form.alert_codes.length === 0 ? 'text-[#059669]' : 'text-[#334155]'}`}>
+                                        {form.alert_codes.length === 0
+                                            ? 'Tüm alarm tipleri gönderilir'
+                                            : `${form.alert_codes.length} / ${alertCodes.length} tip seçili`}
+                                    </span>
+                                    <div className="flex items-center gap-1.5">
+                                        <button type="button"
+                                            onClick={() => set('alert_codes', visibleCodes.map(c => c.alert_code))}
+                                            className="text-[11px] px-2 py-0.5 rounded border border-[#CBD5E1] text-[#475569] hover:bg-white">
+                                            {search ? 'Görünenleri seç' : 'Tümünü seç'}
+                                        </button>
+                                        <button type="button" onClick={() => set('alert_codes', [])}
+                                            disabled={form.alert_codes.length === 0}
+                                            className="text-[11px] px-2 py-0.5 rounded border border-[#CBD5E1] text-[#475569] hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed">
+                                            Temizle
+                                        </button>
+                                    </div>
+                                </div>
+                                <input type="search" value={search} onChange={e => setSearch(e.target.value)}
+                                    placeholder="Alarm tipi ara…"
+                                    className="w-full border border-[#CBD5E1] rounded px-2 py-1 text-xs" />
+                            </div>
+
+                            <div className="max-h-56 overflow-y-auto">
+                                {visibleCodes.length === 0 ? (
+                                    <div className="text-xs text-[#94A3B8] px-2.5 py-3">Eşleşen alarm tipi yok.</div>
+                                ) : (
+                                    // Kaynaga gore gruplu: sistem/adaptive/kural alarmlari
+                                    // farkli seyler, karisik tek liste okunmuyor.
+                                    CODE_GROUPS.map(group => {
+                                        const rows = visibleCodes.filter(c => codeGroupOf(c) === group.key);
+                                        if (rows.length === 0) return null;
+                                        const allChecked = rows.every(r => form.alert_codes.includes(r.alert_code));
+                                        return (
+                                            <div key={group.key}>
+                                                <div className="flex items-center justify-between bg-[#F1F5F9] px-2.5 py-1 sticky top-0">
+                                                    <span className="text-[11px] font-semibold text-[#475569]">
+                                                        {group.label}
+                                                        <span className="ml-1 font-normal text-[#94A3B8]">({rows.length})</span>
+                                                    </span>
+                                                    <button type="button"
+                                                        onClick={() => {
+                                                            const keys = rows.map(r => r.alert_code);
+                                                            set('alert_codes', allChecked
+                                                                ? form.alert_codes.filter(c => !keys.includes(c))
+                                                                : Array.from(new Set([...form.alert_codes, ...keys])));
+                                                        }}
+                                                        className="text-[11px] text-[#3B82F6] hover:underline">
+                                                        {allChecked ? 'kaldır' : 'seç'}
+                                                    </button>
+                                                </div>
+                                                {rows.map(c => (
+                                                    <label key={c.alert_code}
+                                                        className="flex items-start gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-[#F8FAFC] border-b border-[#F1F5F9] last:border-0">
+                                                        <input type="checkbox" className="mt-0.5"
+                                                            checked={form.alert_codes.includes(c.alert_code)}
+                                                            onChange={e => set('alert_codes',
+                                                                e.target.checked
+                                                                    ? [...form.alert_codes, c.alert_code]
+                                                                    : form.alert_codes.filter(x => x !== c.alert_code))} />
+                                                        <span className="min-w-0 flex-1">
+                                                            <span className="flex items-center gap-1.5">
+                                                                <span className="font-mono text-xs text-[#334155] truncate">{c.alert_code}</span>
+                                                                {c.last_severity && (
+                                                                    <span className={`text-[10px] px-1 py-px rounded ${SEVERITY_STYLES[c.last_severity] ?? 'bg-[#F1F5F9] text-[#64748B]'}`}>
+                                                                        {c.last_severity}
+                                                                    </span>
+                                                                )}
+                                                                {Number(c.count_30d) > 0 && (
+                                                                    <span className="text-[10px] text-[#94A3B8]">30g: {c.count_30d}</span>
+                                                                )}
+                                                            </span>
+                                                            {c.description && (
+                                                                <span className="block text-[11px] text-[#94A3B8] leading-snug">{c.description}</span>
+                                                            )}
+                                                        </span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        );
+                                    })
                                 )}
                             </div>
-                            <div className="max-h-40 overflow-y-auto border border-[#CBD5E1] rounded-md p-2 space-y-1">
-                                {alertCodes.map(code => (
-                                    <label key={code} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-[#F8FAFC] px-1 py-0.5 rounded">
-                                        <input type="checkbox"
-                                            checked={form.alert_codes.includes(code)}
-                                            onChange={e => set('alert_codes',
-                                                e.target.checked
-                                                    ? [...form.alert_codes, code]
-                                                    : form.alert_codes.filter(c => c !== code))} />
-                                        <span className="font-mono text-[#334155]">{code}</span>
-                                    </label>
-                                ))}
-                            </div>
-                        </>
+                        </div>
                     )}
                 </div>
             </div>
