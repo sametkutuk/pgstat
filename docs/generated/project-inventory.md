@@ -16,9 +16,9 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 109 |
+| Migrations scanned | 110 |
 | Tables discovered | 96 |
-| Columns discovered | 1180 |
+| Columns discovered | 1181 |
 | Indexes discovered | 128 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
@@ -219,7 +219,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.alert_code_notification_channel | 3 | no |  | V099__channel_alert_code_filter.sql | V099__channel_alert_code_filter.sql |
 | control.alert_message_template | 6 | no |  | V030__alert_message_templates.sql | V030__alert_message_templates.sql |
 | control.alert_notification | 9 | no |  | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |
-| control.alert_rule | 38 | no |  | V011__alert_rules.sql | V105__alert_rule_evaluation_interval.sql |
+| control.alert_rule | 39 | no |  | V011__alert_rules.sql | V106__alert_rule_last_run.sql |
 | control.alert_rule_last_eval | 8 | no |  | V011__alert_rules.sql | V016__smart_alerts.sql |
 | control.alert_rule_notification_channel | 3 | no |  | V091__alert_rule_notification_channel_selection.sql | V091__alert_rule_notification_channel_selection.sql |
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |
@@ -300,7 +300,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>control.alert_rule columns (38)</summary>
+<details><summary>control.alert_rule columns (39)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -342,6 +342,7 @@ This generated inventory is the bridge between code and the manual project docum
 | bloat_vacuum_ineffective_count | int | V089__bloat_alert_thresholds.sql |
 | space_bloat_min_wasted_mb | integer | V104__space_bloat_accuracy.sql |
 | evaluation_interval_minutes | integer | V105__alert_rule_evaluation_interval.sql |
+| last_run_at | timestamptz | V106__alert_rule_last_run.sql |
 
 </details>
 

@@ -408,8 +408,12 @@ public class AlertRuleEvaluator {
                     rule.get("rule_id"), rule.get("evaluation_type"),
                     rule.get("metric_type"), rule.get("metric_name"));
                 evaluateRule(rule);
+                markRuleRun(rule);
             } catch (Exception e) {
                 log.error("Kural degerlendirme hatasi rule_id={}: {}", rule.get("rule_id"), e.getMessage(), e);
+                // Hatali kural da isaretlenir: aksi halde her cycle tekrar
+                // denenir ve hata dongusu yuku katlar.
+                markRuleRun(rule);
             }
         }
     }
@@ -438,20 +442,32 @@ public class AlertRuleEvaluator {
         if (!(rule.get("evaluation_interval_minutes") instanceof Number n)) return false;
         int minutes = n.intValue();
         if (minutes <= 0) return false;
+        Object lastRun = rule.get("last_run_at");
+        if (lastRun == null) return false; // hic calismamis
+        java.time.OffsetDateTime ts = asOffsetDateTime(lastRun);
+        if (ts == null) return false;
+        return java.time.Duration.between(ts, java.time.OffsetDateTime.now()).toMinutes() < minutes;
+    }
+
+    /**
+     * Kuralin calistigini kaydeder — evaluate() dongusunde MERKEZI olarak,
+     * evaluateRule() dondukten sonra.
+     *
+     * Ilk hali bunu control.alert_rule_last_eval'e birakiyordu ve o tabloyu
+     * yalnizca ilgili evaluator updateLastEval'i cagirirsa dolduruyordu.
+     * table_space_bloat cagirmiyordu: satir hic olusmadi, aralik kontrolu bir
+     * sey bulamadi ve kural 6 saatte bir yerine her cycle calismaya devam etti
+     * — yani duzeltmeye calistigi sorunun aynisi surdu. Merkezi yazim, yeni bir
+     * evaluation_type eklendiginde ayni hatanin tekrarlanmasini imkansiz kilar.
+     */
+    private void markRuleRun(Map<String, Object> rule) {
+        if (!(rule.get("evaluation_interval_minutes") instanceof Number)) return; // aralik yoksa yazmaya gerek yok
         try {
-            Boolean tooSoon = jdbc.queryForObject(
-                "select exists (select 1 from control.alert_rule_last_eval" +
-                "   where rule_id = ?" +
-                "   group by rule_id" +
-                "  having max(last_evaluated_at) > now() - (? * interval '1 minute'))",
-                Boolean.class, toLong(rule.get("rule_id")), minutes);
-            return Boolean.TRUE.equals(tooSoon);
+            jdbc.update("update control.alert_rule set last_run_at = now() where rule_id = ?",
+                toLong(rule.get("rule_id")));
         } catch (Exception e) {
-            // Kontrol edilemiyorsa degerlendir — sessiz kalmak, fazladan
-            // calismaktan daha zararli.
-            log.debug("Degerlendirme araligi kontrolu hatasi rule_id={}: {}",
+            log.debug("Kural calisma zamani yazilamadi rule_id={}: {}",
                 rule.get("rule_id"), e.getMessage());
-            return false;
         }
     }
 
@@ -5831,7 +5847,7 @@ public class AlertRuleEvaluator {
                    -- yaramamisti (2026-08-26).
                    space_bloat_min_wasted_mb,
                    -- Kural bazli degerlendirme araligi (V105). NULL = her cycle.
-                   evaluation_interval_minutes
+                   evaluation_interval_minutes, last_run_at
             from control.alert_rule
             where is_enabled = true
             order by rule_id

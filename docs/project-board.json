@@ -3762,7 +3762,7 @@
       "acceptance_criteria": [
         {
           "id": "AC1",
-          "text": "control.alert_rule carries evaluation_interval_minutes, null meaning every cycle, and the evaluator skips a rule whose interval has not elapsed since its last evaluation.",
+          "text": "control.alert_rule carries evaluation_interval_minutes and last_run_at, the latter written centrally in the evaluate loop, so the interval cannot be defeated by an evaluator that forgets to record its run.",
           "status": "done"
         },
         {
@@ -3794,6 +3794,11 @@
           "id": "AC7",
           "text": "Live verification: the collector log stops showing the two rules on every cycle, and the Alert Rules screen renders the descriptions and the frequency control.",
           "status": "pending"
+        },
+        {
+          "id": "AC8",
+          "text": "A rule that throws is still marked as run, so a failing rule does not retry every cycle and multiply the load it is already failing under.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3819,7 +3824,9 @@
       },
       "verification_evidence": [
         "Customer asked on 2026-08-31 how often the new alert would fire and whether that is configurable, which exposed that it was not and that both new rules were running their heavy queries every seven seconds for no benefit.",
-        "Same message asked for the rule configuration screen to explain each rule plainly, and for Telegram to stay brief with the detail in the UI. The second turned out to be already true for table_space_bloat but not for stale_statistics, which was still sending its full rendered body."
+        "Same message asked for the rule configuration screen to explain each rule plainly, and for Telegram to stay brief with the detail in the UI. The second turned out to be already true for table_space_bloat but not for stale_statistics, which was still sending its full rendered body.",
+        "Live check immediately after deploy showed the throttle working for stale_statistics - last evaluated 25 minutes earlier against a 60 minute interval - and not working at all for table_space_bloat, whose last-evaluation row did not exist. The interval read control.alert_rule_last_eval, which only fills when an evaluator calls updateLastEval, and evaluateTableSpaceBloat never did. The rule was therefore still running its window-function query every seven seconds: the exact problem the interval was added to fix, reproduced in the newer rule.",
+        "Fixed at the mechanism rather than the call site. last_run_at lives on the rule row and is written in the evaluate loop right after evaluateRule returns, so a future evaluation_type cannot repeat the omission. A rule that throws is marked too, since retrying a failing rule every cycle multiplies the load it is already failing under."
       ]
     }
   ]
