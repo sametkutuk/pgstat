@@ -14,8 +14,8 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 50 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 934 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 627 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Field contracts needing exact source/version review | 935 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 628 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -36,7 +36,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_code_notification_channel | control/config | 3 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
 | control.alert_message_template | control/config | 6 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_notification | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
-| control.alert_rule | control/config | 37 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
+| control.alert_rule | control/config | 38 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
 | control.alert_rule_last_eval | control/config | 8 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_rule_notification_channel | control/config | 3 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_snooze | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
@@ -167,6 +167,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_rule.created_by | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.critical_threshold | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.description | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule.evaluation_interval_minutes | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.evaluation_type | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.evaluation_window_minutes | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.flatline_minutes | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

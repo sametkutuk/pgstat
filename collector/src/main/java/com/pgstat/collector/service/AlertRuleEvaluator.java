@@ -403,6 +403,7 @@ public class AlertRuleEvaluator {
         if (rules.isEmpty()) return;
         for (Map<String, Object> rule : rules) {
             try {
+                if (shouldSkipForInterval(rule)) continue;
                 log.info("Kural degerlendiriliyor rule_id={} type={} metric={}.{}",
                     rule.get("rule_id"), rule.get("evaluation_type"),
                     rule.get("metric_type"), rule.get("metric_name"));
@@ -416,6 +417,43 @@ public class AlertRuleEvaluator {
     // =========================================================================
     // Kural degerlendirme — tip'e gore yonlendir
     // =========================================================================
+
+    /**
+     * Bu kural, kendi degerlendirme araligi dolmadan tekrar calistirilmasin mi?
+     *
+     * evaluate() her orchestrator cycle'inda calisiyor — uretimde ~7 saniyede
+     * bir. Verisi saniyeler icinde degisen kurallar icin dogru olan bu; ama
+     * verisi gece toplanan kurallar (stale_statistics, table_space_bloat) icin
+     * sonuc degismeyecegi halde agir sorgular tekrar tekrar kosuyordu:
+     * 25 instance x 2 kural x 7 saniye = dakikada ~430 sorgu.
+     *
+     * NULL aralik = her cycle (mevcut davranis korunur, hicbir kural sessizce
+     * yavaslatilmaz). Aralik doluysa kural bu turda atlanir.
+     *
+     * Referans zaman, o kuralin HERHANGI bir instance icin en son degerlendirme
+     * ani. Instance bazli ayirmiyoruz cunku bu kurallarin sorgulari zaten tum
+     * instance'lari tek turda geziyor.
+     */
+    private boolean shouldSkipForInterval(Map<String, Object> rule) {
+        if (!(rule.get("evaluation_interval_minutes") instanceof Number n)) return false;
+        int minutes = n.intValue();
+        if (minutes <= 0) return false;
+        try {
+            Boolean tooSoon = jdbc.queryForObject(
+                "select exists (select 1 from control.alert_rule_last_eval" +
+                "   where rule_id = ?" +
+                "   group by rule_id" +
+                "  having max(last_evaluated_at) > now() - (? * interval '1 minute'))",
+                Boolean.class, toLong(rule.get("rule_id")), minutes);
+            return Boolean.TRUE.equals(tooSoon);
+        } catch (Exception e) {
+            // Kontrol edilemiyorsa degerlendir — sessiz kalmak, fazladan
+            // calismaktan daha zararli.
+            log.debug("Degerlendirme araligi kontrolu hatasi rule_id={}: {}",
+                rule.get("rule_id"), e.getMessage());
+            return false;
+        }
+    }
 
     private void evaluateRule(Map<String, Object> rule) {
         String evalType = rule.get("evaluation_type") != null
@@ -524,9 +562,17 @@ public class AlertRuleEvaluator {
                 lookupInstanceName(instancePk), stale.size(), Math.round(worstHours));
             String[] rendered = renderWithCode(rule, ctx, ruleName, fallback, "stale_statistics");
 
-            alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE, severity,
-                instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
-                buildStaleDetailsJson(stale));
+            // DEFERRED: alert'in tam govdesi (tablo listesi + aksiyon) ops.alert'te
+            // durur ve UI'da goruluyor; bildirime yalnizca baslik ve tek satirlik
+            // ozet gider (musteri talebi 2026-08-28, granular kurallarda uygulanan
+            // ayni ilke — bu kural onunla tutarsiz kalmisti).
+            long alertId = alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
+                severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
+                buildStaleDetailsJson(stale), AlertRepository.NotifyMode.DEFERRED);
+            alertRepo.notifySummary(alertId, alertKey, AlertCode.USER_DEFINED_RULE.getCode(),
+                severity, instancePk, rendered[0],
+                String.format("%d tablo, en eskisi %d saattir analiz edilmemiş.",
+                    stale.size(), Math.round(worstHours)));
             updateLastEval(ruleId, instancePk, BigDecimal.valueOf(Math.round(worstHours)), severity);
         }
     }
@@ -5783,7 +5829,9 @@ public class AlertRuleEvaluator {
                    -- varsayilana dusmesi demek — yukaridaki uc kolonda tam bu
                    -- olmustu ve kullanicinin UI'dan girdigi deger hicbir ise
                    -- yaramamisti (2026-08-26).
-                   space_bloat_min_wasted_mb
+                   space_bloat_min_wasted_mb,
+                   -- Kural bazli degerlendirme araligi (V105). NULL = her cycle.
+                   evaluation_interval_minutes
             from control.alert_rule
             where is_enabled = true
             order by rule_id

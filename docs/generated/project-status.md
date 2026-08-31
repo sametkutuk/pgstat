@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 56 |
+| Total tasks | 57 |
 | Done tasks | 22 |
-| Remaining tasks | 34 |
+| Remaining tasks | 35 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -35,13 +35,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | codex_verified | 2 |
 | done | 22 |
 | in_progress | 4 |
-| planned | 28 |
+| planned | 29 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 10 |
+| alerting | 11 |
 | collector | 3 |
 | contracts | 2 |
 | governance | 5 |
@@ -114,6 +114,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 54 | PGSTAT-P1-014 | P1 | alerting | planned | Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them | Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there. |
 | 55 | PGSTAT-P0-041 | P0 | alerting | codex_verified | Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart | Awaiting customer sign-off; the false criticals on instance 8 resolved on their own in the first collection cycle after deploy. |
 | 56 | PGSTAT-P0-042 | P0 | alerting | planned | Nothing detects a table that is physically bloated while its dead-tuple count stays low | Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from. |
+| 57 | PGSTAT-P0-043 | P0 | alerting | planned | Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night | Deploy with V105 and confirm from the collector log that the two nightly-data rules no longer appear on every cycle, and that the Alert Rules screen shows their descriptions and the frequency control. |
 
 ## Dependency Map
 
@@ -175,6 +176,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-014 | - | - |
 | PGSTAT-P0-041 | - | - |
 | PGSTAT-P0-042 | - | - |
+| PGSTAT-P0-043 | - | - |
 
 ## Closure Rules
 

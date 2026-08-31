@@ -33,6 +33,8 @@ interface AlertRule {
   sensitivity: 'low' | 'medium' | 'high' | null;
   is_enabled: boolean;
   cooldown_minutes: number;
+  // V105: kural bazli degerlendirme araligi. null = her toplama dongusunde.
+  evaluation_interval_minutes: number | null;
   auto_resolve: boolean;
   title_template: string | null;
   message_template: string | null;
@@ -252,6 +254,14 @@ const EVAL_TYPES: Record<string, { label: string; description: string; category:
   flatline: { label: 'Counter Durdu', category: 'smart', description: 'Normalde artan bir değer N dakika boyunca hiç değişmediyse tetiklenir.' },
   hourly_pattern: { label: 'Saatlik Örüntü Sapması', category: 'smart', description: 'Bu saatin 4 haftalık ortalamasından sapma. Yeni instance\'ta anlık spike\'a geçer.' },
   adaptive: { label: 'Adaptive (otomatik baseline)', category: 'smart', description: 'Gece hesaplanan 28 günlük baseline üzerinden otomatik eşik. Sensitivity ile hassasiyet ayarlanır.' },
+  stale_statistics: {
+    label: 'Bayat İstatistik', category: 'smart',
+    description: 'PostgreSQL\'in kendi autoanalyze eşiği aşıldığı hâlde ANALYZE uzun süredir çalışmamışsa tetiklenir. Eşik sabit değil — instance ayarlarından ve tablo boyutundan hesaplanır. Uyarı/Kritik SAAT cinsindendir.',
+  },
+  table_space_bloat: {
+    label: 'Fiziksel Tablo Şişmesi', category: 'smart',
+    description: 'Tablonun satır başına kapladığı alanı kendi geçmişindeki en düşük değerle karşılaştırır. Ölü satır saymaz: autovacuum yetişse bile boşalan alan yeniden kullanılmıyorsa yakalar. Uyarı/Kritik ŞİŞME KATIdır.',
+  },
 };
 
 const emptyForm = {
@@ -276,6 +286,7 @@ const emptyForm = {
   sensitivity: 'medium' as 'low' | 'medium' | 'high',
   is_enabled: true,
   cooldown_minutes: 15,
+  evaluation_interval_minutes: null as number | null,
   auto_resolve: true,
   title_template: '',
   message_template: '',
@@ -824,6 +835,7 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
       sensitivity: rule.sensitivity ?? 'medium',
       is_enabled: rule.is_enabled,
       cooldown_minutes: rule.cooldown_minutes,
+      evaluation_interval_minutes: rule.evaluation_interval_minutes ?? null,
       auto_resolve: rule.auto_resolve,
       title_template: rule.title_template || '',
       message_template: rule.message_template || '',
@@ -1242,6 +1254,38 @@ function RuleFormModal({ rule, onClose }: { rule: AlertRule | null; onClose: () 
                   className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
                   {COOLDOWN_OPTIONS.map(v => <option key={v} value={v}>{v === 0 ? 'Cooldown yok' : `${v} dakika`}</option>)}
                 </select>
+                <p className="text-[11px] text-[#94A3B8] mt-1">
+                  Aynı sorun için yeniden alarm açılmadan önce beklenecek süre.
+                </p>
+              </div>
+
+              {/* Degerlendirme sikligi: kuralin verisi ne siklikla degisiyorsa
+                  ona gore ayarlanir. Bos birakilirsa her toplama dongusunde
+                  (~saniyeler) calisir; verisi gece toplanan kurallarda bu
+                  sonucu degistirmez, sadece yuk uretir. */}
+              <div>
+                <label className="block text-xs font-medium text-[#475569] mb-1">
+                  Değerlendirme Sıklığı
+                </label>
+                <select
+                  value={form.evaluation_interval_minutes ?? ''}
+                  onChange={e => set('evaluation_interval_minutes',
+                    e.target.value === '' ? null : Number(e.target.value))}
+                  className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#3B82F6]">
+                  <option value="">Her toplama döngüsünde (varsayılan)</option>
+                  <option value="5">5 dakikada bir</option>
+                  <option value="15">15 dakikada bir</option>
+                  <option value="60">Saatte bir</option>
+                  <option value="360">6 saatte bir</option>
+                  <option value="720">12 saatte bir</option>
+                  <option value="1440">Günde bir</option>
+                </select>
+                <p className="text-[11px] text-[#94A3B8] mt-1">
+                  Bu kural en az ne kadar aralıkla değerlendirilsin. Verisi hızlı
+                  değişen kurallarda varsayılanı bırakın; verisi gece toplanan
+                  kurallarda (bayat istatistik, fiziksel şişme) sık değerlendirmek
+                  sonucu değiştirmez, yalnızca yük üretir.
+                </p>
               </div>
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">

@@ -204,6 +204,7 @@ router.post('/', async (req: Request, res: Response, next) => {
       is_enabled, cooldown_minutes, auto_resolve,
       title_template, message_template,
       bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count,
+      space_bloat_min_wasted_mb, evaluation_interval_minutes,
       notification_channel_ids
     } = req.body;
 
@@ -245,6 +246,11 @@ router.post('/', async (req: Request, res: Response, next) => {
       { name: 'bloat_min_rows', val: bloat_min_rows ?? null },
       { name: 'bloat_abs_dead_tup', val: bloat_abs_dead_tup ?? null },
       { name: 'bloat_vacuum_ineffective_count', val: bloat_vacuum_ineffective_count ?? null },
+      // V104/V105: fiziksel sisme MB esigi ve kural bazli degerlendirme araligi.
+      // getExistingColumns() filtresi sayesinde migration uygulanmamis kurulumda
+      // sessizce atlanirlar.
+      { name: 'space_bloat_min_wasted_mb', val: space_bloat_min_wasted_mb ?? null },
+      { name: 'evaluation_interval_minutes', val: evaluation_interval_minutes ?? null },
     ];
 
     const active = cols.filter(c => existing.has(c.name));
@@ -317,6 +323,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       is_enabled, cooldown_minutes, auto_resolve,
       title_template, message_template,
       bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count,
+      space_bloat_min_wasted_mb, evaluation_interval_minutes,
       notification_channel_ids
     } = req.body;
 
@@ -352,6 +359,11 @@ router.put('/:id', async (req: Request, res: Response) => {
       { name: 'bloat_min_rows', val: bloat_min_rows ?? null },
       { name: 'bloat_abs_dead_tup', val: bloat_abs_dead_tup ?? null },
       { name: 'bloat_vacuum_ineffective_count', val: bloat_vacuum_ineffective_count ?? null },
+      // V104/V105: fiziksel sisme MB esigi ve kural bazli degerlendirme araligi.
+      // getExistingColumns() filtresi sayesinde migration uygulanmamis kurulumda
+      // sessizce atlanirlar.
+      { name: 'space_bloat_min_wasted_mb', val: space_bloat_min_wasted_mb ?? null },
+      { name: 'evaluation_interval_minutes', val: evaluation_interval_minutes ?? null },
     ];
     const active = cols.filter(c => existing.has(c.name));
     const setSql = active.map((c, i) => `${c.name}=$${i + 1}`).join(', ');

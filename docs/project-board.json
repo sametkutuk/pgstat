@@ -3743,6 +3743,84 @@
         "Two further accuracy limits were raised and addressed rather than left implicit: a fillfactor below 100 leaves pages partly empty by design and would have made a healthy fillfactor=70 table look 1.43x bloated, and the heap-only measurement says nothing about TOAST. The first is now divided out, the second is stated in the message.",
         "Honest limits recorded with the customer: this reliably detects large bloat, above roughly 2x, but cannot measure 1.2 to 1.5x, where the accumulated uncertainty from estimated row counts, sampling in reltuples, dropped columns and TOAST distribution can reach 30 percent. The shipped thresholds of 3x and 100 MB sit deliberately above that band."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-043",
+      "order": 57,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Deploy with V105 and confirm from the collector log that the two nightly-data rules no longer appear on every cycle, and that the Alert Rules screen shows their descriptions and the frequency control.",
+      "title": "Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night",
+      "problem": "AlertRuleEvaluator.evaluate() runs on every orchestrator cycle - about every seven seconds in production - and evaluates every enabled rule. That is correct for rules whose data changes in seconds, but the two rules added on 2026-08-31 read data that is collected nightly: stale_statistics reads the settings and table stats, and table_space_bloat runs window functions over the relation size history. Across 25 instances that is roughly 430 non-trivial queries a minute whose result cannot change, against the central database we are otherwise trying to keep small. The customer asked directly whether the frequency is configurable; it was not.",
+      "requirements": [
+        "Evaluation frequency must be configurable per rule, since the right answer depends on how often that rule underlying data changes.",
+        "Leaving it unset must preserve the current behaviour exactly, so no existing rule is silently slowed down.",
+        "The Alert Rules screen must explain each rule in plain language - what it does, how its threshold is derived, what its warning and critical numbers mean, and what it does not cover - because these rules thresholds are not self-explanatory.",
+        "Notifications for these rules must carry only a title and a short summary, with the detail read in the UI, matching what was agreed for the granular rules."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "control.alert_rule carries evaluation_interval_minutes, null meaning every cycle, and the evaluator skips a rule whose interval has not elapsed since its last evaluation.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "stale_statistics is set to hourly and table_space_bloat to every six hours, both above the nightly cadence of their data but frequent enough to catch a missed or manually triggered collection.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "The interval is exposed through the API and offered in the Alert Rules form with an explanation of when to change it.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Both new rules carry a full description covering purpose, how the threshold is computed, what the warning and critical values mean, and the accuracy limits; the evaluation-type picker describes them too.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "stale_statistics notifies through the deferred path with a one-line summary rather than sending its whole rendered body, which is what table_space_bloat and the granular rules already do.",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "mvn test passes (85), tsc is clean for api and ui, and the ui build succeeds.",
+          "status": "done"
+        },
+        {
+          "id": "AC7",
+          "text": "Live verification: the collector log stops showing the two rules on every cycle, and the Alert Rules screen renders the descriptions and the frequency control.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "V105: add evaluation_interval_minutes with a positive-value constraint, set it for the two nightly-data rules, and write the operator-facing descriptions into control.alert_rule.description.",
+        "AlertRuleEvaluator: add shouldSkipForInterval consulted before each rule, reading the latest evaluation across instances, and select the new column in loadActiveRules.",
+        "AlertRuleEvaluator.evaluateStaleStatistics: switch to NotifyMode.DEFERRED plus a one-line notifySummary.",
+        "api/src/routes/alertRules.ts: accept and persist evaluation_interval_minutes and space_bloat_min_wasted_mb on create and update.",
+        "ui/src/pages/AlertRules.tsx: describe the two new evaluation types and add the frequency control with guidance."
+      ],
+      "verification_plan": [
+        "mvn -o test; npx tsc --noEmit in api and ui; npx vite build",
+        "Live: watch the collector log for one minute and confirm rule 175 and the space bloat rule no longer appear every cycle."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer asked on 2026-08-31 how often the new alert would fire and whether that is configurable, which exposed that it was not and that both new rules were running their heavy queries every seven seconds for no benefit.",
+        "Same message asked for the rule configuration screen to explain each rule plainly, and for Telegram to stay brief with the detail in the UI. The second turned out to be already true for table_space_bloat but not for stale_statistics, which was still sending its full rendered body."
+      ]
     }
   ]
 }
