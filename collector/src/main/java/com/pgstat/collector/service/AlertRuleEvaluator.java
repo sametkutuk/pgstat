@@ -2024,6 +2024,25 @@ public class AlertRuleEvaluator {
             // Cozulen kayitlar toplanir; tek mesaj halinde bildirilir.
             java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
 
+            // Eski instance-bazli anahtardan kalan alert varsa sessizce kapat.
+            //
+            // V098 bunlari tek seferde temizlemisti, ama tek seferlik bir
+            // migration deploy penceresine karsi savunmasiz: uretimde V098
+            // 10:53:42'de uygulandi, container ise henuz yeniden baslamamisti ve
+            // eski kod 10:54:35'te bir tane daha eski-format alert yazdi —
+            // migration onu goremezdi, cunku daha yoktu. Sonuc, hicbir kod
+            // yolunun artik guncellemedigi, kendiliginden de kapanamayan bir
+            // alert oldu.
+            //
+            // Burada her degerlendirmede kontrol edilerek sorun sinif olarak
+            // ortadan kalkiyor. Bildirim gonderilmiyor: bu bir cozulme degil,
+            // format degisikliginin artiginin temizlenmesi. Gercek sorun devam
+            // ediyorsa zaten kayit bazli anahtariyla ayrica acilir.
+            String legacyKey = "rule:" + ruleId + ":instance:" + instancePk;
+            if (alertRepo.resolveDeferred(legacyKey) != null) {
+                log.info("Eski format alert kapatildi (kayit bazli anahtara gecis artigi): {}", legacyKey);
+            }
+
             if (exceeding.isEmpty()) {
                 // exceeding bos olmasi iki sebepten olabilir: (A) gercekten esigi
                 // asan kayit yok — sorun duzelmis, resolve edilmeli, ya da (B) bu
