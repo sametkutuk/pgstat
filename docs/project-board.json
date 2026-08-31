@@ -3663,7 +3663,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from.",
+      "next_action": "On hold. The rule is disabled under PGSTAT-P0-046 after an external review found the size and row estimate describe different moments and that table history is matched by name; re-enable only after those are fixed.",
       "title": "Nothing detects a table that is physically bloated while its dead-tuple count stays low",
       "problem": "The dead_tuple_ratio rule counts dead tuples, which catches autovacuum falling behind but is structurally blind to the opposite case: autovacuum keeping up, clearing dead tuples, while the space they freed is never reused. In that case the dead-tuple count is low by construction. On 2026-08-31 the customer ran vacuumdb -afvz and reclaimed 8 GB. The largest single contributor was agg.pg_table_stat_hourly_202608, which went from 2432 MB to 41 MB at an unchanged row count - 98 percent of it was free space, roughly 20 KB per row for rows that actually occupy 338 bytes. The rollup rewrites each hour bucket about twelve times an hour, so that partition took 1,126,780 updates across 121,162 rows. dead_tuple_ratio did fire, but only at 20.00 percent, exactly on the threshold, and it prescribed VACUUM ANALYZE - a command that cannot return this space. An operator following that advice would have seen no change.",
       "requirements": [
@@ -3757,7 +3757,8 @@
         "Same run confirmed the cost of the manual workaround: collection dropped from about 48,000 rows an hour to 12,119 during the run, because VACUUM FULL takes an ACCESS EXCLUSIVE lock on every table.",
         "The customer questioned whether a threshold built on reltuples would hold up, and it would not have. reltuples only advances on VACUUM or ANALYZE, so a table that doubled in rows between analyses would have shown twice the bytes per row and been reported at 2x bloat while being perfectly healthy. That is not hypothetical here: 4,478 of 12,116 observed tables have never been analyzed. The fix uses the insert and delete deltas already collected, which need no new collection.",
         "Two further accuracy limits were raised and addressed rather than left implicit: a fillfactor below 100 leaves pages partly empty by design and would have made a healthy fillfactor=70 table look 1.43x bloated, and the heap-only measurement says nothing about TOAST. The first is now divided out, the second is stated in the message.",
-        "Honest limits recorded with the customer: this reliably detects large bloat, above roughly 2x, but cannot measure 1.2 to 1.5x, where the accumulated uncertainty from estimated row counts, sampling in reltuples, dropped columns and TOAST distribution can reach 30 percent. The shipped thresholds of 3x and 100 MB sit deliberately above that band."
+        "Honest limits recorded with the customer: this reliably detects large bloat, above roughly 2x, but cannot measure 1.2 to 1.5x, where the accumulated uncertainty from estimated row counts, sampling in reltuples, dropped columns and TOAST distribution can reach 30 percent. The shipped thresholds of 3x and 100 MB sit deliberately above that band.",
+        "Disabled on 2026-08-31 before it ever produced an alert. An external review of the shipped SQL found the fillfactor allowance subtracted twice (fixed), the numerator and denominator drawn from different moments, and table history keyed by name so a rename splits it and a reused name merges two tables. The first two of those were introduced by this task; the third is a property of fact.pg_relation_size_snapshot that this task relied on without checking."
       ]
     },
     {
@@ -3988,7 +3989,7 @@
       "priority": "P1",
       "workstream": "ui",
       "status": "planned",
-      "next_action": "Design is at r4. Send sections 4.3, 4.4 and 8 for the narrow final review - the two detector contracts and the data model - then implement in the order given in section 12.",
+      "next_action": "Design is at r5. Implementation cannot start on the wasted-space detector until PGSTAT-P0-046 supplies identity and an as-of row estimate; the scope and signal model and the eligibility gate can be built now.",
       "title": "Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand",
       "problem": "Alerts answer whether something needs acting on now: a threshold is crossed, a record opens, a notification goes out, it resolves. Most of what monitoring actually surfaces does not fit that shape. Over the week of 2026-08-27 the following were all produced by hand-written SQL and none of them belongs in an alert: that reltuples read 30,404,328 while n_live_tup read 0 and every ratio built on it was therefore wrong; that a partition held 11,740 rows in 637 MB; that pg_index_stat_delta produces about 3 GB a day; that 4,478 of 12,116 observed tables have never been analyzed; that one table took nine updates per row; and that agg.pg_table_stat_hourly_202608 was 98 percent empty space, which the dead-tuple ratio could not see. None of these should wake anyone. All of them change a decision. Today they are invisible unless someone goes looking.",
       "requirements": [
@@ -4067,7 +4068,84 @@
         "Recorded limitation: the second reviewer could not open r2 and assessed navigation from the change summary alone, so the catalogue, data model and projection gates introduced in r2 have not yet had a second reading.",
         "Third review round answered the three open questions and two of them changed the schema. EXPECTED must not be permanent: a disposition is bound to the evidence hash and the detector logic version it was given under, plus a review_after date, and is reopened by material worsening, a logic change or expiry - but not by a text-only change, which is why the detector version is now split into logic and cosmetic. The weekly digest settles as UI-as-source-of-truth with an optional weekly email and explicitly no Telegram, keeping findings out of the on-call channel. The backtest gate became measurable: rolling-origin median error at most 50 percent of the predicted change, at least three windows, direction consistency, configurable per detector version.",
         "The reviewer also reordered implementation, putting data reliability before wasted space so that bytes-per-row is never published on unreliable row estimates. That is exactly the failure that occurred in production this week under PGSTAT-P0-041, where n_live_tup of 0 produced a reported 100 percent bloat against a true 1.7 percent, so the ordering is adopted as written.",
-        "ops.finding_evaluation_run was added for the same reason the nightly snapshot job was instrumented under PGSTAT-P0-045: a run that is not recorded cannot have its cost measured, and that gap is what made an earlier question unanswerable."
+        "ops.finding_evaluation_run was added for the same reason the nightly snapshot job was instrumented under PGSTAT-P0-045: a run that is not recorded cannot have its cost measured, and that gap is what made an earlier question unanswerable.",
+        "Fourth review round was the first with access to the code itself, and it found a shipped bug. The fillfactor allowance was being subtracted twice: the baseline is drawn from the table own past observations under the same fillfactor regime and therefore already includes the space left free by design, so the 100/fillfactor multiplier removed it again and under-reported bloat - a genuine threefold case would have read 2.1. Verified in the query and fixed.",
+        "Two further problems could not be fixed in place because they need collection we do not have: the numerator is a size at snapshot time while the denominator is reltuples plus deltas after it, with reltuples itself last refreshed at some earlier vacuum, so the halves of the ratio describe different moments; and the size snapshot identifies tables by name with no relid, so a rename splits a history and a reused name merges two tables. The shipped rule was disabled rather than left to publish results on Wednesday whose correctness is in doubt.",
+        "Design corrections applied: the claim that the ratio is a difference between two measurements rather than an estimate is withdrawn, since the denominator is a catalog estimate; the historical minimum is no longer described as proof of a compact state; the 30 percent error band is removed as it was a guess rather than a backtest result; row width and schema change are added to what the detector does not claim; reltuples of zero is distinguished from unknown; the unmeasured cause PostgreSQL did not find it worth analyzing is removed, the same correction made earlier to the autovacuum finding; and the growth observation is no longer suppressed by the row-eligibility gate because it rests on the physical size series.",
+        "Data model reworked: the evaluation run becomes ops.job_run plus a per-detector-per-scope table so a finding is never closed on a scope that failed or was skipped, which is the same protection hasRecentData provides in the bloat alert; a signal-state table gives the hysteresis in section 6 somewhere to live; evidence becomes immutable revisions with compare-and-set on user action so a decision is never recorded against evidence the user did not see; and dispositions bind to finding_id and episode_no so a finding returning months later does not inherit an old EXPECTED."
+      ]
+    },
+    {
+      "id": "PGSTAT-P0-046",
+      "order": 61,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Add relid and a row-estimate as-of anchor to the size snapshot, let enough history accumulate under the new identity, then re-enable the rule.",
+      "title": "The physical bloat rule compares a size and a row count from different moments, and matches table history by name",
+      "problem": "An external review of the shipped table_space_bloat rule found three correctness problems, one fixed immediately and two needing new collection. First, fillfactor was subtracted twice: the historical baseline is drawn from the table own past observations, which were taken under the same fillfactor regime and therefore already include the space left free by design, so multiplying the expectation by 100/fillfactor removed that allowance a second time and under-reported bloat - a genuine threefold case would have been reported as 2.1. That is fixed. Second, the numerator is table_size_bytes at snapshot time T while the denominator is reltuples plus deltas accumulated after T; reltuples itself was last refreshed at whatever VACUUM or ANALYZE preceded T, possibly months earlier, so staleness before T is never corrected and the two halves of the ratio describe different moments. Third, fact.pg_relation_size_snapshot identifies tables by schema and name and carries no relid, so a rename splits a history and a drop-and-recreate or a reused name merges two different tables into one - meaning the historical minimum can be another table measurement entirely.",
+      "requirements": [
+        "A size observation and the row estimate it is divided by must describe the same moment, with a verified continuous delta chain back to a known anchor; where no anchor exists the detector must stay silent rather than divide across time.",
+        "Table history must be keyed by identity rather than name, so a rename does not split a history and a reused name does not merge two tables.",
+        "The historical baseline must not be claimed as proof of a compact state; it is the densest comparable observation, and comparability must be bounded by the schema and fillfactor regime it was measured under.",
+        "The rule stays disabled until both open problems are addressed and enough history exists under the new identity, since a result that cannot be trusted is worse than no result."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "The fillfactor multiplier is removed from the expectation, since the baseline already embodies the regime it was measured under.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The rule is disabled and its description records why, noting that it had produced no alert so nothing is being retracted.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "fact.pg_relation_size_snapshot carries relid, and the detector matches history on identity rather than name.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "Each size observation carries an as-of row estimate, or the detector declines to compute a ratio for that observation.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "fillfactor is recorded per observation so a regime change splits the baseline rather than silently invalidating the comparison.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "The rule is re-enabled only after enough history has accumulated under the new identity, and the first results are checked against a manual measurement.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Migration: add relid and fillfactor to fact.pg_relation_size_snapshot; keep name columns for display.",
+        "NightlySnapshotCollector and the intra-day watched-table path: select and store relid and the effective fillfactor.",
+        "Detector: match history on (instance_pk, dbid, relid); require the baseline and the current observation to share a fillfactor regime; require a verified delta chain between the row-estimate anchor and the size observation, and skip the record otherwise.",
+        "Re-enable the rule and compare its first output against a manual check on a known table."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: after re-enabling, compare a reported ratio against a manual pgstattuple or size-versus-count check on one table, and confirm a renamed table does not inherit another history."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "External review on 2026-08-31 read the shipped SQL rather than the design and identified all three problems with file and line references. The fillfactor double-subtraction was verified directly in the query before being fixed.",
+        "The rule was disabled rather than left armed. It had not yet produced a single alert, because it needs two nightly snapshots and the first populated one had not run, so disabling withdraws nothing - it only prevents publishing results whose correctness is known to be in doubt.",
+        "This also invalidates the claim made in V102 and V103 that the physical bloat measurement needed no new collection. Identity and an as-of row estimate both require collecting fields we do not have."
       ]
     }
   ]

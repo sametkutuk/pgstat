@@ -842,10 +842,24 @@ public class AlertRuleEvaluator {
             "   where d.instance_pk = ? and d.sample_ts > l2.snapshot_ts" +
             "   group by d.dbid, d.schemaname, d.relname" +
             ")," +
-            // FILLFACTOR (V104): 100'un altindaki deger, sayfalarin bir kismini
-            // HOT update icin BILEREK bos birakir. Dusulmezse tasarim geregi bos
-            // alan sisme sanilir — fillfactor=70 olan saglikli bir tablo 1.43
-            // kat sismis gorunurdu.
+            // FILLFACTOR — carpan olarak UYGULANMAZ (V108 duzeltmesi).
+            //
+            // V104'te "fillfactor=70 olan saglikli bir tablo 1.43 kat sismis
+            // gorunur" gerekcesiyle expected_bytes'a (100/fillfactor) carpani
+            // eklenmisti. Bu YANLISTI: taban (min_bytes_per_row) tablonun kendi
+            // gecmis gozlemlerinden geliyor ve o gozlemler zaten ayni fillfactor
+            // rejiminde alindigi icin tasarim geregi bos alani ICERIYOR. Carpan,
+            // ayni payi ikinci kez dusuyordu.
+            //
+            // Sonuc: sismeyi EKSIK raporluyorduk. fillfactor=70 bir tabloda
+            // gercek 3 kat sisme 2.1 kat olarak cikardi (dis inceleme,
+            // 2026-08-31).
+            //
+            // Deger yine seciliyor: mesajda gosteriliyor ve tabanin hangi
+            // rejimde olculdugu bilinmedigi surece bu bir SINIR — fillfactor
+            // taban olusduktan sonra degistiyse karsilastirma gecersizdir.
+            // Rejim degisimini tespit edebilmek icin fillfactor'un her boyut
+            // gozlemiyle birlikte saklanmasi gerekiyor (PGSTAT-P0-046).
             "ff as (" +
             "  select dbid, relid, schemaname, relname," +
             "         coalesce(fillfactor, 100) as fillfactor" +
@@ -857,13 +871,13 @@ public class AlertRuleEvaluator {
             "       greatest(l.reltuples + coalesce(g.net_rows, 0), 1) as est_rows," +
             "       coalesce(ff.fillfactor, 100) as fillfactor," +
             "       c.observation_count," +
-            "       (greatest(l.reltuples + coalesce(g.net_rows,0), 1) * c.min_bytes_per_row" +
-            "         * (100.0 / coalesce(ff.fillfactor, 100)))::bigint as expected_bytes," +
+            "       (greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
+            "         * c.min_bytes_per_row)::bigint as expected_bytes," +
             "       (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)))::bigint as wasted_bytes," +
+            "         * c.min_bytes_per_row)::bigint as wasted_bytes," +
             "       (l.table_size_bytes::numeric" +
             "         / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "           * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)), 0))::numeric" +
+            "           * c.min_bytes_per_row, 0))::numeric" +
             "         as bloat_ratio," +
             "       l.snapshot_ts" +
             "  from latest l" +
@@ -878,9 +892,9 @@ public class AlertRuleEvaluator {
             "   and c.min_bytes_per_row > 0" +
             "   and l.table_size_bytes::numeric" +
             "       / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)), 0) >= ?" +
+            "         * c.min_bytes_per_row, 0) >= ?" +
             "   and (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100))) >= ? * 1024 * 1024" +
+            "         * c.min_bytes_per_row) >= ? * 1024 * 1024" +
             " order by wasted_bytes desc" +
             " limit " + PER_RECORD_QUERY_LIMIT,
             instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, instancePk, instancePk,

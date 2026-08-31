@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 60 |
+| Total tasks | 61 |
 | Done tasks | 32 |
-| Remaining tasks | 28 |
+| Remaining tasks | 29 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,13 +34,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 32 |
 | in_progress | 2 |
-| planned | 26 |
+| planned | 27 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 11 |
+| alerting | 12 |
 | collector | 4 |
 | contracts | 2 |
 | governance | 5 |
@@ -112,11 +112,12 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it. |
 | 54 | PGSTAT-P1-014 | P1 | alerting | done | Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 55 | PGSTAT-P0-041 | P0 | alerting | done | Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
-| 56 | PGSTAT-P0-042 | P0 | alerting | planned | Nothing detects a table that is physically bloated while its dead-tuple count stays low | Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from. |
+| 56 | PGSTAT-P0-042 | P0 | alerting | planned | Nothing detects a table that is physically bloated while its dead-tuple count stays low | On hold. The rule is disabled under PGSTAT-P0-046 after an external review found the size and row estimate describe different moments and that table history is matched by name; re-enable only after those are fixed. |
 | 57 | PGSTAT-P0-043 | P0 | alerting | done | Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 58 | PGSTAT-P0-044 | P0 | retention | done | Retention purge runs on every orchestrator cycle although its cutoffs only change once a day | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot. |
-| 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r4. Send sections 4.3, 4.4 and 8 for the narrow final review - the two detector contracts and the data model - then implement in the order given in section 12. |
+| 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r5. Implementation cannot start on the wasted-space detector until PGSTAT-P0-046 supplies identity and an as-of row estimate; the scope and signal model and the eligibility gate can be built now. |
+| 61 | PGSTAT-P0-046 | P0 | alerting | planned | The physical bloat rule compares a size and a row count from different moments, and matches table history by name | Add relid and a row-estimate as-of anchor to the size snapshot, let enough history accumulate under the new identity, then re-enable the rule. |
 
 ## Dependency Map
 
@@ -182,6 +183,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-044 | - | - |
 | PGSTAT-P0-045 | - | - |
 | PGSTAT-P1-015 | - | - |
+| PGSTAT-P0-046 | - | - |
 
 ## Closure Rules
 

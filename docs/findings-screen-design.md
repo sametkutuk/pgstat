@@ -1,14 +1,15 @@
 # Bulgular (Findings) — Tasarım
 
-**Durum:** r4 — kodlamaya hazır, dar kapsamlı son inceleme bekliyor
+**Durum:** r5 — dar inceleme uygulandı; §8 ve §4.4 için yeni toplama gerekiyor
 **Tarih:** 2026-08-31
-**Değişiklik:** üç tur dış inceleme uygulandı. r1→r2 §11, r2→r3 §11b,
-r3→r4 §11c.
+**Değişiklik:** dört tur dış inceleme uygulandı. r1→r2 §11, r2→r3 §11b,
+r3→r4 §11c, r4→r5 §11d.
 
-> **Son inceleme için odak (dar kapsam):** §4.3 ve §4.4 dedektörlerinin
-> "ölçtüğünü söyle" sözleşmesi, ve §8 veri modeli. Genel tasarımın
-> yeniden tartışılmasına gerek yok. İlk turda yakalanan hata
-> (`n_dead_tup / autovacuum_count`) bu kısa kontrolün değerini kanıtladı.
+> **Dar inceleme sonucu:** §4.3 küçük düzeltmelerle geçti. §4.4 ve §8
+> revize edildi — ikisi de kodlamadan önce yeni veri toplama gerektiriyor.
+> İnceleme ayrıca **canlıdaki bir hatayı** buldu: table_space_bloat
+> alarmı fillfactor payını iki kez düşüyordu. Düzeltildi ve kural, kalan
+> iki sorun giderilene kadar **devre dışı bırakıldı** (PGSTAT-P0-046).
 
 ---
 
@@ -199,47 +200,77 @@ gözlendiğinde** yapılabilir.
 > tablolarda satır sayısına dayanan hiçbir hesap yapılamıyor.
 
 **Ölçtüğü:** `last_analyze` ve `last_autoanalyze`'ın ikisinin de boş
-olduğu, `reltuples`'ın bilinmediği (`-1` ya da `0`) tablo sayısı; ve o
-veritabanının `stats_reset` tarihi.
+olduğu **ve** `reltuples`'ın **bilinmediği** (`NULL` ya da `-1`) tablo
+sayısı; ve o veritabanının `stats_reset` tarihi.
+
+> `reltuples = 0` **bilinmiyor değildir** — tablo gerçekten boş olabilir.
+> Ayrı ele alınır.
 
 **Söylemediği:**
-- Bu tabloların sorunlu olduğunu. Çoğu hiç değişmediği için analiz
-  edilmemiştir; PostgreSQL onları analiz etmeye değer bulmamıştır.
+- Bu tabloların sorunlu olduğunu. Çoğu değişmediği için analiz
+  edilmemiştir. *(Önceki taslaktaki "PostgreSQL analiz etmeye değer
+  bulmamıştır" ifadesi **kaldırıldı** — sebep ölçülmüyor.)*
 - Sıfırlamadan **önce** analiz edilip edilmediğini. `last_analyze`
-  sıfırlamada silinir, yani "hiç" değil "sıfırlamadan beri" demektir.
+  sıfırlamada silinir; "hiç" değil "sıfırlamadan beri" demektir.
+  *(`stats_reset` bu zaman damgaları için kesin bir alt sınır olarak
+  sunulmaz — yalnızca bilinen en erken referanstır.)*
 - İstatistiklerin ne kadar yanlış olduğunu — yalnızca **düzeltilmemiş**
   olduğunu.
 
-**Bu bulgu diğerlerini bastırır.** Satır sayısına dayanan bulgular
-(§4.1, §4.2, §4.4) yalnızca `reltuples` bilinen tablolarda hesaplanabilir
-— ölçümde 12.116'nın **7.638'i**, yani ~%63. Kapsam her kartta yazılır ve
-güvenilmez satır tahmini olan tablolarda diğer dedektörler **otomatik
-susar**.
+### Satır uygunluk kapısı
+
+Satır sayısına dayanan bulgular (§4.2, §4.4) yalnızca `reltuples` bilinen
+tablolarda hesaplanabilir — ölçümde 12.116'nın **7.638'i**, ~%63.
+
+İki nokta:
+
+1. **Kapı tablo bazında çalışır** ve bu bulgunun *yayımlanmasından
+   bağımsızdır.* Eşik aşılmasa bile, satır tahmini güvenilmez **tek bir
+   tablo** §4.2/§4.4'e girmez.
+2. **§4.1 bastırılmaz.** Büyüme gözlemi fiziksel boyut serisine dayanır,
+   satır tahminine değil. Onu susturmak gereksiz bilgi kaybı olurdu.
+
+Kapsam her kartta yazılır: *"7.638/12.116 tablo değerlendirildi"*.
 
 #### 4.4 Kaynak israfı · **V1, ikinci yazılacak**
 
 > `fact.pgss_delta_20260820` 11.740 satırı 637 MB'da tutuyor. Satır başına
 > ~54 kB; aynı tablonun geçmişte ölçülen en sıkışık hâli ~870 B/satır.
 
-**Ölçtüğü:** `table_size_bytes / satır_sayısı` oranının, **aynı tablonun**
-kendi geçmişindeki en düşük değerine bölümü. İki ölçüm arasındaki fark;
-tahmin değil.
+**Ölçtüğü:** **tahmini satır sayısıyla normalize edilmiş fiziksel heap
+boyutu karşılaştırması.** Aynı tablonun geçmişindeki **en yoğun
+karşılaştırılabilir gözleme** oranlanır.
 
-Satır sayısı `reltuples + Σ(ins_delta − del_delta)` ile düzeltilir —
-`reltuples` yalnızca `VACUUM`/`ANALYZE`'da güncellendiği için, aradaki
-büyüme aksi hâlde şişme sanılır.
+> "İki ölçüm arasındaki fark, tahmin değil" ifadesi **kaldırıldı** — payda
+> (`reltuples`) katalogdaki bir **tahmin**, ölçüm değil.
+
+> "Tarihsel minimum = sıkışık hâl" varsayımı da **kaldırıldı**. Minimum,
+> tablonun sıkışık olduğunu **kanıtlamaz**; yalnızca gözlemlediğimiz en
+> yoğun hâldir. Karşılaştırılabilirlik şema ve `fillfactor` rejimiyle
+> sınırlıdır; rejim değişince taban bölünmelidir.
+
+**Ön koşullar (hiçbiri sağlanmazsa dedektör susar):**
+- Boyut gözlemi ve satır tahmini **aynı ana** ait olmalı; doğrulanmış,
+  kesintisiz bir delta zinciri gerekli
+- Geçmiş **kimlikle** eşleşmeli (`relid`), adla değil
+- Taban ve şimdiki gözlem **aynı `fillfactor` rejiminde** olmalı
 
 **Söylemediği:**
-- **TOAST ve indeks şişmesini.** Ölçüm yalnızca heap'i (`table_size_bytes`)
-  kapsar.
-- `fillfactor` ayarlıysa boşluğun tasarım gereği olan kısmını — o pay
-  hesaptan düşülür ve mesajda belirtilir.
-- **1.2–1.5 kat aralığında güvenilir bir sayı.** Tahmini satır sayısı,
-  `reltuples` örneklemesi, düşürülmüş kolonlar ve TOAST dağılımı toplamda
-  ~%30 hataya çıkabilir. Eşik bu bandın üstünde tutulur.
-- Tabloyu **hiç sıkışık görmediysek** bir şey söylemez — taban yoksa oran
-  1.0 çıkar ve bulgu üretilmez. Uydurulmuş bir taban yanlış bulgudan daha
-  zararlıdır.
+- **TOAST ve indeks şişmesini.** Yalnızca heap (`table_size_bytes`).
+- **Satır genişliği değişiminden gelen büyümeyi.** Şema değişikliği, veri
+  dağılımının kayması ya da daha geniş değerler yazılması da bayt/satır'ı
+  büyütür — bu şişme değildir.
+- **Küçük oranlarda güvenilir bir sayı.** Tahmini satır sayısı,
+  `reltuples` örneklemesi, düşürülmüş kolonlar ve TOAST dağılımı hata
+  biriktirir. *(Önceki taslaktaki "~%30" rakamı **kaldırıldı** — backtest
+  sonucu değildi, tahmindi. Gerçek band ilk backtest ile ölçülecek ve
+  eşik ona göre konacak.)*
+- Tabloyu **karşılaştırılabilir bir hâlde hiç görmediysek** hiçbir şey.
+  Uydurulmuş bir taban, yanlış bulgudan daha zararlıdır.
+
+> **Durum:** bu dedektörün canlıdaki öncülü (`table_space_bloat` alarmı)
+> yukarıdaki ilk iki ön koşulu sağlamadığı için **devre dışı bırakıldı**
+> (PGSTAT-P0-046). Bulgu sürümü, o eksikler giderilmeden yazılmayacak.
 
 #### 4.5 Autovacuum yetişemiyor
 
@@ -359,14 +390,27 @@ Teslimat kodu sonraya kalabilir; şema ve üretim önce gelir.
 ## 8. Veri modeli
 
 ```
-ops.finding_evaluation_run       -- her degerlendirme kosusu
-  run_id              bigint pk
-  started_at          timestamptz
-  finished_at         timestamptz null
-  status              text        -- running | success | partial | failed
-  detectors_ok        int
-  detectors_failed    int
+-- Ust kayit MEVCUT ops.job_run kullanilir (job_type='finding_evaluation');
+-- ayri bir kosu tablosu acmiyoruz, diger job'larla ayni yerde gorunsun.
+
+ops.finding_evaluation_scope     -- dedektor x kapsam basina SONUC
+  scope_id            bigint pk
+  job_run_id          bigint      -- fk -> ops.job_run
+  finding_code        text
+  detector_logic_version int
+  instance_pk         bigint
+  dbid                bigint null
+  status              text        -- success | failed | skipped
+  skip_reason         text null   -- 'insufficient_history' | 'no_anchor' | ...
+  data_cutoff_at      timestamptz -- bu kapsamda hangi ana kadar veri goruldu
   error_text          text null
+
+ops.finding_signal_state         -- histerezis; bulgudan AYRI
+  finding_key         text pk
+  positive_streak     int
+  negative_streak     int
+  pending_since       timestamptz null
+  last_scope_id       bigint
 
 ops.finding
   finding_id          bigint pk
@@ -396,21 +440,68 @@ ops.finding
   evaluation_run_id   bigint      -- fk -> finding_evaluation_run
   ended_at            timestamptz null
 
+ops.finding_evidence_revision    -- kanit IMMUTABLE, uzerine yazilmaz
+  revision_id         bigint pk
+  finding_id          bigint
+  evidence_json       jsonb
+  content_hash        text        -- canonical icerik hash'i
+  decision_fingerprint text       -- dedektor uretimli: ANLAMLI degisim
+  created_at          timestamptz
+
 ops.finding_disposition          -- kullanici karari AYRI tabloda
-  finding_key                     text
+  finding_id                      bigint  -- EPISODE'a bagli, finding_key'e degil
+  episode_no                      int
   user_id                         text
   state                           text  -- UNSEEN|REVIEWED|EXPECTED|SNOOZED
   note                            text null
-  -- Kararin NEYE dayandigi: bunlar degisince karar gecersizlesir
-  detector_compatibility_version  int   -- hangi mantik surumunde verildi
-  evidence_hash_at_disposition    text  -- hangi kanitla verildi
-  review_after                    timestamptz  -- en gec ne zaman tekrar sorulacak
+  -- Kararin NEYE dayandigi
+  detector_compatibility_version  int
+  evidence_revision_id            bigint  -- hangi kanit revizyonunda verildi
+  decision_fingerprint_at_disposition text
+  review_after                    timestamptz
   invalidated_at                  timestamptz null
   invalidation_reason             text null    -- 'evidence_changed'
                                                -- 'detector_logic_changed'
                                                -- 'expired'
-  primary key (finding_key, user_id)
+  primary key (finding_id, episode_no, user_id)
 ```
+
+### Bütünlük kuralları
+
+- `unique(finding_key, episode_no)`
+- Bulgu başına **tek aktif episode**
+- `data_cutoff_at` **monoton** olmalı (geriye giden kapsam kabul edilmez)
+- Kapsam bazlı **transaction/advisory lock** — eşzamanlı koşular
+  birbirinin streak'ini bozmasın
+
+### Kısmi koşuda yaşam döngüsü
+
+Bir bulgunun **görülmemiş olması**, kaybolduğu anlamına gelmez —
+değerlendirilmemiş de olabilir.
+
+**Yalnızca `status='success'` olan kapsam**, pozitif/negatif streak'i
+ilerletebilir ve bulgu kapatabilir. `failed` ve `skipped` kapsamlar
+bulguyu `STALE` bırakır.
+
+Bu, alarm tarafındaki `hasRecentData` korumasının aynı sınıfı: toplama
+boşluğuna denk gelen bir tur, %99 bloat'lı bir tabloyu yanlışlıkla
+"düzeldi" saymıştı (2026-08-21).
+
+### Kullanıcı kararı neden `finding_id + episode_no`
+
+`finding_key`'e bağlansa, aylar sonra **yeni bir episode** olarak dönen
+bulgu eski `EXPECTED` kararını miras alırdı — oysa §6 dönüşü yeni episode
+olarak tanımlıyor. İkisi çelişirdi.
+
+### Kanıt neden immutable
+
+`evidence_json` üzerine yazılırsa, kullanıcının **neye** karar verdiği
+kaybolur. Her değerlendirme yeni bir `finding_evidence_revision` yazar;
+karar `evidence_revision_id` ile bağlanır.
+
+Kullanıcı eylemi **compare-and-set**: istemci hangi revizyonu gördüğünü
+gönderir; kanıt o arada değiştiyse **409** döner ve kullanıcı güncel
+kanıtı görür. Aksi hâlde eski kanıta bakarak "beklenen" işaretlenebilir.
 
 Notlar:
 - `severity_hint` **kaldırıldı** — yerine `potential_impact` ile sıralama.
@@ -529,13 +620,22 @@ yayımlanmamalı.** Bu, bu hafta canlıda yaşadığımız hatanın aynısı —
 `n_live_tup` 0 iken %100 bloat raporlandı, gerçek oran %1.7'ydi
 (PGSTAT-P0-041). Dedektörler o hatayı tekrarlamamalı.
 
-1. **Şema ve koşu modeli** — `ops.finding`, `ops.finding_disposition`,
-   `ops.finding_evaluation_run`
-2. **Veri güvenilirliği dedektörü** (§4.3)
-3. **Kapsam/güven kapısı** — bu dedektörün diğerlerini bastırma mekanizması
-4. **Kaynak israfı dedektörü** (§4.4)
+1. **Kapsam ve sinyal modeli** — `ops.finding`,
+   `ops.finding_evaluation_scope`, `ops.finding_signal_state`,
+   `ops.finding_evidence_revision`, `ops.finding_disposition`
+2. **§4.3 uygunluk kapısı** — tablo bazlı satır-tahmini güvenilirliği
+3. **§4.4 için yeni kimlik ve zaman ankrajlı toplama** — `relid`,
+   `fillfactor` ve as-of satır tahmini (PGSTAT-P0-046 ile aynı iş)
+4. **Backtest** — eşik gerçek veriyle kalibre edilir
+5. **§4.4 yayını** — ancak yukarıdakiler bittikten sonra
 
 Sonraki dedektörler (§4.1, §4.2, §4.5, §4.6) bu iskelet oturduktan sonra.
+
+> Sıra r4'te "şema → §4.3 → kapı → §4.4" idi. Dar inceleme, §4.4'ün
+> **yeni veri toplama gerektirdiğini** ve backtest yapılmadan
+> yayımlanmaması gerektiğini gösterdi; 3. ve 4. adımlar bu yüzden araya
+> girdi. Aynı eksikler canlıdaki `table_space_bloat` alarmında da vardı ve
+> o kural devre dışı bırakıldı.
 
 ## 13. Hâlâ açık
 
@@ -567,3 +667,32 @@ Sonraki dedektörler (§4.1, §4.2, §4.5, §4.6) bu iskelet oturduktan sonra.
 
 *(r1'de 12.116 sayısı instance başına gibi okunabiliyordu — bu toplam
 sayıdır.)*
+
+## 11d. r4'ten r5'e ne değişti
+
+Dördüncü tur, ilk kez **kodun kendisine** erişerek yapıldı ve sevk edilmiş
+bir hatayı buldu.
+
+| Değişiklik | Sebep |
+|---|---|
+| **Canlıdaki fillfactor hatası düzeltildi** | Taban zaten aynı rejimde ölçüldüğü için tasarım payını içeriyordu; `(100/fillfactor)` çarpanı onu ikinci kez düşüyor ve şişmeyi **eksik** raporluyordu (3 kat → 2.1 kat) |
+| **`table_space_bloat` alarmı devre dışı** | Boyut/satır zaman uyumsuzluğu ve ad-tabanlı geçmiş eşleşmesi giderilene kadar (PGSTAT-P0-046) |
+| §4.4'te **"iki ölçüm farkı, tahmin değil"** kaldırıldı | Payda (`reltuples`) katalogda bir tahmin |
+| §4.4'te **"tarihsel minimum = sıkışık hâl"** kaldırıldı | Minimum bunu kanıtlamaz; "en yoğun karşılaştırılabilir gözlem" |
+| §4.4'e **üç ön koşul** eklendi (zaman ankrajı, kimlik, fillfactor rejimi) | Hiçbiri sağlanmazsa dedektör susmalı |
+| §4.4'ten **"~%30 hata bandı"** kaldırıldı | Backtest sonucu değildi, tahmindi |
+| §4.4'e **satır genişliği/şema değişimi** eklendi | O da bayt/satır'ı büyütür ve şişme değildir |
+| §4.3'te `reltuples = 0` ile `NULL/-1` **ayrıldı** | Sıfır gerçekten boş tablo olabilir |
+| §4.3'ten **"PostgreSQL değer bulmadı"** kaldırıldı | Sebep ölçülmüyor — autovacuum bulgusunda kaldırdığımızın aynısı |
+| **§4.1 artık bastırılmıyor** | Fiziksel boyut serisine dayanıyor, satır tahminine değil |
+| **Uygunluk kapısı tablo bazlı** ve bulgunun yayımlanmasından bağımsız | Eşik aşılmasa bile güvenilmez tek tablo girmemeli |
+| `finding_evaluation_run` → **`ops.job_run` + `finding_evaluation_scope`** | Kısmi koşuda hangi kapsamın başarılı olduğu bilinmeden bulgu kapatılamaz |
+| **`finding_signal_state`** eklendi | §6 histerezis istiyordu ama saklayacak yer yoktu |
+| **`finding_evidence_revision`** eklendi, kanıt immutable | Üzerine yazılırsa kullanıcının neye karar verdiği kaybolur |
+| Disposition **`finding_id + episode_no`**'ya bağlandı | `finding_key`'e bağlıyken dönen bulgu eski kararı miras alıyordu |
+| **Bütünlük kuralları** yazıldı (tek aktif episode, monoton `data_cutoff_at`, kapsam kilidi) | Eşzamanlı koşular streak'i bozabilirdi |
+| **Kodlama sırasına iki adım girdi** (yeni toplama, backtest) | §4.4 yayını bunlardan önce yapılamaz |
+
+> **Not:** bu tur ilk kez gerçek dosya ve satır referanslarıyla geldi
+> (`AlertRuleEvaluator.java:842`, `V039:23`, `V006:8`). İki kod iddiası da
+> doğrulandı. Önceki turlardaki "erişemedim" sınırı bu turda yoktu.
