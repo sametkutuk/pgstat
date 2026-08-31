@@ -912,6 +912,19 @@ public class AlertRuleEvaluator {
         }
         sb.append(" Satır sayısı tahmindir ve ölçüm yalnızca tabloyu (heap) kapsar —"
             + " TOAST ve indeks şişmesi bu sayıya dâhil değildir.");
+
+        // Boyut GECE olculuyor; rapor edilen sayi 24 saate kadar eski olabilir.
+        // Operator alarmi gorup tabloya baktiginda farkli bir durum bulabilir ve
+        // bunu bilmeden "alarm yanlis" sonucuna varir (musteri sorusu
+        // 2026-08-31: "hangi istatistiklere gore calisiyor ve ne siklikla
+        // toplaniyor").
+        java.time.OffsetDateTime snap = asOffsetDateTime(rec.get("snapshot_ts"));
+        if (snap != null) {
+            long hours = java.time.Duration.between(snap, java.time.OffsetDateTime.now()).toHours();
+            sb.append(String.format(" Boyut ölçümü %s alınan gece anlık görüntüsünden (%d saat önce);"
+                + " o zamandan beri eklenen/silinen satırlar hesaba katıldı.",
+                snap.toLocalDate(), hours));
+        }
         return sb.toString();
     }
 

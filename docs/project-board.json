@@ -3757,7 +3757,8 @@
         "Evaluation frequency must be configurable per rule, since the right answer depends on how often that rule underlying data changes.",
         "Leaving it unset must preserve the current behaviour exactly, so no existing rule is silently slowed down.",
         "The Alert Rules screen must explain each rule in plain language - what it does, how its threshold is derived, what its warning and critical numbers mean, and what it does not cover - because these rules thresholds are not self-explanatory.",
-        "Notifications for these rules must carry only a title and a short summary, with the detail read in the UI, matching what was agreed for the granular rules."
+        "Notifications for these rules must carry only a title and a short summary, with the detail read in the UI, matching what was agreed for the granular rules.",
+        "The rule description must state its data sources and their collection cadence, and the space bloat message must carry the age of the size snapshot, because the figure can be up to a day old and an operator who checks the table without knowing that will conclude the alert is wrong."
       ],
       "acceptance_criteria": [
         {
@@ -3799,6 +3800,11 @@
           "id": "AC8",
           "text": "A rule that throws is still marked as run, so a failing rule does not retry every cycle and multiply the load it is already failing under.",
           "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "Each rule description states which statistics it reads and how often they are collected, and the space bloat alert message names the age of the size snapshot it is based on.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3826,7 +3832,8 @@
         "Customer asked on 2026-08-31 how often the new alert would fire and whether that is configurable, which exposed that it was not and that both new rules were running their heavy queries every seven seconds for no benefit.",
         "Same message asked for the rule configuration screen to explain each rule plainly, and for Telegram to stay brief with the detail in the UI. The second turned out to be already true for table_space_bloat but not for stale_statistics, which was still sending its full rendered body.",
         "Live check immediately after deploy showed the throttle working for stale_statistics - last evaluated 25 minutes earlier against a 60 minute interval - and not working at all for table_space_bloat, whose last-evaluation row did not exist. The interval read control.alert_rule_last_eval, which only fills when an evaluator calls updateLastEval, and evaluateTableSpaceBloat never did. The rule was therefore still running its window-function query every seven seconds: the exact problem the interval was added to fix, reproduced in the newer rule.",
-        "Fixed at the mechanism rather than the call site. last_run_at lives on the rule row and is written in the evaluate loop right after evaluateRule returns, so a future evaluation_type cannot repeat the omission. A rule that throws is marked too, since retrying a failing rule every cycle multiplies the load it is already failing under."
+        "Fixed at the mechanism rather than the call site. last_run_at lives on the rule row and is written in the evaluate loop right after evaluateRule returns, so a future evaluation_type cannot repeat the omission. A rule that throws is marked too, since retrying a failing rule every cycle multiplies the load it is already failing under.",
+        "Customer asked which statistics the alerts read and how often those are collected, and whether that appears in the alert information. It did not. Verified cadences: table statistics every 30 minutes via the db_objects job, autovacuum analyze settings nightly at 03:00 plus a three-hourly hot refresh, and relation sizes only nightly. The last is the binding constraint for space bloat - its measurement can be 24 hours old - so both the rule description and the alert message now say so."
       ]
     }
   ]
