@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 58 |
+| Total tasks | 59 |
 | Done tasks | 22 |
-| Remaining tasks | 36 |
+| Remaining tasks | 37 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -35,14 +35,14 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | codex_verified | 2 |
 | done | 22 |
 | in_progress | 4 |
-| planned | 30 |
+| planned | 31 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
 | alerting | 11 |
-| collector | 3 |
+| collector | 4 |
 | contracts | 2 |
 | governance | 5 |
 | operations | 13 |
@@ -116,6 +116,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 56 | PGSTAT-P0-042 | P0 | alerting | planned | Nothing detects a table that is physically bloated while its dead-tuple count stays low | Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from. |
 | 57 | PGSTAT-P0-043 | P0 | alerting | planned | Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night | Deploy with V105 and confirm from the collector log that the two nightly-data rules no longer appear on every cycle, and that the Alert Rules screen shows their descriptions and the frequency control. |
 | 58 | PGSTAT-P0-044 | P0 | retention | planned | Retention purge runs on every orchestrator cycle although its cutoffs only change once a day | Deploy, then confirm from the collector log that the purge messages appear about once an hour instead of every few seconds. |
+| 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot. |
 
 ## Dependency Map
 
@@ -179,6 +180,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-042 | - | - |
 | PGSTAT-P0-043 | - | - |
 | PGSTAT-P0-044 | - | - |
+| PGSTAT-P0-045 | - | - |
 
 ## Closure Rules
 

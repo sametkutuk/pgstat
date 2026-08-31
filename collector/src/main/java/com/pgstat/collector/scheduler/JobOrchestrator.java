@@ -970,12 +970,33 @@ public class JobOrchestrator {
                     log.info("Nightly snapshot job basliyor...");
                     List<com.pgstat.collector.model.InstanceInfo> readyInstances = inventoryRepo.findAllReady();
                     long snapshotRows = 0;
+                    // ops.job_run kaydi: bu is bugune kadar hicbir yerde
+                    // sureli/kayitli degildi, dolayisiyla "boyut toplamasi ne
+                    // kadar yuk getiriyor" sorusu olculemiyordu (musteri sorusu
+                    // 2026-08-31). Diger job'lar gibi kaydediliyor.
+                    long nightlyJobRunId = -1;
+                    int nightlyOk = 0, nightlyFail = 0;
+                    try {
+                        nightlyJobRunId = opsRepo.startJobRun("nightly_snapshot", props.getHostname());
+                    } catch (Exception ignore) {
+                        // Kayit acilamazsa is yine calissin; olcum kaybi,
+                        // toplamanin kendisinden daha az zararli.
+                    }
                     for (com.pgstat.collector.model.InstanceInfo inst : readyInstances) {
                         try {
                             snapshotRows += nightlySnapshotCollector.collectAll(inst);
+                            nightlyOk++;
                         } catch (Exception e) {
+                            nightlyFail++;
                             log.warn("Nightly snapshot hatasi {}: {}", inst.instanceId(), e.getMessage());
                         }
+                    }
+                    if (nightlyJobRunId > 0) {
+                        try {
+                            opsRepo.finishJobRun(nightlyJobRunId,
+                                nightlyFail == 0 ? "success" : (nightlyOk == 0 ? "failed" : "partial"),
+                                snapshotRows, nightlyOk, nightlyFail, null);
+                        } catch (Exception ignore) { }
                     }
                     log.info("Nightly snapshot tamamlandi: {} instance, {} satir",
                         readyInstances.size(), snapshotRows);

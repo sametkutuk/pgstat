@@ -1,5 +1,7 @@
 package com.pgstat.collector.repository;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -12,6 +14,8 @@ import java.time.OffsetDateTime;
  */
 @Repository
 public class FactRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(FactRepository.class);
 
     private final JdbcTemplate jdbc;
 
@@ -438,6 +442,62 @@ public class FactRepository {
             totalVacuumTimeMsDelta, totalAutovacuumTimeMsDelta,
             totalAnalyzeTimeMsDelta, totalAutoanalyzeTimeMsDelta,
             reltuples
+        );
+    }
+
+    /**
+     * Bu instance/DB icin gun ici boyut olcumu yapilacak tablolar
+     * (PGSTAT-P0-045).
+     *
+     * Liste, acik bloat alarmlarinin isaret ettigi tablolardan olusur:
+     * details_json, alert acilirken buildPerRecordsJson ile yazilir ve kaydin
+     * sema/tablo adini tasir. Bunlar zaten operatorun ilgilendigi tablolar,
+     * yani sik olcmenin karsiligi en yuksek oldugu yer.
+     *
+     * @return {schemaname, relname} ciftleri; hata durumunda bos liste
+     */
+    public java.util.List<String[]> findWatchedTables(long instancePk, long dbid, int limit) {
+        try {
+            return jdbc.query(
+                "select distinct (r->>'schemaname') as schemaname, (r->>'relname') as relname" +
+                "  from ops.alert a, jsonb_array_elements(a.details_json->'records') r" +
+                " where a.instance_pk = ? and a.status <> 'resolved'" +
+                "   and a.details_json is not null" +
+                "   and (r->>'dbid') ~ '^[0-9]+$' and (r->>'dbid')::bigint = ?" +
+                "   and (r->>'schemaname') is not null and (r->>'relname') is not null" +
+                " limit " + limit,
+                (rs, n) -> new String[]{ rs.getString("schemaname"), rs.getString("relname") },
+                instancePk, dbid);
+        } catch (Exception e) {
+            log.debug("Izleme listesi okunamadi instance={} dbid={}: {}", instancePk, dbid, e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Tek bir tablonun boyut anlik goruntusunu yazar.
+     *
+     * Gece toplayicisi butun relation'lari batch halinde yaziyor; bu metot
+     * izleme listesindeki tablolarin gun ici olcumleri icin (PGSTAT-P0-045).
+     * Ayni tabloya yaziyorlar, yani fiziksel sisme kurali her iki kaynagi da
+     * ayirt etmeden kullanir — gun ici olcum sadece "en son" degeri tazeler,
+     * tarihsel minimum hesabina da dogal olarak katilir.
+     */
+    public void insertRelationSizeSnapshot(OffsetDateTime snapshotTs, long instancePk, long dbid,
+                                           String schemaname, String relname, String relkind,
+                                           Long totalSizeBytes, Long tableSizeBytes,
+                                           Long indexSizeBytes, Long toastSizeBytes,
+                                           Long reltuples) {
+        jdbc.update("""
+            insert into fact.pg_relation_size_snapshot (
+              snapshot_ts, instance_pk, dbid, schemaname, relname, relkind,
+              total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict do nothing
+            """,
+            snapshotTs, instancePk, dbid, schemaname, relname, relkind,
+            totalSizeBytes, tableSizeBytes, indexSizeBytes, toastSizeBytes, reltuples
         );
     }
 

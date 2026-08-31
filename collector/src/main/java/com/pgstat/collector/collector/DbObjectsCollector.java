@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.OffsetDateTime;
@@ -107,6 +108,9 @@ public class DbObjectsCollector {
 
             // Index stats
             rowsWritten += collectIndexStats(conn, queries, instancePk, target.dbid(), now);
+
+            // Izleme listesindeki tablolarin boyutu (PGSTAT-P0-045)
+            rowsWritten += collectWatchedTableSizes(conn, instancePk, target.dbid(), now);
         }
 
         log.debug("DbObjects toplama tamamlandi: {}:{} — {} satir",
@@ -114,6 +118,78 @@ public class DbObjectsCollector {
 
         return rowsWritten;
     }
+
+    /**
+     * Izleme listesindeki tablolarin boyutunu her toplama dongusunde olcer
+     * (PGSTAT-P0-045).
+     *
+     * Boyut normalde yalnizca gece toplanir; fiziksel sisme alarmi bu yuzden 24
+     * saate kadar eski bir olcume dayanabiliyordu. Butun tablolari sik olcmek
+     * pahali — gecede ~6.900 relation topluyoruz ve saatlige cikarmak
+     * fact.pg_relation_size_snapshot'i ~80 MB'dan ~2 GB'a tasirdi.
+     *
+     * Musteri onerisi (2026-08-31): alarm almis tablolari daha sik izlemek daha
+     * mantikli. Bir tabloya gun icinde yogun UPDATE/INSERT/DELETE gelmis
+     * olabilir ve durumu gece olcumunden tamamen farklidir.
+     *
+     * Liste bilincli olarak dar: acik bir bloat alarmi olan tablolar. Bunlar
+     * zaten operatorun ilgilendigi, muhtemelen mudahale edecegi tablolar; hem
+     * "duzelttim ama alarm kapanmiyor" gecikmesini ortadan kaldirir hem de
+     * maliyeti bir avuc relation ile sinirli kalir.
+     */
+    private long collectWatchedTableSizes(Connection conn, long instancePk, long dbid,
+                                          OffsetDateTime now) {
+        java.util.List<String[]> watched =
+            factRepo.findWatchedTables(instancePk, dbid, WATCHED_TABLE_LIMIT);
+        if (watched.isEmpty()) return 0;
+
+        long rows = 0;
+        for (String[] t : watched) {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    // to_regclass: tablo silinmis/adi degismisse NULL doner ve
+                    // hata firlatmaz. Boyut fonksiyonlari NULL'da NULL verir,
+                    // asagida atlaniyor.
+                    "select pg_total_relation_size(c.oid) as total_size_bytes," +
+                    "       pg_relation_size(c.oid) as table_size_bytes," +
+                    "       coalesce((select sum(pg_relation_size(i.indexrelid))" +
+                    "                   from pg_index i where i.indrelid = c.oid), 0) as index_size_bytes," +
+                    "       case when c.reltoastrelid > 0" +
+                    "            then pg_total_relation_size(c.reltoastrelid) end as toast_size_bytes," +
+                    "       nullif(c.reltuples, -1)::bigint as reltuples," +
+                    "       c.relkind::text as relkind" +
+                    "  from pg_class c" +
+                    " where c.oid = to_regclass(quote_ident(?) || '.' || quote_ident(?))" +
+                    "   and c.relkind in ('r','m')")) {
+                ps.setString(1, t[0]);
+                ps.setString(2, t[1]);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) continue;
+                    factRepo.insertRelationSizeSnapshot(now, instancePk, dbid, t[0], t[1],
+                        rs.getString("relkind"),
+                        (Long) rs.getObject("total_size_bytes"),
+                        (Long) rs.getObject("table_size_bytes"),
+                        (Long) rs.getObject("index_size_bytes"),
+                        (Long) rs.getObject("toast_size_bytes"),
+                        (Long) rs.getObject("reltuples"));
+                    rows++;
+                }
+            } catch (Exception e) {
+                log.debug("Izlenen tablo boyutu okunamadi {}.{}: {}", t[0], t[1], e.getMessage());
+            }
+        }
+        if (rows > 0) {
+            log.debug("Izlenen tablo boyutu olculdu: instance={} dbid={} {} tablo",
+                instancePk, dbid, rows);
+        }
+        return rows;
+    }
+
+    /**
+     * Izleme listesi ust siniri. Dar tutuluyor: amac alarm almis tablolari
+     * takip etmek, gece toplamasini taklit etmek degil. Sinir asilirsa geri
+     * kalanlar gece olcumune kalir.
+     */
+    private static final int WATCHED_TABLE_LIMIT = 25;
 
     // -------------------------------------------------------------------------
     // Database stats

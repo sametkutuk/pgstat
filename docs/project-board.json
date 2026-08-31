@@ -3887,6 +3887,78 @@
         "Retention cutoffs are computed as current_date minus a number of days, so they change only at midnight; the shortest window anywhere is snapshot_retention_hours at 48 hours by default. Running the passes more than hourly cannot drop anything a previous pass did not.",
         "The nightly snapshot collector still has no job_run entry or timing, so the original question - what the size collection actually costs - remains unanswered and needs instrumentation rather than a log grep."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-045",
+      "order": 59,
+      "priority": "P0",
+      "workstream": "collector",
+      "status": "planned",
+      "next_action": "Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot.",
+      "title": "Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night",
+      "problem": "fact.pg_relation_size_snapshot is written only by the 03:00 job, so the physical bloat rule reasons about a size that can be 24 hours old. A table can take heavy update, insert and delete traffic during the day and be in a completely different state than the night measurement describes. The obvious remedy - collect sizes more often for everything - is the expensive one: about 6,900 relations are measured each night across 25 instances, and going hourly would take that table from roughly 80 MB to 2 GB on a database we had just reclaimed 8 GB from. Separately, the nightly job has never been recorded in ops.job_run, so its cost could not be measured at all and the question of whether it could run more often had no data behind it.",
+      "requirements": [
+        "Sizes must be refreshed during the day for the tables that matter, without measuring every relation more often.",
+        "The set of frequently measured tables must be narrow and self-limiting, so the cost stays a handful of relations per database rather than approaching the nightly sweep.",
+        "A table that has been dropped or renamed since its alert opened must not raise an error during collection.",
+        "The nightly snapshot job must record itself in ops.job_run like every other job, so its duration and row count can be seen."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "The db_objects collector, which already runs every 30 minutes with a connection to each database open, measures sizes for tables named by open bloat alerts and writes them to the same snapshot table the nightly job uses.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "The watch list is read from the open alerts details_json, capped, and returns empty rather than failing when it cannot be read.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Size lookup resolves the table through to_regclass so a dropped or renamed relation yields no row instead of an error.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "The nightly snapshot job opens and closes an ops.job_run row with its row count and per-instance success and failure counts.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "mvn test passes (85).",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "Live verification: ops.job_run shows nightly_snapshot with a duration, and a table under an open alert accumulates intra-day size rows.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "FactRepository: findWatchedTables reading open alerts details_json for the instance and database, and insertRelationSizeSnapshot for a single relation.",
+        "DbObjectsCollector: after the table and index passes, measure sizes for the watch list on the connection it already holds.",
+        "JobOrchestrator: wrap the nightly snapshot loop in startJobRun and finishJobRun, counting per-instance successes and failures."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: select from ops.job_run where job_type is nightly_snapshot, and check fact.pg_relation_size_snapshot for same-day rows on a table with an open alert."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer proposed watching alerted tables more frequently rather than raising the collection frequency for everything, noting that a table can take heavy write traffic during the day. That is the cheaper and better-targeted answer: the tables under an open alert are the ones an operator is about to act on, and measuring a handful of them costs almost nothing next to the 6,900-relation nightly sweep.",
+        "Storage arithmetic behind rejecting a uniform frequency increase: the nightly sweep writes about 6,900 rows and the table holds roughly 80 MB over four months; hourly would be 24 times that, around 2 GB, on the database from which 8 GB had just been reclaimed.",
+        "The nightly job had no ops.job_run entry, which is why the original question of what size collection costs could not be answered from the logs - the grep intended to time it surfaced the unguarded purge instead (PGSTAT-P0-044)."
+      ]
     }
   ]
 }
