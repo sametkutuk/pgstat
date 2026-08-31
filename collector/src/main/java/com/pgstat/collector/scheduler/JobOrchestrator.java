@@ -90,6 +90,8 @@ public class JobOrchestrator {
     // bir kerelik dup olabilir, bu kabul edilebilir.
     private volatile java.time.LocalDate lastDailyRollupDate = null;
     private volatile java.time.LocalDate lastJobPurgeDate = null;
+    /** Retention purge saatte bir calisir; en son calistigi saat (UTC, saate yuvarlanmis). */
+    private volatile java.time.LocalDateTime lastPurgeEvaluateHour = null;
     private volatile java.time.LocalDate lastNightlySnapshotDate = null;
     private volatile java.time.LocalDate lastDailyReportDate = null;
     private volatile java.time.LocalDate lastWeeklyReportDate = null;
@@ -1115,8 +1117,26 @@ public class JobOrchestrator {
             // 4c. Frequent (Rolling) alert'ler — UI'dan ayarlanabilir (default 900s = 15dk).
             // HIGH_TEMP_FILES, IDLE_IN_TX_TIME_HIGH, REPLICATION_SLOT_INACTIVE
 
-            // 5. Purge evaluator — retention temizligi
-            purgeEvaluator.evaluate();
+            // 5. Purge evaluator — retention temizligi.
+            //
+            // Saatte en fazla bir kez. Retention cutoff'lari TARIH tabanli
+            // (current_date - retention_days), yani gun icinde degismez; en kisa
+            // pencere bile saat cinsinden (snapshot_retention_hours, varsayilan
+            // 48). Daha sik calistirmak yeni bir sey dusurmuyor.
+            //
+            // Eskiden korumasizdi ve her rollup cycle'inda — uretim loglarinda
+            // ~6 saniyede bir — alti purge gecisi birden kosuyordu. Her gecis
+            // partition katalogunu tariyor ve instance basina batched DELETE
+            // deniyor; 1100'den fazla partition ve 25 instance ile bu, hicbir
+            // sey degistirmeyen surekli bir katalog yuku demekti (musteri
+            // logunda tespit, 2026-08-31). Ayni dosyadaki gece bakim blogu
+            // zaten gunluk korumaliydi; bu cagri gozden kacmis.
+            java.time.LocalDateTime nowHour = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)
+                .truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+            if (!nowHour.equals(lastPurgeEvaluateHour)) {
+                lastPurgeEvaluateHour = nowHour;
+                purgeEvaluator.evaluate();
+            }
 
             // 6. State guncelle
             stateRepo.updateRollupTimestamp();

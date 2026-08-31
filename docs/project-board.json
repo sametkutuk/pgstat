@@ -3835,6 +3835,58 @@
         "Fixed at the mechanism rather than the call site. last_run_at lives on the rule row and is written in the evaluate loop right after evaluateRule returns, so a future evaluation_type cannot repeat the omission. A rule that throws is marked too, since retrying a failing rule every cycle multiplies the load it is already failing under.",
         "Customer asked which statistics the alerts read and how often those are collected, and whether that appears in the alert information. It did not. Verified cadences: table statistics every 30 minutes via the db_objects job, autovacuum analyze settings nightly at 03:00 plus a three-hourly hot refresh, and relation sizes only nightly. The last is the binding constraint for space bloat - its measurement can be 24 hours old - so both the rule description and the alert message now say so."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-044",
+      "order": 58,
+      "priority": "P0",
+      "workstream": "retention",
+      "status": "planned",
+      "next_action": "Deploy, then confirm from the collector log that the purge messages appear about once an hour instead of every few seconds.",
+      "title": "Retention purge runs on every orchestrator cycle although its cutoffs only change once a day",
+      "problem": "purgeEvaluator.evaluate() is called unguarded from the rollup cycle, so all six purge passes - raw delta facts, snapshot facts, table freeze, nightly snapshots, hourly and daily aggregates - run about every six seconds. Production logs show the nightly snapshot purge message at 11:55:51, 11:56:02, 11:56:11, 11:56:19, 11:56:24 and so on. Each pass scans the partition catalogue for its table families and probes a batched DELETE per instance; with over 1,100 partitions and 25 instances that is continuous catalogue work that cannot accomplish anything, because every retention cutoff is date-based and does not move during the day. The shortest window in play is measured in hours (snapshot_retention_hours, default 48). The daily maintenance block in the same file is already guarded to run once a day, so this call appears to have been overlooked rather than deliberately left unguarded.",
+      "requirements": [
+        "Purge must run often enough to honour the shortest retention window, which is expressed in hours, and no more often than that.",
+        "The guard must survive a collector restart gracefully - running one extra pass after a restart is harmless, skipping one is not."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "purgeEvaluator.evaluate() runs at most once per hour, guarded on the current UTC hour.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "mvn test passes.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Live verification: the purge log lines appear roughly hourly rather than every few seconds, and partitions past their retention are still dropped.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "JobOrchestrator: hold the last purge hour and skip the call when it has not advanced."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: grep the collector log over ten minutes and confirm at most one purge pass, then check the next day that old partitions were still dropped."
+      ],
+      "required_docs": [
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Found while answering the customer question of why relation sizes are only collected nightly. The log grep intended to time the nightly collector instead showed PurgeEvaluator logging every five to ten seconds.",
+        "Retention cutoffs are computed as current_date minus a number of days, so they change only at midnight; the shortest window anywhere is snapshot_retention_hours at 48 hours by default. Running the passes more than hourly cannot drop anything a previous pass did not.",
+        "The nightly snapshot collector still has no job_run entry or timing, so the original question - what the size collection actually costs - remains unanswered and needs instrumentation rather than a log grep."
+      ]
     }
   ]
 }
