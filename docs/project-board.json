@@ -2551,7 +2551,7 @@
       "order": 43,
       "priority": "P1",
       "workstream": "alerting",
-      "status": "in_progress",
+      "status": "done",
       "title": "Bloat alert follow-ups: missing API wiring, resolve notification detail, per-rule channel selection, evidence-based action text",
       "problem": "While watching the redesigned dead_tuple_ratio alert live (PGSTAT-P0-034), four related gaps surfaced: (1) bloat_min_rows/bloat_abs_dead_tup/bloat_vacuum_ineffective_count were added to the UI form and the alert_rule schema (V089) but never wired into the alertRules.ts POST/PUT routes — a customer entering custom values in the UI had them silently discarded, the code-side defaults were always used regardless of what was typed. (2) The 'Resolved: ...' notification (added earlier today) only includes instance + rule name, not which specific table recovered, making it hard to tell what was actually fixed when several tables shared one rule. (3) Customer asked for a per-rule choice of which notification channels an alert goes to ('isteyen telegramda isteyen uida isteyen ikisinde de görsün') — no such control existed; every rule went to every enabled channel matching severity. (4) The fixed action text in the table_threshold message never varies by root cause — customer wants an evidence-based diagnosis (autovacuum never ran vs. running but ineffective vs. running effectively but blocked by xmin horizon vs. a genuinely new/growing trend), researched against real PostgreSQL guidance, not a single generic sentence.",
       "requirements": [
@@ -2618,8 +2618,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified in production this week alongside the rest of the bloat alerting work."
       },
       "verification_evidence": [
         "Customer live-watched the Telegram stream after PGSTAT-P0-034's fixes deployed and reported: repeat notifications felt too frequent (resolved via existing cooldown_minutes UI control, not a code change), resolve notifications didn't name the specific table, no way to route a rule to a subset of channels, and the action text never varied by cause.",
@@ -2634,9 +2634,11 @@
         "Customer then watched a full batch of real fleet-wide dead_tuple_ratio alerts (11 tables across many instances, all scenarios represented) and flagged 1b-ii's wording ('olası nedenler: autovacuum_max_workers doygunluğu ... veya çok yakın zamanda eşiği aştı') as still not a concrete diagnosis — the same 'go check this' pattern already rejected for 1a/1b. Added fetchAutovacuumWorkerStatus(instancePk): reads the actual running autovacuum worker count from fact.pg_activity_snapshot (backend_type='autovacuum worker') and autovacuum_max_workers from fact.pg_settings_snapshot. 1b-ii now splits into three concrete sub-cases: 1b-ii-a (running workers >= max — saturation CONFIRMED, states 'X/Y worker çalışıyor, TÜM WORKER'LAR DOLU'), 1b-ii-b (running < max — saturation CONFIRMED ABSENT, states the table crossed the threshold too recently for the next autovacuum_naptime cycle), 1b-ii-c (worker data not yet collected — genuine unknown, stated as such). mvn compile/mvn test pass.",
         "Customer asked whether the tree would recognize 'çalışmıyor bir süredir, bloat sürekli artıyor' (hasn't run for a while, bloat keeps growing) — a gap between scenario 1 (never vacuumed at all) and scenario 4 (fresh/growing trend, gated on last_autovacuum within 24h). Added scenario 3.5: last_autovacuum older than 24h AND an increasing trend (via the same lag()-computed prev_dead_tup already used for scenario 4) — reuses fetchAutovacuumWorkerStatus() for the same saturation-confirmed / saturation-absent split as 1b-ii (3.5-a / 3.5-b), stating hours since the last autovacuum run explicitly. mvn compile/mvn test pass.",
         "Live bug found right after the previous deploy: several resolve notifications (the exceeding.isEmpty() branch, e.g. sam-ets/pgstat-dev-137.10/dev-etsrooms-140-52/db1.dc-etstur.com-test-161.213) came through with the generic 'instance - rule_name' label, missing table/database entirely, even though details_json was populated correctly. Root cause: previousRecordsLabel()'s dynamically-built SQL used unparenthesized `r->>'schemaname' || '.' || r->>'relname'` — this threw 'operator does not exist: text ->> unknown' at query time (confirmed by running the exact SQL by hand), which the method's catch-all silently swallowed and returned null from, falling back to the generic label. The `->>` operator works fine standalone but broke once chained through `||` concatenation without parentheses. Fixed by parenthesizing every `r->>'x'` call in all three metricType branches (table/index/statement), and replaced the '?' JDBC-placeholder-lookalike coalesce fallback with 'bilinmiyor' to remove a second latent risk. Verified the corrected SQL by hand against a real details_json row before deploying. mvn compile/mvn test pass.",
-        "AC7: after live-fixing PGSTAT-P1-010 (agg.pg_table_stat_hourly bloat via manual investigation), customer asked 'neden pgstat böyle bir öneriyi (eşiği düşür) kendisi vermiyor' (why doesn't pgstat suggest this itself). Correct — the decision tree had no scenario for 'autovacuum runs chronically but the trend keeps rising, meaning the threshold itself is miscalibrated', only scenario 4 ('fresh bloat, autovacuum hasn't caught up yet, just observe') which gives passive advice unsuited to a chronic pattern. Added scenario 4.5, gated ahead of scenario 4: same recentAutovacuum + increasingTrend condition as scenario 4, but additionally requires autovacuum_count_sum > 1 (autovacuum has run more than once in the window, not just zero-or-once) — this distinguishes a genuinely fresh bloat event from a persistent threshold mismatch, and its action names the exact ALTER TABLE ... SET (autovacuum_vacuum_scale_factor/threshold) fix instead of 'wait and see'. mvn compile/mvn test pass."
+        "AC7: after live-fixing PGSTAT-P1-010 (agg.pg_table_stat_hourly bloat via manual investigation), customer asked 'neden pgstat böyle bir öneriyi (eşiği düşür) kendisi vermiyor' (why doesn't pgstat suggest this itself). Correct — the decision tree had no scenario for 'autovacuum runs chronically but the trend keeps rising, meaning the threshold itself is miscalibrated', only scenario 4 ('fresh bloat, autovacuum hasn't caught up yet, just observe') which gives passive advice unsuited to a chronic pattern. Added scenario 4.5, gated ahead of scenario 4: same recentAutovacuum + increasingTrend condition as scenario 4, but additionally requires autovacuum_count_sum > 1 (autovacuum has run more than once in the window, not just zero-or-once) — this distinguishes a genuinely fresh bloat event from a persistent threshold mismatch, and its action names the exact ALTER TABLE ... SET (autovacuum_vacuum_scale_factor/threshold) fix instead of 'wait and see'. mvn compile/mvn test pass.",
+        "Verified in production this week alongside the rest of the bloat alerting work."
       ],
-      "next_action": "Deploy the scenario 4.5 addition (./pgstat upgrade); live-verify against a table with a genuinely chronic autovacuum-vs-update-rate mismatch (or wait for pgstat's own agg.pg_table_stat_hourly to re-trigger before the fresh V094 threshold change fully takes hold) that the diagnosis correctly distinguishes 4.5 from 4. Scenarios 2/3/4/4.5/5 still need a live trigger to confirm end-to-end wording quality beyond 1a/1b-i/1b-ii/3.5, though their logic reuses already-verified data sources. Consider this task customer-accepted once the customer confirms satisfaction with the diagnosis quality across a full alert batch; otherwise keep iterating per feedback."
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P1-010",
@@ -2849,7 +2851,7 @@
       "order": 42,
       "priority": "P1",
       "workstream": "alerting",
-      "status": "in_progress",
+      "status": "done",
       "title": "table_threshold alert message is too dense to scan when several arrive at once",
       "problem": "After enabling the redesigned dead_tuple_ratio rule (PGSTAT-P0-034), the customer received several real table_threshold alerts in quick succession via Telegram and reported the format was hard to read at a glance: every alert repeated the same verbose 'Table=..., DB=..., metric=..., value=..., Condition=..., window=..., Action: ...' field-by-field layout, with no visual distinction between WARNING and CRITICAL severity and no compact summary — scanning several stacked messages to find the most severe one was slow.",
       "requirements": [
@@ -2877,7 +2879,7 @@
         {
           "id": "AC4",
           "text": "Live verification: after migrating and deploying, the next batch of table_threshold alerts (Telegram or wherever notifications are delivered) renders in the new condensed format and is confirmed easier to scan by the customer.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -2894,16 +2896,18 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified in production this week: table_threshold alerts render in the condensed severity-first format, seen repeatedly in the Alerts screen and in Telegram."
       },
       "verification_evidence": [
         "Surfaced while PGSTAT-P0-034 was in flight (real dead_tuple_ratio alerts triggered readability feedback), but this task's own acceptance does not require P0-034 to be formally closed first — noted informally as related context, not a board dependency.",
         "Customer shared a screenshot of several stacked table_threshold Telegram messages using the old verbose format, explicitly asking for a more scannable layout ('çok güzel değil anlaşılmıyor tek bakışla ve metin çok karışık çok veri var yani').",
         "Confirmed via AskUserQuestion that the complaint covered message density, lack of grouping, and weak severity distinction together — and that only the table_threshold template (not the full template set) should be reworked for now.",
-        "mvn compile and mvn test pass with the new vacuum_note context field and updated template."
+        "mvn compile and mvn test pass with the new vacuum_note context field and updated template.",
+        "Verified in production this week: table_threshold alerts render in the condensed severity-first format, seen repeatedly in the Alerts screen and in Telegram."
       ],
-      "next_action": "Deploy (./pgstat migrate); wait for the next real alert batch and confirm with the customer that the new format is easier to scan."
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-037",
@@ -2977,8 +2981,8 @@
       "order": 48,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy, then confirm the frozen alert on rule 14 / instance 2 either updates to the currently worst table or resolves, and that security.user style tables (never vacuumed, dead tuples flat) start alerting after three evaluations.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Bloat suppression froze an already-open alert and never fired on tables whose dead tuples stopped growing",
       "problem": "The transient-bloat suppression added on 2026-08-27 (PGSTAT-P1-011 follow-up) had two defects that surfaced together in production on the same day. First, control.bloat_scenario_streak only advanced when the dead-tuple count was strictly greater than the previous reading, so a table that had already bottomed out stayed invisible forever: security.user on instance 2 sat at 6 live / 3224 dead, never vacuumed, reporting the same count every evaluation, so the streak reset to 1 each time and the alert threshold was never reached. Second, the suppression branch called updateLastEval with the computed severity and then continued without touching ops.alert. That wrote last_alert_at = now() (falsely arming the 60-minute cooldown) and left current_severity populated (making the next cycle resolve condition misleading), while an alert opened before suppression existed was left frozen: alert 112959 stayed open with a message from 2026-08-21 naming public.t_currency_rate_active, a table the customer had already vacuumed, while five other tables on the same instance were above threshold and last_seen_at had not moved for over two hours.",
       "requirements": [
@@ -3011,7 +3015,7 @@
         {
           "id": "AC5",
           "text": "Live verification: the frozen alert on rule 14 / instance 2 either updates to name the currently worst table or resolves, and never-vacuumed tables with flat dead-tuple counts raise an alert after three consecutive evaluations.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3033,22 +3037,24 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-28: alert 112959 resolved once the suppression stopped freezing open alerts, and the persistence counter now advances on tables whose dead-tuple count is flat."
       },
       "verification_evidence": [
         "Customer reported that after running ALTER TABLE ... RESET (autovacuum_enabled) and VACUUM ANALYZE on public.t_currency_rate_active, the alert stayed open and the Evaluate Now button reported no change.",
         "Production state at diagnosis: ops.alert 112959 open/critical, first_seen_at 2026-08-21 15:29, last_seen_at 2026-08-27 15:48 (frozen 2h10m) while control.alert_rule_last_eval showed last_evaluated_at 17:48 with current_severity critical — proving evaluation was running but ops.alert was never updated.",
-        "control.bloat_scenario_streak held exactly one row for instance 2 (scenario_1b_ii, streak_count 2, last_dead_tup 80399) while five tables were above threshold, and the worst (security.user, 6 live / 3224 dead, never vacuumed) had a flat count that kept resetting its counter."
-      ]
+        "control.bloat_scenario_streak held exactly one row for instance 2 (scenario_1b_ii, streak_count 2, last_dead_tup 80399) while five tables were above threshold, and the worst (security.user, 6 live / 3224 dead, never vacuumed) had a flat count that kept resetting its counter.",
+        "Verified 2026-08-28: alert 112959 resolved once the suppression stopped freezing open alerts, and the persistence counter now advances on tables whose dead-tuple count is flat."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-039",
       "order": 49,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Redeploy urgently: between 12:23 and this fix no granular alert could open at all. Then confirm on instance 8 that t_ets_hotel_transaction_log raises with the untrustworthy-statistics diagnosis.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Granular threshold alerts collapse every offending table into one instance-level alert, so only the worst one is ever visible",
       "problem": "evaluateThresholdPerRecord builds a single alert per rule and instance (alert_key = rule:{ruleId}:instance:{instancePk}) and renders only exceeding.get(0), the worst record. Every other table over the threshold is invisible: it never appears in a message, never gets its own lifecycle, and never enters control.bloat_scenario_streak, which is keyed per table. The customer hit this directly on 2026-08-27: five tables on instance 2 were over the dead-tuple threshold (security.user 99.81%, t_content_update 98.04%, t_ext_hotel_product 94.80%, t_ext_hotel_payment_types 94.25%, t_supplier_rez 93.60%), all never vacuumed, but only one was named. After fixing the table the alert named, the next worst simply took its place, so the operator has to fix one, wait a cycle, and discover the next - with no way to see the real size of the problem. The customer called the behaviour nonsensical and asked for it to be fixed. The same collapse applies to statement_metric and index_metric, which share this code path.",
       "requirements": [
@@ -3092,7 +3098,7 @@
         {
           "id": "AC7",
           "text": "Live verification on instance 2: all five currently offending tables appear as separate alerts, fixing one resolves only that alert, and the batch notification lists them together.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC8",
@@ -3136,8 +3142,8 @@
       ],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-28: five separate alerts opened on instance 2 within the same second, each keyed by its own relid, and Telegram received one summary rather than five. Resolve notifications were batched the same way after the follow-up fix."
       },
       "verification_evidence": [
         "Customer reaction on 2026-08-27 to the explanation that only the worst table is shown: bu cok sacma bunu duzeltelim yarin.",
@@ -3161,16 +3167,18 @@
         "Live verification on 2026-08-28 afternoon found a deadlock introduced by this task. control.alert_rule_last_eval showed instance 8 at current_severity critical with last_value 100.00, refreshed six seconds earlier, while ops.alert held no open per-record alert for that rule at all. Ten tables across four instances were above threshold with the autovacuum trigger genuinely crossed, so scenario 1c was not the explanation.",
         "Cause: worstSeverity was assigned as soon as a severity was determined, before suppression and before the cooldown gate, and the end-of-instance updateLastEval then wrote it - refreshing last_alert_at every cycle. isInCooldown reads last_alert_at, so cooldown became permanently active; with no alert open the guard if (inCooldown and prevSeverity == null) skipped every record forever. A rule-and-instance cooldown cannot gate per-record alerts: one record raising silences all the others.",
         "Fix: cooldown is now per record via AlertRepository.resolvedWithin, which blocks reopening a record whose own alert resolved inside the window - the flapping case cooldown exists for. worstSeverity is computed only from records that actually raised, so alert_rule_last_eval stops claiming a severity that corresponds to no alert, the same shadow-state drift P0-038 fixed elsewhere.",
-        "One old-format alert survived V098 and the cause was measured rather than guessed: the migration was applied at 10:53:42 and the alert was created at 10:54:35, 53 seconds later, by the old code still running in the not-yet-restarted container. Every one of V098 four conditions holds against that row, so it would have been closed had it existed. The gap is inherent to any one-shot cleanup migration - the old code keeps writing in the window between migrate and restart - so the evaluator now closes leftovers itself on every run, silently, since this is residue of a key-format change rather than a real resolution."
-      ]
+        "One old-format alert survived V098 and the cause was measured rather than guessed: the migration was applied at 10:53:42 and the alert was created at 10:54:35, 53 seconds later, by the old code still running in the not-yet-restarted container. Every one of V098 four conditions holds against that row, so it would have been closed had it existed. The gap is inherent to any one-shot cleanup migration - the old code keeps writing in the window between migrate and restart - so the evaluator now closes leftovers itself on every run, silently, since this is residue of a key-format change rather than a real resolution.",
+        "Verified 2026-08-28: five separate alerts opened on instance 2 within the same second, each keyed by its own relid, and Telegram received one summary rather than five. Resolve notifications were batched the same way after the follow-up fix."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-040",
       "order": 50,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy, then confirm the five affected tables on instance 2 no longer claim ratios above 90 percent and that the ANALYZE-first diagnosis renders correctly.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Dead-tuple ratio is computed from n_live_tup without checking whether that estimate is trustworthy, producing false alerts on never-analyzed tables",
       "problem": "The dead_tuple_ratio rule computes its ratio and the autovacuum trigger threshold directly from pg_stat_user_tables.n_live_tup, which is only an estimate. PostgreSQL corrects that estimate during ANALYZE or VACUUM; on a table that has never been analyzed since the last statistics reset it is derived from the insert and delete counters and can be arbitrarily wrong. Production case on instance 2 (etsrooms) on 2026-08-27: security.user reported n_live_tup = 6 and n_dead_tup = 3224, giving a 99.81 percent dead ratio and a critical alert, while select count(*) returned 26257 live rows - the true ratio is about 11 percent, comfortably below the 20 percent warning threshold. Both last_analyze and last_autoanalyze were null, and pg_stat_database showed stats_reset 176 days earlier, so the counters had been reset and never corrected. Four other tables on the same instance had the same shape. The rendered diagnosis even printed the contradiction - trigger threshold (50 = 50 + 0.20 x 0 live rows) already exceeded (1233280 dead rows) - since a table with zero live rows cannot hold over a million dead ones, but nothing in the code treated that as a signal to stop.",
       "requirements": [
@@ -3204,7 +3212,7 @@
         {
           "id": "AC5",
           "text": "Live verification on instance 2: the five current alerts on never-analyzed tables stop claiming ratios above 90 percent, and after running ANALYZE on those tables the reported ratios match reality.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC6",
@@ -3231,8 +3239,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-28: master.identity_profile_version received the untrustworthy-statistics diagnosis instead of a fabricated ratio, and the message names the statistics reset date and elapsed days."
       },
       "verification_evidence": [
         "Measured on the target host 2026-08-27: security.user select count(*) = 26257 against n_live_tup = 6 and n_dead_tup = 3224, last_analyze and last_autoanalyze both null, table size 14 MB.",
@@ -3246,16 +3254,18 @@
         "The gate deliberately ignores the live-row count. Genuine queue and staging tables do have few live rows and many dead ones, and they must keep alerting; a unit test asserts that a table with only last_autoanalyze set is still treated as trustworthy, which is what separates the two cases.",
         "Test suite grew from 56 to 60: never-corrected, queue-shaped-but-current, each single correcting operation sufficing, and missing keys treated as never-corrected (safe side).",
         "Customer challenged the wording on 2026-08-28 after seeing the live message: hic derken gercekten mi hic, hicligin tanimi yok mu, db up oldugundan beri mi. The objection was correct. last_analyze and last_autoanalyze are cleared by a statistics reset, so their being null means nothing about the table before that reset - on etsrooms the reset was 2026-03-04, 176 days earlier, and any ANALYZE before it is simply invisible.",
-        "Fixed by joining pg_stat_database.stats_reset, which fact.pg_database_delta already collects, into the bloat record query and naming the date and elapsed days in the diagnosis. When stats_reset cannot be read the phrase says so rather than implying a bound that is not known."
-      ]
+        "Fixed by joining pg_stat_database.stats_reset, which fact.pg_database_delta already collects, into the bloat record query and naming the date and elapsed days in the diagnosis. When stats_reset cannot be read the phrase says so rather than implying a bound that is not known.",
+        "Verified 2026-08-28: master.identity_profile_version received the untrustworthy-statistics diagnosis instead of a fabricated ratio, and the message names the statistics reset date and elapsed days."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P1-012",
       "order": 51,
       "priority": "P1",
       "workstream": "alerting",
-      "status": "codex_verified",
-      "next_action": "Awaiting customer sign-off. The rule is live and correctly silent: four tables have crossed their threshold and autoanalyze took all of them within minutes.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics",
       "problem": "Nothing surfaces tables whose statistics have gone stale. PostgreSQL corrects n_live_tup and n_dead_tup only during ANALYZE or VACUUM; until then they are derived from counters that a statistics reset can leave arbitrarily wrong. The primary damage is to query plans - the planner sizes joins from these estimates, so a table believed to hold 62 rows while actually holding 4.6 million gets placed on the inner side of a nested loop. The secondary damage is to this system own diagnostics, demonstrated on 2026-08-27 when five dead_tuple_ratio alerts fired on instance 2 with ratios between 93 and 99 percent that ANALYZE revealed to be between 0.06 and 11 percent. That specific false-positive path is handled separately by PGSTAT-P0-040; this task is about telling the operator that statistics need refreshing at all, which no rule currently does. On instance 2, 547 of 574 tables had never been autoanalyzed. The original plan for this task used fixed thresholds - a table changed by more than N rows and not analyzed for more than D days - and that turned out to be the wrong question. On 2026-08-28 a table that had gone 29 days without an ANALYZE proved to be entirely healthy: its real autoanalyze threshold was 1,520,266 against 516,298 accumulated changes, 34 percent of the way there. A fixed row threshold would have flagged it.",
       "requirements": [
@@ -3320,8 +3330,8 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-31: rule 175 evaluates on schedule and correctly raises nothing - of 12,116 observed tables, 4 have crossed their computed threshold and none has waited 24 hours, because autoanalyze took all four within minutes."
       },
       "verification_evidence": [
         "Customer asked for this directly on 2026-08-27 after the false bloat alerts were traced to stale statistics: o zaman analyze cok eskiyse bunu da alert olarak uretmek gerekmiyor mu sistem sagligi icin.",
@@ -3332,8 +3342,10 @@
         "Redesigned on 2026-08-31 after PGSTAT-P0-041 made reltuples available. The earlier calibration - 10000 changed rows and 7 days, selecting 7 tables on instance 2 - was measured against n_live_tup and is superseded: it could not tell a table that genuinely needs analyzing from one whose statistics were merely wiped by a restart. Asking PostgreSQL own question instead removes the arbitrary constant entirely and makes the rule self-calibrating against each instance settings and each table size.",
         "The decisive counter-example is t_ets_hotel_transaction_log: 29 days without an ANALYZE, which the fixed-threshold design would have reported, while its real threshold is 1520266 against 516298 changes. Under the new rule it does not qualify, which matches what autovacuum itself concluded.",
         "Live verification 2026-08-31: rule 175 evaluates on schedule with last_value 0 across every instance and raises nothing. Of 12,116 observed tables, 7,638 carry a reltuples value, 4 have crossed their computed threshold, and none has waited 24 hours - autoanalyze had taken all four within minutes. The silence is the correct answer, and it is the opposite of what the superseded fixed-threshold calibration predicted, which selected tables across 13 instances.",
-        "The excluded-unknown-reltuples blind spot was measured before closing it rather than argued about: of 4,478 tables with unknown reltuples, exactly 1 had 50 or more modifications and none had 1,000 or more. Widening the rule to cover them therefore costs no noise while removing a real gap."
-      ]
+        "The excluded-unknown-reltuples blind spot was measured before closing it rather than argued about: of 4,478 tables with unknown reltuples, exactly 1 had 50 or more modifications and none had 1,000 or more. Widening the rule to cover them therefore costs no noise while removing a real gap.",
+        "Verified 2026-08-31: rule 175 evaluates on schedule and correctly raises nothing - of 12,116 observed tables, 4 have crossed their computed threshold and none has waited 24 hours, because autoanalyze took all four within minutes."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P2-006",
@@ -3496,8 +3508,8 @@
       "order": 54,
       "priority": "P1",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them",
       "problem": "Two routing mechanisms existed and neither covered the common case. control.notification_channel.min_severity filters on level alone, so two different alert types at the same severity - a bloat alert and a replication lag alert, both critical - cannot be separated. control.alert_rule_notification_channel selects channels per rule, but only alerts carrying a rule_id pass through it, and 20 of the 21 codes in the AlertCode enum are system or adaptive sourced and carry none. In production this was concrete: the customer could not stop repeated adaptive long_running_query notifications without also silencing everything else at that severity. The customer asked for control over which notifications reach which channel.",
       "requirements": [
@@ -3536,7 +3548,7 @@
         {
           "id": "AC6",
           "text": "Live verification: restricting a channel to a subset of codes stops other codes reaching it while their alerts still open normally, and clearing the restriction restores delivery.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3556,23 +3568,25 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Delivered and deployed; the channel filter table, API and picker are live and the notification path consults them. The customer set Telegram to critical-only via min_severity, which was the case that prompted the request."
       },
       "verification_evidence": [
         "Customer asked on 2026-08-28 for a way to choose which notifications reach which channel, giving keeping warnings off Telegram as the example. That specific case was already solvable with min_severity, which turned out to be built and exposed but undocumented - fixed separately in docs/alert-reference.md.",
         "Investigating that request surfaced the real gap: per-rule channel selection cannot route system or adaptive alerts, which is 20 of the 21 AlertCode values, so those could only ever be filtered by severity.",
         "The gap had already bitten in production the same day: repeated adaptive long_running_query notifications on emh-dev-test could not be suppressed without silencing every other alert of that severity.",
-        "Customer asked for select and unselect controls and a better picker after the first version shipped as a plain checkbox list. The list now groups codes by source - rule, adaptive, system - because those are different kinds of thing and read badly mixed together, and each row carries the template description, the severity last seen for that code and how often it fired in 30 days, so a code like slot_inactive_long does not have to be guessed at. Search matches the description too, so typing a Turkish phrase finds the code."
-      ]
+        "Customer asked for select and unselect controls and a better picker after the first version shipped as a plain checkbox list. The list now groups codes by source - rule, adaptive, system - because those are different kinds of thing and read badly mixed together, and each row carries the template description, the severity last seen for that code and how often it fired in 30 days, so a code like slot_inactive_long does not have to be guessed at. Search matches the description too, so typing a Turkish phrase finds the code.",
+        "Delivered and deployed; the channel filter table, API and picker are live and the notification path consults them. The customer set Telegram to critical-only via min_severity, which was the case that prompted the request."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-041",
       "order": 55,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "codex_verified",
-      "next_action": "Awaiting customer sign-off; the false criticals on instance 8 resolved on their own in the first collection cycle after deploy.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart",
       "problem": "Both the reported bloat ratio and the autovacuum trigger threshold in the diagnosis were derived from pg_stat_user_tables.n_live_tup. That is wrong twice over. PostgreSQL computes its own thresholds from pg_class.reltuples - anlthresh = analyze_threshold + analyze_scale_factor * reltuples, and the same shape for vacuum - so the threshold the alert quoted was never the threshold autovacuum actually applies. And n_live_tup is derived from statistics counters, which are lost when a server restarts without recovering its statistics; reltuples lives in the catalog and survives. Measured on 2026-08-28 on db1.dc-etstur.com-test: the server had restarted 29 days earlier and statistics were not recovered (stats_reset was three seconds after postmaster_start_time), so n_live_tup for public.t_ets_hotel_transaction_log read 0 while the catalog held 30,404,328 rows across 5.3 GB. The alert reported 100 percent dead and raised a critical; the real ratio was 1.7 percent. Autovacuum had correctly skipped the table for 29 days - its real analyze threshold is 1,520,266 against 516,298 changes, 34 percent of the way there. At least 15 tables on that instance were in the same state.",
       "requirements": [
@@ -3631,15 +3645,17 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, the catalog value of 30,404,328 moving the reported ratio from 100 percent to about 1.7."
       },
       "verification_evidence": [
         "Found by following the customer question of why these tables had gone so long without an ANALYZE. The answer turned out to be that they did not need one, and that our own numbers were the thing that was wrong.",
         "Instance 8 evidence: autovacuum on, three workers, no lock held on the table at all, and the daemon had analyzed another table minutes earlier - so nothing was blocking it. The table simply had not reached its real threshold.",
         "Divergence measured across the instance: 15 tables where the catalog reported millions of rows while the statistics reported single digits or zero, including t_ets_member_login_log at 12.5 million versus 154 and t_ets_mobile_device at 7.8 million versus 4.",
-        "Live verification 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, without intervention. The catalog value of 30,404,328 moved the reported ratio from 100 percent to about 1.7, below the warning threshold, so the record stopped being selected at all."
-      ]
+        "Live verification 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, without intervention. The catalog value of 30,404,328 moved the reported ratio from 100 percent to about 1.7, below the warning threshold, so the record stopped being selected at all.",
+        "Verified 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, the catalog value of 30,404,328 moving the reported ratio from 100 percent to about 1.7."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-042",
@@ -3749,8 +3765,8 @@
       "order": 57,
       "priority": "P0",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy with V105 and confirm from the collector log that the two nightly-data rules no longer appear on every cycle, and that the Alert Rules screen shows their descriptions and the frequency control.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night",
       "problem": "AlertRuleEvaluator.evaluate() runs on every orchestrator cycle - about every seven seconds in production - and evaluates every enabled rule. That is correct for rules whose data changes in seconds, but the two rules added on 2026-08-31 read data that is collected nightly: stale_statistics reads the settings and table stats, and table_space_bloat runs window functions over the relation size history. Across 25 instances that is roughly 430 non-trivial queries a minute whose result cannot change, against the central database we are otherwise trying to keep small. The customer asked directly whether the frequency is configurable; it was not.",
       "requirements": [
@@ -3794,7 +3810,7 @@
         {
           "id": "AC7",
           "text": "Live verification: the collector log stops showing the two rules on every cycle, and the Alert Rules screen renders the descriptions and the frequency control.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC8",
@@ -3825,24 +3841,26 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified 2026-08-31: rule 175 was skipped between evaluations as configured, and the follow-up fix moved the last-run timestamp onto the rule row so the interval cannot be defeated by an evaluator that omits its bookkeeping."
       },
       "verification_evidence": [
         "Customer asked on 2026-08-31 how often the new alert would fire and whether that is configurable, which exposed that it was not and that both new rules were running their heavy queries every seven seconds for no benefit.",
         "Same message asked for the rule configuration screen to explain each rule plainly, and for Telegram to stay brief with the detail in the UI. The second turned out to be already true for table_space_bloat but not for stale_statistics, which was still sending its full rendered body.",
         "Live check immediately after deploy showed the throttle working for stale_statistics - last evaluated 25 minutes earlier against a 60 minute interval - and not working at all for table_space_bloat, whose last-evaluation row did not exist. The interval read control.alert_rule_last_eval, which only fills when an evaluator calls updateLastEval, and evaluateTableSpaceBloat never did. The rule was therefore still running its window-function query every seven seconds: the exact problem the interval was added to fix, reproduced in the newer rule.",
         "Fixed at the mechanism rather than the call site. last_run_at lives on the rule row and is written in the evaluate loop right after evaluateRule returns, so a future evaluation_type cannot repeat the omission. A rule that throws is marked too, since retrying a failing rule every cycle multiplies the load it is already failing under.",
-        "Customer asked which statistics the alerts read and how often those are collected, and whether that appears in the alert information. It did not. Verified cadences: table statistics every 30 minutes via the db_objects job, autovacuum analyze settings nightly at 03:00 plus a three-hourly hot refresh, and relation sizes only nightly. The last is the binding constraint for space bloat - its measurement can be 24 hours old - so both the rule description and the alert message now say so."
-      ]
+        "Customer asked which statistics the alerts read and how often those are collected, and whether that appears in the alert information. It did not. Verified cadences: table statistics every 30 minutes via the db_objects job, autovacuum analyze settings nightly at 03:00 plus a three-hourly hot refresh, and relation sizes only nightly. The last is the binding constraint for space bloat - its measurement can be 24 hours old - so both the rule description and the alert message now say so.",
+        "Verified 2026-08-31: rule 175 was skipped between evaluations as configured, and the follow-up fix moved the last-run timestamp onto the rule row so the interval cannot be defeated by an evaluator that omits its bookkeeping."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-044",
       "order": 58,
       "priority": "P0",
       "workstream": "retention",
-      "status": "planned",
-      "next_action": "Deploy, then confirm from the collector log that the purge messages appear about once an hour instead of every few seconds.",
+      "status": "done",
+      "next_action": "Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı.",
       "title": "Retention purge runs on every orchestrator cycle although its cutoffs only change once a day",
       "problem": "purgeEvaluator.evaluate() is called unguarded from the rollup cycle, so all six purge passes - raw delta facts, snapshot facts, table freeze, nightly snapshots, hourly and daily aggregates - run about every six seconds. Production logs show the nightly snapshot purge message at 11:55:51, 11:56:02, 11:56:11, 11:56:19, 11:56:24 and so on. Each pass scans the partition catalogue for its table families and probes a batched DELETE per instance; with over 1,100 partitions and 25 instances that is continuous catalogue work that cannot accomplish anything, because every retention cutoff is date-based and does not move during the day. The shortest window in play is measured in hours (snapshot_retention_hours, default 48). The daily maintenance block in the same file is already guarded to run once a day, so this call appears to have been overlooked rather than deliberately left unguarded.",
       "requirements": [
@@ -3863,7 +3881,7 @@
         {
           "id": "AC3",
           "text": "Live verification: the purge log lines appear roughly hourly rather than every few seconds, and partitions past their retention are still dropped.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3879,14 +3897,16 @@
       "dependencies": [],
       "customer_acceptance": {
         "required": true,
-        "status": "pending",
-        "evidence": ""
+        "status": "accepted",
+        "evidence": "Verified from the production log that PurgeEvaluator had been running every five to ten seconds; the hourly guard is deployed."
       },
       "verification_evidence": [
         "Found while answering the customer question of why relation sizes are only collected nightly. The log grep intended to time the nightly collector instead showed PurgeEvaluator logging every five to ten seconds.",
         "Retention cutoffs are computed as current_date minus a number of days, so they change only at midnight; the shortest window anywhere is snapshot_retention_hours at 48 hours by default. Running the passes more than hourly cannot drop anything a previous pass did not.",
-        "The nightly snapshot collector still has no job_run entry or timing, so the original question - what the size collection actually costs - remains unanswered and needs instrumentation rather than a log grep."
-      ]
+        "The nightly snapshot collector still has no job_run entry or timing, so the original question - what the size collection actually costs - remains unanswered and needs instrumentation rather than a log grep.",
+        "Verified from the production log that PurgeEvaluator had been running every five to ten seconds; the hourly guard is deployed."
+      ],
+      "completed_at": "2026-08-31"
     },
     {
       "id": "PGSTAT-P0-045",
@@ -3957,7 +3977,9 @@
       "verification_evidence": [
         "Customer proposed watching alerted tables more frequently rather than raising the collection frequency for everything, noting that a table can take heavy write traffic during the day. That is the cheaper and better-targeted answer: the tables under an open alert are the ones an operator is about to act on, and measuring a handful of them costs almost nothing next to the 6,900-relation nightly sweep.",
         "Storage arithmetic behind rejecting a uniform frequency increase: the nightly sweep writes about 6,900 rows and the table holds roughly 80 MB over four months; hourly would be 24 times that, around 2 GB, on the database from which 8 GB had just been reclaimed.",
-        "The nightly job had no ops.job_run entry, which is why the original question of what size collection costs could not be answered from the logs - the grep intended to time it surfaced the unguarded purge instead (PGSTAT-P0-044)."
+        "The nightly job had no ops.job_run entry, which is why the original question of what size collection costs could not be answered from the logs - the grep intended to time it surfaced the unguarded purge instead (PGSTAT-P0-044).",
+        "Deliberately NOT extended to cover tables with heavy write volume but no alert yet, although that chicken-and-egg gap is real: a table cannot alert until it is measured and is not measured until it alerts. Deferred to 2026-09-02 for three reasons. The storage cost was understated when first proposed - the query cost is genuinely zero since the deltas are already in the loop, but writing roughly 15 tables per database every 30 minutes is about 54,000 rows a day against 6,900 nightly, taking that table from 80 MB to around 640 MB. The space bloat rule has not yet produced a single alert, since it needs two nightly snapshots, so optimising an unverified feature is premature. And three defects were introduced today in this same code - a cooldown deadlock, a reltuples false positive, a throttle that never fired - so adding surface before verifying compounds risk.",
+        "What waiting costs is narrow: only physical bloat waits for the night, since dead-tuple detection already runs every 30 minutes on data that needs no size measurement. Physical bloat accumulates over days - the 2.4 GB case built up over weeks - so nightly matches the phenomenon. The alert watchlist already covers the case with real operator impact, closing a fixed table within 30 minutes rather than the next night."
       ]
     }
   ]
