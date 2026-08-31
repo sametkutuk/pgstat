@@ -431,8 +431,223 @@ public class AlertRuleEvaluator {
             case "flatline"       -> evaluateFlatline(rule);
             case "hourly_pattern" -> evaluateHourlyPattern(rule);
             case "adaptive"       -> evaluateAdaptive(rule);
+            case "stale_statistics" -> evaluateStaleStatistics(rule);
             default -> log.warn("Bilinmeyen evaluation_type: {}", evalType);
         }
+    }
+
+    // =========================================================================
+    // stale_statistics: PostgreSQL'in KENDI autoanalyze esigi asilmis olmasina
+    // ragmen uzun suredir ANALYZE calismamis tablolar.
+    // =========================================================================
+
+    /**
+     * Bayat istatistik tespiti (PGSTAT-P1-012).
+     *
+     * Asil zarar bizim teshislerimizde degil SORGU PLANLARINDA: planner join
+     * boyutlarini istatistiklerden hesaplar. Uretimde 62 satir sanilan bir
+     * tablo gercekte 4.593.352 satirdi; boyle bir tablo nested loop'un ic
+     * tarafina konur ve sorgu saatlerce surer.
+     *
+     * ESIK SABIT DEGIL. Ilk tasarim "X satir degismis ve Y gundur analiz yok"
+     * diyordu; 2026-08-28'de bunun yanlis soru oldugunu ogrendik. Bir tablonun
+     * istatistiklerinin bayat SAYILIP sayilmayacagina PostgreSQL'in kendi
+     * esigi karar verir:
+     *
+     *   anlthresh = autovacuum_analyze_threshold + autovacuum_analyze_scale_factor * reltuples
+     *
+     * t_ets_hotel_transaction_log 29 gundur analiz gormemisti ve bu tamamen
+     * normaldi — esigi 1.520.266, birikmis degisim 516.298 (esigin %34'u).
+     * Sabit bir esik onu yanlislikla isaretlerdi.
+     *
+     * Bu yuzden sorulan soru: "esik ASILDIGI HALDE autoanalyze ne kadar
+     * suredir calismadi?" Esik asilmamissa sorun yoktur. Asilmissa ve uzun
+     * suredir calismiyorsa gercek bir aksaklik vardir — kural bunu bildirir.
+     *
+     * Kendi kendini kalibre eder: instance'in kendi ayarlarini kullanir, tablo
+     * boyutuna gore olceklenir, ayar degisince esik de degisir.
+     */
+    private void evaluateStaleStatistics(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String ruleName = (String) rule.get("rule_name");
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        // Esikler SAAT cinsinden: esik asildiktan sonra autoanalyze'in
+        // calismamasina ne kadar tahammul edilecegi.
+        BigDecimal warnHours = toBD(rule.get("warning_threshold"));
+        BigDecimal critHours = toBD(rule.get("critical_threshold"));
+        if (warnHours == null && critHours == null) return;
+
+        for (Map<String, Object> target : loadTargetInstances(rule)) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+
+            List<Map<String, Object>> stale;
+            try {
+                stale = findStaleStatisticsTables(instancePk);
+            } catch (Exception e) {
+                log.warn("stale_statistics sorgusu hatasi instance={}: {}", instancePk, e.getMessage());
+                continue;
+            }
+
+            // En uzun sure bayat kalan tablo severity'yi belirler.
+            double worstHours = 0;
+            for (Map<String, Object> r : stale) {
+                double h = r.get("stale_hours") instanceof Number n ? n.doubleValue() : 0;
+                if (h > worstHours) worstHours = h;
+            }
+
+            String severity = null;
+            if (critHours != null && worstHours >= critHours.doubleValue()) severity = "critical";
+            else if (warnHours != null && worstHours >= warnHours.doubleValue()) severity = "warning";
+
+            String prevSeverity = alertRepo.openSeverity(alertKey);
+
+            if (severity == null) {
+                if (prevSeverity != null && autoResolve) {
+                    resolveAlert(alertKey, rule, instancePk, null);
+                }
+                updateLastEval(ruleId, instancePk, BigDecimal.valueOf(worstHours), null);
+                continue;
+            }
+            if (prevSeverity == null && alertRepo.resolvedWithin(alertKey, cooldownMinutes)) continue;
+
+            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+            ctx.put("value", BigDecimal.valueOf(Math.round(worstHours)));
+            ctx.put("stale_count", stale.size());
+            ctx.put("stale_list", formatStaleList(stale));
+            ctx.put("stale_action", staleStatisticsAction(stale));
+
+            String fallback = String.format("%s: %d tablonun istatistikleri bayat (en eskisi %d saat).",
+                lookupInstanceName(instancePk), stale.size(), Math.round(worstHours));
+            String[] rendered = renderWithCode(rule, ctx, ruleName, fallback, "stale_statistics");
+
+            alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE, severity,
+                instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
+                buildStaleDetailsJson(stale));
+            updateLastEval(ruleId, instancePk, BigDecimal.valueOf(Math.round(worstHours)), severity);
+        }
+    }
+
+    /**
+     * PostgreSQL'in kendi autoanalyze esigini asmis ama analiz edilmemis
+     * tablolar. Esik instance'in kendi ayarlarindan hesaplanir; ayarlar
+     * okunamazsa PostgreSQL varsayilanlarina (50 / 0.1) duser.
+     *
+     * reltuples zorunlu: bilinmiyorsa (PG14+ -1, ya da hic vacuum/analyze
+     * gormemis tablo) esik hesaplanamaz ve tahmin yurutmek yerine kayit
+     * atlanir.
+     */
+    private List<Map<String, Object>> findStaleStatisticsTables(long instancePk) {
+        return jdbc.queryForList(
+            "with settings as (" +
+            "  select" +
+            "    coalesce(max(case when setting_name = 'autovacuum_analyze_threshold'" +
+            "                      then setting_value::numeric end), 50) as base_thresh," +
+            "    coalesce(max(case when setting_name = 'autovacuum_analyze_scale_factor'" +
+            "                      then setting_value::numeric end), 0.1) as scale_factor" +
+            "  from (" +
+            "    select distinct on (setting_name) setting_name, setting_value" +
+            "      from fact.pg_settings_snapshot" +
+            "     where instance_pk = ?" +
+            "       and setting_name in ('autovacuum_analyze_threshold'," +
+            "                            'autovacuum_analyze_scale_factor')" +
+            "     order by setting_name, snapshot_ts desc" +
+            "  ) s" +
+            ")," +
+            // Her tablonun pencere icindeki EN SON ornegi
+            "latest as (" +
+            "  select distinct on (schemaname, relname, dbid)" +
+            "         schemaname, relname, dbid, relid," +
+            "         reltuples, n_mod_since_analyze," +
+            "         greatest(coalesce(last_analyze, '-infinity'::timestamptz)," +
+            "                  coalesce(last_autoanalyze, '-infinity'::timestamptz)) as last_any_analyze," +
+            "         sample_ts" +
+            "    from fact.pg_table_stat_delta" +
+            "   where instance_pk = ? and sample_ts > now() - interval '2 hours'" +
+            "   order by schemaname, relname, dbid, sample_ts desc" +
+            ")" +
+            "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
+            "       l.reltuples, l.n_mod_since_analyze," +
+            "       (s.base_thresh + s.scale_factor * l.reltuples)::bigint as analyze_threshold," +
+            "       case when l.last_any_analyze = '-infinity'::timestamptz then null" +
+            "            else l.last_any_analyze end as last_any_analyze," +
+            // Ne kadar suredir bayat: analiz varsa ondan beri, hic yoksa
+            // ilk gozlemimizden beri — "sonsuzdur bayat" demek yerine
+            // bildigimiz en erken ani kullaniyoruz.
+            "       extract(epoch from (now() - coalesce(" +
+            "         nullif(l.last_any_analyze, '-infinity'::timestamptz)," +
+            "         (select min(sample_ts) from fact.pg_table_stat_delta d2" +
+            "           where d2.instance_pk = ? and d2.schemaname = l.schemaname" +
+            "             and d2.relname = l.relname and d2.dbid = l.dbid)" +
+            "       ))) / 3600.0 as stale_hours" +
+            "  from latest l" +
+            "  cross join settings s" +
+            "  left join dim.database_ref dbr" +
+            "    on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
+            // reltuples bilinmiyorsa esik hesaplanamaz — tahmin yurutmuyoruz
+            " where l.reltuples is not null and l.reltuples > 0" +
+            "   and l.n_mod_since_analyze >= s.base_thresh + s.scale_factor * l.reltuples" +
+            " order by stale_hours desc nulls last" +
+            " limit " + STALE_STATS_QUERY_LIMIT,
+            instancePk, instancePk, instancePk, instancePk);
+    }
+
+    static String formatStaleListForTest(List<Map<String, Object>> stale) {
+        return formatStaleList(stale);
+    }
+
+    static String staleStatisticsActionForTest(List<Map<String, Object>> stale) {
+        return staleStatisticsAction(stale);
+    }
+
+    /** Mesajdaki tablo listesi — en uzun sure bayat kalanlar once. */
+    private static String formatStaleList(List<Map<String, Object>> stale) {
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (Map<String, Object> r : stale) {
+            if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
+            double hours = r.get("stale_hours") instanceof Number n ? n.doubleValue() : 0;
+            long mods = r.get("n_mod_since_analyze") instanceof Number n ? n.longValue() : 0;
+            long thresh = r.get("analyze_threshold") instanceof Number n ? n.longValue() : 0;
+            sb.append(String.format("• DB=%s %s.%s — %s, %,d satır değişmiş (eşik %,d)%n",
+                r.get("datname") != null ? r.get("datname") : "?",
+                r.get("schemaname"), r.get("relname"),
+                hours >= 48 ? String.format("%d gündür analiz yok", Math.round(hours / 24))
+                            : String.format("%d saattir analiz yok", Math.round(hours)),
+                mods, thresh));
+        }
+        if (stale.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
+            sb.append(String.format("… ve %d tablo daha", stale.size() - BATCH_NOTIFICATION_LIST_LIMIT));
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    /**
+     * Aksiyon metni. Tek tablo varsa onu hedefler; birden fazlaysa instance
+     * genelinde tek komut onerilir — cunku cozum zaten instance genelidir ve
+     * tablo tablo ANALYZE calistirmak gereksiz is uretir.
+     */
+    private static String staleStatisticsAction(List<Map<String, Object>> stale) {
+        if (stale.size() == 1) {
+            Map<String, Object> r = stale.get(0);
+            return String.format("ANALYZE %s.%s; çalıştır (DB=%s).",
+                r.get("schemaname"), r.get("relname"),
+                r.get("datname") != null ? r.get("datname") : "?");
+        }
+        java.util.Set<String> dbs = new java.util.LinkedHashSet<>();
+        for (Map<String, Object> r : stale) {
+            if (r.get("datname") != null) dbs.add(r.get("datname").toString());
+        }
+        return dbs.size() == 1
+            ? String.format("Yoğun saat dışında vacuumdb --analyze-only -d %s çalıştır.", dbs.iterator().next())
+            : "Yoğun saat dışında etkilenen veritabanlarında vacuumdb --analyze-only çalıştır.";
+    }
+
+    /** details_json: UI'da tam listeyi gostermek icin (mesajda ilk 5 var). */
+    private String buildStaleDetailsJson(List<Map<String, Object>> stale) {
+        return buildPerRecordsJson(stale, "table_metric", 0, "0", "stale_statistics");
     }
 
     // =========================================================================
@@ -3874,6 +4089,15 @@ public class AlertRuleEvaluator {
      * gibi okunur — oysa kapsanmamistir.
      */
     private static final int PER_RECORD_QUERY_LIMIT = 10;
+
+    /**
+     * stale_statistics kuralinda bir instance icin en fazla kac tablo listelenir.
+     * Bloat'tan daha yuksek: cozum instance geneli tek komut oldugu icin (bkz.
+     * staleStatisticsAction) uzun liste is yuku degil, sadece kapsam bilgisi
+     * uretir. Mesajda yine ilk BATCH_NOTIFICATION_LIST_LIMIT tanesi gosterilir,
+     * gerisi "… ve N tablo daha" olarak GORUNUR.
+     */
+    private static final int STALE_STATS_QUERY_LIMIT = 50;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).

@@ -138,3 +138,59 @@ eder**: bir sorunun düzeldiği her zaman bildirilmelidir.
 Tablo/indeks/sorgu bazlı kurallar kayıt başına ayrı alarm açar ama
 değerlendirme başına **tek** bildirim gönderir — beş bozuk tablo beş
 alarm, bir mesaj. Çözülme tarafı da aynı şekilde toplanır.
+
+## `stale_statistics` — Bayat İstatistik
+
+Sorgu planları istatistiklerden hesaplanır: planner join boyutlarını
+`n_live_tup`/`reltuples` üzerinden tahmin eder. İstatistik gerçeği
+yansıtmıyorsa plan da yanlış olur — üretimde 62 satır sanılan bir tablo
+gerçekte 4.593.352 satırdı; böyle bir tablo nested loop'un iç tarafına
+konur ve sorgu saatlerce sürer.
+
+### Eşik sabit değil
+
+Kural kendi sabitini taşımaz. Bir tablonun istatistiklerinin bayat
+sayılıp sayılmayacağına **PostgreSQL'in kendi autoanalyze eşiği** karar
+verir:
+
+```
+eşik = autovacuum_analyze_threshold + autovacuum_analyze_scale_factor × reltuples
+```
+
+Kural şunu sorar: **eşik aşıldığı hâlde ANALYZE ne kadar süredir
+çalışmadı?** Eşik aşılmamışsa ortada sorun yoktur.
+
+Bu ayrım deneyimle öğrenildi. `t_ets_hotel_transaction_log` 29 gündür
+analiz görmemişti ve bu tamamen normaldi: gerçek eşiği 1.520.266, birikmiş
+değişim 516.298 — eşiğin %34'ü. Sabit bir "10.000 satır / 7 gün" kuralı
+onu yanlışlıkla işaretlerdi.
+
+Kural böylece kendi kendini kalibre eder: instance'ın kendi
+`autovacuum_analyze_*` ayarlarını kullanır, tablo boyutuna göre ölçeklenir,
+ayar değişince eşik de değişir.
+
+### Neden `n_mod_since_analyze`
+
+Bu sayaç `ANALYZE` tarafından sıfırlanır, yani uyarmak istediğimiz bozuk
+`n_live_tup`/`n_dead_tup` tahminlerinden bağımsızdır. Kuralı canlı satır
+tahminine dayandırmak, ölçmeye çalıştığı hatanın kendisine dayanmak
+olurdu.
+
+`reltuples` bilinmiyorsa (PG14+ `-1`, ya da hiç vacuum/analyze görmemiş
+tablo) eşik hesaplanamaz ve tablo **atlanır** — tahmin yürütülmez.
+
+### Eşikler
+
+`warning_threshold` ve `critical_threshold` **saat** cinsindendir: eşik
+aşıldıktan sonra `ANALYZE`'ın çalışmamasına ne kadar tahammül edileceği.
+Varsayılan 24 / 72 saat, Alert Rules ekranından değiştirilebilir.
+
+### Alarm ve aksiyon
+
+Instance başına **tek** alarm açılır, çünkü çözüm zaten instance geneli
+tek komuttur. Mesaj en uzun süre bekleyen tabloları, kaç satırın
+değiştiğini ve aştıkları eşiği listeler; sığmayanlar "… ve N tablo daha"
+olarak görünür.
+
+Aksiyon tek tabloda `ANALYZE şema.tablo;`, birden fazlada
+`vacuumdb --analyze-only -d <db>` olur.

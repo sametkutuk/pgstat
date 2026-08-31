@@ -472,6 +472,80 @@ class AutovacuumEvidenceTest {
     }
 
     // =========================================================================
+    // Bayat istatistik alarmi (PGSTAT-P1-012)
+    // =========================================================================
+
+    private static java.util.Map<String, Object> staleRow(
+            String db, String schema, String table, double hours, long mods, long thresh) {
+        java.util.Map<String, Object> r = new java.util.HashMap<>();
+        r.put("datname", db); r.put("schemaname", schema); r.put("relname", table);
+        r.put("stale_hours", hours);
+        r.put("n_mod_since_analyze", mods);
+        r.put("analyze_threshold", thresh);
+        return r;
+    }
+
+    @Test
+    void aSingleStaleTableGetsATargetedAnalyzeCommand() {
+        String action = AlertRuleEvaluator.staleStatisticsActionForTest(
+            java.util.List.of(staleRow("etsrooms", "public", "t_currency_rate", 200, 1153450, 60000)));
+
+        assertThat(action).contains("ANALYZE public.t_currency_rate;");
+        assertThat(action).contains("etsrooms");
+    }
+
+    @Test
+    void severalStaleTablesInOneDatabaseGetOneInstanceWideCommand() {
+        // Cozum instance geneli tek komut; tablo tablo ANALYZE onermek gereksiz
+        // is uretir.
+        String action = AlertRuleEvaluator.staleStatisticsActionForTest(java.util.List.of(
+            staleRow("bis", "public", "a", 100, 10, 5),
+            staleRow("bis", "public", "b", 90, 10, 5)));
+
+        assertThat(action).contains("vacuumdb --analyze-only -d bis");
+    }
+
+    @Test
+    void staleTablesSpanningDatabasesDoNotNameASingleDatabase() {
+        // Tek bir -d parametresi yanlis olurdu; komut adlandirilmadan verilir.
+        String action = AlertRuleEvaluator.staleStatisticsActionForTest(java.util.List.of(
+            staleRow("bis", "public", "a", 100, 10, 5),
+            staleRow("contract", "public", "b", 90, 10, 5)));
+
+        assertThat(action).contains("vacuumdb --analyze-only");
+        assertThat(action).doesNotContain("-d bis");
+    }
+
+    @Test
+    void staleListReportsDaysOnceHoursBecomeUnreadable() {
+        String list = AlertRuleEvaluator.formatStaleListForTest(
+            java.util.List.of(staleRow("etstur", "public", "t_x", 24 * 127, 13617, 5000)));
+
+        assertThat(list).contains("127 gündür analiz yok");
+        assertThat(list).contains("13.617");   // binlik ayrac, tr-TR
+        assertThat(list).contains("DB=etstur public.t_x");
+    }
+
+    @Test
+    void staleListShowsHoursWhileTheyAreStillReadable() {
+        String list = AlertRuleEvaluator.formatStaleListForTest(
+            java.util.List.of(staleRow("etstur", "public", "t_x", 30, 100, 50)));
+
+        assertThat(list).contains("30 saattir analiz yok");
+    }
+
+    @Test
+    void staleListSurfacesWhatItHadToLeaveOut() {
+        // Sessiz kirpma "hepsi bu" gibi okunur; kalan sayisi yazilmali.
+        java.util.List<java.util.Map<String, Object>> many = new java.util.ArrayList<>();
+        for (int i = 0; i < 9; i++) many.add(staleRow("db", "public", "t" + i, 100 - i, 10, 5));
+
+        String list = AlertRuleEvaluator.formatStaleListForTest(many);
+
+        assertThat(list).contains("ve 4 tablo daha");
+    }
+
+    // =========================================================================
     // Kayit bazli alert anahtari (recordAlertKey) — PGSTAT-P0-039
     // =========================================================================
 

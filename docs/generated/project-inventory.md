@@ -16,7 +16,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 104 |
+| Migrations scanned | 105 |
 | Tables discovered | 96 |
 | Columns discovered | 1176 |
 | Indexes discovered | 127 |
@@ -219,7 +219,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.alert_code_notification_channel | 3 | no |  | V099__channel_alert_code_filter.sql | V099__channel_alert_code_filter.sql |
 | control.alert_message_template | 6 | no |  | V030__alert_message_templates.sql | V030__alert_message_templates.sql |
 | control.alert_notification | 9 | no |  | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |
-| control.alert_rule | 36 | no |  | V011__alert_rules.sql | V089__bloat_alert_thresholds.sql |
+| control.alert_rule | 36 | no |  | V011__alert_rules.sql | V101__stale_statistics_rule.sql |
 | control.alert_rule_last_eval | 8 | no |  | V011__alert_rules.sql | V016__smart_alerts.sql |
 | control.alert_rule_notification_channel | 3 | no |  | V091__alert_rule_notification_channel_selection.sql | V091__alert_rule_notification_channel_selection.sql |
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |

@@ -43,7 +43,8 @@ public class NightlySnapshotCollector {
           'max_wal_size', 'min_wal_size', 'wal_compression',
           'autovacuum', 'autovacuum_worker_slots',
           'autovacuum_vacuum_scale_factor', 'autovacuum_analyze_scale_factor',
-          'autovacuum_vacuum_threshold', 'autovacuum_max_workers',
+          'autovacuum_vacuum_threshold', 'autovacuum_analyze_threshold',
+          'autovacuum_max_workers',
           'autovacuum_freeze_max_age', 'autovacuum_naptime',
           'autovacuum_vacuum_cost_limit', 'autovacuum_vacuum_cost_delay',
           'vacuum_cost_limit', 'vacuum_cost_delay',
@@ -130,6 +131,11 @@ public class NightlySnapshotCollector {
           'max_wal_size', 'checkpoint_timeout', 'checkpoint_completion_target',
           'autovacuum', 'autovacuum_worker_slots',
           'autovacuum_vacuum_scale_factor', 'autovacuum_max_workers',
+          -- analyze esigi/olcegi: stale_statistics kurali PostgreSQL'in KENDI
+          -- autoanalyze esigini hesaplayabilsin diye (PGSTAT-P1-012). Gece
+          -- toplamasi da aliyor ama bu kural sik degerlendiriliyor; yeni
+          -- eklenen bir instance'ta ilk geceyi beklememek icin HOT'ta da var.
+          'autovacuum_analyze_scale_factor', 'autovacuum_analyze_threshold',
           'autovacuum_vacuum_cost_limit', 'autovacuum_vacuum_cost_delay',
           'vacuum_cost_limit', 'vacuum_cost_delay',
           'random_page_cost'
