@@ -156,8 +156,16 @@ public class DbObjectsCollector {
                     "       case when c.reltoastrelid > 0" +
                     "            then pg_total_relation_size(c.reltoastrelid) end as toast_size_bytes," +
                     "       nullif(c.reltuples, -1)::bigint as reltuples," +
+                    "       c.oid::bigint as relid," +
+                    "       coalesce(nullif(substring(array_to_string(c.reloptions, ',')" +
+                    "                 from 'fillfactor=([0-9]+)'), '')::int, 100) as fillfactor," +
+                    // Ankraj: reltuples bu anda degil, son vacuum/analyze aninda
+                    // guncellenmistir (V109, PGSTAT-P0-046).
+                    "       greatest(st.last_vacuum, st.last_autovacuum," +
+                    "                st.last_analyze, st.last_autoanalyze) as reltuples_anchor_at," +
                     "       c.relkind::text as relkind" +
                     "  from pg_class c" +
+                    "  left join pg_stat_all_tables st on st.relid = c.oid" +
                     " where c.oid = to_regclass(quote_ident(?) || '.' || quote_ident(?))" +
                     "   and c.relkind in ('r','m')")) {
                 ps.setString(1, t[0]);
@@ -170,7 +178,10 @@ public class DbObjectsCollector {
                         (Long) rs.getObject("table_size_bytes"),
                         (Long) rs.getObject("index_size_bytes"),
                         (Long) rs.getObject("toast_size_bytes"),
-                        (Long) rs.getObject("reltuples"));
+                        (Long) rs.getObject("reltuples"),
+                        (Long) rs.getObject("relid"),
+                        (Integer) rs.getObject("fillfactor"),
+                        rs.getObject("reltuples_anchor_at", OffsetDateTime.class));
                     rows++;
                 }
             } catch (Exception e) {

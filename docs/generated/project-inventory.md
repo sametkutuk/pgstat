@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 112 |
+| Migrations scanned | 113 |
 | Tables discovered | 96 |
-| Columns discovered | 1181 |
-| Indexes discovered | 128 |
+| Columns discovered | 1184 |
+| Indexes discovered | 129 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
@@ -1144,7 +1144,7 @@ This generated inventory is the bridge between code and the manual project docum
 | fact.pg_progress_snapshot | 12 | yes | snapshot_ts | V004__fact_tables.sql | V004__fact_tables.sql |
 | fact.pg_progress_vacuum_snapshot | 17 | yes | sample_ts | V067__missing_stat_columns_phase2.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_recovery_prefetch_snapshot | 12 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V026__slru_subscription_prefetch_functions.sql |
-| fact.pg_relation_size_snapshot | 11 | yes | snapshot_ts | V039__nightly_pg_settings_and_catalog.sql | V102__relation_size_reltuples.sql |
+| fact.pg_relation_size_snapshot | 14 | yes | snapshot_ts | V039__nightly_pg_settings_and_catalog.sql | V109__relation_size_identity_and_anchor.sql |
 | fact.pg_replication_slot_snapshot | 30 | yes | sample_ts | V024__slot_conflict_tables.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_replication_snapshot | 23 | yes | snapshot_ts | V004__fact_tables.sql | V066__missing_stat_columns.sql |
 | fact.pg_sequence_io_snapshot | 8 | yes | sample_ts | V028__sequence_io_stats.sql | V028__sequence_io_stats.sql |
@@ -1522,7 +1522,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>fact.pg_relation_size_snapshot columns (11)</summary>
+<details><summary>fact.pg_relation_size_snapshot columns (14)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -1537,6 +1537,9 @@ This generated inventory is the bridge between code and the manual project docum
 | index_size_bytes | bigint | V039__nightly_pg_settings_and_catalog.sql |
 | toast_size_bytes | bigint | V039__nightly_pg_settings_and_catalog.sql |
 | reltuples | bigint | V102__relation_size_reltuples.sql |
+| relid | bigint | V109__relation_size_identity_and_anchor.sql |
+| fillfactor | integer | V109__relation_size_identity_and_anchor.sql |
+| reltuples_anchor_at | timestamptz | V109__relation_size_identity_and_anchor.sql |
 
 </details>
 

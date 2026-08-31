@@ -4081,7 +4081,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Add relid and a row-estimate as-of anchor to the size snapshot, let enough history accumulate under the new identity, then re-enable the rule.",
+      "next_action": "Deploy V109 and wait for two nightly snapshots carrying relid, fillfactor and the anchor. Only then re-enable the rule and check its first output against a manual measurement.",
       "title": "The physical bloat rule compares a size and a row count from different moments, and matches table history by name",
       "problem": "An external review of the shipped table_space_bloat rule found three correctness problems, one fixed immediately and two needing new collection. First, fillfactor was subtracted twice: the historical baseline is drawn from the table own past observations, which were taken under the same fillfactor regime and therefore already include the space left free by design, so multiplying the expectation by 100/fillfactor removed that allowance a second time and under-reported bloat - a genuine threefold case would have been reported as 2.1. That is fixed. Second, the numerator is table_size_bytes at snapshot time T while the denominator is reltuples plus deltas accumulated after T; reltuples itself was last refreshed at whatever VACUUM or ANALYZE preceded T, possibly months earlier, so staleness before T is never corrected and the two halves of the ratio describe different moments. Third, fact.pg_relation_size_snapshot identifies tables by schema and name and carries no relid, so a rename splits a history and a drop-and-recreate or a reused name merges two different tables into one - meaning the historical minimum can be another table measurement entirely.",
       "requirements": [
@@ -4104,22 +4104,27 @@
         {
           "id": "AC3",
           "text": "fact.pg_relation_size_snapshot carries relid, and the detector matches history on identity rather than name.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC4",
           "text": "Each size observation carries an as-of row estimate, or the detector declines to compute a ratio for that observation.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC5",
           "text": "fillfactor is recorded per observation so a regime change splits the baseline rather than silently invalidating the comparison.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC6",
           "text": "The rule is re-enabled only after enough history has accumulated under the new identity, and the first results are checked against a manual measurement.",
           "status": "pending"
+        },
+        {
+          "id": "AC7",
+          "text": "The detector skips a record whose delta history does not reach back to the row-estimate anchor, or which has a gap larger than the tolerance between consecutive samples, rather than bridging a period it did not observe.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -4145,7 +4150,11 @@
       "verification_evidence": [
         "External review on 2026-08-31 read the shipped SQL rather than the design and identified all three problems with file and line references. The fillfactor double-subtraction was verified directly in the query before being fixed.",
         "The rule was disabled rather than left armed. It had not yet produced a single alert, because it needs two nightly snapshots and the first populated one had not run, so disabling withdraws nothing - it only prevents publishing results whose correctness is known to be in doubt.",
-        "This also invalidates the claim made in V102 and V103 that the physical bloat measurement needed no new collection. Identity and an as-of row estimate both require collecting fields we do not have."
+        "This also invalidates the claim made in V102 and V103 that the physical bloat measurement needed no new collection. Identity and an as-of row estimate both require collecting fields we do not have.",
+        "Implemented 2026-08-31. fact.pg_relation_size_snapshot now carries relid, the effective fillfactor and reltuples_anchor_at - the newest of the four vacuum and analyze timestamps, which is when reltuples was actually measured. Both the nightly collector and the intra-day watched-table path populate them.",
+        "The detector matches history on relid rather than name, so a rename no longer splits a history and a reused name no longer merges two tables. The baseline is drawn only from observations sharing the current fillfactor regime, which is the correct use of that value - the multiplier removed in V108 was trying to solve this and solved it wrongly by subtracting the allowance a second time.",
+        "The row count is corrected across the anchor rather than across the snapshot: deltas are summed between reltuples_anchor_at and snapshot_ts, so staleness accumulated before the snapshot is now corrected too. A record is skipped unless the delta history reaches back to the anchor and has no gap longer than three hours between consecutive samples, since bridging a period we did not observe would be inventing the bloat rather than measuring it.",
+        "Rows written before V109 carry no relid and are excluded, so the rule stays disabled until at least two qualifying snapshots exist - roughly two nights after deploy."
       ]
     }
   ]

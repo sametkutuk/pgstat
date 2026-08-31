@@ -71,14 +71,30 @@ public class NightlySnapshotCollector {
           case when c.relkind in ('r','m') and c.reltoastrelid > 0 then
             pg_total_relation_size(c.reltoastrelid) else null end as toast_size_bytes,
           -- Boyutun yaninda satir sayisi: ikisi birlikte "satir basina bayt"
-          -- verir ve bu, fiziksel sismenin OLCUMUDUR (tahmini degil).
-          -- pg_table_stat_delta'da da reltuples var ama onun retention'i
-          -- 7-14 gun; buradaki gece anlik goruntusu ~4 ay yasiyor, yani
-          -- tablonun sikisik halini uzun gecmiste arayabilmek icin burada
-          -- olmasi gerekiyor (V102, PGSTAT-P0-042).
-          nullif(c.reltuples, -1)::bigint as reltuples
+          -- verir. pg_table_stat_delta'da da reltuples var ama onun
+          -- retention'i 7-14 gun; buradaki gece anlik goruntusu ~4 ay yasiyor,
+          -- yani tablonun en yogun halini uzun gecmiste arayabilmek icin
+          -- burada olmasi gerekiyor (V102).
+          nullif(c.reltuples, -1)::bigint as reltuples,
+          -- KIMLIK: gecmis eslesmesi adla degil bununla yapilir. Rename
+          -- gecmisi bolmesin, yeniden kullanilan bir ad iki farkli tabloyu
+          -- birlestirmesin (V109, PGSTAT-P0-046).
+          c.oid::bigint as relid,
+          -- FILLFACTOR REJIMI: taban ile mevcut gozlem ayni rejimde degilse
+          -- karsilastirma gecersiz. Carpan olarak degil, ayirici olarak.
+          coalesce(
+            nullif(substring(array_to_string(c.reloptions, ',')
+                             from 'fillfactor=([0-9]+)'), '')::int,
+            100) as fillfactor,
+          -- ANKRAJ: reltuples snapshot aninda degil, en son calisan
+          -- vacuum/analyze aninda guncellenmistir. Dogru satir sayisi icin bu
+          -- an ile snapshot arasindaki ins/del delta'lari eklenecek; delta
+          -- gecmisi buraya kadar uzanmiyorsa kayit atlanacak.
+          greatest(s.last_vacuum, s.last_autovacuum,
+                   s.last_analyze, s.last_autoanalyze) as reltuples_anchor_at
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
+        left join pg_stat_all_tables s on s.relid = c.oid
         where c.relkind in ('r', 'i', 'm')
           and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast')
           and not n.nspname like 'pg_temp_%'
@@ -318,15 +334,18 @@ public class NightlySnapshotCollector {
                     rs.getObject("table_size_bytes") != null ? rs.getLong("table_size_bytes") : null,
                     rs.getObject("index_size_bytes") != null ? rs.getLong("index_size_bytes") : null,
                     rs.getObject("toast_size_bytes") != null ? rs.getLong("toast_size_bytes") : null,
-                    rs.getObject("reltuples") != null ? rs.getLong("reltuples") : null
+                    rs.getObject("reltuples") != null ? rs.getLong("reltuples") : null,
+                    rs.getObject("relid") != null ? rs.getLong("relid") : null,
+                    rs.getObject("fillfactor") != null ? rs.getInt("fillfactor") : null,
+                    rs.getObject("reltuples_anchor_at", java.time.OffsetDateTime.class)
                 });
             }
         }
         if (batch.isEmpty()) return 0;
 
         jdbc.batchUpdate(
-            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples) " +
-            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples, relid, fillfactor, reltuples_anchor_at) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
             batch.stream().map(row -> (Object[]) row).toList()
         );
         return batch.size();

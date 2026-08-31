@@ -803,102 +803,110 @@ public class AlertRuleEvaluator {
                                                              BigDecimal minRatio,
                                                              long minWastedMb) {
         return jdbc.queryForList(
+            // GECMIS KIMLIKLE eslesir, adla degil (V109). Ad kullanildiginda
+            // rename gecmisi bolüyor, yeniden kullanilan bir ad iki FARKLI
+            // tabloyu tek gecmis gibi birlestiriyordu — tarihsel taban baska
+            // bir tablonun yogunlugu olabiliyordu.
             "with obs as (" +
-            "  select dbid, schemaname, relname, snapshot_ts," +
-            "         table_size_bytes, reltuples," +
+            "  select relid, dbid, schemaname, relname, snapshot_ts," +
+            "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at," +
             "         table_size_bytes::numeric / reltuples as bytes_per_row" +
             "    from fact.pg_relation_size_snapshot" +
             "   where instance_pk = ?" +
+            "     and relid is not null" +          // V109 oncesi satirlar kullanilmaz
             "     and table_size_bytes is not null" +
             "     and reltuples is not null and reltuples > 0" +
-            // Cok kucuk tablolarda sayfa granulerligi orani anlamsizlastirir
             "     and table_size_bytes > ?" +
             ")," +
             "latest as (" +
-            "  select distinct on (dbid, schemaname, relname)" +
-            "         dbid, schemaname, relname, snapshot_ts," +
-            "         table_size_bytes, reltuples" +
-            "    from obs order by dbid, schemaname, relname, snapshot_ts desc" +
+            "  select distinct on (relid)" +
+            "         relid, dbid, schemaname, relname, snapshot_ts," +
+            "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at" +
+            "    from obs order by relid, snapshot_ts desc" +
             ")," +
-            "compact as (" +
-            "  select dbid, schemaname, relname," +
-            "         min(bytes_per_row) as min_bytes_per_row," +
+            // TABAN, mevcut gozlemle AYNI fillfactor rejiminden secilir.
+            // Rejim degisince tasarim geregi bos alan pay da degisir; farkli
+            // rejimlerdeki gozlemler karsilastirilamaz. (V104'teki
+            // 100/fillfactor carpani bu ihtiyaci yanlis cozuyordu ve payi iki
+            // kez dusuyordu — V108'de kaldirildi.)
+            "baseline as (" +
+            "  select o.relid," +
+            "         min(o.bytes_per_row) as min_bytes_per_row," +
             "         count(*) as observation_count" +
-            "    from obs group by dbid, schemaname, relname" +
+            "    from obs o join latest l on l.relid = o.relid" +
+            "   where coalesce(o.fillfactor,100) = coalesce(l.fillfactor,100)" +
+            "   group by o.relid" +
             ")," +
-            // SATIR SAYISI DUZELTMESI (V104). reltuples yalnizca VACUUM/ANALYZE
-            // ile guncellenir; aradaki surede tablo buyurse payda eski kalir ve
-            // BUYUME sisme gibi gorunur (1M -> 2M satir, reltuples 1M kalirsa
-            // bayt/satir iki katina cikar ve tablo hic sismemis olsa bile "2 kat
-            // sismis" raporlanirdi). Toplanan ins/del delta'lari bu bosluğu
-            // kapatiyor: son boyut anlik goruntusunden BERI eklenen ve silinen
-            // satirlar sayilip reltuples'a ekleniyor.
-            "growth as (" +
-            "  select d.dbid, d.schemaname, d.relname," +
-            "         sum(coalesce(d.n_tup_ins_delta,0) - coalesce(d.n_tup_del_delta,0)) as net_rows" +
-            "    from fact.pg_table_stat_delta d" +
-            "    join latest l2 on l2.dbid = d.dbid and l2.schemaname = d.schemaname" +
-            "                  and l2.relname = d.relname" +
-            "   where d.instance_pk = ? and d.sample_ts > l2.snapshot_ts" +
-            "   group by d.dbid, d.schemaname, d.relname" +
-            ")," +
-            // FILLFACTOR — carpan olarak UYGULANMAZ (V108 duzeltmesi).
+            // ZAMAN ANKRAJI. reltuples, snapshot aninda degil ankraj aninda
+            // olculmustur. Dogru satir sayisi icin ankraj ile snapshot arasi
+            // ins/del delta'lari eklenir.
             //
-            // V104'te "fillfactor=70 olan saglikli bir tablo 1.43 kat sismis
-            // gorunur" gerekcesiyle expected_bytes'a (100/fillfactor) carpani
-            // eklenmisti. Bu YANLISTI: taban (min_bytes_per_row) tablonun kendi
-            // gecmis gozlemlerinden geliyor ve o gozlemler zaten ayni fillfactor
-            // rejiminde alindigi icin tasarim geregi bos alani ICERIYOR. Carpan,
-            // ayni payi ikinci kez dusuyordu.
-            //
-            // Sonuc: sismeyi EKSIK raporluyorduk. fillfactor=70 bir tabloda
-            // gercek 3 kat sisme 2.1 kat olarak cikardi (dis inceleme,
-            // 2026-08-31).
-            //
-            // Deger yine seciliyor: mesajda gosteriliyor ve tabanin hangi
-            // rejimde olculdugu bilinmedigi surece bu bir SINIR — fillfactor
-            // taban olusduktan sonra degistiyse karsilastirma gecersizdir.
-            // Rejim degisimini tespit edebilmek icin fillfactor'un her boyut
-            // gozlemiyle birlikte saklanmasi gerekiyor (PGSTAT-P0-046).
-            "ff as (" +
-            "  select dbid, relid, schemaname, relname," +
-            "         coalesce(fillfactor, 100) as fillfactor" +
-            "    from control.table_relopts_snapshot where instance_pk = ?" +
+            // delta_cover: delta gecmisimiz ankraja kadar UZANIYOR mu, ve
+            // ardisik ornekler arasinda buyuk bosluk var mi. Uzanmiyorsa ya
+            // da bosluk varsa fark koprulenemez ve kayit ATLANIR — tahmin
+            // yurutmek sismeyi uydurmak olurdu.
+            "delta_cover as (" +
+            "  select d.relid," +
+            "         min(d.sample_ts) as first_sample," +
+            "         max(extract(epoch from d.gap)) as max_gap_seconds," +
+            "         sum(d.net_rows) as net_rows" +
+            "    from (" +
+            "      select x.relid, x.sample_ts, x.net_rows," +
+            "             x.sample_ts - lag(x.sample_ts)" +
+            "               over (partition by x.relid order by x.sample_ts) as gap" +
+            "        from (" +
+            "          select t.relid, t.sample_ts," +
+            "                 coalesce(t.n_tup_ins_delta,0)" +
+            "                   - coalesce(t.n_tup_del_delta,0) as net_rows" +
+            "            from fact.pg_table_stat_delta t" +
+            "            join latest l3 on l3.relid = t.relid" +
+            "           where t.instance_pk = ?" +
+            "             and l3.reltuples_anchor_at is not null" +
+            "             and t.sample_ts >  l3.reltuples_anchor_at" +
+            "             and t.sample_ts <= l3.snapshot_ts" +
+            "        ) x" +
+            "    ) d" +
+            "   group by d.relid" +
             ")" +
-            "select l.schemaname, l.relname, l.dbid, ff.relid, dbr.datname," +
+            "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
             "       l.table_size_bytes as current_bytes," +
-            "       l.reltuples," +
-            "       greatest(l.reltuples + coalesce(g.net_rows, 0), 1) as est_rows," +
-            "       coalesce(ff.fillfactor, 100) as fillfactor," +
-            "       c.observation_count," +
-            "       (greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row)::bigint as expected_bytes," +
-            "       (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row)::bigint as wasted_bytes," +
+            "       l.reltuples, l.fillfactor, l.reltuples_anchor_at," +
+            "       b.observation_count," +
+            "       greatest(l.reltuples + coalesce(dc.net_rows, 0), 1) as est_rows," +
+            "       (greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
+            "         * b.min_bytes_per_row)::bigint as expected_bytes," +
+            "       (l.table_size_bytes - greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
+            "         * b.min_bytes_per_row)::bigint as wasted_bytes," +
             "       (l.table_size_bytes::numeric" +
-            "         / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "           * c.min_bytes_per_row, 0))::numeric" +
-            "         as bloat_ratio," +
+            "         / nullif(greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
+            "           * b.min_bytes_per_row, 0))::numeric as bloat_ratio," +
             "       l.snapshot_ts" +
             "  from latest l" +
-            "  join compact c using (dbid, schemaname, relname)" +
-            "  left join growth g using (dbid, schemaname, relname)" +
-            "  left join ff on ff.dbid = l.dbid and ff.schemaname = l.schemaname" +
-            "              and ff.relname = l.relname" +
+            "  join baseline b on b.relid = l.relid" +
+            "  left join delta_cover dc on dc.relid = l.relid" +
             "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
-            // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0.
-            // Anlamli bir taban icin en az iki farkli gozlem gerekiyor.
-            " where c.observation_count >= 2" +
-            "   and c.min_bytes_per_row > 0" +
+            // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0
+            " where b.observation_count >= 2" +
+            "   and b.min_bytes_per_row > 0" +
+            // Ankraj bilinmiyorsa reltuples zaten guvenilmez
+            "   and l.reltuples_anchor_at is not null" +
+            // Ankraj ile snapshot ARASI koprulenebilmis olmali:
+            //   - delta gecmisi ankraja kadar uzaniyor
+            //   - ardisik ornekler arasinda tolere edilemez bosluk yok
+            // Ankraj snapshot'tan sonraysa (arada vacuum olmus) kopru gereksiz.
+            "   and (l.reltuples_anchor_at >= l.snapshot_ts" +
+            "        or (dc.relid is not null" +
+            "            and dc.first_sample <= l.reltuples_anchor_at + interval '1 hour'" +
+            "            and coalesce(dc.max_gap_seconds, 0) <= ?))" +
             "   and l.table_size_bytes::numeric" +
-            "       / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row, 0) >= ?" +
-            "   and (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
-            "         * c.min_bytes_per_row) >= ? * 1024 * 1024" +
+            "       / nullif(greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
+            "         * b.min_bytes_per_row, 0) >= ?" +
+            "   and (l.table_size_bytes - greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
+            "         * b.min_bytes_per_row) >= ? * 1024 * 1024" +
             " order by wasted_bytes desc" +
             " limit " + PER_RECORD_QUERY_LIMIT,
-            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, instancePk, instancePk,
-            minRatio, minWastedMb);
+            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, instancePk,
+            SPACE_BLOAT_MAX_DELTA_GAP_SECONDS, minRatio, minWastedMb);
     }
 
     /**
@@ -4531,6 +4539,20 @@ public class AlertRuleEvaluator {
      * sigabilecek olsa bile "2 kat sismis" gorunur.
      */
     private static final long SPACE_BLOAT_MIN_TABLE_BYTES = 8L * 1024 * 1024;
+
+    /**
+     * Ankraj ile boyut gozlemi arasindaki delta zincirinde tolere edilen en
+     * buyuk bosluk (saniye).
+     *
+     * Satir sayisi duzeltmesi, reltuples'in olculdugu an ile boyutun olculdugu
+     * an arasindaki ins/del delta'larini toplayarak yapiliyor. Collector o
+     * aralikta bir sure calismadiysa, kacirdigi degisim toplama girmez ve
+     * duzeltme eksik kalir — sonuc, olmayan bir sismeyi raporlamak olabilir.
+     *
+     * Toplama normalde ~30 dakikada bir; 3 saatlik tolerans birkac kacirilan
+     * turu affeder ama uzun bir kesintiyi affetmez. Asilirsa kayit atlanir.
+     */
+    private static final long SPACE_BLOAT_MAX_DELTA_GAP_SECONDS = 3 * 3600;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).
