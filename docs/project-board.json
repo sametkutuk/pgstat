@@ -3640,6 +3640,88 @@
         "Divergence measured across the instance: 15 tables where the catalog reported millions of rows while the statistics reported single digits or zero, including t_ets_member_login_log at 12.5 million versus 154 and t_ets_mobile_device at 7.8 million versus 4.",
         "Live verification 2026-08-28: reltuples began arriving at 18:13 and the false critical on t_ets_hotel_transaction_log resolved at 18:13:36 in that same cycle, without intervention. The catalog value of 30,404,328 moved the reported ratio from 100 percent to about 1.7, below the warning threshold, so the record stopped being selected at all."
       ]
+    },
+    {
+      "id": "PGSTAT-P0-042",
+      "order": 56,
+      "priority": "P0",
+      "workstream": "alerting",
+      "status": "planned",
+      "next_action": "Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from.",
+      "title": "Nothing detects a table that is physically bloated while its dead-tuple count stays low",
+      "problem": "The dead_tuple_ratio rule counts dead tuples, which catches autovacuum falling behind but is structurally blind to the opposite case: autovacuum keeping up, clearing dead tuples, while the space they freed is never reused. In that case the dead-tuple count is low by construction. On 2026-08-31 the customer ran vacuumdb -afvz and reclaimed 8 GB. The largest single contributor was agg.pg_table_stat_hourly_202608, which went from 2432 MB to 41 MB at an unchanged row count - 98 percent of it was free space, roughly 20 KB per row for rows that actually occupy 338 bytes. The rollup rewrites each hour bucket about twelve times an hour, so that partition took 1,126,780 updates across 121,162 rows. dead_tuple_ratio did fire, but only at 20.00 percent, exactly on the threshold, and it prescribed VACUUM ANALYZE - a command that cannot return this space. An operator following that advice would have seen no change.",
+      "requirements": [
+        "Physical bloat must be detected independently of the dead-tuple count, since the case being missed is defined by that count being low.",
+        "It must work without installing any extension on the monitored instance: the customer stated pgstattuple and pg_freespacemap cannot be deployed to every monitored server, and pgstattuple would require a full table scan besides.",
+        "It must not depend on pg_stats.avg_width, whose estimate returns zero bloat for a never-analyzed table - 4,478 of the 12,116 observed tables were in exactly that state on 2026-08-31, so an avg_width-based estimate is blind where we know least.",
+        "The diagnosis must state that this is not a dead-tuple problem and that VACUUM will not reclaim the space, because the existing alert already misled on precisely that point.",
+        "The recommended action must differ for a past-dated partition, where an exclusive lock blocks nobody, and an actively written table, where it stops writes.",
+        "A table observed only once must not alert: with a single observation the historical minimum equals the current value and the ratio is always 1."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "fact.pg_relation_size_snapshot carries reltuples alongside table_size_bytes, so bytes-per-row can be computed over the four months that table retains rather than the seven to fourteen days pg_table_stat_delta keeps.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "A table_space_bloat rule compares current bytes-per-row against the minimum ever observed for that same table, which is a measurement of its compact state rather than an estimate of it.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "The rule requires both a ratio above the configured multiple and an absolute wasted amount above a floor in MB, so a small table at three times its compact size does not alert over a few MB.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "Tables with fewer than two observations, or below a minimum size where page granularity distorts the ratio, are excluded.",
+          "status": "done"
+        },
+        {
+          "id": "AC5",
+          "text": "The diagnosis says plainly that this is not dead tuples and that VACUUM will not reclaim the space; the action recommends VACUUM FULL for a past-dated partition and pg_repack or a maintenance window for a live table.",
+          "status": "done"
+        },
+        {
+          "id": "AC6",
+          "text": "mvn test passes (82 tests), including that a past-dated partition is recognised, a future one is not, an undated table never is, and a date embedded mid-name still is.",
+          "status": "done"
+        },
+        {
+          "id": "AC7",
+          "text": "Live verification: after two nightly snapshots the rule reports the tables that vacuumdb actually reclaimed space from, and stays silent on tables that are merely large.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "V102: add reltuples to fact.pg_relation_size_snapshot, plus an index matching the per-table historical lookup.",
+        "NightlySnapshotCollector: select reltuples in RELATION_SIZE_QUERY, normalising the -1 sentinel to null, and carry it into the insert.",
+        "V103: allow table_space_bloat as an evaluation_type, insert the rule with ratio thresholds and an MB floor, and insert its message template.",
+        "AlertRuleEvaluator: dispatch table_space_bloat, add findSpaceBloatedTables comparing latest density against the per-table minimum, and diagnoseSpaceBloat which splits its action on whether the relation name carries a past date."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: after two nightly snapshots, compare the reported tables against what vacuumdb -afvz actually reclaimed, and confirm large-but-compact tables are not reported."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer framed the requirement precisely on 2026-08-31: pgstat should discover and report this itself before the application is fixed, and should be able to distinguish autovacuum falling behind from autovacuum keeping up while the table bloats anyway.",
+        "The measurement approach was chosen after establishing that exact measurement without an extension is impossible - free space inside pages is readable only through pgstattuple or pg_freespacemap - and that the customer cannot install extensions on monitored instances.",
+        "Continuous monitoring makes estimation unnecessary for this purpose: observing the same table repeatedly turns bloat into the difference between two measurements rather than a guess. agg.pg_table_stat_hourly_202608 was observed at roughly 20,032 bytes per row and then at 338 for the same row count, a factor of 59, with no reliance on avg_width, ANALYZE quality or a fillfactor assumption.",
+        "The vacuumdb -afvz run that exposed this also created a fresh compact baseline for every table, so the historical minimum the rule needs exists from 2026-08-31 onward.",
+        "Same run confirmed the cost of the manual workaround: collection dropped from about 48,000 rows an hour to 12,119 during the run, because VACUUM FULL takes an ACCESS EXCLUSIVE lock on every table."
+      ]
     }
   ]
 }

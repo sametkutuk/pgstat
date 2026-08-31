@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 55 |
+| Total tasks | 56 |
 | Done tasks | 22 |
-| Remaining tasks | 33 |
+| Remaining tasks | 34 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -35,13 +35,13 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | codex_verified | 2 |
 | done | 22 |
 | in_progress | 4 |
-| planned | 27 |
+| planned | 28 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| alerting | 9 |
+| alerting | 10 |
 | collector | 3 |
 | contracts | 2 |
 | governance | 5 |
@@ -113,6 +113,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 53 | PGSTAT-P1-013 | P1 | retention | planned | Retention is configured per instance but enforced fleet-wide, because a date partition holds every instance rows | On hold at the customer request (2026-08-28) until the alerting defects are cleared. When it resumes, the first step is unchanged: confirm on a scratch database that a range-partitioned parent accepts a sub-partitioned child alongside plain ones, since the whole no-query-change property rests on it. |
 | 54 | PGSTAT-P1-014 | P1 | alerting | planned | Notification routing cannot distinguish alert types, only severity, for the alerts that have no rule behind them | Deploy with the V099 migration, then restrict one channel to a couple of alert codes and confirm that alerts of other codes still open but are not delivered there. |
 | 55 | PGSTAT-P0-041 | P0 | alerting | codex_verified | Bloat ratio and autovacuum threshold were computed from n_live_tup, which is not what PostgreSQL uses and does not survive a restart | Awaiting customer sign-off; the false criticals on instance 8 resolved on their own in the first collection cycle after deploy. |
+| 56 | PGSTAT-P0-042 | P0 | alerting | planned | Nothing detects a table that is physically bloated while its dead-tuple count stays low | Deploy with V102 and V103, then wait for two nightly size snapshots so a density baseline exists, and confirm the rule reports the agg hourly partitions that vacuumdb reclaimed 8 GB from. |
 
 ## Dependency Map
 
@@ -173,6 +174,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-013 | - | - |
 | PGSTAT-P1-014 | - | - |
 | PGSTAT-P0-041 | - | - |
+| PGSTAT-P0-042 | - | - |
 
 ## Closure Rules
 

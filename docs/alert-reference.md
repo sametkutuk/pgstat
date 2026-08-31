@@ -197,3 +197,63 @@ olarak görünür.
 
 Aksiyon tek tabloda `ANALYZE şema.tablo;`, birden fazlada
 `vacuumdb --analyze-only -d <db>` olur.
+
+## `table_space_bloat` — Fiziksel Tablo Şişmesi
+
+`dead_tuple_ratio` **ölü satır** sayar. Bu, "autovacuum yetişemiyor"
+durumunu yakalar ama tersini **yapısal olarak göremez**: autovacuum
+yetişiyor, ölü satırları temizliyor, ama boşalan alan yeniden
+kullanılmıyor. O durumda ölü satır sayısı tanımı gereği düşüktür.
+
+Üretim vakası (2026-08-31): `agg.pg_table_stat_hourly_202608` %98'i boş
+alan olacak şekilde 2432 MB'a şişmişti. `dead_tuple_ratio` ancak %20.00
+ile — eşiğin tam sınırında — tetiklendi ve **yanlış aksiyon** önerdi:
+`VACUUM ANALYZE`. O komut bu alanı geri getirmez.
+
+### Ölçüm, tahmin değil
+
+Alanın gerçekten ne kadarının boş olduğunu kesin ölçmenin tek yolu
+`pgstattuple` ya da `pg_freespacemap` — ikisi de extension, ve izlenen
+her instance'a kurulamaz. Klasik alternatif `pg_stats.avg_width`'e
+dayanan tahmin sorgusudur; onun da kritik bir körlüğü var: **hiç
+`ANALYZE` edilmemiş tabloda `avg_width = 0` olduğu için sonuç %0 bloat
+çıkar.**
+
+pgstat'ın avantajı sürekli izliyor olması. Aynı tablo tekrar tekrar
+ölçüldüğü için:
+
+```
+satır başına bayt = table_size_bytes / reltuples
+```
+
+Bu değerin tablonun **kendi tarihsel minimumuna** oranı, bir tahmin
+değil **iki ölçüm arasındaki farktır**. Yukarıdaki tablo ~20.032
+bayt/satır ölçülmüş, sonra aynı satır sayısında 338 bayt/satır — 59 kat.
+`avg_width`'e, `ANALYZE` kalitesine veya fillfactor varsayımına hiç
+ihtiyaç duyulmadan.
+
+Minimum, tablonun sıkışık hâlinin gerçek ölçümüdür ve kendiliğinden
+oluşur: `VACUUM FULL` sonrası, partition ilk açıldığında, ya da tablo
+boşken.
+
+**Sınırı:** tabloyu en az bir kez sıkışık görmüş olmak gerekir. Hiç
+görmediysek oran düşük çıkar ve alarm üretilmez — uydurulmuş bir taban
+yanlış alarmdan daha zararlı olurdu.
+
+### Eşikler
+
+`warning_threshold` / `critical_threshold` **şişme katıdır** (3 = olması
+gerekenin 3 katı). `bloat_min_rows` bu kuralda **MB cinsinden mutlak alt
+sınırdır** — küçük bir tabloda %300 şişme 3 MB'dır, müdahaleye değmez.
+İki koşul birlikte aranır.
+
+Ayrıca: 8 MB'ın altındaki tablolar ve iki gözlemden az geçmişi olanlar
+dışlanır. Tek gözlemde minimum = mevcut değer olur, oran her zaman 1.0.
+
+### Aksiyon tabloya göre ayrışır
+
+- **Geçmiş tarihli partition** → `VACUUM FULL` güvenli, kimseyi
+  engellemez
+- **Aktif tablo** → `VACUUM FULL` yazmayı durdurur; bakım penceresi ya da
+  kilit almayan `pg_repack`; tekrarlıyorsa asıl çözüm yazım desenini
+  değiştirmek

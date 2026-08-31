@@ -69,7 +69,14 @@ public class NightlySnapshotCollector {
                       from pg_index i where i.indrelid = c.oid), 0)
             else null end as index_size_bytes,
           case when c.relkind in ('r','m') and c.reltoastrelid > 0 then
-            pg_total_relation_size(c.reltoastrelid) else null end as toast_size_bytes
+            pg_total_relation_size(c.reltoastrelid) else null end as toast_size_bytes,
+          -- Boyutun yaninda satir sayisi: ikisi birlikte "satir basina bayt"
+          -- verir ve bu, fiziksel sismenin OLCUMUDUR (tahmini degil).
+          -- pg_table_stat_delta'da da reltuples var ama onun retention'i
+          -- 7-14 gun; buradaki gece anlik goruntusu ~4 ay yasiyor, yani
+          -- tablonun sikisik halini uzun gecmiste arayabilmek icin burada
+          -- olmasi gerekiyor (V102, PGSTAT-P0-042).
+          nullif(c.reltuples, -1)::bigint as reltuples
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
         where c.relkind in ('r', 'i', 'm')
@@ -310,15 +317,16 @@ public class NightlySnapshotCollector {
                     rs.getLong("total_size_bytes"),
                     rs.getObject("table_size_bytes") != null ? rs.getLong("table_size_bytes") : null,
                     rs.getObject("index_size_bytes") != null ? rs.getLong("index_size_bytes") : null,
-                    rs.getObject("toast_size_bytes") != null ? rs.getLong("toast_size_bytes") : null
+                    rs.getObject("toast_size_bytes") != null ? rs.getLong("toast_size_bytes") : null,
+                    rs.getObject("reltuples") != null ? rs.getLong("reltuples") : null
                 });
             }
         }
         if (batch.isEmpty()) return 0;
 
         jdbc.batchUpdate(
-            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes) " +
-            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
             batch.stream().map(row -> (Object[]) row).toList()
         );
         return batch.size();

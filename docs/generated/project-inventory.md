@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 105 |
+| Migrations scanned | 107 |
 | Tables discovered | 96 |
-| Columns discovered | 1176 |
-| Indexes discovered | 127 |
+| Columns discovered | 1177 |
+| Indexes discovered | 128 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
@@ -219,7 +219,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.alert_code_notification_channel | 3 | no |  | V099__channel_alert_code_filter.sql | V099__channel_alert_code_filter.sql |
 | control.alert_message_template | 6 | no |  | V030__alert_message_templates.sql | V030__alert_message_templates.sql |
 | control.alert_notification | 9 | no |  | V019__adaptive_alerting_fix.sql | V019__adaptive_alerting_fix.sql |
-| control.alert_rule | 36 | no |  | V011__alert_rules.sql | V101__stale_statistics_rule.sql |
+| control.alert_rule | 36 | no |  | V011__alert_rules.sql | V103__table_space_bloat_rule.sql |
 | control.alert_rule_last_eval | 8 | no |  | V011__alert_rules.sql | V016__smart_alerts.sql |
 | control.alert_rule_notification_channel | 3 | no |  | V091__alert_rule_notification_channel_selection.sql | V091__alert_rule_notification_channel_selection.sql |
 | control.alert_snooze | 11 | no |  | V018__adaptive_alerting.sql | V081__telegram_alert_mute.sql |
@@ -1140,7 +1140,7 @@ This generated inventory is the bridge between code and the manual project docum
 | fact.pg_progress_snapshot | 12 | yes | snapshot_ts | V004__fact_tables.sql | V004__fact_tables.sql |
 | fact.pg_progress_vacuum_snapshot | 17 | yes | sample_ts | V067__missing_stat_columns_phase2.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_recovery_prefetch_snapshot | 12 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V026__slru_subscription_prefetch_functions.sql |
-| fact.pg_relation_size_snapshot | 10 | yes | snapshot_ts | V039__nightly_pg_settings_and_catalog.sql | V039__nightly_pg_settings_and_catalog.sql |
+| fact.pg_relation_size_snapshot | 11 | yes | snapshot_ts | V039__nightly_pg_settings_and_catalog.sql | V102__relation_size_reltuples.sql |
 | fact.pg_replication_slot_snapshot | 30 | yes | sample_ts | V024__slot_conflict_tables.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_replication_snapshot | 23 | yes | snapshot_ts | V004__fact_tables.sql | V066__missing_stat_columns.sql |
 | fact.pg_sequence_io_snapshot | 8 | yes | sample_ts | V028__sequence_io_stats.sql | V028__sequence_io_stats.sql |
@@ -1518,7 +1518,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>fact.pg_relation_size_snapshot columns (10)</summary>
+<details><summary>fact.pg_relation_size_snapshot columns (11)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -1532,6 +1532,7 @@ This generated inventory is the bridge between code and the manual project docum
 | table_size_bytes | bigint | V039__nightly_pg_settings_and_catalog.sql |
 | index_size_bytes | bigint | V039__nightly_pg_settings_and_catalog.sql |
 | toast_size_bytes | bigint | V039__nightly_pg_settings_and_catalog.sql |
+| reltuples | bigint | V102__relation_size_reltuples.sql |
 
 </details>
 
@@ -2059,7 +2060,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/repository/ReportHistoryRepository.java | ops.report_history |
 | collector/src/main/java/com/pgstat/collector/repository/StateRepository.java | control.database_state, control.instance_inventory, control.instance_state |
 | collector/src/main/java/com/pgstat/collector/service/AlertMessageRenderer.java | control.alert_message_template |
-| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, control.alert_rule, control.alert_rule_last_eval, control.bloat_scenario_streak, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
+| collector/src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java | agg.get, agg.pg_table_stat_hourly, agg.pg_table_stat_hourly_202608, control.alert_rule, control.alert_rule_last_eval, control.bloat_scenario_streak, control.get_baseline, control.instance_capability, control.instance_group_member, control.instance_inventory, control.is_alert_snoozed, control.is_in_maintenance, control.metric_baseline, control.schedule_profile, control.table_relopts_snapshot, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/AlertService.java | control.instance_inventory, ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/BaselineCalculator.java | control.baseline_trigger, control.instance_inventory, control.metric_baseline, fact.pg_activity_snapshot, fact.pg_cluster_delta, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java | control.instance_inventory, control.long_query_subscription, fact.pg_activity_snapshot, ops.alert |

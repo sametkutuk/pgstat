@@ -472,6 +472,41 @@ class AutovacuumEvidenceTest {
     }
 
     // =========================================================================
+    // Fiziksel sisme — gecmis partition tespiti (PGSTAT-P0-042)
+    // =========================================================================
+
+    @Test
+    void aPastDayPartitionIsRecognisedSoVacuumFullCanBeRecommendedSafely() {
+        // Gecmis bir partition'a kimse yazmadigi icin VACUUM FULL'un kilidi
+        // zararsizdir; aktif tabloda ayni komut yazmayi durdurur. Aksiyon
+        // metni bu ayrima dayaniyor.
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("pgss_delta_20200819")).isTrue();
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("pg_table_stat_hourly_202001")).isTrue();
+    }
+
+    @Test
+    void aFuturePartitionIsNotTreatedAsPast() {
+        // PartitionManager gelecek gunleri onceden acar; onlar yazilacak.
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("pgss_delta_20991231")).isFalse();
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("pgss_hourly_209912")).isFalse();
+    }
+
+    @Test
+    void anUndatedTableIsNeverTreatedAsAPastPartition() {
+        // Yanlis pozitif, aktif bir tabloda VACUUM FULL onermek demek olurdu.
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("statement_series")).isFalse();
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("t_currency_rate_active")).isFalse();
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast("")).isFalse();
+    }
+
+    @Test
+    void aDateEmbeddedMidNameIsStillRecognised() {
+        // Uretimdeki segment adlari: pg_table_stat_hourly_202608_seg_...
+        assertThat(AlertRuleEvaluator.isDatedPartitionInThePast(
+            "pg_table_stat_hourly_202001_seg_202001010000_202001312100")).isTrue();
+    }
+
+    // =========================================================================
     // Bayat istatistik alarmi (PGSTAT-P1-012)
     // =========================================================================
 

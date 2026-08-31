@@ -14,7 +14,7 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 50 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 931 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Field contracts needing exact source/version review | 932 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
 | Sensitive or conditional AI fields | 625 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 

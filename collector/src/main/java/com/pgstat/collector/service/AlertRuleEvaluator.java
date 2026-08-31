@@ -432,6 +432,7 @@ public class AlertRuleEvaluator {
             case "hourly_pattern" -> evaluateHourlyPattern(rule);
             case "adaptive"       -> evaluateAdaptive(rule);
             case "stale_statistics" -> evaluateStaleStatistics(rule);
+            case "table_space_bloat" -> evaluateTableSpaceBloat(rule);
             default -> log.warn("Bilinmeyen evaluation_type: {}", evalType);
         }
     }
@@ -603,6 +604,260 @@ public class AlertRuleEvaluator {
             " order by stale_hours desc nulls last" +
             " limit " + STALE_STATS_QUERY_LIMIT,
             instancePk, instancePk, instancePk, instancePk);
+    }
+
+    // =========================================================================
+    // table_space_bloat: fiziksel sisme — olu satirdan BAGIMSIZ.
+    // =========================================================================
+
+    /**
+     * Fiziksel tablo sismesi (PGSTAT-P0-042).
+     *
+     * dead_tuple_ratio OLU SATIR sayar ve "autovacuum yetisemiyor" durumunu
+     * yakalar. Ama "autovacuum yetisiyor, olu satirlari temizliyor, ama bosalan
+     * alan yeniden kullanilmiyor" durumunu yapisal olarak goremez — o durumda
+     * olu satir sayisi zaten dusuktur.
+     *
+     * Uretim vakasi (2026-08-31, agg.pg_table_stat_hourly_202608): tablo %98'i
+     * bos alan olacak sekilde 2432 MB'a sismisti. dead_tuple_ratio ancak %20.00
+     * ile, esigin tam sinirinda tetiklendi ve YANLIS aksiyon onerdi ("VACUUM
+     * ANALYZE"), cunku o komut bu alani geri getirmez.
+     *
+     * OLCUM, TAHMIN DEGIL: satir basina bayt, tablonun KENDI tarihsel
+     * minimumuna kiyaslanir. Minimum, o tablonun sikisik halinin gercek bir
+     * olcumudur. Bu, pg_stats.avg_width'e dayali klasik tahmine ve onun "hic
+     * ANALYZE edilmemis tabloda %0 bloat" korlugune ihtiyac birakmiyor —
+     * uretimde izlenen 12.116 tablonun 4.478'i tam olarak o durumdaydi.
+     *
+     * Ayrica extension gerektirmiyor: musteri kisiti (2026-08-31) izlenen her
+     * instance'a pgstattuple/pg_freespacemap kurulamayacagi yonundeydi.
+     */
+    private void evaluateTableSpaceBloat(Map<String, Object> rule) {
+        long ruleId = toLong(rule.get("rule_id"));
+        String ruleName = (String) rule.get("rule_name");
+        int cooldownMinutes = toInt(rule.get("cooldown_minutes"));
+        boolean autoResolve = Boolean.TRUE.equals(rule.get("auto_resolve"));
+        BigDecimal warnRatio = toBD(rule.get("warning_threshold"));
+        BigDecimal critRatio = toBD(rule.get("critical_threshold"));
+        if (warnRatio == null && critRatio == null) return;
+        // bloat_min_rows bu kuralda MB cinsinden mutlak alt sinir: kucuk bir
+        // tabloda %300 sisme 3 MB'dir ve mudahale etmeye degmez.
+        long minWastedMb = rule.get("bloat_min_rows") instanceof Number n
+            ? n.longValue() : DEFAULT_SPACE_BLOAT_MIN_WASTED_MB;
+
+        for (Map<String, Object> target : loadTargetInstances(rule)) {
+            long instancePk = toLong(target.get("instance_pk"));
+            String serviceGroup = (String) target.get("service_group");
+            String keyPrefix = recordAlertKeyPrefix(ruleId, instancePk);
+
+            List<Map<String, Object>> bloated;
+            try {
+                BigDecimal probe = warnRatio != null ? warnRatio : critRatio;
+                bloated = findSpaceBloatedTables(instancePk, probe, minWastedMb);
+            } catch (Exception e) {
+                log.warn("table_space_bloat sorgusu hatasi instance={}: {}", instancePk, e.getMessage());
+                continue;
+            }
+
+            java.util.Set<String> stillAlerting = new java.util.HashSet<>();
+            java.util.List<RaisedRecordAlert> raised = new java.util.ArrayList<>();
+            java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
+
+            for (Map<String, Object> rec : bloated) {
+                BigDecimal ratio = toBDSafe(rec.get("bloat_ratio"));
+                if (ratio == null) continue;
+                String severity = null;
+                if (critRatio != null && ratio.compareTo(critRatio) >= 0) severity = "critical";
+                else if (warnRatio != null && ratio.compareTo(warnRatio) >= 0) severity = "warning";
+
+                String recordKey = recordAlertKey(ruleId, instancePk, rec, "table_metric");
+                String prevSeverity = alertRepo.openSeverity(recordKey);
+
+                if (severity == null) {
+                    if (prevSeverity != null && autoResolve) {
+                        resolveRecordDeferred(recordKey, instancePk,
+                            recordLabel(rec, "table_metric"), resolved);
+                    }
+                    continue;
+                }
+                if (prevSeverity == null && alertRepo.resolvedWithin(recordKey, cooldownMinutes)) continue;
+
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", ratio);
+                ctx.put("bloat_ratio", ratio.setScale(1, java.math.RoundingMode.HALF_UP));
+                ctx.put("current_size", formatBytes(rec.get("current_bytes")));
+                ctx.put("compact_size", formatBytes(rec.get("expected_bytes")));
+                ctx.put("wasted_size", formatBytes(rec.get("wasted_bytes")));
+                populateRecordCtx(ctx, rec, "table_metric");
+                SpaceBloatDiagnosis d = diagnoseSpaceBloat(rec);
+                ctx.put("diagnosis", d.diagnosis());
+                ctx.put("bloat_action", d.action());
+
+                String fallback = String.format("%s.%s olması gerekenin %sx katı yer kaplıyor (%s israf).",
+                    rec.get("schemaname"), rec.get("relname"),
+                    ratio.setScale(1, java.math.RoundingMode.HALF_UP),
+                    formatBytes(rec.get("wasted_bytes")));
+                String[] rendered = renderWithCode(rule, ctx, ruleName, fallback, "table_space_bloat");
+
+                long alertId = alertRepo.upsertWithSeverity(recordKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
+                    buildPerRecordsJson(java.util.List.of(rec), "table_metric", 0,
+                        String.valueOf(minWastedMb), "space_bloat"),
+                    AlertRepository.NotifyMode.DEFERRED);
+
+                stillAlerting.add(recordKey);
+                raised.add(new RaisedRecordAlert(alertId, recordKey, severity,
+                    recordLabel(rec, "table_metric"), ratio, warnRatio, rendered[0]));
+            }
+
+            if (autoResolve) {
+                for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
+                    if (!stillAlerting.contains(openKey)) {
+                        resolveRecordDeferred(openKey, instancePk,
+                            previousRecordsLabel(openKey, "table_metric"), resolved);
+                    }
+                }
+            }
+
+            notifyRaisedBatch(raised, instancePk, ruleName);
+            notifyResolvedBatch(resolved, instancePk, ruleName);
+        }
+    }
+
+    /**
+     * Satir basina alani tablonun kendi tarihsel minimumuyla kiyaslar.
+     *
+     * Minimum, sikisik halin OLCUMUDUR — VACUUM FULL sonrasi, partition ilk
+     * olusturuldugunda ya da tablo boskken kendiliginden olusur. Tabloyu hic
+     * sikisik gormediysek kayit dogal olarak dusuk oran verir ve alarm
+     * uretmez; bu bilincli bir tercih, cunku uydurulmus bir taban yanlis
+     * alarmdan daha zararlidir.
+     *
+     * Yalnizca heap (table_size_bytes) kiyaslanir — index sismesi ayri bir
+     * olcudur ve TOAST'in yogunlugu farkli calisir.
+     */
+    private List<Map<String, Object>> findSpaceBloatedTables(long instancePk,
+                                                             BigDecimal minRatio,
+                                                             long minWastedMb) {
+        return jdbc.queryForList(
+            "with obs as (" +
+            "  select dbid, schemaname, relname, snapshot_ts," +
+            "         table_size_bytes, reltuples," +
+            "         table_size_bytes::numeric / reltuples as bytes_per_row" +
+            "    from fact.pg_relation_size_snapshot" +
+            "   where instance_pk = ?" +
+            "     and table_size_bytes is not null" +
+            "     and reltuples is not null and reltuples > 0" +
+            // Cok kucuk tablolarda sayfa granulerligi orani anlamsizlastirir
+            "     and table_size_bytes > ?" +
+            ")," +
+            "latest as (" +
+            "  select distinct on (dbid, schemaname, relname)" +
+            "         dbid, schemaname, relname, snapshot_ts," +
+            "         table_size_bytes, reltuples, bytes_per_row" +
+            "    from obs order by dbid, schemaname, relname, snapshot_ts desc" +
+            ")," +
+            "compact as (" +
+            "  select dbid, schemaname, relname," +
+            "         min(bytes_per_row) as min_bytes_per_row," +
+            "         count(*) as observation_count" +
+            "    from obs group by dbid, schemaname, relname" +
+            ")" +
+            "select l.schemaname, l.relname, l.dbid, dbr.datname," +
+            "       l.table_size_bytes as current_bytes," +
+            "       l.reltuples," +
+            "       c.observation_count," +
+            "       (l.reltuples * c.min_bytes_per_row)::bigint as expected_bytes," +
+            "       (l.table_size_bytes - l.reltuples * c.min_bytes_per_row)::bigint as wasted_bytes," +
+            "       (l.bytes_per_row / c.min_bytes_per_row)::numeric as bloat_ratio," +
+            "       l.snapshot_ts" +
+            "  from latest l" +
+            "  join compact c using (dbid, schemaname, relname)" +
+            "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
+            // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0.
+            // Anlamli bir taban icin en az iki farkli gozlem gerekiyor.
+            " where c.observation_count >= 2" +
+            "   and c.min_bytes_per_row > 0" +
+            "   and l.bytes_per_row / c.min_bytes_per_row >= ?" +
+            "   and (l.table_size_bytes - l.reltuples * c.min_bytes_per_row) >= ? * 1024 * 1024" +
+            " order by wasted_bytes desc" +
+            " limit " + PER_RECORD_QUERY_LIMIT,
+            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, minRatio, minWastedMb);
+    }
+
+    /** Fiziksel sisme teshisi ve aksiyonu. */
+    private record SpaceBloatDiagnosis(String diagnosis, String action) {}
+
+    /**
+     * Teshis, sismenin OLU SATIRDAN BAGIMSIZ oldugunu net soylemeli — yoksa
+     * operator VACUUM ANALYZE calistirir ve hicbir sey degismez. Uretimde tam
+     * olarak bu oldu (2026-08-31).
+     *
+     * Aksiyon, tablonun hala yazilip yazilmadigina gore ayrisir: gecmis bir
+     * partition'a kimse yazmadigi icin VACUUM FULL'un kilidi zararsizdir; aktif
+     * bir tabloda ayni komut yazmayi durdurur ve pg_repack onerilir.
+     */
+    private SpaceBloatDiagnosis diagnoseSpaceBloat(Map<String, Object> rec) {
+        String qualified = qualifiedTableName(rec);
+        boolean looksLikePastPartition = isDatedPartitionInThePast(
+            rec.get("relname") instanceof String s ? s : "");
+
+        String diagnosis =
+            "Tablo, satır başına olması gerekenden çok daha fazla yer kaplıyor."
+            + " Bu ÖLÜ SATIR sorunu DEĞİL: autovacuum ölü satırları temizlemiş olsa"
+            + " bile boşalan alan tabloda kalır ve yeniden kullanılmazsa israf olur."
+            + " Bu yüzden VACUUM veya VACUUM ANALYZE bu alanı geri getirmez —"
+            + " yalnızca tabloyu yeniden yazan bir işlem getirir."
+            + " Tipik sebep, aynı satırların tekrar tekrar güncellenmesidir (UPSERT"
+            + " deseni) ya da tablonun bir kez boşaltılıp bir daha doldurulmamasıdır.";
+
+        String action = looksLikePastPartition
+            ? String.format("Bu geçmiş tarihli bir partition; artık yazılmadığı için"
+                + " VACUUM FULL %s; güvenlidir (kilit kimseyi engellemez)."
+                + " Tekrarlıyorsa partition'ları daha erken düşürmeyi değerlendir.", qualified)
+            : String.format("Tablo aktif yazılıyorsa VACUUM FULL %s; yazmayı durdurur —"
+                + " kesinti kabul edilebilir bir bakım penceresinde çalıştır ya da"
+                + " kilit almayan pg_repack kullan. Şişme tekrarlıyorsa asıl çözüm"
+                + " yazım desenini değiştirmektir (daha seyrek UPSERT, ya da"
+                + " güncelleme yerine ekleme).", qualified);
+
+        return new SpaceBloatDiagnosis(diagnosis, action);
+    }
+
+    /**
+     * Ad tarihli partition desenine uyuyor ve tarih gecmis mi?
+     * (orn. pgss_delta_20260819, pg_table_stat_hourly_202607)
+     */
+    static boolean isDatedPartitionInThePast(String relname) {
+        java.util.regex.Matcher m = DATED_PARTITION.matcher(relname);
+        if (!m.find()) return false;
+        String digits = m.group(1);
+        try {
+            java.time.LocalDate today = java.time.LocalDate.now();
+            if (digits.length() == 8) {
+                return java.time.LocalDate.parse(digits,
+                    java.time.format.DateTimeFormatter.BASIC_ISO_DATE).isBefore(today);
+            }
+            // YYYYMM: ay tamamlanmis mi
+            int year = Integer.parseInt(digits.substring(0, 4));
+            int month = Integer.parseInt(digits.substring(4, 6));
+            return java.time.YearMonth.of(year, month).isBefore(java.time.YearMonth.from(today));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static final java.util.regex.Pattern DATED_PARTITION =
+        java.util.regex.Pattern.compile("_(\\d{8}|\\d{6})(?:_|$)");
+
+    /** Bayt degerini okunabilir yapar; null ise "?" doner. */
+    private static String formatBytes(Object value) {
+        if (!(value instanceof Number n)) return "?";
+        double b = n.doubleValue();
+        if (b >= 1024L * 1024 * 1024) return String.format("%.1f GB", b / (1024.0 * 1024 * 1024));
+        if (b >= 1024L * 1024) return String.format("%.0f MB", b / (1024.0 * 1024));
+        if (b >= 1024) return String.format("%.0f kB", b / 1024.0);
+        return String.format("%.0f B", b);
     }
 
     static String formatStaleListForTest(List<Map<String, Object>> stale) {
@@ -4109,6 +4364,16 @@ public class AlertRuleEvaluator {
      * gerisi "… ve N tablo daha" olarak GORUNUR.
      */
     private static final int STALE_STATS_QUERY_LIMIT = 50;
+
+    /** Fiziksel sisme alarminda mutlak israf alt siniri (MB), kuralda override edilebilir. */
+    private static final long DEFAULT_SPACE_BLOAT_MIN_WASTED_MB = 100;
+
+    /**
+     * Fiziksel sisme icin minimum tablo boyutu. Kucuk tablolarda sayfa
+     * granulerligi orani anlamsizlastirir: 2 sayfalik bir tablo 1 sayfaya
+     * sigabilecek olsa bile "2 kat sismis" gorunur.
+     */
+    private static final long SPACE_BLOAT_MIN_TABLE_BYTES = 8L * 1024 * 1024;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).
