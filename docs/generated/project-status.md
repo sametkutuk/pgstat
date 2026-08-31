@@ -117,7 +117,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 58 | PGSTAT-P0-044 | P0 | retention | done | Retention purge runs on every orchestrator cycle although its cutoffs only change once a day | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot. |
 | 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r5. Implementation cannot start on the wasted-space detector until PGSTAT-P0-046 supplies identity and an as-of row estimate; the scope and signal model and the eligibility gate can be built now. |
-| 61 | PGSTAT-P0-046 | P0 | alerting | planned | The physical bloat rule compares a size and a row count from different moments, and matches table history by name | Deploy V109 and wait for two nightly snapshots carrying relid, fillfactor and the anchor. Only then re-enable the rule and check its first output against a manual measurement. |
+| 61 | PGSTAT-P0-046 | P0 | alerting | planned | The physical bloat rule compares a size and a row count from different moments, and matches table history by name | Deploy V110. The rule now needs 21 distinct nightly observations spanning 28 days before it can speak, so it stays disabled for roughly four weeks. Re-enable only after checking its first output against a manual measurement. |
 
 ## Dependency Map
 

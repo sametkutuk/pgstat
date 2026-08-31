@@ -809,7 +809,7 @@ public class AlertRuleEvaluator {
             // bir tablonun yogunlugu olabiliyordu.
             "with obs as (" +
             "  select relid, dbid, schemaname, relname, snapshot_ts," +
-            "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at," +
+            "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at, source," +
             "         table_size_bytes::numeric / reltuples as bytes_per_row" +
             "    from fact.pg_relation_size_snapshot" +
             "   where instance_pk = ?" +
@@ -824,18 +824,49 @@ public class AlertRuleEvaluator {
             "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at" +
             "    from obs order by relid, snapshot_ts desc" +
             ")," +
-            // TABAN, mevcut gozlemle AYNI fillfactor rejiminden secilir.
-            // Rejim degisince tasarim geregi bos alan pay da degisir; farkli
-            // rejimlerdeki gozlemler karsilastirilamaz. (V104'teki
-            // 100/fillfactor carpani bu ihtiyaci yanlis cozuyordu ve payi iki
-            // kez dusuyordu — V108'de kaldirildi.)
-            "baseline as (" +
-            "  select o.relid," +
-            "         min(o.bytes_per_row) as min_bytes_per_row," +
-            "         count(*) as observation_count" +
+            // TABAN HAVUZU: yalnizca PLANLI GECE gozlemleri (V110).
+            //
+            // Gun ici izleme gozlemleri (source='watched') disarida birakilir.
+            // Onlar tablo ZATEN alarm verdigi icin toplaniyor — yani sismis
+            // durumu orneklemeye meyilli ve 30 dakikalik siklikta olduklari
+            // icin gurultuyle tabani asagi cekebilirler. Gorevleri guncel
+            // durumu dogrulamak, tabani tanimlamak degil.
+            //
+            // Rejim: taban yalnizca mevcut gozlemle AYNI fillfactor
+            // rejimindeki olcumlerden secilir.
+            "daily as (" +
+            "  select o.relid, date_trunc('day', o.snapshot_ts) as obs_day," +
+            "         min(o.bytes_per_row) as day_bytes_per_row," +
+            "         min(o.snapshot_ts) as day_ts" +
             "    from obs o join latest l on l.relid = o.relid" +
-            "   where coalesce(o.fillfactor,100) = coalesce(l.fillfactor,100)" +
-            "   group by o.relid" +
+            "   where o.source = 'nightly'" +
+            "     and coalesce(o.fillfactor,100) = coalesce(l.fillfactor,100)" +
+            "   group by o.relid, date_trunc('day', o.snapshot_ts)" +
+            ")," +
+            // TABAN = en dusuk UC GUNUN medyani, ham min DEGIL.
+            //
+            // bytes_per_row'un paydasi bir tahmin; tek bir gozlemde reltuples
+            // yukari saparsa bytes_per_row asagi sapar ve ham min o gurultuyu
+            // taban yapardi — sonraki her gozlem sismis gorunurdu. Uc gunun
+            // medyani tek bir sapmadan etkilenmez.
+            "baseline as (" +
+            "  select relid," +
+            "         percentile_cont(0.5) within group (order by day_bytes_per_row)" +
+            "           as min_bytes_per_row" +
+            "    from (select relid, day_bytes_per_row," +
+            "                 row_number() over (partition by relid" +
+            "                                    order by day_bytes_per_row) as rn" +
+            "            from daily) ranked" +
+            "   where rn <= 3" +
+            "   group by relid" +
+            ")," +
+            // KAPI: kac farkli gece ve ne kadar zamana yayilmis.
+            // Sayi tek basina yetmez — yarim saat arayla iki gozlem, tablonun
+            // sikisik hali hakkinda hicbir sey soylemez.
+            "coverage as (" +
+            "  select relid, count(*) as observation_count," +
+            "         max(day_ts) - min(day_ts) as span" +
+            "    from daily group by relid" +
             ")," +
             // ZAMAN ANKRAJI. reltuples, snapshot aninda degil ankraj aninda
             // olculmustur. Dogru satir sayisi icin ankraj ile snapshot arasi
@@ -871,7 +902,7 @@ public class AlertRuleEvaluator {
             "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
             "       l.table_size_bytes as current_bytes," +
             "       l.reltuples, l.fillfactor, l.reltuples_anchor_at," +
-            "       b.observation_count," +
+            "       cv.observation_count, cv.span as baseline_span," +
             "       greatest(l.reltuples + coalesce(dc.net_rows, 0), 1) as est_rows," +
             "       (greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
             "         * b.min_bytes_per_row)::bigint as expected_bytes," +
@@ -883,10 +914,12 @@ public class AlertRuleEvaluator {
             "       l.snapshot_ts" +
             "  from latest l" +
             "  join baseline b on b.relid = l.relid" +
+            "  join coverage cv on cv.relid = l.relid" +
             "  left join delta_cover dc on dc.relid = l.relid" +
             "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
             // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0
-            " where b.observation_count >= 2" +
+            " where cv.observation_count >= " + SPACE_BLOAT_MIN_BASELINE_NIGHTS +
+            "   and cv.span >= interval '" + SPACE_BLOAT_MIN_BASELINE_SPAN_DAYS + " days'" +
             "   and b.min_bytes_per_row > 0" +
             // Ankraj bilinmiyorsa reltuples zaten guvenilmez
             "   and l.reltuples_anchor_at is not null" +
@@ -4553,6 +4586,24 @@ public class AlertRuleEvaluator {
      * turu affeder ama uzun bir kesintiyi affetmez. Asilirsa kayit atlanir.
      */
     private static final long SPACE_BLOAT_MAX_DELTA_GAP_SECONDS = 3 * 3600;
+
+    /**
+     * Taban gecerliligi icin gereken en az farkli GECE sayisi ve en az zaman
+     * YAYILIMI (V110).
+     *
+     * Ikisi birlikte aranir. Sayi tek basina yetmez: gun ici izleme yolu 30
+     * dakikada bir yazdigi icin bir tablo, yarim saat arayla alinmis iki
+     * gozlemle sayi kapisini gecebilirdi — ve o iki gozlem tablonun sikisik
+     * hali hakkinda hicbir sey soylemez. (Taban havuzu zaten yalnizca gece
+     * gozlemlerinden olusuyor, ama yayilim kosulu ayrica gerekli.)
+     *
+     * 21/28 muhafazakar bir baslangic; backtest sonucuna gore ayarlanacak.
+     * Pratik sonucu: yeni bir tablo icin dedektor en erken 4 hafta sonra
+     * konusabilir. Bu bilincli — gecersiz bir taban, sessizlikten daha
+     * zararlidir.
+     */
+    private static final int SPACE_BLOAT_MIN_BASELINE_NIGHTS = 21;
+    private static final int SPACE_BLOAT_MIN_BASELINE_SPAN_DAYS = 28;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).

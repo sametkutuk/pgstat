@@ -4081,7 +4081,7 @@
       "priority": "P0",
       "workstream": "alerting",
       "status": "planned",
-      "next_action": "Deploy V109 and wait for two nightly snapshots carrying relid, fillfactor and the anchor. Only then re-enable the rule and check its first output against a manual measurement.",
+      "next_action": "Deploy V110. The rule now needs 21 distinct nightly observations spanning 28 days before it can speak, so it stays disabled for roughly four weeks. Re-enable only after checking its first output against a manual measurement.",
       "title": "The physical bloat rule compares a size and a row count from different moments, and matches table history by name",
       "problem": "An external review of the shipped table_space_bloat rule found three correctness problems, one fixed immediately and two needing new collection. First, fillfactor was subtracted twice: the historical baseline is drawn from the table own past observations, which were taken under the same fillfactor regime and therefore already include the space left free by design, so multiplying the expectation by 100/fillfactor removed that allowance a second time and under-reported bloat - a genuine threefold case would have been reported as 2.1. That is fixed. Second, the numerator is table_size_bytes at snapshot time T while the denominator is reltuples plus deltas accumulated after T; reltuples itself was last refreshed at whatever VACUUM or ANALYZE preceded T, possibly months earlier, so staleness before T is never corrected and the two halves of the ratio describe different moments. Third, fact.pg_relation_size_snapshot identifies tables by schema and name and carries no relid, so a rename splits a history and a drop-and-recreate or a reused name merges two different tables into one - meaning the historical minimum can be another table measurement entirely.",
       "requirements": [
@@ -4125,6 +4125,16 @@
           "id": "AC7",
           "text": "The detector skips a record whose delta history does not reach back to the row-estimate anchor, or which has a gap larger than the tolerance between consecutive samples, rather than bridging a period it did not observe.",
           "status": "done"
+        },
+        {
+          "id": "AC8",
+          "text": "Only scheduled nightly observations enter the baseline pool; intra-day watched-table observations confirm current state and persistence but never define the baseline, since they are collected because the table is already alerting.",
+          "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "The baseline is the median of the three lowest daily values rather than a raw minimum, and requires at least 21 distinct nights spanning at least 28 days. Failing the gate produces no finding at all rather than a low-confidence one.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -4154,7 +4164,10 @@
         "Implemented 2026-08-31. fact.pg_relation_size_snapshot now carries relid, the effective fillfactor and reltuples_anchor_at - the newest of the four vacuum and analyze timestamps, which is when reltuples was actually measured. Both the nightly collector and the intra-day watched-table path populate them.",
         "The detector matches history on relid rather than name, so a rename no longer splits a history and a reused name no longer merges two tables. The baseline is drawn only from observations sharing the current fillfactor regime, which is the correct use of that value - the multiplier removed in V108 was trying to solve this and solved it wrongly by subtracting the allowance a second time.",
         "The row count is corrected across the anchor rather than across the snapshot: deltas are summed between reltuples_anchor_at and snapshot_ts, so staleness accumulated before the snapshot is now corrected too. A record is skipped unless the delta history reaches back to the anchor and has no gap longer than three hours between consecutive samples, since bridging a period we did not observe would be inventing the bloat rather than measuring it.",
-        "Rows written before V109 carry no relid and are excluded, so the rule stays disabled until at least two qualifying snapshots exist - roughly two nights after deploy."
+        "Rows written before V109 carry no relid and are excluded, so the rule stays disabled until at least two qualifying snapshots exist - roughly two nights after deploy.",
+        "A further review round found two problems with the baseline gate. First, a missed false-positive path: bytes_per_row has an estimated denominator, so a single observation where reltuples reads high produces a spuriously low bytes_per_row, and a raw minimum would adopt that noise as the baseline - making every later observation look bloated. The baseline is now the median of the three lowest daily values, which one outlier cannot move.",
+        "Second, and missed entirely in the original design: source eligibility. The intra-day watched-table path writes to the same snapshot table every 30 minutes, but only for tables that already have an open bloat alert - so those observations are biased toward the bloated state and dense enough for noise to drag the minimum down. They now carry source=watched and are excluded from the baseline pool; they still confirm current state and persistence, which is what they were added for.",
+        "The gate is now: same relation incarnation, same fillfactor regime, a time-consistent row estimate bridged to its anchor, source nightly, at least 21 distinct nights, and a span of at least 28 days, with the baseline taken as a median rather than a minimum. Failing it yields no finding rather than a low-confidence one - validity is binary while confidence is graded, and an invalid baseline is not a weak finding but no finding. The practical cost is that the rule cannot speak about any table for roughly four weeks after deploy, which is accepted: an invalid baseline is worse than silence."
       ]
     }
   ]

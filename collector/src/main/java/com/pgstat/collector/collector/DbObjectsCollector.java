@@ -181,7 +181,11 @@ public class DbObjectsCollector {
                         (Long) rs.getObject("reltuples"),
                         (Long) rs.getObject("relid"),
                         (Integer) rs.getObject("fillfactor"),
-                        rs.getObject("reltuples_anchor_at", OffsetDateTime.class));
+                        rs.getObject("reltuples_anchor_at", OffsetDateTime.class),
+                        // Bu gozlem taban havuzuna GIRMEZ: tablo zaten alarmli
+                        // oldugu icin toplaniyor, yani sismis ani orneklemeye
+                        // meyilli (V110).
+                        "watched");
                     rows++;
                 }
             } catch (Exception e) {

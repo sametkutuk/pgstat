@@ -488,19 +488,19 @@ public class FactRepository {
                                            Long totalSizeBytes, Long tableSizeBytes,
                                            Long indexSizeBytes, Long toastSizeBytes,
                                            Long reltuples, Long relid, Integer fillfactor,
-                                           OffsetDateTime reltuplesAnchorAt) {
+                                           OffsetDateTime reltuplesAnchorAt, String source) {
         jdbc.update("""
             insert into fact.pg_relation_size_snapshot (
               snapshot_ts, instance_pk, dbid, schemaname, relname, relkind,
               total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples,
-              relid, fillfactor, reltuples_anchor_at
+              relid, fillfactor, reltuples_anchor_at, source
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict do nothing
             """,
             snapshotTs, instancePk, dbid, schemaname, relname, relkind,
             totalSizeBytes, tableSizeBytes, indexSizeBytes, toastSizeBytes, reltuples,
-            relid, fillfactor, reltuplesAnchorAt
+            relid, fillfactor, reltuplesAnchorAt, source
         );
     }
 

@@ -337,15 +337,16 @@ public class NightlySnapshotCollector {
                     rs.getObject("reltuples") != null ? rs.getLong("reltuples") : null,
                     rs.getObject("relid") != null ? rs.getLong("relid") : null,
                     rs.getObject("fillfactor") != null ? rs.getInt("fillfactor") : null,
-                    rs.getObject("reltuples_anchor_at", java.time.OffsetDateTime.class)
+                    rs.getObject("reltuples_anchor_at", java.time.OffsetDateTime.class),
+                    "nightly"   // planli kosu — taban havuzuna giren tek kaynak (V110)
                 });
             }
         }
         if (batch.isEmpty()) return 0;
 
         jdbc.batchUpdate(
-            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples, relid, fillfactor, reltuples_anchor_at) " +
-            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
+            "insert into fact.pg_relation_size_snapshot (snapshot_ts, instance_pk, dbid, schemaname, relname, relkind, total_size_bytes, table_size_bytes, index_size_bytes, toast_size_bytes, reltuples, relid, fillfactor, reltuples_anchor_at, source) " +
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) on conflict do nothing",
             batch.stream().map(row -> (Object[]) row).toList()
         );
         return batch.size();
