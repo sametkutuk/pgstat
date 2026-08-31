@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 59 |
+| Total tasks | 60 |
 | Done tasks | 32 |
-| Remaining tasks | 27 |
+| Remaining tasks | 28 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,7 +34,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 32 |
 | in_progress | 2 |
-| planned | 25 |
+| planned | 26 |
 
 ## Workstream Counts
 
@@ -50,7 +50,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | retention | 3 |
 | security | 1 |
 | telemetry | 7 |
-| ui | 4 |
+| ui | 5 |
 | validation | 3 |
 
 ## Task Board
@@ -116,6 +116,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 57 | PGSTAT-P0-043 | P0 | alerting | done | Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 58 | PGSTAT-P0-044 | P0 | retention | done | Retention purge runs on every orchestrator cycle although its cutoffs only change once a day | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot. |
+| 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design draft is written for external review at docs/findings-screen-design.md; answer its seven open questions before any implementation begins. |
 
 ## Dependency Map
 
@@ -180,6 +181,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-043 | - | - |
 | PGSTAT-P0-044 | - | - |
 | PGSTAT-P0-045 | - | - |
+| PGSTAT-P1-015 | - | - |
 
 ## Closure Rules
 

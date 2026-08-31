@@ -3981,6 +3981,69 @@
         "Deliberately NOT extended to cover tables with heavy write volume but no alert yet, although that chicken-and-egg gap is real: a table cannot alert until it is measured and is not measured until it alerts. Deferred to 2026-09-02 for three reasons. The storage cost was understated when first proposed - the query cost is genuinely zero since the deltas are already in the loop, but writing roughly 15 tables per database every 30 minutes is about 54,000 rows a day against 6,900 nightly, taking that table from 80 MB to around 640 MB. The space bloat rule has not yet produced a single alert, since it needs two nightly snapshots, so optimising an unverified feature is premature. And three defects were introduced today in this same code - a cooldown deadlock, a reltuples false positive, a throttle that never fired - so adding surface before verifying compounds risk.",
         "What waiting costs is narrow: only physical bloat waits for the night, since dead-tuple detection already runs every 30 minutes on data that needs no size measurement. Physical bloat accumulates over days - the 2.4 GB case built up over weeks - so nightly matches the phenomenon. The alert watchlist already covers the case with real operator impact, closing a fixed table within 30 minutes rather than the next night."
       ]
+    },
+    {
+      "id": "PGSTAT-P1-015",
+      "order": 60,
+      "priority": "P1",
+      "workstream": "ui",
+      "status": "planned",
+      "next_action": "Design draft is written for external review at docs/findings-screen-design.md; answer its seven open questions before any implementation begins.",
+      "title": "Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand",
+      "problem": "Alerts answer whether something needs acting on now: a threshold is crossed, a record opens, a notification goes out, it resolves. Most of what monitoring actually surfaces does not fit that shape. Over the week of 2026-08-27 the following were all produced by hand-written SQL and none of them belongs in an alert: that reltuples read 30,404,328 while n_live_tup read 0 and every ratio built on it was therefore wrong; that a partition held 11,740 rows in 637 MB; that pg_index_stat_delta produces about 3 GB a day; that 4,478 of 12,116 observed tables have never been analyzed; that one table took nine updates per row; and that agg.pg_table_stat_hourly_202608 was 98 percent empty space, which the dead-tuple ratio could not see. None of these should wake anyone. All of them change a decision. Today they are invisible unless someone goes looking.",
+      "requirements": [
+        "Findings must be separate from alerts in storage, lifecycle and presentation, because they answer a different question and must not compete for the same attention.",
+        "No notifications. A second notification stream would devalue the first one.",
+        "A finding must be publishable only if it can change a decision. Growing is not a finding; running out of disk in 30 days at the current rate is.",
+        "The first version must compute everything from data already collected, so it adds no collection cost.",
+        "Each finding must show the inputs it was computed from, so a reader can check it rather than trust it.",
+        "Each finding must state what it does not say - a deliberate setting is not a mistake, and an extrapolation is not a promise."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "The design draft is reviewed and its seven open questions are answered, in particular whether the alert/finding distinction survives contact with users and whether the absence of notifications leaves the screen unvisited.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "A finding catalogue is agreed, covering at minimum growth projection, write pattern, data reliability, wasted space, autovacuum falling behind, and autovacuum tuned more aggressively than the workload needs.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "Storage, production cadence and per-instance caps are settled before implementation.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "Implementation follows only after the above; no code is written against an unreviewed design.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Review docs/findings-screen-design.md externally and answer its open questions.",
+        "Settle the finding catalogue and the significance thresholds that keep each one from becoming noise.",
+        "Then: ops.finding table, a daily producer computing from existing fact tables, API, and a separate UI tab."
+      ],
+      "verification_plan": [
+        "Design review first; implementation acceptance to be defined once the catalogue is agreed."
+      ],
+      "required_docs": [
+        "docs/findings-screen-design.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Customer proposed the screen on 2026-08-31 after a week in which the most useful output of the work was repeatedly a hand-written query rather than an alert, and specifically asked for autovacuum falling behind and autovacuum being tuned too aggressively to be among the findings.",
+        "Customer also asked that the plan and draft be produced first and reviewed externally before implementation, which is why this task starts at design rather than code.",
+        "The known risk is named in the draft rather than discovered later: a second noisy stream would devalue both. The week just past supplied the cautionary example - a bloat scenario that diagnosed nothing was wrong, alerted anyway, and recommended a command that could not fix it."
+      ]
     }
   ]
 }
