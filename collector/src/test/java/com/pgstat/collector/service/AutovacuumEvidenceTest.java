@@ -476,6 +476,43 @@ class AutovacuumEvidenceTest {
     // =========================================================================
 
     @Test
+    void theMeasurementNoteStatesWhatTheNumberDoesNotCover() {
+        // Not sussa operator sayiyi oldugundan kesin sanar. Uc gercek sinir
+        // acikca yazilmali.
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("fillfactor", 100L);
+
+        String note = AlertRuleEvaluator.spaceBloatMeasurementNoteForTest(rec);
+
+        assertThat(note).contains("tahmin değil");     // olcum tabanli oldugu
+        assertThat(note).contains("TOAST");            // neyi kapsamadigi
+        assertThat(note).contains("Satır sayısı tahmindir");
+    }
+
+    @Test
+    void aReducedFillfactorIsExplainedRatherThanCountedAsBloat() {
+        // fillfactor=70 olan saglikli bir tablo, dusulmezse 1.43 kat sismis
+        // gorunurdu. Hem hesaptan dusuluyor hem de mesajda soyleniyor.
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("fillfactor", 70L);
+
+        String note = AlertRuleEvaluator.spaceBloatMeasurementNoteForTest(rec);
+
+        assertThat(note).contains("fillfactor=70");
+        assertThat(note).contains("%30");
+        assertThat(note).contains("düşüldü");
+    }
+
+    @Test
+    void aDefaultFillfactorAddsNoExplanation() {
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("fillfactor", 100L);
+
+        assertThat(AlertRuleEvaluator.spaceBloatMeasurementNoteForTest(rec))
+            .doesNotContain("fillfactor=");
+    }
+
+    @Test
     void aPastDayPartitionIsRecognisedSoVacuumFullCanBeRecommendedSafely() {
         // Gecmis bir partition'a kimse yazmadigi icin VACUUM FULL'un kilidi
         // zararsizdir; aktif tabloda ayni komut yazmayi durdurur. Aksiyon

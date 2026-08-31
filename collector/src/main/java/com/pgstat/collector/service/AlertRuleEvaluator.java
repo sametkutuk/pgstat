@@ -642,7 +642,7 @@ public class AlertRuleEvaluator {
         if (warnRatio == null && critRatio == null) return;
         // bloat_min_rows bu kuralda MB cinsinden mutlak alt sinir: kucuk bir
         // tabloda %300 sisme 3 MB'dir ve mudahale etmeye degmez.
-        long minWastedMb = rule.get("bloat_min_rows") instanceof Number n
+        long minWastedMb = rule.get("space_bloat_min_wasted_mb") instanceof Number n
             ? n.longValue() : DEFAULT_SPACE_BLOAT_MIN_WASTED_MB;
 
         for (Map<String, Object> target : loadTargetInstances(rule)) {
@@ -688,6 +688,7 @@ public class AlertRuleEvaluator {
                 ctx.put("current_size", formatBytes(rec.get("current_bytes")));
                 ctx.put("compact_size", formatBytes(rec.get("expected_bytes")));
                 ctx.put("wasted_size", formatBytes(rec.get("wasted_bytes")));
+                ctx.put("measurement_note", spaceBloatMeasurementNote(rec));
                 populateRecordCtx(ctx, rec, "table_metric");
                 SpaceBloatDiagnosis d = diagnoseSpaceBloat(rec);
                 ctx.put("diagnosis", d.diagnosis());
@@ -754,7 +755,7 @@ public class AlertRuleEvaluator {
             "latest as (" +
             "  select distinct on (dbid, schemaname, relname)" +
             "         dbid, schemaname, relname, snapshot_ts," +
-            "         table_size_bytes, reltuples, bytes_per_row" +
+            "         table_size_bytes, reltuples" +
             "    from obs order by dbid, schemaname, relname, snapshot_ts desc" +
             ")," +
             "compact as (" +
@@ -762,27 +763,94 @@ public class AlertRuleEvaluator {
             "         min(bytes_per_row) as min_bytes_per_row," +
             "         count(*) as observation_count" +
             "    from obs group by dbid, schemaname, relname" +
+            ")," +
+            // SATIR SAYISI DUZELTMESI (V104). reltuples yalnizca VACUUM/ANALYZE
+            // ile guncellenir; aradaki surede tablo buyurse payda eski kalir ve
+            // BUYUME sisme gibi gorunur (1M -> 2M satir, reltuples 1M kalirsa
+            // bayt/satir iki katina cikar ve tablo hic sismemis olsa bile "2 kat
+            // sismis" raporlanirdi). Toplanan ins/del delta'lari bu bosluğu
+            // kapatiyor: son boyut anlik goruntusunden BERI eklenen ve silinen
+            // satirlar sayilip reltuples'a ekleniyor.
+            "growth as (" +
+            "  select d.dbid, d.schemaname, d.relname," +
+            "         sum(coalesce(d.n_tup_ins_delta,0) - coalesce(d.n_tup_del_delta,0)) as net_rows" +
+            "    from fact.pg_table_stat_delta d" +
+            "    join latest l2 on l2.dbid = d.dbid and l2.schemaname = d.schemaname" +
+            "                  and l2.relname = d.relname" +
+            "   where d.instance_pk = ? and d.sample_ts > l2.snapshot_ts" +
+            "   group by d.dbid, d.schemaname, d.relname" +
+            ")," +
+            // FILLFACTOR (V104): 100'un altindaki deger, sayfalarin bir kismini
+            // HOT update icin BILEREK bos birakir. Dusulmezse tasarim geregi bos
+            // alan sisme sanilir — fillfactor=70 olan saglikli bir tablo 1.43
+            // kat sismis gorunurdu.
+            "ff as (" +
+            "  select dbid, relid, schemaname, relname," +
+            "         coalesce(fillfactor, 100) as fillfactor" +
+            "    from control.table_relopts_snapshot where instance_pk = ?" +
             ")" +
-            "select l.schemaname, l.relname, l.dbid, dbr.datname," +
+            "select l.schemaname, l.relname, l.dbid, ff.relid, dbr.datname," +
             "       l.table_size_bytes as current_bytes," +
             "       l.reltuples," +
+            "       greatest(l.reltuples + coalesce(g.net_rows, 0), 1) as est_rows," +
+            "       coalesce(ff.fillfactor, 100) as fillfactor," +
             "       c.observation_count," +
-            "       (l.reltuples * c.min_bytes_per_row)::bigint as expected_bytes," +
-            "       (l.table_size_bytes - l.reltuples * c.min_bytes_per_row)::bigint as wasted_bytes," +
-            "       (l.bytes_per_row / c.min_bytes_per_row)::numeric as bloat_ratio," +
+            "       (greatest(l.reltuples + coalesce(g.net_rows,0), 1) * c.min_bytes_per_row" +
+            "         * (100.0 / coalesce(ff.fillfactor, 100)))::bigint as expected_bytes," +
+            "       (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
+            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)))::bigint as wasted_bytes," +
+            "       (l.table_size_bytes::numeric" +
+            "         / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
+            "           * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)), 0))::numeric" +
+            "         as bloat_ratio," +
             "       l.snapshot_ts" +
             "  from latest l" +
             "  join compact c using (dbid, schemaname, relname)" +
+            "  left join growth g using (dbid, schemaname, relname)" +
+            "  left join ff on ff.dbid = l.dbid and ff.schemaname = l.schemaname" +
+            "              and ff.relname = l.relname" +
             "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
             // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0.
             // Anlamli bir taban icin en az iki farkli gozlem gerekiyor.
             " where c.observation_count >= 2" +
             "   and c.min_bytes_per_row > 0" +
-            "   and l.bytes_per_row / c.min_bytes_per_row >= ?" +
-            "   and (l.table_size_bytes - l.reltuples * c.min_bytes_per_row) >= ? * 1024 * 1024" +
+            "   and l.table_size_bytes::numeric" +
+            "       / nullif(greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
+            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100)), 0) >= ?" +
+            "   and (l.table_size_bytes - greatest(l.reltuples + coalesce(g.net_rows,0), 1)" +
+            "         * c.min_bytes_per_row * (100.0 / coalesce(ff.fillfactor, 100))) >= ? * 1024 * 1024" +
             " order by wasted_bytes desc" +
             " limit " + PER_RECORD_QUERY_LIMIT,
-            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, minRatio, minWastedMb);
+            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, instancePk, instancePk,
+            minRatio, minWastedMb);
+    }
+
+    /**
+     * Olcumun neye dayandigini ve neyi KAPSAMADIGINI mesajda soyler.
+     *
+     * Bu not sussa, operator sayiyi oldugundan kesin sanabilir. Uc gercek sinir
+     * var ve ucunu de burada acikca yaziyoruz:
+     *  - satir sayisi tahmindir (reltuples + toplanan delta'lar),
+     *  - olcum yalnizca HEAP'i kapsar; TOAST'in kendi sismesi bu sayida yok,
+     *  - fillfactor 100'un altindaysa bos alanin bir kismi tasarim geregidir
+     *    ve hesaptan dusulmustur.
+     */
+    static String spaceBloatMeasurementNoteForTest(Map<String, Object> rec) {
+        return spaceBloatMeasurementNote(rec);
+    }
+
+    private static String spaceBloatMeasurementNote(Map<String, Object> rec) {
+        long ff = rec.get("fillfactor") instanceof Number n ? n.longValue() : 100;
+        StringBuilder sb = new StringBuilder();
+        sb.append("Ölçüm: satır başına alan, bu tablonun kendi tarihsel"
+            + " minimumuyla karşılaştırıldı (tahmin değil, iki gözlem arasındaki fark).");
+        if (ff < 100) {
+            sb.append(String.format(" fillfactor=%d olduğu için sayfaların %%%d'i"
+                + " tasarım gereği boş bırakılır; bu pay hesaptan düşüldü.", ff, 100 - ff));
+        }
+        sb.append(" Satır sayısı tahmindir ve ölçüm yalnızca tabloyu (heap) kapsar —"
+            + " TOAST ve indeks şişmesi bu sayıya dâhil değildir.");
+        return sb.toString();
     }
 
     /** Fiziksel sisme teshisi ve aksiyonu. */
@@ -5709,7 +5777,13 @@ public class AlertRuleEvaluator {
                    -- kod sessizce kod-ici varsayilanlara dusuyordu. Sonuc:
                    -- kullanici UI'dan bu esikleri degistirse bile hicbir etkisi
                    -- olmuyordu (canli test, 2026-08-26).
-                   bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count
+                   bloat_min_rows, bloat_abs_dead_tup, bloat_vacuum_ineffective_count,
+                   -- table_space_bloat'un MB alt siniri. SELECT listesine
+                   -- eklemeyi unutmak, kolonun sessizce null donmesi ve kodun
+                   -- varsayilana dusmesi demek — yukaridaki uc kolonda tam bu
+                   -- olmustu ve kullanicinin UI'dan girdigi deger hicbir ise
+                   -- yaramamisti (2026-08-26).
+                   space_bloat_min_wasted_mb
             from control.alert_rule
             where is_enabled = true
             order by rule_id

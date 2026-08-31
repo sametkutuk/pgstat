@@ -14,8 +14,8 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 50 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 932 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 625 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Field contracts needing exact source/version review | 934 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 627 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -36,7 +36,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_code_notification_channel | control/config | 3 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
 | control.alert_message_template | control/config | 6 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_notification | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
-| control.alert_rule | control/config | 36 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
+| control.alert_rule | control/config | 37 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx | generated default; needs review |
 | control.alert_rule_last_eval | control/config | 8 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_rule_notification_channel | control/config | 3 | not detected | api/src/routes/alertRules.ts (11 routes) | ui/src/pages/AlertRules.tsx | generated default; needs review |
 | control.alert_snooze | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
@@ -70,7 +70,7 @@ node scripts/generate-doc-inventory.mjs
 | control.slot_lifecycle_subscription | control/config | 11 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
 | control.slot_observation_state | control/config | 10 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
 | control.system_alert_config | control/config | 11 | not detected | not detected | not detected | generated default; needs review |
-| control.table_relopts_snapshot | control/config | 10 | not detected | not detected | not detected | generated default; needs review |
+| control.table_relopts_snapshot | control/config | 11 | not detected | not detected | not detected | generated default; needs review |
 | control.telegram_command_allowlist | control/config | 5 | not detected | api/src/routes/telegramAllowlist.ts (4 routes) | not detected | generated default; needs review |
 | control.telegram_message_map | control/config | 8 | fixed 7 days in PurgeEvaluator | not detected | not detected | generated default; needs review |
 | control.telegram_poll_state | control/config | 3 | not detected | not detected | not detected | generated default; needs review |
@@ -182,6 +182,7 @@ node scripts/generate-doc-inventory.mjs
 | control.alert_rule.scope | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.sensitivity | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.service_group | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.alert_rule.space_bloat_min_wasted_mb | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.spike_fallback_pct | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.template_id | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.alert_rule.title_template | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
@@ -539,6 +540,7 @@ node scripts/generate-doc-inventory.mjs
 | control.table_relopts_snapshot.autovacuum_vacuum_cost_delay | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.autovacuum_vacuum_cost_limit | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.dbid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
+| control.table_relopts_snapshot.fillfactor | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.instance_pk | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.relid | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |
 | control.table_relopts_snapshot.relname | configuration/control metadata; review before export | conditional; redact or allowlist | control/context when explicitly contracted | needs field-level review |

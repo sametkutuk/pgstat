@@ -468,11 +468,15 @@ public class FactRepository {
         }
         Integer costDelay = parseIntRelOption(reloptionsRaw, "autovacuum_vacuum_cost_delay");
         Integer costLimit = parseIntRelOption(reloptionsRaw, "autovacuum_vacuum_cost_limit");
+        // fillfactor: 100 altindaki degerde sayfalarin bir kismi HOT update icin
+        // BILEREK bos birakilir. Fiziksel sisme hesabinda dusulmezse tasarim
+        // geregi bos alan sisme sanilir (V104).
+        Integer fillfactor = parseIntRelOption(reloptionsRaw, "fillfactor");
         jdbc.update("""
             insert into control.table_relopts_snapshot
               (instance_pk, dbid, relid, schemaname, relname, autovacuum_enabled, reloptions_raw,
-               autovacuum_vacuum_cost_delay, autovacuum_vacuum_cost_limit, updated_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+               autovacuum_vacuum_cost_delay, autovacuum_vacuum_cost_limit, fillfactor, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             on conflict (instance_pk, dbid, relid) do update set
               schemaname = excluded.schemaname,
               relname = excluded.relname,
@@ -480,10 +484,11 @@ public class FactRepository {
               reloptions_raw = excluded.reloptions_raw,
               autovacuum_vacuum_cost_delay = excluded.autovacuum_vacuum_cost_delay,
               autovacuum_vacuum_cost_limit = excluded.autovacuum_vacuum_cost_limit,
+              fillfactor = excluded.fillfactor,
               updated_at = now()
             """,
             instancePk, dbid, relid, schemaname, relname, autovacuumEnabled, reloptionsRaw,
-            costDelay, costLimit
+            costDelay, costLimit, fillfactor
         );
     }
 

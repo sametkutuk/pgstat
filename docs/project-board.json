@@ -3656,7 +3656,10 @@
         "It must not depend on pg_stats.avg_width, whose estimate returns zero bloat for a never-analyzed table - 4,478 of the 12,116 observed tables were in exactly that state on 2026-08-31, so an avg_width-based estimate is blind where we know least.",
         "The diagnosis must state that this is not a dead-tuple problem and that VACUUM will not reclaim the space, because the existing alert already misled on precisely that point.",
         "The recommended action must differ for a past-dated partition, where an exclusive lock blocks nobody, and an actively written table, where it stops writes.",
-        "A table observed only once must not alert: with a single observation the historical minimum equals the current value and the ratio is always 1."
+        "A table observed only once must not alert: with a single observation the historical minimum equals the current value and the ratio is always 1.",
+        "The row count must be corrected by the collected insert and delete deltas rather than trusting reltuples alone, since reltuples only moves on VACUUM or ANALYZE and a table that merely grew in between would otherwise be reported as bloated.",
+        "A reduced fillfactor must be subtracted from the expectation rather than counted as bloat, since that space is left free by design.",
+        "The message must state what the number does not cover - that the row count is an estimate and that the measurement is heap-only, excluding TOAST and indexes - so the figure is not read as more precise than it is."
       ],
       "acceptance_criteria": [
         {
@@ -3693,6 +3696,21 @@
           "id": "AC7",
           "text": "Live verification: after two nightly snapshots the rule reports the tables that vacuumdb actually reclaimed space from, and stays silent on tables that are merely large.",
           "status": "pending"
+        },
+        {
+          "id": "AC8",
+          "text": "The denominator is reltuples plus the net of n_tup_ins_delta and n_tup_del_delta accumulated since the size snapshot, so growth between analyses is not mistaken for bloat.",
+          "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "fillfactor is parsed from reloptions into control.table_relopts_snapshot and divided out of the expected size, and the message says so when it is below 100.",
+          "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "The rule reads its MB floor from its own space_bloat_min_wasted_mb column rather than borrowing bloat_min_rows, and that column is in the loadActiveRules select list.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3720,7 +3738,10 @@
         "The measurement approach was chosen after establishing that exact measurement without an extension is impossible - free space inside pages is readable only through pgstattuple or pg_freespacemap - and that the customer cannot install extensions on monitored instances.",
         "Continuous monitoring makes estimation unnecessary for this purpose: observing the same table repeatedly turns bloat into the difference between two measurements rather than a guess. agg.pg_table_stat_hourly_202608 was observed at roughly 20,032 bytes per row and then at 338 for the same row count, a factor of 59, with no reliance on avg_width, ANALYZE quality or a fillfactor assumption.",
         "The vacuumdb -afvz run that exposed this also created a fresh compact baseline for every table, so the historical minimum the rule needs exists from 2026-08-31 onward.",
-        "Same run confirmed the cost of the manual workaround: collection dropped from about 48,000 rows an hour to 12,119 during the run, because VACUUM FULL takes an ACCESS EXCLUSIVE lock on every table."
+        "Same run confirmed the cost of the manual workaround: collection dropped from about 48,000 rows an hour to 12,119 during the run, because VACUUM FULL takes an ACCESS EXCLUSIVE lock on every table.",
+        "The customer questioned whether a threshold built on reltuples would hold up, and it would not have. reltuples only advances on VACUUM or ANALYZE, so a table that doubled in rows between analyses would have shown twice the bytes per row and been reported at 2x bloat while being perfectly healthy. That is not hypothetical here: 4,478 of 12,116 observed tables have never been analyzed. The fix uses the insert and delete deltas already collected, which need no new collection.",
+        "Two further accuracy limits were raised and addressed rather than left implicit: a fillfactor below 100 leaves pages partly empty by design and would have made a healthy fillfactor=70 table look 1.43x bloated, and the heap-only measurement says nothing about TOAST. The first is now divided out, the second is stated in the message.",
+        "Honest limits recorded with the customer: this reliably detects large bloat, above roughly 2x, but cannot measure 1.2 to 1.5x, where the accumulated uncertainty from estimated row counts, sampling in reltuples, dropped columns and TOAST distribution can reach 30 percent. The shipped thresholds of 3x and 100 MB sit deliberately above that band."
       ]
     }
   ]
