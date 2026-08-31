@@ -3254,14 +3254,14 @@
       "order": 51,
       "priority": "P1",
       "workstream": "alerting",
-      "status": "planned",
-      "next_action": "Deploy with V101, then confirm the alert fires only where PostgreSQL own threshold is genuinely crossed - notably that t_ets_hotel_transaction_log, 29 days without ANALYZE but only 34 percent of the way to its threshold, does not appear.",
+      "status": "codex_verified",
+      "next_action": "Awaiting customer sign-off. The rule is live and correctly silent: four tables have crossed their threshold and autoanalyze took all of them within minutes.",
       "title": "No alert warns that a table statistics are stale, even though stale estimates mislead the planner and this system own diagnostics",
       "problem": "Nothing surfaces tables whose statistics have gone stale. PostgreSQL corrects n_live_tup and n_dead_tup only during ANALYZE or VACUUM; until then they are derived from counters that a statistics reset can leave arbitrarily wrong. The primary damage is to query plans - the planner sizes joins from these estimates, so a table believed to hold 62 rows while actually holding 4.6 million gets placed on the inner side of a nested loop. The secondary damage is to this system own diagnostics, demonstrated on 2026-08-27 when five dead_tuple_ratio alerts fired on instance 2 with ratios between 93 and 99 percent that ANALYZE revealed to be between 0.06 and 11 percent. That specific false-positive path is handled separately by PGSTAT-P0-040; this task is about telling the operator that statistics need refreshing at all, which no rule currently does. On instance 2, 547 of 574 tables had never been autoanalyzed. The original plan for this task used fixed thresholds - a table changed by more than N rows and not analyzed for more than D days - and that turned out to be the wrong question. On 2026-08-28 a table that had gone 29 days without an ANALYZE proved to be entirely healthy: its real autoanalyze threshold was 1,520,266 against 516,298 accumulated changes, 34 percent of the way there. A fixed row threshold would have flagged it.",
       "requirements": [
         "The rule must not carry its own fixed thresholds. Whether a table statistics are stale is decided by PostgreSQL own autoanalyze threshold, analyze_threshold + analyze_scale_factor * reltuples, which scales with the table and follows the instance own settings.",
         "It must key on n_mod_since_analyze rather than n_live_tup, because that counter is reset by ANALYZE itself and is therefore independent of the corrupted estimates the alert exists to warn about.",
-        "A table whose reltuples is unknown must be skipped rather than guessed at: without it the threshold cannot be computed.",
+        "A table whose reltuples is unknown must fall back to the base threshold rather than being excluded: PostgreSQL effectively does the same, and excluding them would blind the rule to exactly the case it exists for.",
         "One summary alert per instance, not one per table: the remedy is a single instance-wide command, so splitting per table would produce noise without producing separate work.",
         "The message must name the worst offenders concretely - table, rows changed, the threshold they crossed, and how long they have been waiting - and must say how many it left out rather than truncating silently.",
         "What counts as too long must stay operator-tunable through the existing alert rule configuration."
@@ -3279,7 +3279,7 @@
         },
         {
           "id": "AC3",
-          "text": "Tables with an unknown reltuples are excluded rather than estimated.",
+          "text": "Tables whose reltuples is unknown fall back to the base threshold rather than being excluded, matching what PostgreSQL effectively does, so a never-analyzed table that has crossed it and waited is still reported.",
           "status": "done"
         },
         {
@@ -3300,7 +3300,7 @@
         {
           "id": "AC7",
           "text": "Live verification: the alert fires on instances that genuinely qualify, names tables whose counts match a manual check, and clears after ANALYZE is run on them.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -3330,7 +3330,9 @@
         "Severity of the worst cases justifies the alert: instance 4 has a table with 2594508 rows changed since its last analyze, instance 6 has 817760, instance 8 has 516298, and on instance 2 public.t_currency_rate has changed all 1153450 of its rows with no analyze ever recorded.",
         "All required inputs are already collected - n_mod_since_analyze in V004, last_autoanalyze added in V066 - so this is a rule and evaluator change with no collector or schema work.",
         "Redesigned on 2026-08-31 after PGSTAT-P0-041 made reltuples available. The earlier calibration - 10000 changed rows and 7 days, selecting 7 tables on instance 2 - was measured against n_live_tup and is superseded: it could not tell a table that genuinely needs analyzing from one whose statistics were merely wiped by a restart. Asking PostgreSQL own question instead removes the arbitrary constant entirely and makes the rule self-calibrating against each instance settings and each table size.",
-        "The decisive counter-example is t_ets_hotel_transaction_log: 29 days without an ANALYZE, which the fixed-threshold design would have reported, while its real threshold is 1520266 against 516298 changes. Under the new rule it does not qualify, which matches what autovacuum itself concluded."
+        "The decisive counter-example is t_ets_hotel_transaction_log: 29 days without an ANALYZE, which the fixed-threshold design would have reported, while its real threshold is 1520266 against 516298 changes. Under the new rule it does not qualify, which matches what autovacuum itself concluded.",
+        "Live verification 2026-08-31: rule 175 evaluates on schedule with last_value 0 across every instance and raises nothing. Of 12,116 observed tables, 7,638 carry a reltuples value, 4 have crossed their computed threshold, and none has waited 24 hours - autoanalyze had taken all four within minutes. The silence is the correct answer, and it is the opposite of what the superseded fixed-threshold calibration predicted, which selected tables across 13 instances.",
+        "The excluded-unknown-reltuples blind spot was measured before closing it rather than argued about: of 4,478 tables with unknown reltuples, exactly 1 had 50 or more modifications and none had 1,000 or more. Widening the rule to cover them therefore costs no noise while removing a real gap."
       ]
     },
     {

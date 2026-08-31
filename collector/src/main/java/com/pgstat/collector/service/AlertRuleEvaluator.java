@@ -570,7 +570,15 @@ public class AlertRuleEvaluator {
             ")" +
             "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
             "       l.reltuples, l.n_mod_since_analyze," +
-            "       (s.base_thresh + s.scale_factor * l.reltuples)::bigint as analyze_threshold," +
+            // reltuples bilinmiyorsa (PG14+ -1, ya da hic vacuum/analyze gormemis
+            // tablo) esik base_thresh'e iner. PostgreSQL kaynagindaki tam ele
+            // alis dogrulanamadi, ama iki okuma da ayni yere cikiyor:
+            // 50 + 0.1 * (-1) ~ 49.9, sifira clamp'lenirse 50 — pratikte
+            // base_thresh. Bu tablolari tamamen atlamak kor nokta birakiyordu:
+            // hic analiz edilmemis + esigi asmis + uzun suredir bekleyen bir
+            // tablo tam da yakalamak istedigimiz "autoanalyze tikanmis" vakasi.
+            "       (s.base_thresh + s.scale_factor * greatest(coalesce(l.reltuples, 0), 0))::bigint" +
+            "         as analyze_threshold," +
             "       case when l.last_any_analyze = '-infinity'::timestamptz then null" +
             "            else l.last_any_analyze end as last_any_analyze," +
             // Ne kadar suredir bayat: analiz varsa ondan beri, hic yoksa
@@ -586,9 +594,12 @@ public class AlertRuleEvaluator {
             "  cross join settings s" +
             "  left join dim.database_ref dbr" +
             "    on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
-            // reltuples bilinmiyorsa esik hesaplanamaz — tahmin yurutmuyoruz
-            " where l.reltuples is not null and l.reltuples > 0" +
-            "   and l.n_mod_since_analyze >= s.base_thresh + s.scale_factor * l.reltuples" +
+            // Esik, PostgreSQL'in kendi formulunun aynisi. reltuples bilinmiyorsa
+            // yukarida aciklandigi gibi base_thresh'e iniyor; olculdu ki bu
+            // tablolarin (4.478 adet) yalnizca 1'i esigi asiyor, yani kapsam
+            // genisletmesi gurultu uretmiyor (2026-08-31).
+            " where l.n_mod_since_analyze" +
+            "         >= s.base_thresh + s.scale_factor * greatest(coalesce(l.reltuples, 0), 0)" +
             " order by stale_hours desc nulls last" +
             " limit " + STALE_STATS_QUERY_LIMIT,
             instancePk, instancePk, instancePk, instancePk);

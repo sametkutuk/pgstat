@@ -177,7 +177,10 @@ tahminine dayandırmak, ölçmeye çalıştığı hatanın kendisine dayanmak
 olurdu.
 
 `reltuples` bilinmiyorsa (PG14+ `-1`, ya da hiç vacuum/analyze görmemiş
-tablo) eşik hesaplanamaz ve tablo **atlanır** — tahmin yürütülmez.
+tablo) eşik `autovacuum_analyze_threshold`e iner — PostgreSQL de pratikte
+aynı yere varır. Bu tablolar kapsam dışı bırakılmaz: hiç analiz edilmemiş,
+eşiği aşmış ve uzun süredir bekleyen bir tablo tam da yakalanmak istenen
+durumdur.
 
 ### Eşikler
 
