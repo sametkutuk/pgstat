@@ -1,9 +1,8 @@
 # Bulgular (Findings) — Tasarım
 
-**Durum:** revize edildi (r2), inceleme sonrası
+**Durum:** r3 — navigasyon kararı verildi
 **Tarih:** 2026-08-31
-**Değişiklik:** dış inceleme geldi; bu sürüm o eleştirilerin çoğunu
-uyguluyor. Neyin neden değiştiği §11'de.
+**Değişiklik:** iki tur dış inceleme uygulandı. r1→r2 §11'de, r2→r3 §11b'de.
 
 ---
 
@@ -33,29 +32,86 @@ yalnızca birisi elle sorgu yazarsa görünüyorlar.
 pgstat'ta bugün üç kullanıcı yüzeyi var. Dördüncüsünü eklemeden önce
 farkın net olması gerekiyor.
 
-| Yüzey | Etkileşim | Soru |
+Ayırt edici olan **teknik üretim farkı değil, kullanıcı niyeti**:
+
+| Sıra | Yüzey | Kullanıcının sorusu |
 |---|---|---|
-| **Alarmlar** | Sistem beni çağırır | "Şimdi müdahale gerekli mi?" |
-| **Insights** | Ben gidip mercek seçerim | "Şunu incelemek istiyorum" |
-| **Sistem Sağlığı** | Sistem kendi durumunu bildirir | "Toplama çalışıyor mu?" |
-| **Bulgular** *(yeni)* | Sistem bana söyler, eylem istemez | "Bilmem gereken ne var?" |
+| 1 | **Alarmlar** | "Şimdi neye müdahale etmeliyim?" |
+| 2 | **Bulgular** *(yeni)* | "Sistem planlı incelemem için ne fark etti?" |
+| 3 | **Insights / Analiz** | "Ben neyi araştırmak istiyorum?" |
+| 4 | **Sistem Sağlığı** | "Toplama sistemine güvenebilir miyim?" |
 
-Ayırt edici olan **itme/çekme** ekseni: Insights *çekme*dir — gidip
-bakarsınız, ne arayacağınızı bilmeniz gerekir. Bulgular *itme*dir — sistem
-söyler, ama sizi çağırmaz.
+**Karar: Bulgular ayrı bir üst seviye sekme olur**, yukarıdaki sırayla.
 
-**Örtüşme çözülmeli.** `Insights` içinde zaten "Vacuum Lag" merceği var ve
-önerdiğimiz "autovacuum yetişemiyor" bulgusuyla aynı olguya bakıyor.
-Kural: **aynı gerçek iki kart üretmez.** Bulgu, ilgili Insights merceğine
-*bağlantı verir*; merceğin kendisini kopyalamaz.
+Gerekçe: Bulgular **fleet çapında bir inceleme kuyruğu**, Insights ise bir
+**araştırma aracı**. Bulguları Insights altına koymak, sistemin seçtiği
+inceleme adayını yeniden kullanıcının keşfetmesine bırakır — yani işin
+tam tersini yapar.
 
-> **Not:** dış inceleme, üründe hâlihazırda bir "Recommendations" motoru
-> olduğunu ve dördüncü kavramın gürültü üreteceğini söyledi. Kod tabanı
-> kontrol edildi: pgstat'ta öneri motoru **yok** (`recommendation` için
-> sıfır eşleşme, ilgili tablo yok). İncelemede verilen dosya yolları
-> (`New project`, `com.pgobs.platform`) başka bir projeye ait. Ancak
-> uyarının özü — yüzey çoğaltmamak — geçerli kabul edildi ve yukarıdaki
-> ayrım ile örtüşme kuralı bu yüzden eklendi.
+Ayrı sekmeyi haklı çıkaran, Insights'ta karşılığı olmayan özellikler:
+yeni/değişen/geri dönen yaşam döngüsü (§6), kullanıcı bazlı
+görüldü/beklenen/ertelendi durumu, haftalık inceleme ritmi (§7), birden
+fazla Insights merceğine yönlendirme, kendi filtreleri ve geçmişi.
+
+Bunlar olmasa "Insights → Öne Çıkanlar" yeterdi. Bulgular artık filtrelenmiş
+bir kart listesi değil, bir **dikkat yönlendirme katmanı**.
+
+### Kullanıcı akışı
+
+> Sistem seçer → kullanıcı **Bulgular**'da değerlendirir → gerekirse
+> **Insights**'ta araştırır.
+
+### Navigasyon kuralları
+
+Ayrı sekmenin alarm gibi algılanmaması için:
+
+- **Rozet**, toplam aktif bulguyu değil yalnızca *"son incelemeden beri
+  yeni veya anlamlı değişen"* sayısını gösterir
+- Rozet ve kartlar **kırmızı/uyarı tonunda olmaz**
+- Kart, analiz ekranını **kopyalamaz**: kısa gözlem + önem gerekçesi +
+  kapsam + sınırlama
+- Birincil eylem **"Insights'ta incele"**
+- Derin bağlantı instance, veritabanı, relation, zaman aralığı ve **mercek
+  seçimini** taşır
+- Insights'tan dönüldüğünde Bulgular'ın filtresi ve liste konumu **korunur**
+
+### Örtüşme kuralı
+
+`Insights` içinde zaten "Vacuum Lag" merceği var ve önerdiğimiz
+"autovacuum yetişemiyor" bulgusuyla aynı olguya bakıyor.
+
+**Aynı gerçek iki kart üretmez.** Bulgu ilgili mercege *bağlantı verir*,
+merceğin kendisini kopyalamaz.
+
+### İsimlendirme
+
+"Findings" ve "Insights" İngilizcede birbirine yakın algılanabiliyor.
+Navigasyonda görev odaklı alt açıklama kullanılır:
+
+| Sekme | Alt açıklama |
+|---|---|
+| **Bulgular** | Sistemin seçtiği inceleme adayları |
+| **Insights / Analiz** | Araştırma mercekleri |
+
+### Yüzey sınırı: sağlık mı, bulgu mu
+
+| Durum | Yüzey |
+|---|---|
+| Collector tazeliği, toplama hatası, pgstat'ın kendi çalışma sorunu | **Sistem Sağlığı** |
+| Veritabanı istatistiklerinin bir kararı güvenilmez hâle getirmesi | **Bulgular** |
+
+Örnek: "toplama 2 saattir yapılamıyor" Sistem Sağlığı'dır. "4.478 tablonun
+satır sayısı tahmini güvenilmez, bu tablolarda bloat hesabı yapılamıyor"
+Bulgu'dur.
+
+> **Geri çekilen itiraz.** İlk inceleme, üründe hâlihazırda bir
+> "Recommendations" motoru olduğunu ve dördüncü kavramın gürültü
+> üreteceğini söylemişti. Kod tabanı kontrol edildi: pgstat'ta öneri
+> motoru **yok** (`recommendation` için sıfır eşleşme, ilgili tablo yok);
+> verilen dosya yolları (`New project`, `com.pgobs.platform`) başka bir
+> projeye aitti. İncelemeci itirazı geri çekti ve doğru bağlamda **ayrı
+> sekme** yönünde görüş bildirdi. Uyarının özü — yüzey çoğaltmamak — yine
+> de bu bölümdeki sınır ve örtüşme kurallarına dönüştü.
 
 ## 3. Alarm ile Bulgu ayrımı
 
@@ -343,17 +399,35 @@ sorunu çözmeyecek olandı.
 | **Mevcut yüzeylerle ilişki** bölümü eklendi | Insights zaten var; "Vacuum Lag" merceğiyle örtüşme çözülmeli |
 | Katalog **V1 / V2 / kapsam dışı** olarak bölündü | Hepsi ilk sürüme girmemeli |
 
+## 11b. r2'den r3'e ne değişti
+
+İkinci inceleme turu, birinci turdaki yanlış varsayım düzeldikten sonra
+geldi ve tek konuya odaklandı: navigasyon.
+
+| Değişiklik | Sebep |
+|---|---|
+| **Bulgular ayrı üst seviye sekme** olacak (karar) | Insights altına koymak, sistemin seçtiği inceleme adayını yeniden kullanıcının keşfetmesine bırakırdı |
+| Yüzey ekseni "itme/çekme" → **kullanıcı niyeti** | İtme/çekme teknik üretim farkı; ayrımı taşıyan şey niyet |
+| Sıra belirlendi: **Alarmlar → Bulgular → Insights → Sistem Sağlığı** | Aciliyetten araştırmaya doğru |
+| **Navigasyon kuralları** eklendi (rozet, renk, CTA, derin bağlantı, durum koruma) | Ayrı sekmenin alarm gibi algılanmaması için |
+| **İsimlendirme** alt açıklamaları | "Findings" ve "Insights" İngilizcede yakın algılanıyor |
+| **Yüzey sınırı** yazıldı: collector sağlığı ≠ veri güvenilirliği | Hangi gözlemin nereye ait olduğu belirsizdi |
+
+> **Not:** ikinci incelemeci r2 dosyasına satır satır erişemedi; bu tur
+> değişiklik özetine dayanan bir **navigasyon değerlendirmesiydi**,
+> tasarımın tamamının ikinci bir incelemesi değil. Katalog, veri modeli ve
+> projeksiyon kapıları henüz ikinci bir gözden geçirmeden geçmedi.
+
 ## 12. Hâlâ açık
 
-1. **Bulgular ayrı sekme mi, Insights içinde bir sekme mi?** İtme/çekme
-   ayrımı ayrı sekmeyi haklı çıkarıyor, ama dördüncü bir üst seviye
-   navigasyon öğesi de bir maliyet.
-2. **Haftalık özet kanalı.** Telegram'dan ayrı denildi — e-posta mı,
+1. **Haftalık özet kanalı.** Telegram'dan ayrı denildi — e-posta mı,
    yalnızca UI mı?
-3. **Backtest eşiği** ne olmalı (projeksiyon kapılarından biri)?
-4. **`EXPECTED` işareti kalıcı mı?** "Bu tabloda 9 UPDATE/satır normal,
+2. **Backtest eşiği** ne olmalı (projeksiyon kapılarından biri)?
+3. **`EXPECTED` işareti kalıcı mı?** "Bu tabloda 9 UPDATE/satır normal,
    bir daha sorma" demek mantıklı; ama dedektör sürümü değişince yeniden
    sorulmalı mı?
+4. **Katalog ve veri modeli ikinci incelemeden geçmedi** — r2'deki
+   değişiklikler yalnızca özet üzerinden değerlendirildi.
 
 ---
 

@@ -116,7 +116,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 57 | PGSTAT-P0-043 | P0 | alerting | done | Every alert rule is evaluated on every orchestrator cycle, including rules whose data changes once a night | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 58 | PGSTAT-P0-044 | P0 | retention | done | Retention purge runs on every orchestrator cycle although its cutoffs only change once a day | Kapandı — canlı doğrulaması yapıldı, müşteri onayı alındı. |
 | 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Deploy, then confirm ops.job_run gains nightly_snapshot rows with a duration, and that a table under an open bloat alert gets intra-day size rows in fact.pg_relation_size_snapshot. |
-| 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r2 after external review; four questions remain in section 12, chiefly whether findings get their own navigation entry or a tab inside Insights. Answer those, then implement. |
+| 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r3 with the navigation decision made. Three narrow questions remain in section 12, plus one caveat: the catalogue, data model and projection gates have not had a second review, only the navigation has. |
 
 ## Dependency Map
 
