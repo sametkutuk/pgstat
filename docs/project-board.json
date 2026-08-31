@@ -4135,6 +4135,11 @@
           "id": "AC9",
           "text": "The baseline is the median of the three lowest daily values rather than a raw minimum, and requires at least 21 distinct nights spanning at least 28 days. Failing the gate produces no finding at all rather than a low-confidence one.",
           "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "The rule description in the UI matches what the code does after V109 and V110: median of the three lowest nights rather than a raw minimum, nightly-only baseline pool, the 21-night and 28-day gate, and the conditions under which the detector stays silent.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -4167,7 +4172,8 @@
         "Rows written before V109 carry no relid and are excluded, so the rule stays disabled until at least two qualifying snapshots exist - roughly two nights after deploy.",
         "A further review round found two problems with the baseline gate. First, a missed false-positive path: bytes_per_row has an estimated denominator, so a single observation where reltuples reads high produces a spuriously low bytes_per_row, and a raw minimum would adopt that noise as the baseline - making every later observation look bloated. The baseline is now the median of the three lowest daily values, which one outlier cannot move.",
         "Second, and missed entirely in the original design: source eligibility. The intra-day watched-table path writes to the same snapshot table every 30 minutes, but only for tables that already have an open bloat alert - so those observations are biased toward the bloated state and dense enough for noise to drag the minimum down. They now carry source=watched and are excluded from the baseline pool; they still confirm current state and persistence, which is what they were added for.",
-        "The gate is now: same relation incarnation, same fillfactor regime, a time-consistent row estimate bridged to its anchor, source nightly, at least 21 distinct nights, and a span of at least 28 days, with the baseline taken as a median rather than a minimum. Failing it yields no finding rather than a low-confidence one - validity is binary while confidence is graded, and an invalid baseline is not a weak finding but no finding. The practical cost is that the rule cannot speak about any table for roughly four weeks after deploy, which is accepted: an invalid baseline is worse than silence."
+        "The gate is now: same relation incarnation, same fillfactor regime, a time-consistent row estimate bridged to its anchor, source nightly, at least 21 distinct nights, and a span of at least 28 days, with the baseline taken as a median rather than a minimum. Failing it yields no finding rather than a low-confidence one - validity is binary while confidence is graded, and an invalid baseline is not a weak finding but no finding. The practical cost is that the rule cannot speak about any table for roughly four weeks after deploy, which is accepted: an invalid baseline is worse than silence.",
+        "Deploy verified 2026-08-31: migrations V100 through V110 all applied, the rule is disabled with a six-hour evaluation interval, and the stale statistics rule remains enabled at hourly. The description was found stale - it still said the baseline is the lowest historical value, which V110 replaced with the median of the three lowest nights - and was refreshed in V111. Keeping descriptions faithful to what is measured mattered repeatedly this week: three unsupported claims were removed from messages for the same reason."
       ]
     }
   ]
