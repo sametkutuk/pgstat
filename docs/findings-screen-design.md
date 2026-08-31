@@ -1,8 +1,14 @@
 # Bulgular (Findings) — Tasarım
 
-**Durum:** r3 — navigasyon kararı verildi
+**Durum:** r4 — kodlamaya hazır, dar kapsamlı son inceleme bekliyor
 **Tarih:** 2026-08-31
-**Değişiklik:** iki tur dış inceleme uygulandı. r1→r2 §11'de, r2→r3 §11b'de.
+**Değişiklik:** üç tur dış inceleme uygulandı. r1→r2 §11, r2→r3 §11b,
+r3→r4 §11c.
+
+> **Son inceleme için odak (dar kapsam):** §4.3 ve §4.4 dedektörlerinin
+> "ölçtüğünü söyle" sözleşmesi, ve §8 veri modeli. Genel tasarımın
+> yeniden tartışılmasına gerek yok. İlk turda yakalanan hata
+> (`n_dead_tup / autovacuum_count`) bu kısa kontrolün değerini kanıtladı.
 
 ---
 
@@ -157,7 +163,9 @@ Projeksiyon **yalnızca güven kapılarının hepsi geçilirse** eklenir:
   attach/drop **yok**
 - 14 ve 30 günlük robust eğimler **aynı yönde** ve biri diğerinin
   0,5–2 katı aralığında
-- Backtest hatası kabul edilebilir sınırda
+- **Backtest**: rolling-origin medyan hatası, öngörülen değişimin en fazla
+  **%50'si**; en az **3 test penceresi**; yön tutarlılığı. Eşik dedektör
+  sürümüne bağlı ve **yapılandırılabilir**
 - Tahmin aralığının alt sınırı > 0
 - Öngörülen etki `max(1 GiB, mevcut boyutun %10'u)` eşiğini aşıyor
 
@@ -184,14 +192,23 @@ gözlendiğinde** yapılabilir.
 - **Söylemediği:** desen kasıtlı olabilir (rollup UPSERT'i gibi); gözlem,
   suçlama değil
 
-#### 4.3 Veri güvenilirliği
+#### 4.3 Veri güvenilirliği · **V1, ilk yazılacak**
 
 > `etsrooms` veritabanında istatistikler 2026-03-04'te sıfırlanmış
-> (176 gün önce). O tarihten beri analiz edilmemiş 4.478 tablo var.
+> (176 gün önce). O tarihten beri analiz edilmemiş 4.478 tablo var; bu
+> tablolarda satır sayısına dayanan hiçbir hesap yapılamıyor.
 
-- **Veri:** `pg_stat_database.stats_reset`, `last_analyze/autoanalyze`
-- **Söylemediği:** hepsi sorunlu değil; çoğu hiç değişmediği için analiz
-  edilmemiş
+**Ölçtüğü:** `last_analyze` ve `last_autoanalyze`'ın ikisinin de boş
+olduğu, `reltuples`'ın bilinmediği (`-1` ya da `0`) tablo sayısı; ve o
+veritabanının `stats_reset` tarihi.
+
+**Söylemediği:**
+- Bu tabloların sorunlu olduğunu. Çoğu hiç değişmediği için analiz
+  edilmemiştir; PostgreSQL onları analiz etmeye değer bulmamıştır.
+- Sıfırlamadan **önce** analiz edilip edilmediğini. `last_analyze`
+  sıfırlamada silinir, yani "hiç" değil "sıfırlamadan beri" demektir.
+- İstatistiklerin ne kadar yanlış olduğunu — yalnızca **düzeltilmemiş**
+  olduğunu.
 
 **Bu bulgu diğerlerini bastırır.** Satır sayısına dayanan bulgular
 (§4.1, §4.2, §4.4) yalnızca `reltuples` bilinen tablolarda hesaplanabilir
@@ -199,13 +216,30 @@ gözlendiğinde** yapılabilir.
 güvenilmez satır tahmini olan tablolarda diğer dedektörler **otomatik
 susar**.
 
-#### 4.4 Kaynak israfı
+#### 4.4 Kaynak israfı · **V1, ikinci yazılacak**
 
-> `fact.pgss_delta_20260820` 11.740 satırı 637 MB'da tutuyor.
+> `fact.pgss_delta_20260820` 11.740 satırı 637 MB'da tutuyor. Satır başına
+> ~54 kB; aynı tablonun geçmişte ölçülen en sıkışık hâli ~870 B/satır.
 
-- **Veri:** boyut + `reltuples`, tablonun kendi tarihsel minimumuna oran
-- **Söylemediği:** `fillfactor` ayarlıysa boşluğun bir kısmı tasarım
-  gereğidir (düşülür); TOAST ayrıdır
+**Ölçtüğü:** `table_size_bytes / satır_sayısı` oranının, **aynı tablonun**
+kendi geçmişindeki en düşük değerine bölümü. İki ölçüm arasındaki fark;
+tahmin değil.
+
+Satır sayısı `reltuples + Σ(ins_delta − del_delta)` ile düzeltilir —
+`reltuples` yalnızca `VACUUM`/`ANALYZE`'da güncellendiği için, aradaki
+büyüme aksi hâlde şişme sanılır.
+
+**Söylemediği:**
+- **TOAST ve indeks şişmesini.** Ölçüm yalnızca heap'i (`table_size_bytes`)
+  kapsar.
+- `fillfactor` ayarlıysa boşluğun tasarım gereği olan kısmını — o pay
+  hesaptan düşülür ve mesajda belirtilir.
+- **1.2–1.5 kat aralığında güvenilir bir sayı.** Tahmini satır sayısı,
+  `reltuples` örneklemesi, düşürülmüş kolonlar ve TOAST dağılımı toplamda
+  ~%30 hataya çıkabilir. Eşik bu bandın üstünde tutulur.
+- Tabloyu **hiç sıkışık görmediysek** bir şey söylemez — taban yoksa oran
+  1.0 çıkar ve bulgu üretilmez. Uydurulmuş bir taban yanlış bulgudan daha
+  zararlıdır.
 
 #### 4.5 Autovacuum yetişemiyor
 
@@ -312,14 +346,37 @@ olmayan bir sekme ziyaret edilmez.
 "Yeni" tanımı **kullanıcı bazında "son incelemeden beri"**, sabit "son 24
 saat" değil.
 
+**Kanallar:**
+
+| Kanal | Rol |
+|---|---|
+| **UI** | Kaynak gerçek — bulgular burada yaşar |
+| **Haftalık e-posta** | Tercihe bağlı keşif kanalı |
+| **Telegram / on-call** | **Kullanılmaz** |
+
+Teslimat kodu sonraya kalabilir; şema ve üretim önce gelir.
+
 ## 8. Veri modeli
 
 ```
+ops.finding_evaluation_run       -- her degerlendirme kosusu
+  run_id              bigint pk
+  started_at          timestamptz
+  finished_at         timestamptz null
+  status              text        -- running | success | partial | failed
+  detectors_ok        int
+  detectors_failed    int
+  error_text          text null
+
 ops.finding
   finding_id          bigint pk
   finding_key         text        -- kararli fingerprint (isimden bagimsiz)
   finding_code        text
-  detector_version    int         -- dedektor degisince eski bulgu karismasin
+  -- IKI AYRI SURUM. Ayrim, ertelenmis bir bulgunun ne zaman yeniden
+  -- acilacagini belirliyor: mantik degisirse yeniden sorulmali, metin
+  -- duzeltilirse sorulmamali.
+  detector_logic_version     int  -- hesap/esik degisti (major)
+  detector_cosmetic_version  int  -- yalnizca metin/bicim degisti
   instance_pk         bigint
   scope_kind          text        -- 'instance' | 'database' | 'relation'
   subject_identity    text        -- dbid/relid tabanli, ada bagimli degil
@@ -336,11 +393,23 @@ ops.finding
   first_observed_at   timestamptz
   last_observed_at    timestamptz
   last_evaluated_at   timestamptz
-  evaluation_run_id   bigint
+  evaluation_run_id   bigint      -- fk -> finding_evaluation_run
   ended_at            timestamptz null
 
 ops.finding_disposition          -- kullanici karari AYRI tabloda
-  finding_key, user_id, state, until_at, note
+  finding_key                     text
+  user_id                         text
+  state                           text  -- UNSEEN|REVIEWED|EXPECTED|SNOOZED
+  note                            text null
+  -- Kararin NEYE dayandigi: bunlar degisince karar gecersizlesir
+  detector_compatibility_version  int   -- hangi mantik surumunde verildi
+  evidence_hash_at_disposition    text  -- hangi kanitla verildi
+  review_after                    timestamptz  -- en gec ne zaman tekrar sorulacak
+  invalidated_at                  timestamptz null
+  invalidation_reason             text null    -- 'evidence_changed'
+                                               -- 'detector_logic_changed'
+                                               -- 'expired'
+  primary key (finding_key, user_id)
 ```
 
 Notlar:
@@ -350,6 +419,27 @@ Notlar:
   adlandırılınca bulgu kopmasın).
 - `coverage_num/den` her kartta gösterilir: *"7.638/12.116 tablo
   değerlendirildi"*.
+- `finding_evaluation_run`, gece toplayıcısında eksik olan şeyin aynısını
+  önlüyor: "ne kadar sürüyor" sorusu ölçülemiyordu çünkü koşu hiçbir yere
+  kaydedilmiyordu (bkz. PGSTAT-P0-045).
+
+### `EXPECTED` neden kalıcı değil
+
+"Bu tabloda satır başına 9 UPDATE normaldir, bir daha sorma" demek
+mantıklı. Ama o karar **belirli bir kanıta ve belirli bir hesaba**
+dayanıyor. İkisi de değişebilir.
+
+Karar şu üç durumda geçersizleşir ve bulgu yeniden açılır:
+
+| Tetikleyici | `invalidation_reason` |
+|---|---|
+| Kanıt anlamlı değişti (`evidence_hash` farklı) | `evidence_changed` |
+| Dedektörün **mantığı** değişti (logic version arttı) | `detector_logic_changed` |
+| `review_after` doldu (örn. 90 gün) | `expired` |
+
+**Yalnızca metin/biçim değişikliği (cosmetic version) kararı
+geçersizleştirmez.** Bu ayrım olmasa her mesaj düzeltmesi bütün ertelenmiş
+kararları sıfırlardı.
 
 ## 9. Üretim ve maliyet
 
@@ -418,16 +508,44 @@ geldi ve tek konuya odaklandı: navigasyon.
 > tasarımın tamamının ikinci bir incelemesi değil. Katalog, veri modeli ve
 > projeksiyon kapıları henüz ikinci bir gözden geçirmeden geçmedi.
 
-## 12. Hâlâ açık
+## 11c. r3'ten r4'e ne değişti
 
-1. **Haftalık özet kanalı.** Telegram'dan ayrı denildi — e-posta mı,
-   yalnızca UI mı?
-2. **Backtest eşiği** ne olmalı (projeksiyon kapılarından biri)?
-3. **`EXPECTED` işareti kalıcı mı?** "Bu tabloda 9 UPDATE/satır normal,
-   bir daha sorma" demek mantıklı; ama dedektör sürümü değişince yeniden
-   sorulmalı mı?
-4. **Katalog ve veri modeli ikinci incelemeden geçmedi** — r2'deki
-   değişiklikler yalnızca özet üzerinden değerlendirildi.
+Üçüncü tur, açık üç soruyu cevapladı ve ikisinin **şemayı etkilediğini**
+gösterdi.
+
+| Değişiklik | Sebep |
+|---|---|
+| Dedektör sürümü **ikiye ayrıldı**: `detector_logic_version` + `detector_cosmetic_version` | Ertelenmiş karar mantık değişince yeniden açılmalı, metin düzeltilince açılmamalı |
+| `finding_disposition`'a **beş alan**: `detector_compatibility_version`, `evidence_hash_at_disposition`, `review_after`, `invalidated_at`, `invalidation_reason` | `EXPECTED` kalıcı olmamalı; kararın neye dayandığı kayıtlı olmalı |
+| **`ops.finding_evaluation_run`** tablosu eklendi | Koşu kaydedilmezse maliyeti ölçülemez — gece toplayıcısında tam bu eksikti |
+| **Backtest kapısı somutlaştı**: rolling-origin medyan hata ≤ öngörülen değişimin %50'si, ≥3 pencere, yön tutarlılığı, yapılandırılabilir | "Kabul edilebilir sınırda" ölçülebilir değildi |
+| **Kanallar netleşti**: UI kaynak gerçek, haftalık e-posta tercihe bağlı, **Telegram yok** | Bulgu bildirimi on-call kanalına girmemeli |
+| **Kodlama sırası** yazıldı (§12) ve veri güvenilirliği başa alındı | Güvenilmez satır tahminiyle "satır başına alan" yayımlamak, bu hafta canlıda yaptığımız hatanın aynısı |
+
+## 12. Kodlama sırası
+
+Sıra bilinçli: **güvenilmez satır tahminiyle "satır başına alan" hesabı
+yayımlanmamalı.** Bu, bu hafta canlıda yaşadığımız hatanın aynısı —
+`n_live_tup` 0 iken %100 bloat raporlandı, gerçek oran %1.7'ydi
+(PGSTAT-P0-041). Dedektörler o hatayı tekrarlamamalı.
+
+1. **Şema ve koşu modeli** — `ops.finding`, `ops.finding_disposition`,
+   `ops.finding_evaluation_run`
+2. **Veri güvenilirliği dedektörü** (§4.3)
+3. **Kapsam/güven kapısı** — bu dedektörün diğerlerini bastırma mekanizması
+4. **Kaynak israfı dedektörü** (§4.4)
+
+Sonraki dedektörler (§4.1, §4.2, §4.5, §4.6) bu iskelet oturduktan sonra.
+
+## 13. Hâlâ açık
+
+1. **Katalog ve veri modeli ikinci incelemeden geçmedi.** r2'deki
+   değişiklikler yalnızca değişiklik özeti üzerinden değerlendirildi;
+   dosyanın kendisi incelenmedi.
+2. **`review_after` varsayılanı** 90 gün mü olmalı, dedektör başına mı
+   ayarlanmalı?
+3. **Backtest eşiği** başlangıçta %50 kabul edildi; ilk gerçek veriyle
+   kalibre edilecek.
 
 ---
 
