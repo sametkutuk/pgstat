@@ -1749,12 +1749,12 @@
         {
           "id": "AC5",
           "text": "Measured a day after deploy: n_tup_upd growth has fallen and n_tup_hot_upd is no longer zero.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC6",
           "text": "One-time reclaim of the accumulated bloat, after AC5 confirms the write rate is fixed.",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -1777,6 +1777,8 @@
         "evidence": ""
       },
       "verification_evidence": [
+        "Verified the same day rather than the next, since three hours of post-deploy data was enough. In the window from 14:03 to 17:21, statement_series took 247,031 updates of which 242,989 were HOT (98.4 percent) and relation_ref 98,597 of which 96,061 (97.4 percent). Both now exceed the database_ref control group at 50 percent. The cumulative hot percentage in pg_stat_user_tables still reads 0.1 and 0.3 because 728 million historical non-HOT updates dominate it; the window rate is the number that matters. Write rate fell from about 4.7 million updates an hour to about 74,800, roughly 63 times less.",
+        "Reclaim done. statement_series went 942 MB in the morning to 792 MB before VACUUM FULL to 544 MB after; relation_ref 30 to 24 to 13 MB. The 150 MB that came back before the reclaim was autovacuum reusing space that HOT had finally made reusable. The prediction of about 250 MB was wrong: it reasoned over the heap alone while pg_total_relation_size counts indexes too. The honest floor is 290 MB heap for 1.76 million rows plus 255 MB of indexes, all rebuilt by the VACUUM FULL, so there is no further gain to take. Noted but not acted on: ix_statement_series_instance_ids has 817 scans against 10 MB.",
         "Measured on the central database 2026-09-01. statement_series 942 MB, 1,761,565 live, 81,732 dead, 92,902 inserts, 721,732,172 updates, 0 HOT. relation_ref 30 MB, 2,801 inserts, 27,529,066 updates, 0 HOT. query_text 316 MB, 913,084 live, 569 dead, 6,810 updates - not a churn problem. job_run_instance 539 MB and job_run 236 MB are purged already but job_run had never been autovacuumed.",
         "A control group in the same database identifies the cause rather than leaving it inferred: dim.database_ref takes 37,840 updates and achieves 50 percent HOT. It differs from the other three in one respect - its last_seen_at is not indexed. An indexed column that changes on every update makes HOT impossible.",
         "The five minute interval had no recorded rationale, but it has a real consumer: insights.ts renders pgss_delta windows of six hours or less in five minute steps. The interval is therefore left alone; only the timestamp write is throttled. These are two separate decisions that were conflated because the timestamp write was never a decision at all - it is a side effect of needing DO UPDATE to make RETURNING produce the id.",
