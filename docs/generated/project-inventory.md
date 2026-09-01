@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 116 |
-| Tables discovered | 96 |
-| Columns discovered | 1185 |
-| Indexes discovered | 130 |
+| Migrations scanned | 117 |
+| Tables discovered | 98 |
+| Columns discovered | 1214 |
+| Indexes discovered | 132 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
@@ -1144,6 +1144,8 @@ This generated inventory is the bridge between code and the manual project docum
 | fact.pg_progress_snapshot | 12 | yes | snapshot_ts | V004__fact_tables.sql | V004__fact_tables.sql |
 | fact.pg_progress_vacuum_snapshot | 17 | yes | sample_ts | V067__missing_stat_columns_phase2.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_recovery_prefetch_snapshot | 12 | yes | sample_ts | V026__slru_subscription_prefetch_functions.sql | V026__slru_subscription_prefetch_functions.sql |
+| fact.pg_relation_physical_state | 11 | no |  | V113__relation_physical_generation.sql | V113__relation_physical_generation.sql |
+| fact.pg_relation_rewrite_event | 18 | no |  | V113__relation_physical_generation.sql | V113__relation_physical_generation.sql |
 | fact.pg_relation_size_snapshot | 15 | yes | snapshot_ts | V039__nightly_pg_settings_and_catalog.sql | V110__relation_size_source_and_baseline_gate.sql |
 | fact.pg_replication_slot_snapshot | 30 | yes | sample_ts | V024__slot_conflict_tables.sql | V067__missing_stat_columns_phase2.sql |
 | fact.pg_replication_snapshot | 23 | yes | snapshot_ts | V004__fact_tables.sql | V066__missing_stat_columns.sql |
@@ -1519,6 +1521,49 @@ This generated inventory is the bridge between code and the manual project docum
 | wal_distance | bigint | V026__slru_subscription_prefetch_functions.sql |
 | block_distance | bigint | V026__slru_subscription_prefetch_functions.sql |
 | io_depth | bigint | V026__slru_subscription_prefetch_functions.sql |
+
+</details>
+
+<details><summary>fact.pg_relation_physical_state columns (11)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| instance_pk | bigint | V113__relation_physical_generation.sql |
+| dbid | oid | V113__relation_physical_generation.sql |
+| relid | oid | V113__relation_physical_generation.sql |
+| schemaname | text | V113__relation_physical_generation.sql |
+| relname | text | V113__relation_physical_generation.sql |
+| relfilenode | bigint | V113__relation_physical_generation.sql |
+| reltablespace | oid | V113__relation_physical_generation.sql |
+| relpages | bigint | V113__relation_physical_generation.sql |
+| reltuples | bigint | V113__relation_physical_generation.sql |
+| first_seen_at | timestamptz | V113__relation_physical_generation.sql |
+| observed_at | timestamptz | V113__relation_physical_generation.sql |
+
+</details>
+
+<details><summary>fact.pg_relation_rewrite_event columns (18)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| event_id | bigint | V113__relation_physical_generation.sql |
+| instance_pk | bigint | V113__relation_physical_generation.sql |
+| dbid | oid | V113__relation_physical_generation.sql |
+| relid | oid | V113__relation_physical_generation.sql |
+| schemaname | text | V113__relation_physical_generation.sql |
+| relname | text | V113__relation_physical_generation.sql |
+| window_start | timestamptz | V113__relation_physical_generation.sql |
+| observed_at | timestamptz | V113__relation_physical_generation.sql |
+| prev_relfilenode | bigint | V113__relation_physical_generation.sql |
+| new_relfilenode | bigint | V113__relation_physical_generation.sql |
+| prev_tablespace | oid | V113__relation_physical_generation.sql |
+| new_tablespace | oid | V113__relation_physical_generation.sql |
+| new_relpages | bigint | V113__relation_physical_generation.sql |
+| new_reltuples | bigint | V113__relation_physical_generation.sql |
+| block_size | integer | V113__relation_physical_generation.sql |
+| baseline_bytes_per_row | numeric | V113__relation_physical_generation.sql |
+| classification | text | V113__relation_physical_generation.sql |
+| confirmed_at | timestamptz | V113__relation_physical_generation.sql |
 
 </details>
 
@@ -2021,19 +2066,19 @@ Any generated table absent from purge/partition ownership must be reviewed befor
 
 Methods: `activityQuery`, `bgwriterQuery`, `computeQueryIdQuery`, `databaseListQuery`, `databaseStatsQuery`, `discoveryQuery`, `extensionCheckQuery`, `familyCode`, `indexStatsQuery`, `lockQuery`, `pgssStatsQuery`, `pgssTextQuery`, `postmasterStartTimeQuery`, `progressClusterQuery`, `progressCreateIndexQuery`, `progressVacuumQuery`, `recoveryPrefetchQuery`, `replicationQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
 
-PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_control_system`, `pg_current_wal_lsn`, `pg_database`, `pg_extension`, `pg_index`, `pg_is_in_recovery`, `pg_locks`, `pg_postmaster_start_time`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_cluster`, `pg_stat_progress_create_index`, `pg_stat_progress_vacuum`, `pg_stat_recovery_prefetch`, `pg_stat_replication`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_statio_user_indexes`, `pg_statio_user_tables`
+PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_control_system`, `pg_current_wal_lsn`, `pg_database`, `pg_extension`, `pg_index`, `pg_is_in_recovery`, `pg_locks`, `pg_postmaster_start_time`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_cluster`, `pg_stat_progress_create_index`, `pg_stat_progress_vacuum`, `pg_stat_recovery_prefetch`, `pg_stat_replication`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_statio_user_indexes`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg13Queries.java
 
 Methods: `activityQuery`, `familyCode`, `pgssStatsQuery`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
 
-PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_tables`
+PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg14_16Queries.java
 
 Methods: `activityQuery`, `computeQueryIdQuery`, `databaseStatsQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `pgssStatsQuery`, `progressCopyQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `subscriptionQuery`, `tableStatsQuery`, `walQuery`
 
-PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_index`, `pg_locks`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_copy`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_indexes`, `pg_statio_user_tables`
+PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_index`, `pg_locks`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_copy`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_indexes`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg17_18Queries.java
 
@@ -2061,7 +2106,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/repository/AlertRepository.java | control.alert_rule_last_eval, ops.alert |
 | collector/src/main/java/com/pgstat/collector/repository/CapabilityRepository.java | control.instance_capability |
 | collector/src/main/java/com/pgstat/collector/repository/DimensionRepository.java | dim.database_ref, dim.query_text, dim.relation_ref, dim.role_ref, dim.statement_series |
-| collector/src/main/java/com/pgstat/collector/repository/FactRepository.java | control.alert_rule, control.table_relopts_snapshot, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
+| collector/src/main/java/com/pgstat/collector/repository/FactRepository.java | control.alert_rule, control.table_relopts_snapshot, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_physical_state, fact.pg_relation_rewrite_event, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | collector/src/main/java/com/pgstat/collector/repository/InventoryRepository.java | control.database_state, control.instance_inventory, control.instance_state, control.schedule_profile, dim.database_ref |
 | collector/src/main/java/com/pgstat/collector/repository/OpsRepository.java | ops.job_run, ops.job_run_instance |
 | collector/src/main/java/com/pgstat/collector/repository/ReportConfigRepository.java | control.report_config |

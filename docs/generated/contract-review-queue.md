@@ -13,10 +13,10 @@ node scripts/generate-doc-inventory.mjs
 
 | Queue | Count | Action |
 | --- | --- | --- |
-| Table/data-family contracts needing semantic review | 50 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 940 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 629 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
-| Fact/aggregate families without detected retention mapping | 0 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
+| Table/data-family contracts needing semantic review | 52 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
+| Field contracts needing exact source/version review | 969 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 632 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Fact/aggregate families without detected retention mapping | 2 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
 
@@ -77,6 +77,8 @@ node scripts/generate-doc-inventory.mjs
 | control.user_preferences | control/config | 4 | not detected | api/src/routes/preferences.ts (3 routes) | not detected | generated default; needs review |
 | control.workload_classification_config | control/config | 11 | not detected | api/src/routes/workload.ts (4 routes) | not detected | generated default; needs review |
 | control.xid_freeze_subscription | control/config | 9 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
+| fact.pg_relation_physical_state | fact | 11 | not detected | not detected | not detected | generated default; needs review |
+| fact.pg_relation_rewrite_event | fact | 18 | not detected | not detected | not detected | generated default; needs review |
 | ops.alert | operations | 20 | control.retention_policy.alert_retention_days (resolved alerts only) | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes)<br>api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/databaseCleanup.ts (4 routes)<br>api/src/routes/instances.ts (71 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx<br>ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx | generated default; needs review |
 | ops.audit_log | operations | 10 | control.retention_policy.audit_log_retention_days | api/src/routes/auditLog.ts (2 routes) | ui/src/pages/Settings.tsx | generated default; needs review |
 | ops.job_run | operations | 10 | control.retention_policy.job_run_retention_days | api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/jobRuns.ts (4 routes) | ui/src/pages/Dashboard.tsx<br>ui/src/pages/JobRuns.tsx | generated default; needs review |
@@ -641,6 +643,9 @@ node scripts/generate-doc-inventory.mjs
 | fact.pg_archiver_snapshot.last_archived_time | filesystem/WAL metadata | conditional; redact or allowlist | archive lag evidence | needs field-level review |
 | fact.pg_archiver_snapshot.last_archived_wal | filesystem/WAL metadata | conditional; redact or allowlist | archive lag evidence | needs field-level review |
 | fact.pg_database_delta.temp_files_delta | filesystem/WAL metadata | conditional; redact or allowlist | database workload, TPS, temp, cache, session evidence | manual core field contract |
+| fact.pg_relation_physical_state.relfilenode | filesystem/WAL metadata | conditional; redact or allowlist | verify | needs field-level review |
+| fact.pg_relation_rewrite_event.new_relfilenode | filesystem/WAL metadata | conditional; redact or allowlist | verify | needs field-level review |
+| fact.pg_relation_rewrite_event.prev_relfilenode | filesystem/WAL metadata | conditional; redact or allowlist | verify | needs field-level review |
 | fact.pg_replication_snapshot.application_name | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.client_addr | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
 | fact.pg_replication_snapshot.client_hostname | identity/network metadata | conditional; redact or allowlist | replication lag evidence | needs field-level review |
@@ -722,3 +727,5 @@ node scripts/generate-doc-inventory.mjs
 
 | Table | Semantics | Partition | Rollup | Action |
 | --- | --- | --- | --- | --- |
+| fact.pg_relation_physical_state | fact | not detected | not detected | verify retention policy or document exception |
+| fact.pg_relation_rewrite_event | fact | not detected | not detected | verify retention policy or document exception |

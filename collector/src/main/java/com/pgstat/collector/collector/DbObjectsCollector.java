@@ -212,6 +212,139 @@ public class DbObjectsCollector {
     }
 
     /**
+     * Fiziksel nesil degisimini yakalar ve siniflandirir (PGSTAT-P0-046 Faz 2).
+     *
+     * NEDEN VAR
+     * ---------
+     * Fiziksel sisme kuralinin tabani su an "28 gunde gordugum en dusuk deger",
+     * yani tabloyu sikisikken yakalamis olmayi UMUT ediyoruz. Gozlem
+     * penceresinde hic sikisik olmamis bir tablo icin taban da siskin cikar ve
+     * gercek sisme kacirilir.
+     *
+     * VACUUM FULL / CLUSTER tabloyu yeni bir dosyaya yazar, relfilenode degisir
+     * (kontrollu deney 2026-09-01). O andaki olcum TANIMI GEREGI sikisik
+     * haldir — taban umut degil kanit olur.
+     *
+     * AMA HER NESIL DEGISIMI SIKISTIRMA DEGIL
+     * ----------------------------------------
+     * ALTER TABLE ... SET TABLESPACE de filenode degistirir, ama fork'lari blok
+     * blok kopyalar ve sismeyi AYNEN KORUR. Bu yuzden tablespace ile birlikte
+     * bakilir ve olay siniflandirilmadan taban sayilmaz.
+     *
+     * TABAN NEDEN relpages
+     * --------------------
+     * Rewrite sonunda relpages ve reltuples BIRLIKTE yazilir — tutarli bir
+     * cift. Bizim sonradan okudugumuz pg_relation_size ise o arada buyumus
+     * olabilir ve event-time reltuples ile karisir.
+     */
+    private void detectPhysicalGeneration(long instancePk, long dbid, long relid,
+                                          String schemaname, String relname,
+                                          ResultSet rs, OffsetDateTime now,
+                                          java.util.Map<Long, FactRepository.PhysicalState> prevPhysical,
+                                          java.util.Map<Long, long[]> unconfirmed) {
+        try {
+            Long relfilenode   = rs.getObject("relfilenode")   != null ? rs.getLong("relfilenode")   : null;
+            Long reltablespace = rs.getObject("reltablespace") != null ? rs.getLong("reltablespace") : null;
+            Long relpages      = rs.getObject("relpages")      != null ? rs.getLong("relpages")      : null;
+            Long relt          = rs.getObject("reltuples")     != null ? rs.getLong("reltuples")     : null;
+            Integer blockSize  = rs.getObject("block_size")    != null ? rs.getInt("block_size")     : null;
+
+            FactRepository.PhysicalState prev = prevPhysical.get(relid);
+
+            // Ilk gorus: kaydet, olay uretme. Neyle karsilastiracagimiz yok.
+            if (prev == null) {
+                factRepo.upsertPhysicalState(instancePk, dbid, relid, schemaname, relname,
+                    relfilenode, reltablespace, relpages, relt, now);
+                return;
+            }
+
+            boolean generationChanged =
+                   !java.util.Objects.equals(prev.relfilenode(), relfilenode)
+                || !java.util.Objects.equals(orZero(prev.reltablespace()), orZero(reltablespace));
+
+            if (!generationChanged) {
+                // N=2 DOGRULAMASI. Bekleyen bir olay varsa ve nesil ile
+                // (relpages, reltuples) cifti ayni kaldiysa, olcum kendi icinde
+                // tutarlidir. Ortalama almak icin degil — tutarliligi
+                // dogrulamak icin.
+                long[] pending = unconfirmed.get(relid);
+                if (pending != null
+                        && relfilenode != null && pending[1] == relfilenode
+                        && relpages != null    && pending[2] == relpages
+                        && relt != null        && pending[3] == relt) {
+                    factRepo.confirmRewriteEvent(pending[0], now);
+                    unconfirmed.remove(relid);
+                }
+                // Nesil ayniysa YAZMA YOK. Her donguede yazmak, PGSTAT-P0-047'de
+                // duzeltilen yazma cogaltmasinin aynisini uretirdi.
+                return;
+            }
+
+            String classification = classifyGenerationChange(
+                prev.reltablespace(), reltablespace, relt, relpages, blockSize);
+            java.math.BigDecimal baselineBpr =
+                "compacting_rewrite_candidate".equals(classification)
+                    ? compactBytesPerRow(relpages, blockSize, relt)
+                    : null;
+
+            // Gercek rewrite ani BILINMIYOR: [prev.observedAt, now] arasinda bir
+            // yerde. Tek bir kesin zaman UYDURULMAZ; aralik saklanir.
+            factRepo.insertRewriteEvent(instancePk, dbid, relid, schemaname, relname,
+                prev.observedAt(), now,
+                prev.relfilenode(), relfilenode,
+                prev.reltablespace(), reltablespace,
+                relpages, relt, blockSize, baselineBpr, classification);
+
+            factRepo.upsertPhysicalState(instancePk, dbid, relid, schemaname, relname,
+                relfilenode, reltablespace, relpages, relt, now);
+
+            log.info("Fiziksel nesil degisti: {}.{} instance={} dbid={} {} (filenode {} -> {})",
+                schemaname, relname, instancePk, dbid, classification,
+                prev.relfilenode(), relfilenode);
+
+        } catch (Exception e) {
+            // WARN, DEBUG degil. Sessiz bir catch bu hafta iki kez haftalarca
+            // suren hatayi sakladi.
+            log.warn("Fiziksel nesil kontrolu basarisiz {}.{} instance={} dbid={}",
+                schemaname, relname, instancePk, dbid, e);
+        }
+    }
+
+    /** reltablespace 0 = veritabani varsayilani; NULL ile 0 ayni sey sayilir. */
+    private static long orZero(Long v) { return v != null ? v : 0L; }
+
+    /**
+     * Fiziksel nesil degisimini siniflandirir.
+     *
+     * Sira onemli: TABLESPACE once bakilir. SET TABLESPACE fork'lari blok blok
+     * kopyalar ve sismeyi AYNEN KORUR — filenode degismis olsa da bu bir
+     * sikistirma degildir ve taban sayilamaz. Dis inceleme (2026-09-01) tam
+     * olarak bu karsi ornegi gosterdi.
+     */
+    static String classifyGenerationChange(Long prevTablespace, Long newTablespace,
+                                           Long reltuples, Long relpages, Integer blockSize) {
+        if (orZero(prevTablespace) != orZero(newTablespace)) return "storage_move";
+        if (reltuples == null || reltuples <= 0)             return "truncate";
+        if (relpages == null || relpages <= 0)               return "unknown";
+        if (blockSize == null || blockSize <= 0)             return "unknown";
+        return "compacting_rewrite_candidate";
+    }
+
+    /**
+     * Sikisik yogunluk: relpages * block_size / reltuples.
+     *
+     * relpages ve reltuples rewrite sonunda BIRLIKTE yazilir, yani tutarli bir
+     * cift. pg_relation_size kullanilsaydi, tespit ile rewrite arasinda gecen
+     * surede buyumus bir boyut, event-time satir sayisiyla bolunurdu.
+     */
+    static java.math.BigDecimal compactBytesPerRow(Long relpages, Integer blockSize, Long reltuples) {
+        if (relpages == null || blockSize == null || reltuples == null || reltuples <= 0) return null;
+        return java.math.BigDecimal.valueOf(relpages)
+            .multiply(java.math.BigDecimal.valueOf(blockSize))
+            .divide(java.math.BigDecimal.valueOf(reltuples), 6, java.math.RoundingMode.HALF_UP);
+    }
+
+    /**
      * Izleme listesi ust siniri. Dar tutuluyor: amac alarm almis tablolari
      * takip etmek, gece toplamasini taklit etmek degil. Sinir asilirsa geri
      * kalanlar gece olcumune kalir.
@@ -316,6 +449,13 @@ public class DbObjectsCollector {
                                    OffsetDateTime now) throws Exception {
         long rows = 0;
 
+        // FIZIKSEL NESIL (PGSTAT-P0-046 Faz 2). Iki harita dongude BIR KEZ
+        // yuklenir; tablo basina sorgu atmak on binlerce tabloda pahali olurdu.
+        java.util.Map<Long, FactRepository.PhysicalState> prevPhysical =
+            factRepo.loadPhysicalState(instancePk, dbid);
+        java.util.Map<Long, long[]> unconfirmed =
+            factRepo.loadUnconfirmedEvents(instancePk, dbid);
+
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(queries.tableStatsQuery())) {
             while (rs.next()) {
@@ -365,6 +505,9 @@ public class DbObjectsCollector {
                 // insertTableStatDelta'ya eklenmedi, riski artirmamak icin).
                 String reloptionsRaw = rs.getString("reloptions_raw");
                 factRepo.upsertTableRelOptions(instancePk, dbid, relid, schemaname, relname, reloptionsRaw);
+
+                detectPhysicalGeneration(instancePk, dbid, relid, schemaname, relname,
+                    rs, now, prevPhysical, unconfirmed);
 
                 // Yeni gauge/timestamp kolonlari (V066)
                 java.time.OffsetDateTime lastVacuum = rs.getObject("last_vacuum", java.time.OffsetDateTime.class);

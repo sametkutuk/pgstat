@@ -519,6 +519,147 @@ public class FactRepository {
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Fiziksel nesil takibi (PGSTAT-P0-046 Faz 2)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Bir relation'in son bilinen fiziksel hali.
+     *
+     * relfilenode + reltablespace birlikte "fiziksel nesil"i tanimlar; relpages
+     * ve reltuples ise rewrite'in BIRLIKTE yazdigi tutarli cifttir.
+     */
+    public record PhysicalState(Long relfilenode, Long reltablespace,
+                                Long relpages, Long reltuples,
+                                OffsetDateTime observedAt) {}
+
+    /**
+     * Bir veritabaninin tum fiziksel durumunu tek sorguda yukler.
+     *
+     * Tablo basina sorgu atmak yerine dongude bir kez okunur; on binlerce
+     * tablonun oldugu bir instance'ta fark buyuk.
+     *
+     * @return relid -> PhysicalState
+     */
+    public java.util.Map<Long, PhysicalState> loadPhysicalState(long instancePk, long dbid) {
+        java.util.Map<Long, PhysicalState> out = new java.util.HashMap<>();
+        try {
+            jdbc.query(
+                "select relid, relfilenode, reltablespace, relpages, reltuples, observed_at" +
+                "  from fact.pg_relation_physical_state" +
+                " where instance_pk = ? and dbid = ?",
+                rs -> {
+                    out.put(rs.getLong("relid"), new PhysicalState(
+                        (Long) rs.getObject("relfilenode", Long.class),
+                        (Long) rs.getObject("reltablespace", Long.class),
+                        (Long) rs.getObject("relpages", Long.class),
+                        (Long) rs.getObject("reltuples", Long.class),
+                        rs.getObject("observed_at", OffsetDateTime.class)));
+                },
+                instancePk, dbid);
+        } catch (Exception e) {
+            // WARN, DEBUG degil: bos donmek tespiti sessizce kapatir ve bu, bu
+            // hafta iki kez fark edilmeden calisan hatanin sekli.
+            log.warn("Fiziksel durum yuklenemedi instance={} dbid={}", instancePk, dbid, e);
+        }
+        return out;
+    }
+
+    /**
+     * Fiziksel durumu yazar. YALNIZCA nesil degistiginde cagrilmali.
+     *
+     * Her toplama dongusunde yazmak, PGSTAT-P0-047'de duzeltilen yazma
+     * cogaltmasinin aynisini yeni bir tabloda uretirdi: 30 dakikada bir, on
+     * binlerce tablo icin satir kopyalamak.
+     */
+    public void upsertPhysicalState(long instancePk, long dbid, long relid,
+                                    String schemaname, String relname,
+                                    Long relfilenode, Long reltablespace,
+                                    Long relpages, Long reltuples,
+                                    OffsetDateTime observedAt) {
+        jdbc.update("""
+            insert into fact.pg_relation_physical_state (
+              instance_pk, dbid, relid, schemaname, relname,
+              relfilenode, reltablespace, relpages, reltuples, observed_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, coalesce(?, 0), ?, ?)
+            on conflict (instance_pk, dbid, relid) do update
+            set schemaname    = excluded.schemaname,
+                relname       = excluded.relname,
+                relfilenode   = excluded.relfilenode,
+                reltablespace = excluded.reltablespace,
+                relpages      = excluded.relpages,
+                reltuples     = excluded.reltuples,
+                observed_at   = excluded.observed_at
+            """,
+            instancePk, dbid, relid, schemaname, relname,
+            relfilenode, reltablespace, relpages, reltuples, observedAt);
+    }
+
+    /** Nesil degisimi kaydi. Append-only, yalnizca degisimde. */
+    public void insertRewriteEvent(long instancePk, long dbid, long relid,
+                                   String schemaname, String relname,
+                                   OffsetDateTime windowStart, OffsetDateTime observedAt,
+                                   Long prevRelfilenode, Long newRelfilenode,
+                                   Long prevTablespace, Long newTablespace,
+                                   Long newRelpages, Long newReltuples,
+                                   Integer blockSize, java.math.BigDecimal baselineBytesPerRow,
+                                   String classification) {
+        jdbc.update("""
+            insert into fact.pg_relation_rewrite_event (
+              instance_pk, dbid, relid, schemaname, relname,
+              window_start, observed_at,
+              prev_relfilenode, new_relfilenode,
+              prev_tablespace, new_tablespace,
+              new_relpages, new_reltuples, block_size,
+              baseline_bytes_per_row, classification
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            instancePk, dbid, relid, schemaname, relname,
+            windowStart, observedAt,
+            prevRelfilenode, newRelfilenode,
+            prevTablespace, newTablespace,
+            newRelpages, newReltuples, blockSize,
+            baselineBytesPerRow, classification);
+    }
+
+    /** Dogrulanmayi bekleyen event: relid -> [event_id, relfilenode, relpages, reltuples] */
+    public java.util.Map<Long, long[]> loadUnconfirmedEvents(long instancePk, long dbid) {
+        java.util.Map<Long, long[]> out = new java.util.HashMap<>();
+        try {
+            jdbc.query(
+                "select event_id, relid," +
+                "       coalesce(new_relfilenode, -1) as nf," +
+                "       coalesce(new_relpages, -1)    as np," +
+                "       coalesce(new_reltuples, -1)   as nt" +
+                "  from fact.pg_relation_rewrite_event" +
+                " where instance_pk = ? and dbid = ? and confirmed_at is null",
+                rs -> {
+                    out.put(rs.getLong("relid"), new long[]{
+                        rs.getLong("event_id"), rs.getLong("nf"),
+                        rs.getLong("np"), rs.getLong("nt") });
+                },
+                instancePk, dbid);
+        } catch (Exception e) {
+            log.warn("Dogrulanmamis eventler yuklenemedi instance={} dbid={}", instancePk, dbid, e);
+        }
+        return out;
+    }
+
+    /**
+     * N=2 dogrulamasi: bir sonraki gozlemde nesil VE (relpages, reltuples) cifti
+     * ayni kaldiysa event tuple'i kendi icinde tutarlidir.
+     *
+     * Ortalama almak icin degil — olcumun tutarli oldugunu dogrulamak icin.
+     */
+    public void confirmRewriteEvent(long eventId, OffsetDateTime confirmedAt) {
+        jdbc.update(
+            "update fact.pg_relation_rewrite_event set confirmed_at = ?" +
+            " where event_id = ? and confirmed_at is null",
+            confirmedAt, eventId);
+    }
+
     /**
      * Tablo-ozel autovacuum override'larini (pg_class.reloptions) upsert eder.
      * Delta degil, nadiren degisen bir konfigurasyon — her toplama

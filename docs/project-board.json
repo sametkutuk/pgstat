@@ -81,6 +81,11 @@
         "Three probes were run rather than one, because a detector that only proves it can speak has not been tested - what it stays silent about matters as much. All three behaved correctly. A boundary probe at exactly 3.0x, the warning threshold, fired warning, confirming the comparison is >= and not > and that a real bloat sitting on the threshold would not be missed. A growth probe whose size and row count both tripled, holding bytes per row flat at 100, stayed silent, confirming growth is not mistaken for bloat. A young probe bloated 12x but with only 10 nights over 9 days stayed silent, confirming the 21-night and 28-day eligibility gate holds - the gate that is the only thing protecting production until 2026-09-29, previously assumed rather than tested.",
         "Reported figures on the boundary probe matched the arithmetic exactly: 286 MB current, 95 MB compact, 191 MB wasted, ratio 3.0. The corrected message text was verified in the same output - it now reads that the comparison is against the median of the three most compact days, and the withdrawn claim that the ratio is not an estimate is gone.",
         "Probe alerts generate real notifications, which is why deleting them hits a foreign key from ops.notification_log. Deliberately left enabled during the probe run so the Telegram rendering of the corrected message was exercised too, since that is where operators actually read it.",
+        "Phase 2 collection shipped. relfilenode, reltablespace and relpages ride along on the pg_class join the 30-minute table pass already performs, so the added cost is three columns on an existing query. State is written only when the generation changes: writing every cycle would have reproduced, in a new table, exactly the write amplification fixed the same day in PGSTAT-P0-047 - tens of thousands of rows copied every thirty minutes.",
+        "Classification comes before trust, because the review supplied a counter-example the original design missed: ALTER TABLE SET TABLESPACE allocates a new filenode and copies the forks block by block, preserving the bloat. Treating that as compaction would record a bloated table bloated state as its compact baseline and make the bloat permanently invisible. Tablespace is therefore checked first, an emptied table is a truncate rather than a baseline, and anything unmeasurable is unknown rather than a guess.",
+        "Compact density is relpages times block_size over reltuples rather than the measured relation size. The rewrite writes relpages and reltuples together, so they are a coherent pair; a size read up to thirty minutes later has already grown and dividing it by the event-time row count would overstate density. This also removes most of the timing pressure the first design put on detection frequency.",
+        "The rewrite instant is not invented. The event records the window between the last observation of the old generation and the first of the new one, which is what the interval arithmetic will need.",
+        "Eight unit tests cover the classification and density, suite 85 to 93. The tests exist for one reason: the assumption that a filenode change means compaction was wrong, and a test that encodes a withdrawn claim preserves the error rather than the behaviour - a lesson from the same day.",
         "A controlled experiment on 2026-09-01 settled what the design had assumed: VACUUM FULL refreshes pg_class.reltuples but updates neither last_vacuum nor vacuum_count. 100,000 rows, delete half, VACUUM FULL - reltuples became 50,000 while all four timestamps stayed null. CREATE INDEX and REINDEX refresh reltuples and relpages the same way without touching the timestamps. The row estimate is therefore current while reltuples_anchor_at still points at an older vacuum, so bridging deltas counts pre-rewrite churn a second time. With the experiment numbers: 50,000 + (0 - 50,000) = 0. The row count collapses and the ratio explodes.",
         "The first design put the anchor at the previous observation and called that the safe side. External review showed the direction was backwards, using the experiment own numbers. Anchoring at the detection observation gives 50,000, which is right; anchoring at the previous observation gives zero. The corrected answer is not to pick an instant at all but to bound the interval - N_low = R - D, N_high = R + I - and alert only when the lower bound crosses the threshold. That is deferred; the shipped fix skips the record instead, because moving the anchor forward would drop the rows written between the rewrite and detection and convert a false negative into a false positive.",
         "The invalidation had to be an epoch rather than a single record, or the bug returns on the next snapshot: reltuples no longer changes and the anchor still has not moved, so a record-level check reads false. The break timestamp is retained and the anchor counts as invalid until a genuine vacuum or analyze passes it.",
@@ -4225,6 +4230,41 @@
           "id": "AC7",
           "text": "The detector skips a record whose delta history does not reach back to the row-estimate anchor, or which has a gap larger than the tolerance between consecutive samples, rather than bridging a period it did not observe.",
           "status": "done"
+        },
+        {
+          "id": "AC8",
+          "text": "Physical generation is tracked: relfilenode, reltablespace and relpages come from the pg_class join the 30-minute table pass already performs, and state is written only when the generation changes rather than on every cycle.",
+          "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "A generation change is classified before it is trusted. A tablespace move is not compaction - SET TABLESPACE copies block by block and preserves the bloat - and an emptied table is not a baseline. Only a same-tablespace rewrite with rows becomes a compaction candidate.",
+          "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "The compact density is computed from relpages times block size over reltuples, the pair the rewrite writes together, not from a size measured later that has already grown.",
+          "status": "done"
+        },
+        {
+          "id": "AC11",
+          "text": "The real rewrite instant is not invented. The event stores the window between the last observation of the old generation and the observation of the new one.",
+          "status": "done"
+        },
+        {
+          "id": "AC12",
+          "text": "A candidate is confirmed only when a second observation shows the same generation and the same relpages and reltuples pair, so an incoherent event tuple is not used as a baseline.",
+          "status": "done"
+        },
+        {
+          "id": "AC13",
+          "text": "Live verification: running VACUUM FULL on a probe table produces a compacting_rewrite_candidate event, and ALTER TABLE SET TABLESPACE produces storage_move.",
+          "status": "pending"
+        },
+        {
+          "id": "AC14",
+          "text": "The bloat rule consumes a confirmed compaction baseline and bypasses the 21-night gate for that table.",
+          "status": "pending"
         },
         {
           "id": "AC8",

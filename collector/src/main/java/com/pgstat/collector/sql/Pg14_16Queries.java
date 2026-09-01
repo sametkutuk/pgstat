@@ -209,7 +209,26 @@ public class Pg14_16Queries extends Pg13Queries {
               -- Autovacuum'un KENDI esik hesabi reltuples'i kullanir,
               -- n_live_tup'u degil; ayrica katalogda durdugu icin istatistik
               -- sifirlamasini/restart'i atlatir (PGSTAT-P0-041).
-              c.reltuples::bigint as reltuples
+              c.reltuples::bigint as reltuples,
+              -- FIZIKSEL NESIL (PGSTAT-P0-046 Faz 2). pg_class join'i zaten
+              -- vardi; uc kolon eklemenin ek maliyeti yok.
+              --
+              -- relfilenode: VACUUM FULL / CLUSTER tabloyu yeni bir dosyaya
+              -- yazar ve bu deger degisir. relid (oid) degismez, yani kimlik
+              -- korunur.
+              --
+              -- reltablespace: relfilenode ile BIRLIKTE bakilmali. SET
+              -- TABLESPACE de filenode degistirir ama fork'lari blok blok
+              -- kopyalar; sisme AYNEN KORUNUR. Sikistirma sayilmamali.
+              --
+              -- relpages: rewrite sonunda reltuples ile BIRLIKTE yazilir, yani
+              -- tutarli bir cift. relpages * block_size / reltuples, tespit
+              -- gecikmesinden bagimsiz olarak sikisik yogunlugu verir —
+              -- pg_relation_size ise o arada buyumus olabilir.
+              c.relfilenode::bigint as relfilenode,
+              c.reltablespace::bigint as reltablespace,
+              c.relpages::bigint as relpages,
+              current_setting('block_size')::int as block_size
             from pg_stat_user_tables s
             join src on src.relid = s.relid
             left join pg_statio_user_tables io on io.relid = s.relid
