@@ -484,15 +484,20 @@ class AutovacuumEvidenceTest {
 
         String note = AlertRuleEvaluator.spaceBloatMeasurementNoteForTest(rec);
 
-        assertThat(note).contains("tahmin değil");     // olcum tabanli oldugu
+        // "tahmin degil, iki gozlem arasindaki fark" iddiasi geri cekildi:
+        // payda reltuples, yani katalog TAHMINI. Mesaj olcumu oldugundan daha
+        // kesin gostermemeli.
+        assertThat(note).doesNotContain("tahmin değil");
+        assertThat(note).contains("en sıkışık üç günün medyanı");
         assertThat(note).contains("TOAST");            // neyi kapsamadigi
         assertThat(note).contains("Satır sayısı tahmindir");
     }
 
     @Test
     void aReducedFillfactorIsExplainedRatherThanCountedAsBloat() {
-        // fillfactor=70 olan saglikli bir tablo, dusulmezse 1.43 kat sismis
-        // gorunurdu. Hem hesaptan dusuluyor hem de mesajda soyleniyor.
+        // fillfactor=70 olan saglikli bir tablo yanlis okunmasin diye mesajda
+        // aciklanir. AYRICA DUSULMEZ (V108): taban ayni fillfactor rejiminden
+        // secildigi icin tasarim geregi bos alani zaten icinde tasir.
         java.util.Map<String, Object> rec = new java.util.HashMap<>();
         rec.put("fillfactor", 70L);
 
@@ -500,7 +505,8 @@ class AutovacuumEvidenceTest {
 
         assertThat(note).contains("fillfactor=70");
         assertThat(note).contains("%30");
-        assertThat(note).contains("düşüldü");
+        assertThat(note).contains("zaten tabanın içinde");
+        assertThat(note).doesNotContain("hesaptan düşüldü");
     }
 
     @Test

@@ -788,7 +788,8 @@ public class AlertRuleEvaluator {
     }
 
     /**
-     * Satir basina alani tablonun kendi tarihsel minimumuyla kiyaslar.
+     * Satir basina alani tablonun kendi en sikisik uc gununun medyaniyla
+     * kiyaslar (V110; ham minimum tek gurultulu olcumu taban yapabiliyordu).
      *
      * Minimum, sikisik halin OLCUMUDUR — VACUUM FULL sonrasi, partition ilk
      * olusturuldugunda ya da tablo boskken kendiliginden olusur. Tabloyu hic
@@ -949,8 +950,9 @@ public class AlertRuleEvaluator {
      * var ve ucunu de burada acikca yaziyoruz:
      *  - satir sayisi tahmindir (reltuples + toplanan delta'lar),
      *  - olcum yalnizca HEAP'i kapsar; TOAST'in kendi sismesi bu sayida yok,
-     *  - fillfactor 100'un altindaysa bos alanin bir kismi tasarim geregidir
-     *    ve hesaptan dusulmustur.
+     *  - fillfactor 100'un altindaysa bos alanin bir kismi tasarim geregidir;
+     *    AYRICA DUSULMEZ (V108), taban ayni fillfactor rejiminden secildigi
+     *    icin o payi zaten icinde tasir.
      */
     static String spaceBloatMeasurementNoteForTest(Map<String, Object> rec) {
         return spaceBloatMeasurementNote(rec);
@@ -959,11 +961,12 @@ public class AlertRuleEvaluator {
     private static String spaceBloatMeasurementNote(Map<String, Object> rec) {
         long ff = rec.get("fillfactor") instanceof Number n ? n.longValue() : 100;
         StringBuilder sb = new StringBuilder();
-        sb.append("Ölçüm: satır başına alan, bu tablonun kendi tarihsel"
-            + " minimumuyla karşılaştırıldı (tahmin değil, iki gözlem arasındaki fark).");
+        sb.append("Ölçüm: satır başına alan, bu tablonun kendi geçmişindeki en"
+            + " sıkışık üç günün medyanıyla karşılaştırıldı.");
         if (ff < 100) {
             sb.append(String.format(" fillfactor=%d olduğu için sayfaların %%%d'i"
-                + " tasarım gereği boş bırakılır; bu pay hesaptan düşüldü.", ff, 100 - ff));
+                + " tasarım gereği boş bırakılır; karşılaştırma aynı fillfactor'daki"
+                + " gözlemlerle yapıldığından bu pay zaten tabanın içinde.", ff, 100 - ff));
         }
         sb.append(" Satır sayısı tahmindir ve ölçüm yalnızca tabloyu (heap) kapsar —"
             + " TOAST ve indeks şişmesi bu sayıya dâhil değildir.");

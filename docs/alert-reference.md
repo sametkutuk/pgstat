@@ -210,7 +210,7 @@ alan olacak şekilde 2432 MB'a şişmişti. `dead_tuple_ratio` ancak %20.00
 ile — eşiğin tam sınırında — tetiklendi ve **yanlış aksiyon** önerdi:
 `VACUUM ANALYZE`. O komut bu alanı geri getirmez.
 
-### Ölçüm, tahmin değil
+### Neye dayanıyor
 
 Alanın gerçekten ne kadarının boş olduğunu kesin ölçmenin tek yolu
 `pgstattuple` ya da `pg_freespacemap` — ikisi de extension, ve izlenen
@@ -226,19 +226,32 @@ pgstat'ın avantajı sürekli izliyor olması. Aynı tablo tekrar tekrar
 satır başına bayt = table_size_bytes / reltuples
 ```
 
-Bu değerin tablonun **kendi tarihsel minimumuna** oranı, bir tahmin
-değil **iki ölçüm arasındaki farktır**. Yukarıdaki tablo ~20.032
-bayt/satır ölçülmüş, sonra aynı satır sayısında 338 bayt/satır — 59 kat.
-`avg_width`'e, `ANALYZE` kalitesine veya fillfactor varsayımına hiç
-ihtiyaç duyulmadan.
+Bu değer, tablonun kendi geçmişindeki **en sıkışık üç günün medyanıyla**
+karşılaştırılır. Yukarıdaki tablo ~20.032 bayt/satır ölçülmüş, sonra aynı
+satır sayısında 338 bayt/satır — 59 kat. `avg_width`'e, `ANALYZE`
+kalitesine veya fillfactor varsayımına hiç ihtiyaç duyulmadan.
 
-Minimum, tablonun sıkışık hâlinin gerçek ölçümüdür ve kendiliğinden
-oluşur: `VACUUM FULL` sonrası, partition ilk açıldığında, ya da tablo
-boşken.
+**Bu bir tahmindir, iki ölçümün farkı değildir.** Pay (`table_size_bytes`)
+gerçek bir ölçümdür, ama payda (`reltuples`) `pg_class`'ta duran bir
+katalog **tahminidir** ve yalnızca `VACUUM`/`ANALYZE` çalıştığında
+güncellenir. Bu yüzden ankraj anı ile boyut ölçümü arasındaki
+eklenen/silinen satırlar delta'lardan düzeltilir; düzeltilemiyorsa kayıt
+atlanır. Oranı olduğundan daha kesin sunmak, kullanıcıyı ölçmediğimiz bir
+şeye güvendirmek olurdu.
 
-**Sınırı:** tabloyu en az bir kez sıkışık görmüş olmak gerekir. Hiç
-görmediysek oran düşük çıkar ve alarm üretilmez — uydurulmuş bir taban
-yanlış alarmdan daha zararlı olurdu.
+Taban neden **medyan**, ham minimum değil: `bytes_per_row`'un paydası
+tahmin olduğu için tek bir gözlemde `reltuples` yukarı saparsa
+`bytes_per_row` aşağı sapar; ham minimum o gürültülü değeri taban yapar ve
+sonraki her gözlem şişmiş görünür. Farklı günlerden gelen en düşük üç
+değerin medyanı bunu önler (V110).
+
+Sıkışık hâl kendiliğinden oluşur: `VACUUM FULL` sonrası, partition ilk
+açıldığında, ya da tablo boşken.
+
+**Sınırı:** taban geçerli olmadan alarm üretilmez — en az 21 farklı gece,
+en az 28 günlük yayılım, aynı `relid`, aynı fillfactor rejimi, ve yalnızca
+planlı gece ölçümlerinden. Uydurulmuş bir taban, sessizlikten daha
+zararlıdır.
 
 ### Eşikler
 
