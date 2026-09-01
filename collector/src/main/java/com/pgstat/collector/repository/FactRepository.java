@@ -449,7 +449,8 @@ public class FactRepository {
      * Bu instance/DB icin gun ici boyut olcumu yapilacak tablolar
      * (PGSTAT-P0-045).
      *
-     * Liste, acik bloat alarmlarinin isaret ettigi tablolardan olusur:
+     * Liste, acik FIZIKSEL SISME alarmlarinin isaret ettigi tablolardan
+     * olusur (a.rule_id -> control.alert_rule.evaluation_type):
      * details_json, alert acilirken buildPerRecordsJson ile yazilir ve kaydin
      * sema/tablo adini tasir. Bunlar zaten operatorun ilgilendigi tablolar,
      * yani sik olcmenin karsiligi en yuksek oldugu yer.
@@ -460,7 +461,18 @@ public class FactRepository {
         try {
             return jdbc.query(
                 "select distinct (r->>'schemaname') as schemaname, (r->>'relname') as relname" +
-                "  from ops.alert a, jsonb_array_elements(a.details_json->'records') r" +
+                "  from ops.alert a" +
+                // YALNIZCA fiziksel sisme alarmlari. Onceden her tablo alarmi
+                // listeye giriyordu, ama gun ici boyut olcumunun tek amaci sisme
+                // kuralinin 24 saatlik eski bir olcume dayanmasini onlemek. Olu
+                // satir alarmi boyuta hic bakmaz; verisi pg_stat_user_tables
+                // uzerinden zaten 30 dakikada bir tazeleniyor. Daraltmadan once
+                // 1 MB'lik lookup tablolarinin boyutunu bosuna olcuyorduk;
+                // sisme kurali onlari 8 MB alt siniriyla nasilsa eliyor.
+                "  join control.alert_rule ar" +
+                "    on ar.rule_id = a.rule_id" +
+                "   and ar.evaluation_type = 'table_space_bloat'" +
+                "  cross join lateral jsonb_array_elements(a.details_json->'records') r" +
                 " where a.instance_pk = ? and a.status <> 'resolved'" +
                 "   and a.details_json is not null" +
                 "   and (r->>'dbid') ~ '^[0-9]+$' and (r->>'dbid')::bigint = ?" +
@@ -469,7 +481,10 @@ public class FactRepository {
                 (rs, n) -> new String[]{ rs.getString("schemaname"), rs.getString("relname") },
                 instancePk, dbid);
         } catch (Exception e) {
-            log.debug("Izleme listesi okunamadi instance={} dbid={}: {}", instancePk, dbid, e.getMessage());
+            // WARN, DEBUG degil. Bos liste donmek izlemeyi sessizce kapatir ve
+            // bu tam olarak PGSTAT-P0-045'te haftalarca fark edilmeyen hatanin
+            // sekli: is yapiliyor gorunur, hicbir sey yazilmaz, log susar.
+            log.warn("Izleme listesi okunamadi instance={} dbid={}", instancePk, dbid, e);
             return java.util.List.of();
         }
     }
