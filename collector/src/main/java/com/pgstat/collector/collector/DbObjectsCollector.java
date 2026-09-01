@@ -152,7 +152,7 @@ public class DbObjectsCollector {
                     "select pg_total_relation_size(c.oid) as total_size_bytes," +
                     "       pg_relation_size(c.oid) as table_size_bytes," +
                     "       coalesce((select sum(pg_relation_size(i.indexrelid))" +
-                    "                   from pg_index i where i.indrelid = c.oid), 0) as index_size_bytes," +
+                    "                   from pg_index i where i.indrelid = c.oid), 0)::bigint as index_size_bytes," +
                     "       case when c.reltoastrelid > 0" +
                     "            then pg_total_relation_size(c.reltoastrelid) end as toast_size_bytes," +
                     "       nullif(c.reltuples, -1)::bigint as reltuples," +
@@ -172,15 +172,22 @@ public class DbObjectsCollector {
                 ps.setString(2, t[1]);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) continue;
+                    // NOT: (Long) rs.getObject(...) kullanilmiyor. JDBC sutunun
+                    // SQL tipine gore Long DEGIL BigDecimal dondurebiliyor ve o
+                    // durumda cast ClassCastException atiyordu; hata asagidaki
+                    // catch'te yutuldugu icin izleme yolu haftalarca sessizce
+                    // hicbir satir yazmadi. getLong/getInt donusumu kendisi
+                    // yapar. Gece toplayicisi da ayni deseni kullaniyor
+                    // (NightlySnapshotCollector).
                     factRepo.insertRelationSizeSnapshot(now, instancePk, dbid, t[0], t[1],
                         rs.getString("relkind"),
-                        (Long) rs.getObject("total_size_bytes"),
-                        (Long) rs.getObject("table_size_bytes"),
-                        (Long) rs.getObject("index_size_bytes"),
-                        (Long) rs.getObject("toast_size_bytes"),
-                        (Long) rs.getObject("reltuples"),
-                        (Long) rs.getObject("relid"),
-                        (Integer) rs.getObject("fillfactor"),
+                        rs.getObject("total_size_bytes")  != null ? rs.getLong("total_size_bytes")  : null,
+                        rs.getObject("table_size_bytes")  != null ? rs.getLong("table_size_bytes")  : null,
+                        rs.getObject("index_size_bytes")  != null ? rs.getLong("index_size_bytes")  : null,
+                        rs.getObject("toast_size_bytes")  != null ? rs.getLong("toast_size_bytes")  : null,
+                        rs.getObject("reltuples")         != null ? rs.getLong("reltuples")         : null,
+                        rs.getObject("relid")             != null ? rs.getLong("relid")            : null,
+                        rs.getObject("fillfactor")        != null ? rs.getInt("fillfactor")        : null,
                         rs.getObject("reltuples_anchor_at", OffsetDateTime.class),
                         // Bu gozlem taban havuzuna GIRMEZ: tablo zaten alarmli
                         // oldugu icin toplaniyor, yani sismis ani orneklemeye
@@ -189,7 +196,12 @@ public class DbObjectsCollector {
                     rows++;
                 }
             } catch (Exception e) {
-                log.debug("Izlenen tablo boyutu okunamadi {}.{}: {}", t[0], t[1], e.getMessage());
+                // WARN, DEBUG degil. Bu blok bir ClassCastException'i haftalarca
+                // sakladi: toplama her dongude calisiyor gorunuyordu ama tek satir
+                // yazmiyordu ve log tamamen sessizdi. Tek bir tablonun okunamamasi
+                // dongueyu durdurmamali, ama gorunmez de olmamali.
+                log.warn("Izlenen tablo boyutu okunamadi instance={} dbid={} tablo={}.{}",
+                    instancePk, dbid, t[0], t[1], e);
             }
         }
         if (rows > 0) {
