@@ -819,11 +819,57 @@ public class AlertRuleEvaluator {
             "     and reltuples is not null and reltuples > 0" +
             "     and table_size_bytes > ?" +
             ")," +
+            // KIMLIK = (dbid, relid). relid yalnizca kendi veritabani icinde
+            // benzersizdir; instance genelinde DEGIL. Ayni instance'ta iki
+            // farkli veritabaninda ayni oid'e sahip tablolar bulunuyor —
+            // dogrulandi: instance 18'de dbid 7886849 ve dbid 6327213'te
+            // management.payment_types_currencies'in ikisi de relid 7887268.
+            // Sadece relid ile gruplamak bu iki tablonun gecmisini
+            // birlestiriyordu; V109'da adla eslestirmeyi birakirken anahtarin
+            // yarisi eksik kalmis.
             "latest as (" +
-            "  select distinct on (relid)" +
+            "  select distinct on (dbid, relid)" +
             "         relid, dbid, schemaname, relname, snapshot_ts," +
             "         table_size_bytes, reltuples, fillfactor, reltuples_anchor_at" +
-            "    from obs order by relid, snapshot_ts desc" +
+            "    from obs order by dbid, relid, snapshot_ts desc" +
+            ")," +
+            // ANKRAJSIZ reltuples TAZELEMESI ("epoch kirilmasi").
+            //
+            // Olculdu (2026-09-01, kontrollu deney): VACUUM FULL reltuples'i
+            // gunceller ama last_vacuum'u ve vacuum_count'u GUNCELLEMEZ.
+            // 100k satir -> 50k silme -> VACUUM FULL sonrasi reltuples 50.000
+            // oldu, dort zaman damgasinin hicbiri kipirdamadi.
+            //
+            // Ayni sey CREATE INDEX ve REINDEX icin de gecerli: heap taranirken
+            // pg_class.reltuples/relpages yenilenir, damgalar sabit kalir.
+            //
+            // Sonuc: satir sayisi zaten guncel, ankraj ise eski. Delta koprusu
+            // kurulursa ankraj-oncesi ins/del'ler BIR DAHA sayilir. Deneydeki
+            // ornekle: 50.000 + (0 - 50.000) = 0. Satir sayisi sifira duser ve
+            // oran patlar — agir yanlis pozitif.
+            //
+            // Tespit yeni bir sinyal gerektirmiyor: ardisik iki gozlemimizde
+            // reltuples degisip ankraj degismediyse, izlemedigimiz bir sey
+            // reltuples'i tazelemistir.
+            //
+            // EPOCH: kirilma tek bir kaydi degil, ONDAN SONRAKI TUM DONEMI
+            // gecersiz kilar. Sonraki snapshot'ta reltuples artik degismez
+            // (ayni deger durur) ve ankraj da degismez; kayit-bazli bir kontrol
+            // false doner ve hata geri gelirdi. Bu yuzden kirilma zamani
+            // saklanir ve ankraj onu GECENE kadar gecersiz sayilir.
+            "epoch_break as (" +
+            "  select dbid, relid, max(snapshot_ts) as break_ts" +
+            "    from (" +
+            "      select dbid, relid, snapshot_ts, reltuples, reltuples_anchor_at," +
+            "             lag(reltuples) over w as prev_reltuples," +
+            "             lag(reltuples_anchor_at) over w as prev_anchor" +
+            "        from obs" +
+            "      window w as (partition by dbid, relid order by snapshot_ts)" +
+            "    ) e" +
+            "   where e.prev_reltuples is not null" +
+            "     and e.reltuples is distinct from e.prev_reltuples" +
+            "     and e.reltuples_anchor_at is not distinct from e.prev_anchor" +
+            "   group by dbid, relid" +
             ")," +
             // TABAN HAVUZU: yalnizca PLANLI GECE gozlemleri (V110).
             //
@@ -836,13 +882,13 @@ public class AlertRuleEvaluator {
             // Rejim: taban yalnizca mevcut gozlemle AYNI fillfactor
             // rejimindeki olcumlerden secilir.
             "daily as (" +
-            "  select o.relid, date_trunc('day', o.snapshot_ts) as obs_day," +
+            "  select o.dbid, o.relid, date_trunc('day', o.snapshot_ts) as obs_day," +
             "         min(o.bytes_per_row) as day_bytes_per_row," +
             "         min(o.snapshot_ts) as day_ts" +
-            "    from obs o join latest l on l.relid = o.relid" +
+            "    from obs o join latest l on l.dbid = o.dbid and l.relid = o.relid" +
             "   where o.source = 'nightly'" +
             "     and coalesce(o.fillfactor,100) = coalesce(l.fillfactor,100)" +
-            "   group by o.relid, date_trunc('day', o.snapshot_ts)" +
+            "   group by o.dbid, o.relid, date_trunc('day', o.snapshot_ts)" +
             ")," +
             // TABAN = en dusuk UC GUNUN medyani, ham min DEGIL.
             //
@@ -851,23 +897,23 @@ public class AlertRuleEvaluator {
             // taban yapardi — sonraki her gozlem sismis gorunurdu. Uc gunun
             // medyani tek bir sapmadan etkilenmez.
             "baseline as (" +
-            "  select relid," +
+            "  select dbid, relid," +
             "         percentile_cont(0.5) within group (order by day_bytes_per_row)" +
             "           as min_bytes_per_row" +
-            "    from (select relid, day_bytes_per_row," +
-            "                 row_number() over (partition by relid" +
+            "    from (select dbid, relid, day_bytes_per_row," +
+            "                 row_number() over (partition by dbid, relid" +
             "                                    order by day_bytes_per_row) as rn" +
             "            from daily) ranked" +
             "   where rn <= 3" +
-            "   group by relid" +
+            "   group by dbid, relid" +
             ")," +
             // KAPI: kac farkli gece ve ne kadar zamana yayilmis.
             // Sayi tek basina yetmez — yarim saat arayla iki gozlem, tablonun
             // sikisik hali hakkinda hicbir sey soylemez.
             "coverage as (" +
-            "  select relid, count(*) as observation_count," +
+            "  select dbid, relid, count(*) as observation_count," +
             "         max(day_ts) - min(day_ts) as span" +
-            "    from daily group by relid" +
+            "    from daily group by dbid, relid" +
             ")," +
             // ZAMAN ANKRAJI. reltuples, snapshot aninda degil ankraj aninda
             // olculmustur. Dogru satir sayisi icin ankraj ile snapshot arasi
@@ -878,27 +924,28 @@ public class AlertRuleEvaluator {
             // da bosluk varsa fark koprulenemez ve kayit ATLANIR — tahmin
             // yurutmek sismeyi uydurmak olurdu.
             "delta_cover as (" +
-            "  select d.relid," +
+            "  select d.dbid, d.relid," +
             "         min(d.sample_ts) as first_sample," +
             "         max(extract(epoch from d.gap)) as max_gap_seconds," +
             "         sum(d.net_rows) as net_rows" +
             "    from (" +
-            "      select x.relid, x.sample_ts, x.net_rows," +
+            "      select x.dbid, x.relid, x.sample_ts, x.net_rows," +
             "             x.sample_ts - lag(x.sample_ts)" +
-            "               over (partition by x.relid order by x.sample_ts) as gap" +
+            "               over (partition by x.dbid, x.relid" +
+            "                     order by x.sample_ts) as gap" +
             "        from (" +
-            "          select t.relid, t.sample_ts," +
+            "          select t.dbid, t.relid, t.sample_ts," +
             "                 coalesce(t.n_tup_ins_delta,0)" +
             "                   - coalesce(t.n_tup_del_delta,0) as net_rows" +
             "            from fact.pg_table_stat_delta t" +
-            "            join latest l3 on l3.relid = t.relid" +
+            "            join latest l3 on l3.dbid = t.dbid and l3.relid = t.relid" +
             "           where t.instance_pk = ?" +
             "             and l3.reltuples_anchor_at is not null" +
             "             and t.sample_ts >  l3.reltuples_anchor_at" +
             "             and t.sample_ts <= l3.snapshot_ts" +
             "        ) x" +
             "    ) d" +
-            "   group by d.relid" +
+            "   group by d.dbid, d.relid" +
             ")" +
             "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
             "       l.table_size_bytes as current_bytes," +
@@ -914,9 +961,10 @@ public class AlertRuleEvaluator {
             "           * b.min_bytes_per_row, 0))::numeric as bloat_ratio," +
             "       l.snapshot_ts" +
             "  from latest l" +
-            "  join baseline b on b.relid = l.relid" +
-            "  join coverage cv on cv.relid = l.relid" +
-            "  left join delta_cover dc on dc.relid = l.relid" +
+            "  join baseline b on b.dbid = l.dbid and b.relid = l.relid" +
+            "  join coverage cv on cv.dbid = l.dbid and cv.relid = l.relid" +
+            "  left join delta_cover dc on dc.dbid = l.dbid and dc.relid = l.relid" +
+            "  left join epoch_break eb on eb.dbid = l.dbid and eb.relid = l.relid" +
             "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
             // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0
             " where cv.observation_count >= " + SPACE_BLOAT_MIN_BASELINE_NIGHTS +
@@ -932,6 +980,17 @@ public class AlertRuleEvaluator {
             "        or (dc.relid is not null" +
             "            and dc.first_sample <= l.reltuples_anchor_at + interval '1 hour'" +
             "            and coalesce(dc.max_gap_seconds, 0) <= ?))" +
+            // EPOCH KAPISI: ankrajsiz bir reltuples tazelemesi olduysa ve
+            // ankraj hala onu gecmediyse KAYIT URETILMEZ.
+            //
+            // Ankraji kirilma anina TASIMAK yerine susuyoruz. Tasimak,
+            // gercek yeniden yazma ile bizim tespitimiz arasinda eklenen
+            // satirlari saymamak demek olurdu; satir sayisi dusuk cikar, oran
+            // yukari saparr ve yanlis negatifi yanlis POZITIFE cevirirdik.
+            // Bu kuralin bugune kadarki hatalarinin hepsi o taraftaydi.
+            // Araligi guvenle sinirlamak (N_low = R - D, N_high = R + I) ayri
+            // bir is; o gelene kadar dogru cevap sessizliktir.
+            "   and (eb.break_ts is null or eb.break_ts <= l.reltuples_anchor_at)" +
             "   and l.table_size_bytes::numeric" +
             "       / nullif(greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
             "         * b.min_bytes_per_row, 0) >= ?" +
