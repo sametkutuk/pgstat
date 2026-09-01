@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 61 |
+| Total tasks | 62 |
 | Done tasks | 32 |
-| Remaining tasks | 29 |
+| Remaining tasks | 30 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,14 +34,14 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 32 |
 | in_progress | 2 |
-| planned | 27 |
+| planned | 28 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
 | alerting | 12 |
-| collector | 4 |
+| collector | 5 |
 | contracts | 2 |
 | governance | 5 |
 | operations | 13 |
@@ -118,6 +118,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 59 | PGSTAT-P0-045 | P0 | collector | planned | Table sizes are only measured nightly, so a bloat alert can rest on a day-old figure and cannot clear until the next night | Awaiting customer acceptance. The fix is verified live: four source=watched rows landed at 11:00 on 2026-09-01, the first ever written. The watch list has since been narrowed to bloat alerts, which is deployed but cannot show rows until the bloat rule is re-enabled around 2026-09-28; re-verify then. |
 | 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r5. Implementation cannot start on the wasted-space detector until PGSTAT-P0-046 supplies identity and an as-of row estimate; the scope and signal model and the eligibility gate can be built now. |
 | 61 | PGSTAT-P0-046 | P0 | alerting | planned | The physical bloat rule compares a size and a row count from different moments, and matches table history by name | Probe testing is complete and passed; clean up the probe state (delete ops.notification_log rows for the probe alerts, then the alerts, then the pgstat_probe snapshot rows, then set rule 176 is_enabled back to false). Real history starts 2026-09-01, so the rule can only speak from 2026-09-29. Re-enable then and check its first real output against a manual measurement. |
+| 62 | PGSTAT-P0-047 | P0 | collector | planned | The central database rewrites 1.76 million dimension rows every five minutes to refresh a timestamp nothing reads | Throttle the last_seen_at writes, ship the migration that drops the two last_seen_at indexes and lowers fillfactor, then measure n_tup_upd and n_tup_hot_upd a day later before deciding on the one-time reclaim. |
 
 ## Dependency Map
 
@@ -184,6 +185,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P0-045 | - | - |
 | PGSTAT-P1-015 | - | - |
 | PGSTAT-P0-046 | - | - |
+| PGSTAT-P0-047 | - | - |
 
 ## Closure Rules
 

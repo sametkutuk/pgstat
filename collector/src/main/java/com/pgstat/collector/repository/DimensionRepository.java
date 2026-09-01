@@ -3,6 +3,9 @@ package com.pgstat.collector.repository;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * dim sema tablolari icin upsert islemleri.
  * database_ref, relation_ref, role_ref, query_text, statement_series.
@@ -10,6 +13,25 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class DimensionRepository {
+
+    /**
+     * last_seen_at tazeleme araligi (PGSTAT-P0-047).
+     *
+     * Bu damga her toplama dongusunde yaziliyordu. statements_interval 300
+     * saniye oldugu icin satir basina GUNDE 288 kez. Olculen sonuc: 92.902
+     * ekleme karsiliginda 721.732.172 guncelleme ve %0 HOT — cunku last_seen_at
+     * indekslidir ve indeksli kolon degisince HOT devre disi kalir. Tablo 1.76M
+     * satir icin 942 MB oldu; olu satir orani %4.6 kaldigi icin ne autovacuum ne
+     * de olu-satir alarmi bunu sorun saydi.
+     *
+     * Damgayi collector HIC OKUMUYOR; okuyan tek yer API arama sonucu
+     * siralamasi. Bir saatlik bayatlik orada fark edilmez.
+     *
+     * DIKKAT: toplama sikligi DEGISMIYOR. Bes dakika, insights.ts icinde alti
+     * saatten kisa pencerelerin bes dakikalik adimlarla cizilmesine bagli.
+     * Degisen tek sey, ayni damgayi her seferinde yeniden yazmak.
+     */
+    private static final String LAST_SEEN_REFRESH_INTERVAL = "1 hour";
 
     private final JdbcTemplate jdbc;
 
@@ -49,8 +71,17 @@ public class DimensionRepository {
             set schemaname   = excluded.schemaname,
                 relname      = excluded.relname,
                 last_seen_at = now()
+            -- Yalnizca gercekten degisen bir sey varsa yaz (PGSTAT-P0-047).
+            -- Ad degistiyse kaydetmek zorundayiz; degismediyse tek yazma sebebi
+            -- damgayi tazelemekti ve bunun icin her donguyu beklemeye gerek yok.
+            -- Bu metot RETURNING kullanmiyor, bu yuzden WHERE tutmadiginda satir
+            -- donmemesi bir sorun degil.
+            where dim.relation_ref.schemaname   is distinct from excluded.schemaname
+               or dim.relation_ref.relname      is distinct from excluded.relname
+               or dim.relation_ref.last_seen_at < now() - ?::interval
             """,
-            instancePk, dbid, relid, schemaname, relname, relkind
+            instancePk, dbid, relid, schemaname, relname, relkind,
+            LAST_SEEN_REFRESH_INTERVAL
         );
     }
 
@@ -113,6 +144,49 @@ public class DimensionRepository {
                                       String collectorSqlFamily, long systemIdentifier,
                                       String pgssEpochKey, long dbid, long userid,
                                       Boolean toplevel, long queryid, Long queryTextId) {
+
+        // ONCE OKU (PGSTAT-P0-047). Bu metot her toplama dongusunde her seri
+        // icin cagriliyor ve neredeyse her seferinde seri ZATEN VAR. Eskiden o
+        // durumda bile UPDATE atiyorduk: id'yi RETURNING ile alabilmek icin DO
+        // UPDATE yazmak zorundayiz, cunku DO NOTHING catismada satir dondurmez.
+        // Yani her cagride bir satir kopyalaniyordu; olculen 721 milyon
+        // guncellemenin kaynagi bu.
+        //
+        // DO UPDATE ... WHERE ile filtrelemek cozum DEGIL: kosul tutmadiginda
+        // RETURNING satir dondurmez ve queryForObject patlar. Bu yuzden once
+        // okuyup yalnizca yazacak bir sey varsa upsert ediyoruz.
+        //
+        // Predicate, uq_statement_series_natural indeksiyle birebir ayni
+        // ifadeleri kullanir; aksi halde indeks kullanilmaz.
+        List<Map<String, Object>> existing = jdbc.queryForList("""
+            select statement_series_id,
+                   query_text_id,
+                   last_seen_at < now() - ?::interval as stale
+            from dim.statement_series
+            where instance_pk       = ?
+              and system_identifier = ?
+              and pg_major          = ?
+              and pgss_epoch_key    = ?
+              and dbid              = ?
+              and userid            = ?
+              and coalesce(toplevel::text, 'unknown') = ?
+              and queryid           = ?
+            """,
+            LAST_SEEN_REFRESH_INTERVAL, instancePk, systemIdentifier, pgMajor,
+            pgssEpochKey, dbid, userid,
+            toplevel == null ? "unknown" : toplevel.toString(), queryid);
+
+        if (!existing.isEmpty()) {
+            Map<String, Object> row = existing.get(0);
+            boolean stale = Boolean.TRUE.equals(row.get("stale"));
+            // query_text_id yalnizca NULL iken doldurulur (asagidaki coalesce ile
+            // ayni kural); doluysa yazacak bir sey yok.
+            boolean needsQueryText = row.get("query_text_id") == null && queryTextId != null;
+            if (!stale && !needsQueryText) {
+                return ((Number) row.get("statement_series_id")).longValue();
+            }
+        }
+
         return jdbc.queryForObject("""
             insert into dim.statement_series (
               instance_pk,

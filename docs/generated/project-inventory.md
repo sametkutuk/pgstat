@@ -16,7 +16,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 115 |
+| Migrations scanned | 116 |
 | Tables discovered | 96 |
 | Columns discovered | 1185 |
 | Indexes discovered | 130 |
@@ -1030,9 +1030,9 @@ This generated inventory is the bridge between code and the manual project docum
 | --- | --- | --- | --- | --- | --- |
 | dim.database_ref | 17 | no |  | V003__dim_tables.sql | V065__alert_intervals_and_cleanup.sql |
 | dim.query_text | 8 | no |  | V003__dim_tables.sql | V003__dim_tables.sql |
-| dim.relation_ref | 10 | no |  | V003__dim_tables.sql | V003__dim_tables.sql |
+| dim.relation_ref | 10 | no |  | V003__dim_tables.sql | V112__dim_last_seen_hot_updates.sql |
 | dim.role_ref | 6 | no |  | V003__dim_tables.sql | V003__dim_tables.sql |
-| dim.statement_series | 13 | no |  | V003__dim_tables.sql | V003__dim_tables.sql |
+| dim.statement_series | 13 | no |  | V003__dim_tables.sql | V112__dim_last_seen_hot_updates.sql |
 
 <details><summary>dim.database_ref columns (17)</summary>
 

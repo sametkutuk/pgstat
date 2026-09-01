@@ -1704,6 +1704,82 @@
       "next_action": "Closed; max_in_progress restored to 1. Continue with PGSTAT-P0-002; PGSTAT-P0-023 unblocked."
     },
     {
+      "id": "PGSTAT-P0-047",
+      "order": 62,
+      "priority": "P0",
+      "workstream": "collector",
+      "status": "planned",
+      "next_action": "Throttle the last_seen_at writes, ship the migration that drops the two last_seen_at indexes and lowers fillfactor, then measure n_tup_upd and n_tup_hot_upd a day later before deciding on the one-time reclaim.",
+      "title": "The central database rewrites 1.76 million dimension rows every five minutes to refresh a timestamp nothing reads",
+      "problem": "dim.statement_series holds 1,761,565 live rows in 942 MB - about 561 bytes per row for a row whose real width is a fraction of that. The cause is not retention. Against 92,902 inserts the table has taken 721,732,172 updates, roughly 7,800 updates per row inserted, and 0.0 percent of them were HOT. dim.relation_ref shows the same pathology at smaller scale: 2,801 inserts against 27,529,066 updates, also 0.0 percent HOT. Every statements collection cycle upserts each series to obtain its statement_series_id, and because ON CONFLICT DO NOTHING would return no row, the upsert must DO UPDATE - so last_seen_at = now() rides along on every cycle. With statements_interval_seconds at 300 that is 288 rewrites per row per day. HOT is impossible because last_seen_at is indexed, so each rewrite also writes index entries. The dead tuple ratio stays at 4.6 percent, low enough that neither autovacuum nor the dead_tuple_ratio alert treats it as a problem, while the space is never returned. dim.query_text is a different case entirely and belongs to PGSTAT-P0-023: it takes only 6,810 updates and holds 569 dead tuples, so its 316 MB is real query text that is never pruned.",
+      "requirements": [
+        "The last_seen_at write must stop happening on every collection cycle, without changing how often statistics are collected - the five minute cadence has a real consumer and must not move.",
+        "The five minute collection interval must not be changed. insights.ts renders windows of six hours or less in five minute steps, tied to that cadence, so widening it coarsens the chart that shows when a query degraded.",
+        "The SQL text skip must not be disturbed. Avoiding a re-fetch of query text is driven by query_text_id is null, not by last_seen_at, and it exists to spare the monitored machine.",
+        "The remaining writes must be able to go HOT, which requires that no indexed column changes and that the page has room.",
+        "The staleness the throttle introduces must be stated rather than discovered later: last_seen_at becomes accurate to within the throttle window.",
+        "Accumulated bloat must be reclaimed only after the write rate is fixed, since reclaiming first means growing back within weeks."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "last_seen_at on dim.statement_series, dim.relation_ref and dim.query_text is written only when it is older than the throttle window, and the series id is still returned correctly when no write happens - ON CONFLICT DO UPDATE with a WHERE clause returns no row when the condition is false, which would break the caller.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "The last_seen_at indexes on dim.statement_series and dim.relation_ref are dropped and fillfactor is lowered so the remaining updates can be HOT. Purge finds old rows by scan, which is acceptable at hourly cadence on a table of this size.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "No collector code reads dim last_seen_at, and the only API reader is the statements deep search ordering, which already scans because it filters on query_text ILIKE. Verified rather than assumed.",
+          "status": "pending"
+        },
+        {
+          "id": "AC4",
+          "text": "mvn test passes.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Measured a day after deploy: n_tup_upd growth has fallen and n_tup_hot_upd is no longer zero.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "One-time reclaim of the accumulated bloat, after AC5 confirms the write rate is fixed.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "DimensionRepository: read the id first and write last_seen_at only when stale, rather than folding the timestamp into the upsert that exists to return the id.",
+        "Migration: drop ix_statement_series_last_seen and ix_relation_ref_last_seen, set fillfactor on both tables.",
+        "After a day of measurement, reclaim with pg_repack if available, otherwise VACUUM FULL in a maintenance window."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: pg_stat_user_tables on the central database, comparing n_tup_upd and n_tup_hot_upd before and after; then pg_total_relation_size after the reclaim."
+      ],
+      "required_docs": [
+        "docs/data-contract-registry.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Measured on the central database 2026-09-01. statement_series 942 MB, 1,761,565 live, 81,732 dead, 92,902 inserts, 721,732,172 updates, 0 HOT. relation_ref 30 MB, 2,801 inserts, 27,529,066 updates, 0 HOT. query_text 316 MB, 913,084 live, 569 dead, 6,810 updates - not a churn problem. job_run_instance 539 MB and job_run 236 MB are purged already but job_run had never been autovacuumed.",
+        "A control group in the same database identifies the cause rather than leaving it inferred: dim.database_ref takes 37,840 updates and achieves 50 percent HOT. It differs from the other three in one respect - its last_seen_at is not indexed. An indexed column that changes on every update makes HOT impossible.",
+        "The five minute interval had no recorded rationale, but it has a real consumer: insights.ts renders pgss_delta windows of six hours or less in five minute steps. The interval is therefore left alone; only the timestamp write is throttled. These are two separate decisions that were conflated because the timestamp write was never a decision at all - it is a side effect of needing DO UPDATE to make RETURNING produce the id.",
+        "The customer recalled that something existed to avoid re-fetching SQL text from the monitored machine. That mechanism is real and is untouched by this task: findSeriesWithoutQueryText selects on query_text_id is null, and last_seen_at appears nowhere in it. Checked rather than assumed.",
+        "This is the case the physical bloat rule was built for and the dead-tuple rule cannot see: the dead tuple ratio is 4.6 percent while the table occupies roughly four times the space its rows need. When the rule is re-enabled around 2026-09-29 the central database is its first real test."
+      ]
+    },
+    {
       "id": "PGSTAT-P0-023",
       "order": 29,
       "priority": "P0",
