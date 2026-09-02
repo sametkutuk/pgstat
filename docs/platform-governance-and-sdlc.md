@@ -28,6 +28,37 @@ data, recommendations, findings, or user workflows must be documented and traced
 
 ## 2. Non-Negotiable Product Boundaries
 
+### Supported PostgreSQL Versions: 12 And Above
+
+Decided 2026-09-02. All new development targets **PostgreSQL 12 or newer**.
+A feature must work on PG12; if it cannot, it must degrade explicitly rather
+than silently produce a wrong answer.
+
+This is a floor for *new* work, not a removal notice. `Pg11_12Queries` stays
+where it is until someone decides to remove PG11 support deliberately, with
+its own change.
+
+**What the floor buys us.** `pg_stat_progress_cluster` exists from PG12, so
+VACUUM FULL and CLUSTER can be observed in progress on every supported
+instance. That is what makes the physical generation detection in
+PGSTAT-P0-046 verifiable from a second, independent source.
+
+**What it does not buy us, and must be handled explicitly.** The
+`pg_class.reltuples = -1` sentinel for "row count not known" arrives only in
+**PG14**. On PG12 and PG13, `reltuples = 0` means either *genuinely empty* or
+*never analyzed*, and the catalog alone cannot separate them.
+
+Any rule that treats a zero row count as meaningful must therefore say which
+version it is on, or cross-check another column. `pg_stat_user_tables.n_live_tup`
+is collected in the same query and settles it: `reltuples = 0` with
+`n_live_tup > 0` is an unanalyzed table, not an empty one.
+
+The general rule this is an instance of: **a version difference must produce a
+different answer or an explicit "unknown", never the same answer with a
+different meaning behind it.** Reading -1 as a row count on 2026-09-02 marked
+dozens of populated tables as truncated; the same shape of mistake on PG12/13
+would mark unanalyzed tables as empty.
+
 ### pgstat Core Must Stand Alone
 
 pgstat must remain a useful product without pgdbaagent.
