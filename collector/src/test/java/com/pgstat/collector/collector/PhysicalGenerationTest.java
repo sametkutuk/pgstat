@@ -62,9 +62,18 @@ class PhysicalGenerationTest {
         assertThat(DbObjectsCollector.classifyGenerationChange(
                 0L, 0L, 0L, 0L, 8192))
             .isEqualTo("truncate");
+    }
+
+    @Test
+    void anUnknownRowCountIsNotAnEmptyTable() {
+        // PG14+ pg_class.reltuples = -1 "BILINMIYOR" demektir, "bos" degil.
+        // Kaynak sorguda nullif ile NULL'a cevriliyor. Bunu truncate saymak,
+        // hic analiz gormemis tablolari bos ilan etmek olurdu — canli veride
+        // tam bu oldu (2026-09-02): -1 tasiyan onlarca tablo truncate
+        // isaretlendi ve sayilari hicbir zaman bos degildi.
         assertThat(DbObjectsCollector.classifyGenerationChange(
                 0L, 0L, null, 5L, 8192))
-            .isEqualTo("truncate");
+            .isEqualTo("unknown");
     }
 
     @Test

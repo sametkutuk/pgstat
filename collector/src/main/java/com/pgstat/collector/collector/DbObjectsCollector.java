@@ -324,7 +324,12 @@ public class DbObjectsCollector {
     static String classifyGenerationChange(Long prevTablespace, Long newTablespace,
                                            Long reltuples, Long relpages, Integer blockSize) {
         if (orZero(prevTablespace) != orZero(newTablespace)) return "storage_move";
-        if (reltuples == null || reltuples <= 0)             return "truncate";
+        // reltuples NULL = BILINMIYOR (kaynakta PG14+ -1 sentineli nullif ile
+        // elenir), sifir DEGIL. Bunu "truncate" saymak, hic analiz gormemis
+        // tablolari bos ilan etmek olurdu — canli veride tam bu oldu
+        // (2026-09-02): -1 tasiyan onlarca tablo truncate isaretlendi.
+        if (reltuples == null)                               return "unknown";
+        if (reltuples == 0)                                  return "truncate";
         if (relpages == null || relpages <= 0)               return "unknown";
         if (blockSize == null || blockSize <= 0)             return "unknown";
         return "compacting_rewrite_candidate";
