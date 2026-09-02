@@ -248,6 +248,9 @@ public class DbObjectsCollector {
             Long relpages      = rs.getObject("relpages")      != null ? rs.getLong("relpages")      : null;
             Long relt          = rs.getObject("reltuples")     != null ? rs.getLong("reltuples")     : null;
             Integer blockSize  = rs.getObject("block_size")    != null ? rs.getInt("block_size")     : null;
+            // PG12/13'te reltuples = 0'in anlamini ayirmak icin gerekli;
+            // bkz. classifyGenerationChange.
+            Long nLiveTup      = rs.getObject("n_live_tup")    != null ? rs.getLong("n_live_tup")    : null;
 
             FactRepository.PhysicalState prev = prevPhysical.get(relid);
 
@@ -281,7 +284,7 @@ public class DbObjectsCollector {
             }
 
             String classification = classifyGenerationChange(
-                prev.reltablespace(), reltablespace, relt, relpages, blockSize);
+                prev.reltablespace(), reltablespace, relt, relpages, blockSize, nLiveTup);
             java.math.BigDecimal baselineBpr =
                 "compacting_rewrite_candidate".equals(classification)
                     ? compactBytesPerRow(relpages, blockSize, relt)
@@ -322,16 +325,33 @@ public class DbObjectsCollector {
      * olarak bu karsi ornegi gosterdi.
      */
     static String classifyGenerationChange(Long prevTablespace, Long newTablespace,
-                                           Long reltuples, Long relpages, Integer blockSize) {
+                                           Long reltuples, Long relpages, Integer blockSize,
+                                           Long nLiveTup) {
         if (orZero(prevTablespace) != orZero(newTablespace)) return "storage_move";
+
         // reltuples NULL = BILINMIYOR (kaynakta PG14+ -1 sentineli nullif ile
         // elenir), sifir DEGIL. Bunu "truncate" saymak, hic analiz gormemis
         // tablolari bos ilan etmek olurdu — canli veride tam bu oldu
         // (2026-09-02): -1 tasiyan onlarca tablo truncate isaretlendi.
-        if (reltuples == null)                               return "unknown";
-        if (reltuples == 0)                                  return "truncate";
-        if (relpages == null || relpages <= 0)               return "unknown";
-        if (blockSize == null || blockSize <= 0)             return "unknown";
+        if (reltuples == null) return "unknown";
+
+        if (reltuples == 0) {
+            // PG12/13'te "-1 = bilinmiyor" sentineli YOK; o surumlerde sifir hem
+            // GERCEKTEN BOS hem HIC ANALIZ GORMEMIS anlamina gelir ve katalog
+            // tek basina ayiramaz (desteklenen taban PG12,
+            // docs/platform-governance-and-sdlc.md 2).
+            //
+            // n_live_tup ayrimi yapar: satir sayisi sifir diyorsa ama
+            // istatistikler satir goruyorsa tablo bos degildir.
+            //
+            // Surum dallanmasina gerek yok, cunku ayni cevap PG14+'ta da
+            // dogru: reltuples sifir ile n_live_tup pozitif CELISKILIDIR ve
+            // celiskiye dayali bir taban zaten kullanilmamali.
+            return (nLiveTup != null && nLiveTup > 0) ? "unknown" : "truncate";
+        }
+
+        if (relpages == null || relpages <= 0)   return "unknown";
+        if (blockSize == null || blockSize <= 0) return "unknown";
         return "compacting_rewrite_candidate";
     }
 

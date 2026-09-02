@@ -18,11 +18,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PhysicalGenerationTest {
 
+    /** Satir sayisi supheli olmayan tablolar icin kisayol. */
+    private static String classify(Long prevTs, Long newTs, Long reltuples,
+                                   Long relpages, Integer blockSize) {
+        return DbObjectsCollector.classifyGenerationChange(
+            prevTs, newTs, reltuples, relpages, blockSize, null);
+    }
+
     @Test
     void aTablespaceMoveIsNotCompaction() {
         // SET TABLESPACE: filenode degisir, satirlar durur, sisme KORUNUR.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                1663L, 99999L, 1_000_000L, 50_000L, 8192))
+        assertThat(classify(1663L, 99999L, 1_000_000L, 50_000L, 8192))
             .isEqualTo("storage_move");
     }
 
@@ -30,16 +36,14 @@ class PhysicalGenerationTest {
     void aTablespaceMoveWinsOverEverythingElse() {
         // Tablespace kontrolu ONCE yapilmali. Aksi halde tasima islemi,
         // "satir var + sayfa var" oldugu icin sikistirma sayilirdi.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 1663L, 500_000L, 10_000L, 8192))
+        assertThat(classify(0L, 1663L, 500_000L, 10_000L, 8192))
             .isEqualTo("storage_move");
     }
 
     @Test
     void aRewriteInTheSameTablespaceIsACompactionCandidate() {
         // VACUUM FULL / CLUSTER: ayni tablespace, filenode degisti, satir var.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 0L, 1_000_000L, 20_000L, 8192))
+        assertThat(classify(0L, 0L, 1_000_000L, 20_000L, 8192))
             .isEqualTo("compacting_rewrite_candidate");
     }
 
@@ -47,20 +51,18 @@ class PhysicalGenerationTest {
     void nullAndZeroTablespaceMeanTheSameThing() {
         // pg_class.reltablespace = 0 "veritabaninin varsayilani" demektir.
         // NULL ile 0'i farkli saymak, her tabloyu tasima gibi gosterirdi.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                null, 0L, 1_000_000L, 20_000L, 8192))
+        assertThat(classify(null, 0L, 1_000_000L, 20_000L, 8192))
             .isEqualTo("compacting_rewrite_candidate");
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, null, 1_000_000L, 20_000L, 8192))
+        assertThat(classify(0L, null, 1_000_000L, 20_000L, 8192))
             .isEqualTo("compacting_rewrite_candidate");
     }
 
     @Test
     void anEmptyTableIsATruncateNotABaseline() {
         // TRUNCATE sonrasi tablo bostur; satir basina alan hesaplanamaz ve
-        // taban olarak kullanilamaz.
+        // taban olarak kullanilamaz. Istatistikler de sifir goruyor.
         assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 0L, 0L, 0L, 8192))
+                0L, 0L, 0L, 0L, 8192, 0L))
             .isEqualTo("truncate");
     }
 
@@ -71,19 +73,49 @@ class PhysicalGenerationTest {
         // hic analiz gormemis tablolari bos ilan etmek olurdu — canli veride
         // tam bu oldu (2026-09-02): -1 tasiyan onlarca tablo truncate
         // isaretlendi ve sayilari hicbir zaman bos degildi.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 0L, null, 5L, 8192))
+        assertThat(classify(0L, 0L, null, 5L, 8192))
             .isEqualTo("unknown");
+    }
+
+    @Test
+    void onPg12And13AZeroRowCountWithLiveRowsIsUnknownNotEmpty() {
+        // PG12/13'te "-1 = bilinmiyor" sentineli YOK; sifir hem gercekten bos
+        // hem hic analiz gormemis demek ve katalog tek basina ayiramaz.
+        // Desteklenen taban PG12 (docs/platform-governance-and-sdlc.md 2), yani
+        // bu ayrim yapilmak zorunda.
+        //
+        // n_live_tup pozitifse tablo bos DEGILDIR; taban olarak kullanilamaz
+        // ama "bos" da denemez.
+        assertThat(DbObjectsCollector.classifyGenerationChange(
+                0L, 0L, 0L, 0L, 8192, 4_200L))
+            .isEqualTo("unknown");
+    }
+
+    @Test
+    void theSameRuleHoldsOnPg14WhereTheTwoSourcesContradictEachOther() {
+        // Surum dallanmasi yok, cunku ayni cevap PG14+'ta da dogru: reltuples
+        // sifir derken n_live_tup satir goruyorsa iki kaynak CELISIYOR ve
+        // celiskiye dayali bir taban zaten kullanilmamali.
+        assertThat(DbObjectsCollector.classifyGenerationChange(
+                0L, 0L, 0L, 12L, 8192, 900L))
+            .isEqualTo("unknown");
+    }
+
+    @Test
+    void unknownLiveTupleCountDoesNotTurnAnEmptyTableIntoAnUnknownOne() {
+        // n_live_tup okunamadiysa elimizde tek kaynak var: reltuples = 0.
+        // Ona uyulur; yokluktan supheli durum uretilmez.
+        assertThat(DbObjectsCollector.classifyGenerationChange(
+                0L, 0L, 0L, 0L, 8192, null))
+            .isEqualTo("truncate");
     }
 
     @Test
     void missingPageOrBlockSizeYieldsUnknownRatherThanAGuess() {
         // Taban hesaplanamiyorsa "bilmiyorum" denir. Uydurulmus bir taban,
         // sessizlikten zararlidir — bu kuralin tekrar eden dersi.
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 0L, 1_000L, null, 8192)).isEqualTo("unknown");
-        assertThat(DbObjectsCollector.classifyGenerationChange(
-                0L, 0L, 1_000L, 10L, null)).isEqualTo("unknown");
+        assertThat(classify(0L, 0L, 1_000L, null, 8192)).isEqualTo("unknown");
+        assertThat(classify(0L, 0L, 1_000L, 10L, null)).isEqualTo("unknown");
     }
 
     @Test
