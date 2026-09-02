@@ -372,12 +372,12 @@ public class Pg11_12Queries implements SourceQueries {
               -- Autovacuum'un KENDI esik hesabi reltuples'i kullanir,
               -- n_live_tup'u degil; ayrica katalogda durdugu icin istatistik
               -- sifirlamasini/restart'i atlatir (PGSTAT-P0-041).
-              -- PG14+ -1 = BILINMIYOR, sifir DEGIL. nullif olmadan -1 bir satir
-              -- sayisiymis gibi akiyordu ve fiziksel nesil siniflandirmasi bu
-              -- yuzden hic analiz gormemis tablolari "truncate" sayiyordu
-              -- (canli veride yakalandi, 2026-09-02). Gece ve izleme yollari
-              -- zaten nullif kullaniyordu; eksik olan buydu.
-              nullif(c.reltuples, -1)::bigint as reltuples,
+              -- Bu surumde reltuples icin "-1 = bilinmiyor" sentineli YOKTUR;
+              -- o PG14 ile geldi. Burada sifir hem GERCEKTEN BOS hem HIC ANALIZ
+              -- GORMEMIS demektir ve katalog tek basina ayiramaz. Ayrimi
+              -- n_live_tup yapiyor (classifyGenerationChange). nullif eklemek
+              -- bu sinifta olu kod olurdu ve surum bilgisini yanlis yere koyardi.
+              c.reltuples::bigint as reltuples,
               -- FIZIKSEL NESIL (PGSTAT-P0-046 Faz 2). pg_class join'i zaten
               -- vardi; uc kolon eklemenin ek maliyeti yok.
               --

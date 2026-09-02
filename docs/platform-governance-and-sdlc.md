@@ -59,6 +59,29 @@ different meaning behind it.** Reading -1 as a row count on 2026-09-02 marked
 dozens of populated tables as truncated; the same shape of mistake on PG12/13
 would mark unanalyzed tables as empty.
 
+### Version-Specific SQL Belongs In The Version-Specific Profile
+
+Source queries are split by version family (`Pg11_12Queries`, `Pg13Queries`,
+`Pg14_16Queries`, `Pg17_18Queries`, each inheriting the one below), and the
+collector picks the profile from the instance's major version. That split is
+the platform's record of which versions actually differ.
+
+**A clause that only applies to some versions must appear only in those
+profiles.** Copying it everywhere is not harmless: it runs as dead code, and
+it erases the very information the split exists to carry. A reader can no
+longer tell, from the code, which versions behave differently.
+
+Worked example (2026-09-02): the `nullif(reltuples, -1)` filter was first
+added to all three profiles. The sentinel only exists from PG14, so on
+PG11-PG13 the clause could never fire. Behaviour was unaffected; the defect
+was that the profiles stopped saying anything true about their versions. It
+now lives in `Pg14_16Queries` alone, and the older profiles state plainly that
+the sentinel does not exist for them and that `n_live_tup` is what
+disambiguates a zero.
+
+Conversely, a column present in every supported version belongs in every
+profile that overrides the query - there is no version knowledge to record.
+
 ### pgstat Core Must Stand Alone
 
 pgstat must remain a useful product without pgdbaagent.
