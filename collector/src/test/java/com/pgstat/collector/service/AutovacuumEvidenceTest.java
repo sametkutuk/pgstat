@@ -494,6 +494,27 @@ class AutovacuumEvidenceTest {
     }
 
     @Test
+    void aProvenBaselineSaysSoInsteadOfClaimingTheStatisticalOne() {
+        // Kanitli taban (dogrulanmis VACUUM FULL sonrasi olcum) ile
+        // istatistiksel taban (28 gunluk gozlemden medyan) ayni guvende degil.
+        // Ikisini tek cumleyle gostermek, olcumu oldugundan kesin gosterirdi —
+        // bu kuralin tekrar eden hatasi tam olarak buydu.
+        java.util.Map<String, Object> rec = new java.util.HashMap<>();
+        rec.put("fillfactor", 100L);
+        rec.put("baseline_proven", Boolean.TRUE);
+        rec.put("proven_at", java.time.OffsetDateTime.parse("2026-09-02T06:11:03Z"));
+
+        String note = AlertRuleEvaluator.spaceBloatMeasurementNoteForTest(rec);
+
+        assertThat(note).contains("2026-09-02");
+        assertThat(note).contains("VACUUM FULL");
+        assertThat(note).doesNotContain("üç günün medyanı");
+        // Kapsam uyarilari her iki durumda da kalmali.
+        assertThat(note).contains("TOAST");
+        assertThat(note).contains("Satır sayısı tahmindir");
+    }
+
+    @Test
     void aReducedFillfactorIsExplainedRatherThanCountedAsBloat() {
         // fillfactor=70 olan saglikli bir tablo yanlis okunmasin diye mesajda
         // aciklanir. AYRICA DUSULMEZ (V108): taban ayni fillfactor rejiminden

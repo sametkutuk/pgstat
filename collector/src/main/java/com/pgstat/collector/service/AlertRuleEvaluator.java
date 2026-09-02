@@ -946,30 +946,74 @@ public class AlertRuleEvaluator {
             "        ) x" +
             "    ) d" +
             "   group by d.dbid, d.relid" +
+            ")," +
+            // KANITLI TABAN (PGSTAT-P0-046 Faz 2).
+            //
+            // Istatistiksel taban bir UMUTTUR: "28 gecede gordugum en dusuk
+            // deger, umarim tablonun sikisik halidir". Gozlem penceresinde hic
+            // sikisik olmamis bir tablo icin taban da siskin cikar, oran 1'e
+            // yakin gorunur ve GERCEK SISME KACIRILIR.
+            //
+            // Dogrulanmis bir sikistirici yeniden yazma ise olcumdur:
+            // relpages ve reltuples'i rewrite'in kendisi birlikte yazmistir.
+            // Boyle bir taban 21 gece / 28 gun kapisini gereksiz kilar —
+            // kapinin amaci zaten "yeterince gozlem birikti mi ki tabloyu
+            // sikisikken gormus olalim" idi; burada gordugumuzu BILIYORUZ.
+            //
+            // Kosullar dar: yalnizca compacting_rewrite_candidate (tablespace
+            // tasimasi sismeyi korur, truncate'in tabani olmaz), yalnizca N=2
+            // ile dogrulanmis olay, ve yas siniri icinde. Yas siniri, arada
+            // satir genisligi/sema degismis olabilecegi icin var — o durumda
+            // eski yogunluk olduğundan dusuk kalir ve sismeyi ABARTIRDI.
+            "proven as (" +
+            "  select distinct on (dbid, relid) dbid, relid," +
+            "         baseline_bytes_per_row as proven_bpr," +
+            "         observed_at as proven_at" +
+            "    from fact.pg_relation_rewrite_event" +
+            "   where instance_pk = ?" +
+            "     and classification = 'compacting_rewrite_candidate'" +
+            "     and confirmed_at is not null" +
+            "     and baseline_bytes_per_row is not null" +
+            "     and baseline_bytes_per_row > 0" +
+            "     and observed_at > now() - ?::interval" +
+            "   order by dbid, relid, observed_at desc" +
+            ")," +
+            // ETKIN TABAN: kanit varsa o, yoksa istatistiksel.
+            "eff as (" +
+            "  select l.*," +
+            "         coalesce(pv.proven_bpr, b.min_bytes_per_row) as bpr," +
+            "         pv.proven_at," +
+            "         (pv.relid is not null) as baseline_proven," +
+            "         cv.observation_count, cv.span" +
+            "    from latest l" +
+            "    left join baseline b  on b.dbid  = l.dbid and b.relid  = l.relid" +
+            "    left join coverage cv on cv.dbid = l.dbid and cv.relid = l.relid" +
+            "    left join proven pv   on pv.dbid = l.dbid and pv.relid = l.relid" +
             ")" +
             "select l.schemaname, l.relname, l.dbid, l.relid, dbr.datname," +
             "       l.table_size_bytes as current_bytes," +
             "       l.reltuples, l.fillfactor, l.reltuples_anchor_at," +
-            "       cv.observation_count, cv.span as baseline_span," +
+            "       l.observation_count, l.span as baseline_span," +
+            "       l.baseline_proven, l.proven_at," +
             "       greatest(l.reltuples + coalesce(dc.net_rows, 0), 1) as est_rows," +
             "       (greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
-            "         * b.min_bytes_per_row)::bigint as expected_bytes," +
+            "         * l.bpr)::bigint as expected_bytes," +
             "       (l.table_size_bytes - greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
-            "         * b.min_bytes_per_row)::bigint as wasted_bytes," +
+            "         * l.bpr)::bigint as wasted_bytes," +
             "       (l.table_size_bytes::numeric" +
             "         / nullif(greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
-            "           * b.min_bytes_per_row, 0))::numeric as bloat_ratio," +
+            "           * l.bpr, 0))::numeric as bloat_ratio," +
             "       l.snapshot_ts" +
-            "  from latest l" +
-            "  join baseline b on b.dbid = l.dbid and b.relid = l.relid" +
-            "  join coverage cv on cv.dbid = l.dbid and cv.relid = l.relid" +
+            "  from eff l" +
             "  left join delta_cover dc on dc.dbid = l.dbid and dc.relid = l.relid" +
             "  left join epoch_break eb on eb.dbid = l.dbid and eb.relid = l.relid" +
             "  left join dim.database_ref dbr on dbr.instance_pk = ? and dbr.dbid = l.dbid" +
-            // Tek gozlemli tabloda minimum = mevcut deger, oran her zaman 1.0
-            " where cv.observation_count >= " + SPACE_BLOAT_MIN_BASELINE_NIGHTS +
-            "   and cv.span >= interval '" + SPACE_BLOAT_MIN_BASELINE_SPAN_DAYS + " days'" +
-            "   and b.min_bytes_per_row > 0" +
+            // KAPI: kanitli taban varsa istatistiksel kapi ARANMAZ. Yoksa
+            // 21 gece + 28 gun yayilim sarti aynen gecerli.
+            " where (l.baseline_proven" +
+            "        or (l.observation_count >= " + SPACE_BLOAT_MIN_BASELINE_NIGHTS +
+            "            and l.span >= interval '" + SPACE_BLOAT_MIN_BASELINE_SPAN_DAYS + " days'))" +
+            "   and l.bpr > 0" +
             // Ankraj bilinmiyorsa reltuples zaten guvenilmez
             "   and l.reltuples_anchor_at is not null" +
             // Ankraj ile snapshot ARASI koprulenebilmis olmali:
@@ -993,12 +1037,14 @@ public class AlertRuleEvaluator {
             "   and (eb.break_ts is null or eb.break_ts <= l.reltuples_anchor_at)" +
             "   and l.table_size_bytes::numeric" +
             "       / nullif(greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
-            "         * b.min_bytes_per_row, 0) >= ?" +
+            "         * l.bpr, 0) >= ?" +
             "   and (l.table_size_bytes - greatest(l.reltuples + coalesce(dc.net_rows,0), 1)" +
-            "         * b.min_bytes_per_row) >= ? * 1024 * 1024" +
+            "         * l.bpr) >= ? * 1024 * 1024" +
             " order by wasted_bytes desc" +
             " limit " + PER_RECORD_QUERY_LIMIT,
-            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk, instancePk,
+            instancePk, SPACE_BLOAT_MIN_TABLE_BYTES, instancePk,
+            instancePk, SPACE_BLOAT_PROVEN_BASELINE_MAX_AGE_DAYS + " days",
+            instancePk,
             SPACE_BLOAT_MAX_DELTA_GAP_SECONDS, minRatio, minWastedMb);
     }
 
@@ -1020,8 +1066,22 @@ public class AlertRuleEvaluator {
     private static String spaceBloatMeasurementNote(Map<String, Object> rec) {
         long ff = rec.get("fillfactor") instanceof Number n ? n.longValue() : 100;
         StringBuilder sb = new StringBuilder();
-        sb.append("Ölçüm: satır başına alan, bu tablonun kendi geçmişindeki en"
-            + " sıkışık üç günün medyanıyla karşılaştırıldı.");
+        // Hangi tabanla karsilastirildigini SOYLEMEK zorundayiz. Kanitli taban
+        // (dogrulanmis VACUUM FULL/CLUSTER sonrasi olcum) ile istatistiksel
+        // taban (28 gunluk gozlemden secilen medyan) ayni guvende degil;
+        // ikisini tek cumleyle gostermek olcumu oldugundan kesin gosterirdi.
+        if (Boolean.TRUE.equals(rec.get("baseline_proven"))) {
+            java.time.OffsetDateTime pv = asOffsetDateTime(rec.get("proven_at"));
+            sb.append(pv != null
+                ? String.format("Ölçüm: satır başına alan, %s tarihinde tablo yeniden"
+                    + " yazıldıktan (VACUUM FULL/CLUSTER) hemen sonraki sıkışık hâliyle"
+                    + " karşılaştırıldı.", pv.toLocalDate())
+                : "Ölçüm: satır başına alan, tablonun yeniden yazıldıktan sonraki"
+                    + " sıkışık hâliyle karşılaştırıldı.");
+        } else {
+            sb.append("Ölçüm: satır başına alan, bu tablonun kendi geçmişindeki en"
+                + " sıkışık üç günün medyanıyla karşılaştırıldı.");
+        }
         if (ff < 100) {
             sb.append(String.format(" fillfactor=%d olduğu için sayfaların %%%d'i"
                 + " tasarım gereği boş bırakılır; karşılaştırma aynı fillfactor'daki"
@@ -4666,6 +4726,20 @@ public class AlertRuleEvaluator {
      */
     private static final int SPACE_BLOAT_MIN_BASELINE_NIGHTS = 21;
     private static final int SPACE_BLOAT_MIN_BASELINE_SPAN_DAYS = 28;
+
+    /**
+     * Kanitli tabanin yas siniri (PGSTAT-P0-046 Faz 2).
+     *
+     * Dogrulanmis bir sikistirici yeniden yazma, o andaki satir basina alanin
+     * OLCUMUDUR. Ama aradan gecen surede satir genisligi ya da sema degismis
+     * olabilir; o durumda eski yogunluk oldugundan dusuk kalir ve sismeyi
+     * ABARTIRIZ. Bu kuralin bugune kadarki hatalarinin hepsi o taraftaydi.
+     *
+     * 90 gun, boyut anlik goruntusunun yasadigi sure ile ayni buyukluk
+     * mertebesinde secildi; backtest ile ayarlanacak muhafazakar bir baslangic.
+     * Sinir asilirsa kayit atlanmaz — istatistiksel tabana geri dusulur.
+     */
+    private static final int SPACE_BLOAT_PROVEN_BASELINE_MAX_AGE_DAYS = 90;
 
     /**
      * Israr sayacini bir artirir ve guncel degeri doner (V096).
