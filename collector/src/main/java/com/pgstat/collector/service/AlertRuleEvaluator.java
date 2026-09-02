@@ -981,7 +981,11 @@ public class AlertRuleEvaluator {
             // ETKIN TABAN: kanit varsa o, yoksa istatistiksel.
             "eff as (" +
             "  select l.*," +
-            "         coalesce(pv.proven_bpr, b.min_bytes_per_row) as bpr," +
+            // percentile_cont double precision donuyor; kanitli taban ise
+            // numeric. Cast olmadan coalesce sonucu float8'e duser ve esik
+            // karsilastirmasinda kullanilan bir deger gereksiz yere kayan
+            // noktaya cevrilirdi.
+            "         coalesce(pv.proven_bpr, b.min_bytes_per_row::numeric) as bpr," +
             "         pv.proven_at," +
             "         (pv.relid is not null) as baseline_proven," +
             "         cv.observation_count, cv.span" +
