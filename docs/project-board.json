@@ -1802,6 +1802,100 @@
       ]
     },
     {
+      "id": "PGSTAT-P0-048",
+      "order": 63,
+      "priority": "P0",
+      "workstream": "collector",
+      "status": "in_progress",
+      "next_action": "Disable rule 176 immediately - enabling it was premature. Then work the order set by review: leg B eligibility and severity, then the shared breach-episode lifecycle covering stale age and acknowledgement together, then the materiality gate, then notification backoff.",
+      "title": "Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant",
+      "problem": "The customer reviewed the Telegram feed on 2026-09-02 and called it insufficient and wrong. Three separate defects sit behind that, all confirmed in code. First, the stale statistics notification carries only a count: one alert had been open since 2026-08-31 with 9 notifications over 49 hours, none of them naming management.payment_types_currencies. The DEFERRED notify mode was a deliberate 2026-08-28 choice to keep Telegram short, which is right for fifty tables and pure loss for one. Second, the dead tuple rule fires CRITICAL on pgstat's own control tables - control.instance_state at 26 live rows, control.alert_rule_last_eval at 170, dim.role_ref at 715, control.table_relopts_snapshot at 14033 - whose absolute dead tuple counts measured 63, 130, 555 and 2952. Leg A's minimum-row gate counts dead tuples in the sum, so the complaint qualifies itself; leg B's absolute floor of 500 is below any scale at which dead tuples cost anything. Third, stale_hours is computed as now() minus the last ANALYZE rather than from the moment the autoanalyze threshold was breached, so a table analyzed 178 hours ago that crossed its threshold an hour ago reports 178 hours and goes straight to CRITICAL.",
+      "requirements": [
+        "A notification must identify what it is about. One stale table must be named; a handful must be listed; more than that must show the first few and count the rest.",
+        "Identity in any notification must be database.schema.table. The same schema and table name exists in several databases of one instance - verified: pnrhouse.t_order in both prodb and testdb on instance 13.",
+        "The absolute dead-tuple leg must be able to raise an alert on its own. Today the SQL returns the record but severity is recomputed from the ratio alone, so a low-ratio record is discarded - and it consumes the query's row limit on the way out, which can push out genuine ratio candidates.",
+        "The absolute leg needs its own warning and critical thresholds. Reusing the ratio thresholds is what makes it inert.",
+        "Severity must be driven by how long the condition has been true, not by how long since the last successful maintenance. Those are different clocks and only one of them says anything about urgency.",
+        "A breach must have an episode identity: it opens once, survives re-evaluation, closes when the condition clears, and a later breach is a new episode.",
+        "An acknowledgement must survive the next evaluation. Today the upsert flips acknowledged back to open and nulls acknowledged_at, so the user's acknowledgement is erased by the collector.",
+        "occurrence_count must not be read as an event or notification count. It increments on every evaluation - 637 on the alert above - while the notification log recorded 9 sends.",
+        "Materiality must be judged on physical impact, not on a ratio. A 99 percent dead ratio on a 26-row table is not a critical condition.",
+        "The monitoring platform's own tables must not be exempted by schema name. Their churn is a real self-observability signal and hiding it would conceal the same noise in customer databases."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Rule 176 (table_space_bloat) is disabled again. Enabling it on 2026-09-02 was premature: a clean dry run shows today's ratios, not the correctness of alerts that will fire next week, and the anchor epoch check is fail-closed but incomplete - it cannot see a statistics refresh that leaves reltuples numerically unchanged.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "The stale statistics notification names tables: one is named in full, up to three are listed, the rest are counted. Identity is database.schema.table.",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "fetchTableAutovacuumOverride and resolveEffectiveCostDelay are keyed by (instance_pk, dbid, relid). Both were missing dbid, and both drive customer-facing action text rather than the trigger, so they could attribute an autovacuum-disabled finding or a cost_delay recommendation to a table in a different database. Verified: relid 7887268 exists in two databases of instance 18.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "The absolute dead-tuple leg raises alerts on its own, with its own thresholds, an effective severity of max(ratio, absolute), a recorded trigger reason, and the row limit applied after severity is computed rather than before.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Staleness severity is driven by time since the threshold breach began, recorded once on the false-to-true transition and never rewritten by re-evaluation. Absence of data must not reset the clock. Time since last ANALYZE stays as context.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "Breach episodes have a lifecycle: an acknowledgement survives while the episode continues, the episode closes when the condition clears, and a later breach opens a new one. Whether a severity increase breaks an acknowledgement is an explicit policy, not a side effect of an upsert.",
+          "status": "pending"
+        },
+        {
+          "id": "AC7",
+          "text": "A materiality gate based on physical impact, replacing the current ratio-only judgement. Leg A's minimum-row gate counts live rows only; leg B keeps a size gate rather than a live-row gate, so a bulk delete leaving few live rows in a large heap is still caught.",
+          "status": "pending"
+        },
+        {
+          "id": "AC8",
+          "text": "Notifications are event-driven: open, severity increase, material change, resolve. Unacknowledged criticals back off 6h, 12h, 24h, then daily. Warnings do not repeat. Reminder state is its own counter, not occurrence_count.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Disable rule 176.",
+        "Leg B: separate thresholds, effective severity as the max of the ratio and absolute severities, trigger reason recorded, limit applied after severity.",
+        "Breach episode model shared by staleness and acknowledgement.",
+        "Materiality gate, sized against a fleet backtest rather than a guessed constant.",
+        "Event-driven notification with backoff, built on the episode and severity model."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Live: the Telegram feed over a day - every message names what it is about, no message repeats without a change behind it, and no CRITICAL fires on a table whose absolute waste is trivial."
+      ],
+      "required_docs": [
+        "docs/alert-reference.md",
+        "docs/generated/project-status.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": true,
+        "status": "pending",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Measured on the stale statistics alert the customer complained about: one alert row, open since 2026-08-31 11:57, occurrence_count 637, cooldown_minutes 360, evaluation_interval_minutes 60, and 9 notifications sent between 2026-08-31 11:57 and 2026-09-02 12:44. So the repetition is exactly as configured; what makes it noise is that each message carries no new information and does not name the table.",
+        "Measured on pgstat's own database over two hours, showing the ratios oscillate rather than climb: dim.role_ref went 43.70, 16.47, 43.70, 0.00, 34.34, 8.22 - autovacuum is working and the ratio falls back. control.instance_state stayed between 50.94 and 83.33 on 26 live rows. A persistence requirement would therefore not have suppressed it, which rules out the first fix that came to mind: instance_state is persistently above threshold, just never materially bloated.",
+        "The proposal to move dead tuples out of the ratio denominator was rejected on review and the rejection is right: dead/(live+dead) becomes dead/live, which can exceed 100 percent and silently changes what the existing 20 and 50 thresholds mean. The self-qualification problem is in the minimum-row gate, not the ratio.",
+        "The proposal to raise the absolute floor from 500 to 50,000 was accepted only as a temporary noise filter. A fixed number cannot be right across scales: the effective autovacuum threshold is 50 + 0.2 * live_rows by default, so 250,000 live rows need about 50,000 dead tuples while 30 million need about 6 million. The example used to justify leg B - 1.2 million dead in a 30 million row table - may not have reached its own autovacuum trigger. The final value needs a fleet backtest against notification budget and cases actually acted on.",
+        "Also rejected on review: adding a live-row gate to leg B. That would miss the case leg B exists for - a bulk delete leaving few live rows in a large heap. Leg B needs a physical size gate instead.",
+        "relpages * block_size * dead/(live+dead) was considered as a wasted-bytes measure and must not be used as one. Every input is an estimate refreshed at a different moment; tuple counts say nothing about tuple width, page overhead, fillfactor, TOAST or indexes; and plain VACUUM removes dead tuples while leaving the file large, so serious physical bloat can coexist with a dead tuple count near zero. At most it is a prioritisation proxy, and pg_relation_size is the better input where a size is needed.",
+        "Enabling rule 176 was premature and that was my recommendation. The dry run was clean, but a clean dry run reports today's ratios - all 1.00, because the tables had just been rewritten - and says nothing about alerts that will fire as they re-bloat. The anchor epoch check is fail-closed but incomplete: a statistics refresh that leaves reltuples numerically unchanged is invisible to it, and the anchor then stays stale while deltas double-count. V108 disabled this rule for the same class of reason, and the same reasoning applies."
+      ]
+    },
+    {
       "id": "PGSTAT-P0-023",
       "order": 29,
       "priority": "P0",

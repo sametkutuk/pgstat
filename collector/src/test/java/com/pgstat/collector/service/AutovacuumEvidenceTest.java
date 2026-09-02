@@ -493,6 +493,51 @@ class AutovacuumEvidenceTest {
         assertThat(note).contains("Satır sayısı tahmindir");
     }
 
+    private static java.util.Map<String, Object> staleRow(String db, String schema, String table) {
+        java.util.Map<String, Object> r = new java.util.HashMap<>();
+        r.put("datname", db);
+        r.put("schemaname", schema);
+        r.put("relname", table);
+        return r;
+    }
+
+    @Test
+    void aSingleStaleTableIsNamedInTheNotification() {
+        // Musteri itirazi 2026-09-02: ayni alarm 49 saatte 9 kez gonderilmis ve
+        // hicbirinde tablo adi gecmemis. Tek tabloda kisaltilacak bir sey yok;
+        // adi gizlemek yalnizca operatoru nereye bakacagindan mahrum birakir.
+        String out = AlertRuleEvaluator.staleNotificationSummary(
+            java.util.List.of(staleRow("moneasy", "management", "payment_types_currencies")), 178);
+
+        assertThat(out).contains("moneasy.management.payment_types_currencies");
+        assertThat(out).contains("178");
+    }
+
+    @Test
+    void theDatabaseIsPartOfTheNameBecauseSchemaAndTableAreNotUnique() {
+        // Ayni sema/tablo adi bir instance'in birden fazla veritabaninda
+        // bulunabiliyor — dogrulandi 2026-09-02: pnrhouse.t_order hem prodb hem
+        // testdb'de. DB olmadan bildirimdeki ad belirsizdir.
+        String out = AlertRuleEvaluator.staleNotificationSummary(
+            java.util.List.of(staleRow("prodb", "pnrhouse", "t_order")), 40);
+
+        assertThat(out).startsWith("prodb.pnrhouse.t_order");
+    }
+
+    @Test
+    void aFewStaleTablesAreListedAndTheRestAreCounted() {
+        // Uc ad + kalanin sayisi. Telegram dar tutulur, tam govde UI'da kalir.
+        String out = AlertRuleEvaluator.staleNotificationSummary(java.util.List.of(
+            staleRow("db1", "s", "a"), staleRow("db1", "s", "b"),
+            staleRow("db1", "s", "c"), staleRow("db1", "s", "d"),
+            staleRow("db1", "s", "e")), 90);
+
+        assertThat(out).contains("5 tablo");
+        assertThat(out).contains("db1.s.a").contains("db1.s.b").contains("db1.s.c");
+        assertThat(out).doesNotContain("db1.s.d");
+        assertThat(out).contains("2 tablo daha");
+    }
+
     @Test
     void aProvenBaselineSaysSoInsteadOfClaimingTheStatisticalOne() {
         // Kanitli taban (dogrulanmis VACUUM FULL sonrasi olcum) ile

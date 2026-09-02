@@ -587,8 +587,7 @@ public class AlertRuleEvaluator {
                 buildStaleDetailsJson(stale), AlertRepository.NotifyMode.DEFERRED);
             alertRepo.notifySummary(alertId, alertKey, AlertCode.USER_DEFINED_RULE.getCode(),
                 severity, instancePk, rendered[0],
-                String.format("%d tablo, en eskisi %d saattir analiz edilmemiş.",
-                    stale.size(), Math.round(worstHours)));
+                staleNotificationSummary(stale, Math.round(worstHours)));
             updateLastEval(ruleId, instancePk, BigDecimal.valueOf(Math.round(worstHours)), severity);
         }
     }
@@ -1191,6 +1190,52 @@ public class AlertRuleEvaluator {
     static String staleStatisticsActionForTest(List<Map<String, Object>> stale) {
         return staleStatisticsAction(stale);
     }
+
+    /**
+     * Bildirimdeki ozet — tablo ADLARIYLA.
+     *
+     * Onceden yalnizca "%d tablo, en eskisi %d saattir analiz edilmemis."
+     * gonderiliyordu. Gerekce, tam govdeyi UI'da tutup Telegram'i kisa tutmakti
+     * (2026-08-28) ve cok tabloda dogru. TEK TABLODA ise kisaltilacak bir sey
+     * yok, sadece bilgi eksiltiliyor: operator hangi tabloya bakacagini
+     * bilmiyor (musteri itirazi 2026-09-02, ayni alarm 49 saatte 9 kez
+     * gonderilmis ve hicbirinde tablo adi gecmemis).
+     *
+     * Kimlik DB.sema.tablo — ayni sema/tablo adi bir instance'in birden fazla
+     * veritabaninda bulunabiliyor (dogrulandi: pnrhouse.t_order hem prodb hem
+     * testdb'de), DB olmadan ad belirsiz kalir.
+     */
+    static String staleNotificationSummary(List<Map<String, Object>> stale, long worstHours) {
+        if (stale.isEmpty()) {
+            return String.format("En eskisi %d saattir analiz edilmemiş.", worstHours);
+        }
+        if (stale.size() == 1) {
+            return String.format("%s — %d saattir analiz edilmemiş.",
+                staleQualifiedName(stale.get(0)), worstHours);
+        }
+        StringBuilder names = new StringBuilder();
+        int shown = 0;
+        for (Map<String, Object> r : stale) {
+            if (shown >= STALE_NOTIFICATION_NAME_LIMIT) break;
+            if (shown > 0) names.append(", ");
+            names.append(staleQualifiedName(r));
+            shown++;
+        }
+        String rest = stale.size() > shown
+            ? String.format(" ve %d tablo daha", stale.size() - shown) : "";
+        return String.format("%d tablo: %s%s. En eskisi %d saattir analiz edilmemiş.",
+            stale.size(), names, rest, worstHours);
+    }
+
+    /** DB.sema.tablo — DB olmadan ad belirsiz kalir. */
+    private static String staleQualifiedName(Map<String, Object> r) {
+        Object db = r.get("datname");
+        return String.format("%s.%s.%s",
+            db != null ? db : "?", r.get("schemaname"), r.get("relname"));
+    }
+
+    /** Bildirimde en fazla kac tablo adi yazilir. Telegram dar, govde UI'da. */
+    private static final int STALE_NOTIFICATION_NAME_LIMIT = 3;
 
     /** Mesajdaki tablo listesi — en uzun sure bayat kalanlar once. */
     private static String formatStaleList(List<Map<String, Object>> stale) {
@@ -4019,16 +4064,35 @@ public class AlertRuleEvaluator {
      *         acik override var, null ise override yok/hic toplanmamis
      *         (varsayilan davranis: acik).
      */
-    private Boolean fetchTableAutovacuumOverride(long instancePk, String schemaname, String relname) {
+    /**
+     * Tabloya ozel autovacuum_enabled override'i.
+     *
+     * KIMLIK (instance_pk, dbid, relid) — tablonun PK'si. Onceden yalnizca
+     * (instance_pk, schemaname, relname) ile aranıyordu ve bu YANLIS TABLOYU
+     * dondurebiliyordu: ayni sema/tablo adi bir instance'in birden fazla
+     * veritabaninda bulunabiliyor. Dogrulandi (2026-09-02): instance 13'te
+     * pnrhouse.t_order hem prodb hem testdb'de var; instance 18'de
+     * management.payment_types_currencies bes veritabaninda.
+     *
+     * Bu, alarmin TETIKLENMESINI degil MUSTERIYE VERILEN AKSIYONU etkiliyordu:
+     * "bu tabloda autovacuum kapali, ALTER TABLE ... RESET calistir" tavsiyesi
+     * baska bir veritabanindaki tabloya ait olabiliyordu.
+     */
+    private Boolean fetchTableAutovacuumOverride(long instancePk, Long dbid, Long relid,
+                                                 String schemaname, String relname) {
+        // relid ya da dbid yoksa tabloyu kesin olarak tanimlayamiyoruz. Ad ile
+        // tahmin yurutmek yanlis tabloya aksiyon yazmak demek; null donuyoruz
+        // ve cagiran "override bilinmiyor" dalina gidiyor.
+        if (dbid == null || relid == null) return null;
         try {
             List<Boolean> rows = jdbc.queryForList(
                 "select autovacuum_enabled from control.table_relopts_snapshot " +
-                "where instance_pk = ? and schemaname = ? and relname = ?",
-                Boolean.class, instancePk, schemaname, relname);
+                "where instance_pk = ? and dbid = ? and relid = ?",
+                Boolean.class, instancePk, dbid, relid);
             return rows.isEmpty() ? null : rows.get(0);
         } catch (Exception e) {
-            log.debug("fetchTableAutovacuumOverride okunamadi instance={} table={}.{}: {}",
-                instancePk, schemaname, relname, e.getMessage());
+            log.debug("fetchTableAutovacuumOverride okunamadi instance={} dbid={} table={}.{}: {}",
+                instancePk, dbid, schemaname, relname, e.getMessage());
             return null;
         }
     }
@@ -4287,15 +4351,22 @@ public class AlertRuleEvaluator {
      *
      * @return etkin cost_delay (ms) veya cozumlenemezse null
      */
-    Integer resolveEffectiveCostDelay(long instancePk, Long relid) {
+    Integer resolveEffectiveCostDelay(long instancePk, Long dbid, Long relid) {
         try {
             // Adim 1: tablo override — V095 ile ayristirilmis kolondan okunuyor
             // (toplama aninda bir kez parse edilir, her sorguda tekrar degil).
-            if (relid != null) {
+            //
+            // KIMLIK (instance_pk, dbid, relid). Onceden dbid yoktu ve relid
+            // yalnizca kendi veritabani icinde benzersiz oldugu icin BASKA BIR
+            // VERITABANINDAKI tablonun override'i okunabiliyordu. Dogrulandi
+            // (2026-09-02): instance 18'de relid 7887268 iki farkli dbid'de.
+            // Yine tetiklemeyi degil, "cost_delay dusur" aksiyonunu yanlis
+            // tabloya bagliyordu.
+            if (dbid != null && relid != null) {
                 List<Integer> tableRows = jdbc.queryForList(
                     "select autovacuum_vacuum_cost_delay from control.table_relopts_snapshot " +
-                    "where instance_pk = ? and relid = ?",
-                    Integer.class, instancePk, relid);
+                    "where instance_pk = ? and dbid = ? and relid = ?",
+                    Integer.class, instancePk, dbid, relid);
                 if (!tableRows.isEmpty() && tableRows.get(0) != null && tableRows.get(0) >= 0) {
                     return tableRows.get(0);
                 }
@@ -4499,9 +4570,10 @@ public class AlertRuleEvaluator {
      * Ayar cozumlenemezse (UNKNOWN) oneri bastirilir — bilinmeyen bir deger
      * "yuksek" sayilamaz.
      */
-    private String buildCostDelayAction(long instancePk, Long relid, AutovacuumWorkerEvidence ev) {
+    private String buildCostDelayAction(long instancePk, Long dbid, Long relid,
+                                        AutovacuumWorkerEvidence ev) {
         Integer pgMajor = fetchPgMajor(instancePk);
-        Integer effectiveDelay = resolveEffectiveCostDelay(instancePk, relid);
+        Integer effectiveDelay = resolveEffectiveCostDelay(instancePk, dbid, relid);
         int versionDefault = versionDefaultCostDelayMs(pgMajor);
 
         boolean throttleEvidenceUsable = ev.throttleStatus() == EvidenceStatus.AVAILABLE;
@@ -4970,6 +5042,16 @@ public class AlertRuleEvaluator {
             && record.get("last_autovacuum") == null;
     }
 
+    /** Kayittan dbid; yoksa null. Kimlik (instance_pk, dbid, relid) ucludur. */
+    private static Long recordDbid(Map<String, Object> record) {
+        return record.get("dbid") instanceof Number n ? n.longValue() : null;
+    }
+
+    /** Kayittan relid; yoksa null. relid YALNIZ kendi veritabani icinde benzersiz. */
+    private static Long recordRelid(Map<String, Object> record) {
+        return record.get("relid") instanceof Number n ? n.longValue() : null;
+    }
+
     private BloatDiagnosis diagnoseBloat(Map<String, Object> record, long instancePk) {
         // Istatistik guvenilirlik kapisi — karar agacindan ONCE. Buradan sonraki
         // her senaryo n_live_tup/n_dead_tup uzerinden oran ve tetikleme esigi
@@ -5042,7 +5124,8 @@ public class AlertRuleEvaluator {
                     // "Olabilir" degil KESIN sonuc — pg_class.reloptions artik
                     // toplaniyor (V093), gercek override durumunu direkt soyluyoruz.
                     Boolean tableAutovacuumOverride = fetchTableAutovacuumOverride(
-                        instancePk, (String) record.get("schemaname"), (String) record.get("relname"));
+                        instancePk, recordDbid(record), recordRelid(record),
+                        (String) record.get("schemaname"), (String) record.get("relname"));
                     if (Boolean.FALSE.equals(tableAutovacuumOverride)) {
                         return BloatDiagnosis.of(
                             String.format("Bu tablo hiç vacuum edilmemiş. Autovacuum genel olarak açık (autovacuum=on) ve tetikleme eşiği (%d = %d + %.2f × %d canlı satır) çoktan aşılmış (%d ölü satır) — ama bu TABLOYA ÖZEL autovacuum_enabled=false override'ı var (pg_class.reloptions), bu yüzden hiç çalışmadı.",
@@ -5138,12 +5221,11 @@ public class AlertRuleEvaluator {
         // olmadigi elle sorgu yazmadan gorulebiliyor.
         if (vacuumIneffective) {
             AutovacuumWorkerEvidence ev = fetchAutovacuumWorkerStatus(instancePk);
-            Long relid = record.get("relid") instanceof Number rn ? rn.longValue() : null;
             return BloatDiagnosis.of(
                 "Autovacuum çalışıyor ama ölü satırları yeterince hızlı temizleyemiyor."
                     + renderWorkerWaitEvidence(ev)
                     + renderIoImpactEvidence(fetchAutovacuumIoImpact(instancePk)),
-                buildCostDelayAction(instancePk, relid, ev)
+                buildCostDelayAction(instancePk, recordDbid(record), recordRelid(record), ev)
             );
         }
 
