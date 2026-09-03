@@ -723,6 +723,10 @@ public class AlertRuleEvaluator {
             java.util.Set<String> stillAlerting = new java.util.HashSet<>();
             java.util.List<RaisedRecordAlert> raised = new java.util.ArrayList<>();
             java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
+            // Instance icin en ciddi kayit; hicbiri yoksa null kalir ve satir
+            // "degerlendirildi, bulgu yok" anlamina gelir.
+            BigDecimal worstVal = null;
+            String worstSeverity = null;
 
             for (Map<String, Object> rec : bloated) {
                 BigDecimal ratio = toBDSafe(rec.get("bloat_ratio"));
@@ -742,6 +746,14 @@ public class AlertRuleEvaluator {
                     continue;
                 }
                 if (prevSeverity == null && alertRepo.resolvedWithin(recordKey, cooldownMinutes)) continue;
+
+                // Instance ozeti: en ciddi kayit. Alarm ACILDIKTAN sonra
+                // izlenir, cunku cooldown yuzunden atlanan bir kayit
+                // instance'i alarmli gostermemeli.
+                if ("critical".equals(severity) || worstSeverity == null) {
+                    worstSeverity = severity;
+                    worstVal = ratio;
+                }
 
                 Map<String, Object> ctx = baseContext(rule, instancePk, severity);
                 ctx.put("value", ratio);
@@ -783,6 +795,22 @@ public class AlertRuleEvaluator {
 
             notifyRaisedBatch(raised, instancePk, ruleName);
             notifyResolvedBatch(resolved, instancePk, ruleName);
+
+            // DEGERLENDIRME KAYDI. Bu kural sessiz kaldiginda hicbir iz
+            // birakmiyordu: control.alert_rule_last_eval'de satiri yoktu ve
+            // "degerlendirdi, sisme bulmadi" ile "bu instance'a hic bakmadi"
+            // ayirt edilemiyordu.
+            //
+            // alert_rule.last_run_at yeterli degil — onu evaluate() merkezi
+            // olarak yaziyor, instance dongusunden bagimsiz olarak. Yani taze
+            // bir last_run_at, sorgunun kostugunu KANITLAMIYOR.
+            //
+            // Bu, bu hafta iki kez haftalarca sakli kalan hatanin sekli:
+            // is yapiliyor gorunur, hicbir sey kaydedilmez, sessizlik dogru
+            // davranis mi eksiklik mi bilinmez (izleme yolu, DEBUG'daki catch).
+            // Kural KAPALI oldugu icin fark edilmiyordu; acildiginda sessizligin
+            // anlamli olmasi bu kayda bagli.
+            updateLastEval(ruleId, instancePk, worstVal, worstSeverity);
         }
     }
 
