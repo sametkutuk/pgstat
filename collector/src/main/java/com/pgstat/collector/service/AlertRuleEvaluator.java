@@ -1924,7 +1924,7 @@ public class AlertRuleEvaluator {
 
             alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                 instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+            alertRepo.patchSeverity(alertKey, severity, null);
 
             updateLastEval(ruleId, instancePk, currentVal, severity);
         }
@@ -2194,7 +2194,7 @@ public class AlertRuleEvaluator {
                 if (detailsJson != null) {
                     alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                         instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", "warning", alertKey);
+                    alertRepo.patchSeverity(alertKey, "warning", null);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                         "warning", instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
@@ -2296,7 +2296,7 @@ public class AlertRuleEvaluator {
                 if (detailsJson != null) {
                     alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                         instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                    alertRepo.patchSeverity(alertKey, severity, null);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                         severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
@@ -2444,8 +2444,7 @@ public class AlertRuleEvaluator {
                 if (detailsJson != null) {
                     alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                         instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                    jdbc.update("update ops.alert set severity = ?, rule_id = ? where alert_key = ?",
-                        severity, ruleId, alertKey);
+                    alertRepo.patchSeverity(alertKey, severity, ruleId);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                         severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);
@@ -2530,7 +2529,7 @@ public class AlertRuleEvaluator {
 
                         alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                             instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                        jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                        alertRepo.patchSeverity(alertKey, severity, null);
                         updateLastEval(ruleId, instancePk, instChange, severity);
                         continue;
                     }
@@ -2568,7 +2567,7 @@ public class AlertRuleEvaluator {
 
             alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                 instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-            jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+            alertRepo.patchSeverity(alertKey, severity, null);
 
             updateLastEval(ruleId, instancePk, changePct, severity);
         }
@@ -5708,7 +5707,7 @@ public class AlertRuleEvaluator {
                 if (detailsJson != null) {
                     alertRepo.upsert(alertKey, AlertCode.USER_DEFINED_RULE,
                         instancePk, serviceGroup, null, rendered[0], rendered[1], detailsJson);
-                    jdbc.update("update ops.alert set severity = ? where alert_key = ?", severity, alertKey);
+                    alertRepo.patchSeverity(alertKey, severity, null);
                 } else {
                     alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
                         severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId);

@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 117 |
-| Tables discovered | 98 |
-| Columns discovered | 1214 |
-| Indexes discovered | 132 |
+| Migrations scanned | 118 |
+| Tables discovered | 100 |
+| Columns discovered | 1248 |
+| Indexes discovered | 137 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
@@ -1934,6 +1934,8 @@ This generated inventory is the bridge between code and the manual project docum
 | Table | Columns | Partitioned | Partition key | First migration | Last migration |
 | --- | --- | --- | --- | --- | --- |
 | ops.alert | 20 | no |  | V006__ops_tables.sql | V073__system_alerts_overhaul.sql |
+| ops.alert_episode | 26 | no |  | V114__alert_episode.sql | V114__alert_episode.sql |
+| ops.alert_episode_ack | 8 | no |  | V114__alert_episode.sql | V114__alert_episode.sql |
 | ops.audit_log | 10 | no |  | V038__audit_log.sql | V038__audit_log.sql |
 | ops.job_run | 10 | no |  | V006__ops_tables.sql | V006__ops_tables.sql |
 | ops.job_run_instance | 11 | no |  | V006__ops_tables.sql | V006__ops_tables.sql |
@@ -1964,6 +1966,54 @@ This generated inventory is the bridge between code and the manual project docum
 | rule_id | bigint | V013__alert_rule_evaluation_types.sql |
 | acknowledge_note | text | V013__alert_rule_evaluation_types.sql |
 | alert_source | text | V073__system_alerts_overhaul.sql |
+
+</details>
+
+<details><summary>ops.alert_episode columns (26)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| episode_id | bigint | V114__alert_episode.sql |
+| alert_key | text | V114__alert_episode.sql |
+| alert_code | text | V114__alert_episode.sql |
+| alert_source | text | V114__alert_episode.sql |
+| instance_pk | bigint | V114__alert_episode.sql |
+| dbid | bigint | V114__alert_episode.sql |
+| relid | bigint | V114__alert_episode.sql |
+| relation_generation | text | V114__alert_episode.sql |
+| identity_status | text | V114__alert_episode.sql |
+| state | text | V114__alert_episode.sql |
+| severity | text | V114__alert_episode.sql |
+| max_severity | text | V114__alert_episode.sql |
+| opened_at | timestamptz | V114__alert_episode.sql |
+| first_observed_breaching_at | timestamptz | V114__alert_episode.sql |
+| last_confirmed_at | timestamptz | V114__alert_episode.sql |
+| last_sample_ts | timestamptz | V114__alert_episode.sql |
+| observation_count | integer | V114__alert_episode.sql |
+| closed_at | timestamptz | V114__alert_episode.sql |
+| close_reason | text | V114__alert_episode.sql |
+| acknowledged_at | timestamptz | V114__alert_episode.sql |
+| acknowledged_by | text | V114__alert_episode.sql |
+| ack_severity | text | V114__alert_episode.sql |
+| ack_invalidated_at | timestamptz | V114__alert_episode.sql |
+| ack_invalidated_reason | text | V114__alert_episode.sql |
+| backfilled | boolean | V114__alert_episode.sql |
+| created_at | timestamptz | V114__alert_episode.sql |
+
+</details>
+
+<details><summary>ops.alert_episode_ack columns (8)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| ack_id | bigint | V114__alert_episode.sql |
+| episode_id | bigint | V114__alert_episode.sql |
+| action | text | V114__alert_episode.sql |
+| actor | text | V114__alert_episode.sql |
+| severity_at_action | text | V114__alert_episode.sql |
+| reason | text | V114__alert_episode.sql |
+| note | text | V114__alert_episode.sql |
+| created_at | timestamptz | V114__alert_episode.sql |
 
 </details>
 
@@ -2054,7 +2104,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Owner | Tables referenced |
 | --- | --- |
-| PurgeEvaluator | agg.pg_activity_hourly, agg.pg_archiver_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_table_stat_hourly, agg.pg_wal_daily, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.instance_inventory, control.report_config, control.retention_policy, control.telegram_message_map, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.audit_log, ops.job_run, ops.job_run_instance, ops.notification_log, ops.report_history |
+| PurgeEvaluator | agg.pg_activity_hourly, agg.pg_archiver_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_table_stat_hourly, agg.pg_wal_daily, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.instance_inventory, control.report_config, control.retention_policy, control.telegram_message_map, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.alert_episode, ops.audit_log, ops.job_run, ops.job_run_instance, ops.notification_log, ops.report_history |
 | PartitionManager | agg.pg_table_stat_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |
 | AggRepository | agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_table_stat_delta, fact.pgss_delta |
 
@@ -2103,6 +2153,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/collector/StatementsCollector.java | dim.role_ref, dim.statement_series, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/collector/TextEnricher.java | dim.query_text, dim.statement_series |
 | collector/src/main/java/com/pgstat/collector/repository/AggRepository.java | agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_table_stat_delta, fact.pgss_delta |
+| collector/src/main/java/com/pgstat/collector/repository/AlertEpisodeRepository.java | dim.statement_series, ops.alert, ops.alert_episode |
 | collector/src/main/java/com/pgstat/collector/repository/AlertRepository.java | control.alert_rule_last_eval, ops.alert |
 | collector/src/main/java/com/pgstat/collector/repository/CapabilityRepository.java | control.instance_capability |
 | collector/src/main/java/com/pgstat/collector/repository/DimensionRepository.java | dim.database_ref, dim.query_text, dim.relation_ref, dim.role_ref, dim.statement_series |
@@ -2120,7 +2171,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | collector/src/main/java/com/pgstat/collector/service/NotificationService.java | control.alert_code_notification_channel, control.alert_rule, control.alert_rule_notification_channel, control.alert_snooze, control.maintenance_window, control.notification_channel, control.telegram_message_map, ops.alert, ops.notification_log |
 | collector/src/main/java/com/pgstat/collector/service/PartitionManager.java | agg.pg_table_stat_hourly, agg.pgss_daily, agg.pgss_hourly, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta |
 | collector/src/main/java/com/pgstat/collector/service/PgssResetTracker.java | control.pgss_reset_history, control.pgss_reset_schedule, ops.job_run |
-| collector/src/main/java/com/pgstat/collector/service/PurgeEvaluator.java | agg.pg_activity_hourly, agg.pg_archiver_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_table_stat_hourly, agg.pg_wal_daily, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.instance_inventory, control.report_config, control.retention_policy, control.telegram_message_map, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.audit_log, ops.job_run, ops.job_run_instance, ops.notification_log, ops.report_history |
+| collector/src/main/java/com/pgstat/collector/service/PurgeEvaluator.java | agg.pg_activity_hourly, agg.pg_archiver_hourly, agg.pg_lock_hourly, agg.pg_replication_hourly, agg.pg_slru_hourly, agg.pg_table_stat_hourly, agg.pg_wal_daily, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.instance_inventory, control.report_config, control.retention_policy, control.telegram_message_map, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.alert_episode, ops.audit_log, ops.job_run, ops.job_run_instance, ops.notification_log, ops.report_history |
 | collector/src/main/java/com/pgstat/collector/service/ReportGenerator.java | agg.pg_wal_daily, agg.pg_wal_hourly, control.instance_inventory, control.notification_channel, control.report_trigger, fact.pg_database_delta, fact.pg_index_stat_delta, fact.pg_wal_snapshot, ops.alert, ops.report_history |
 | collector/src/main/java/com/pgstat/collector/service/SecretResolver.java | ops.alert |
 | collector/src/main/java/com/pgstat/collector/service/SlotLifecycleEvaluator.java | control.instance_inventory, control.slot_lifecycle_subscription, control.slot_observation_state, fact.pg_replication_slot_snapshot |

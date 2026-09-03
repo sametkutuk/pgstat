@@ -30,10 +30,18 @@ public class AlertService {
     private final JdbcTemplate jdbc;
     private NotificationService notificationService;
 
-    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer, JdbcTemplate jdbc) {
+    /**
+     * Ihlal epizodu golge yazimi (PGSTAT-P0-048, Adim 1). Yalnizca yazilir;
+     * bu siniftaki hicbir karar epizoda bakmaz.
+     */
+    private final com.pgstat.collector.repository.AlertEpisodeRepository episodes;
+
+    public AlertService(AlertRepository alertRepo, AlertMessageRenderer renderer, JdbcTemplate jdbc,
+                        com.pgstat.collector.repository.AlertEpisodeRepository episodes) {
         this.alertRepo = alertRepo;
         this.renderer = renderer;
         this.jdbc = jdbc;
+        this.episodes = episodes;
     }
 
     @Autowired(required = false)
@@ -243,6 +251,15 @@ public class AlertService {
             alertKey, alertCode, severity, instancePk, title, message, detailsJson
         );
 
+        // GOLGE YAZIM. Ana alarm satiri yazildiktan sonra, bildirim kararindan
+        // once. episodes.observe() istisna firlatmaz; buradaki cagri sistem
+        // alarmi akisinin sonucunu degistiremez.
+        episodes.observe(new com.pgstat.collector.repository.AlertEpisodeRepository.Observation(
+            alertKey, alertCode, "system", instancePk,
+            null, null, null, false,
+            com.pgstat.collector.repository.AlertEpisodeRepository.STATE_BREACHING,
+            severity, java.time.Instant.now()));
+
         boolean shouldNotify = wasAcknowledged
             ? "warning".equals(severity) || "critical".equals(severity)
             : shouldNotifySystemOpen(severity, previousSeverity, previousStatus);
@@ -302,6 +319,13 @@ public class AlertService {
                 last_seen_at = now()
             where alert_key = ? and status in ('open', 'acknowledged')
             """, alertKey);
+
+        // Epizot yalnizca gercekten kapanan alarm icin kapanir; kosulsuz
+        // kapatmak, kapanma damgasini her cagrida ileri iterdi.
+        if (updated > 0) {
+            episodes.close(alertKey,
+                com.pgstat.collector.repository.AlertEpisodeRepository.CLOSE_RESOLVED);
+        }
 
         if (updated > 0 && notificationService != null
                 && "critical".equals(String.valueOf(previous.get("severity")))) {

@@ -13,9 +13,9 @@ node scripts/generate-project-status.mjs
 
 | Metric | Value |
 | --- | ---: |
-| Total tasks | 63 |
+| Total tasks | 64 |
 | Done tasks | 32 |
-| Remaining tasks | 31 |
+| Remaining tasks | 32 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -34,14 +34,14 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | --- | ---: |
 | done | 32 |
 | in_progress | 3 |
-| planned | 28 |
+| planned | 29 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
 | alerting | 12 |
-| collector | 6 |
+| collector | 7 |
 | contracts | 2 |
 | governance | 5 |
 | operations | 13 |
@@ -119,7 +119,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 60 | PGSTAT-P1-015 | P1 | ui | planned | Valuable observations that are not alerts have nowhere to live, so they are only found when someone writes SQL by hand | Design is at r5. Implementation cannot start on the wasted-space detector until PGSTAT-P0-046 supplies identity and an as-of row estimate; the scope and signal model and the eligibility gate can be built now. |
 | 61 | PGSTAT-P0-046 | P0 | alerting | planned | The physical bloat rule compares a size and a row count from different moments, and matches table history by name | Probe testing is complete and passed; clean up the probe state (delete ops.notification_log rows for the probe alerts, then the alerts, then the pgstat_probe snapshot rows, then set rule 176 is_enabled back to false). Real history starts 2026-09-01, so the rule can only speak from 2026-09-29. Re-enable then and check its first real output against a manual measurement. |
 | 62 | PGSTAT-P0-047 | P0 | collector | planned | The central database rewrites 1.76 million dimension rows every five minutes to refresh a timestamp nothing reads | Throttle the last_seen_at writes, ship the migration that drops the two last_seen_at indexes and lowers fillfactor, then measure n_tup_upd and n_tup_hot_upd a day later before deciding on the one-time reclaim. |
-| 63 | PGSTAT-P0-048 | P0 | collector | in_progress | Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant | Work the order set by review: leg B eligibility and severity, then the shared breach-episode lifecycle covering stale age and acknowledgement together, then the materiality gate, then notification backoff. Rule 176 stays enabled and watched; verify its first alert by hand. |
+| 63 | PGSTAT-P0-048 | P0 | collector | in_progress | Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant | Adim 1 (epizot golge yazimi) kodlandi ve dogrulandi; deploy sonrasi cift yonlu karsilastirma sorgusu calistirilip sifir satir dondugu gorulmeden Adim 2 baslamaz. Kural 176 acik ve izleniyor; ilk alarmi elle dogrulanacak. |
+| 64 | PGSTAT-P1-020 | P1 | collector | planned | Collector da gercek veritabanina karsi kosan test altyapisi yok | Testcontainers degerlendir; SQL i olan repository/evaluator mantigi icin gercek PostgreSQL 17 e karsi kosan bir test katmani kur. |
 
 ## Dependency Map
 
@@ -187,7 +188,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | PGSTAT-P1-015 | - | - |
 | PGSTAT-P0-046 | - | - |
 | PGSTAT-P0-047 | - | - |
-| PGSTAT-P0-048 | - | - |
+| PGSTAT-P0-048 | - | PGSTAT-P1-020 |
+| PGSTAT-P1-020 | PGSTAT-P0-048 | - |
 
 ## Closure Rules
 

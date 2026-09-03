@@ -552,6 +552,22 @@ public class PurgeEvaluator {
             if (deleted > 0) {
                 log.info("Alert purge: {} satir silindi ({} gun)", deleted, days);
             }
+
+            // Kapanmis ihlal epizotlari da ayni retention ile silinir (V114).
+            // Yeni bir ayar dugmesi eklenmedi: alarm ve epizot ayni olgunun iki
+            // gorunumu, farkli sureler tutmak ikisini tutarsiz birakirdi.
+            // ACIK epizotlar SILINMEZ — kapanmamis bir ihlalin gecmisi durumun
+            // kendisidir. Purge bu surumde geliyor; sonraya birakilan bir
+            // temizlik, buyuyen bir tablo demektir.
+            int episodesDeleted = jdbc.update("""
+                delete from ops.alert_episode
+                where closed_at is not null
+                  and closed_at < now() - make_interval(days => ?)
+                """, days);
+
+            if (episodesDeleted > 0) {
+                log.info("Alert epizot purge: {} satir silindi ({} gun)", episodesDeleted, days);
+            }
         } catch (Exception e) {
             log.warn("Alert purge hatasi: {}", e.getMessage());
         }

@@ -41,8 +41,23 @@ public class AlertRepository {
     private final JdbcTemplate jdbc;
     private NotificationService notificationService;
 
-    public AlertRepository(JdbcTemplate jdbc) {
+    /**
+     * Ihlal epizodu golge yazimi (PGSTAT-P0-048, Adim 1).
+     *
+     * BU SURUMDE YALNIZCA YAZILIR. Bu siniftaki hicbir karar epizoda bakmaz;
+     * alarm, bildirim ve UI davranisi degismez. Amac, epizot modelini gercek
+     * trafikle doldurup cift yonlu karsilastirma sorgusuyla dogrulamak.
+     *
+     * Sozlesme: episodes.* metotlari ISTISNA FIRLATMAZ (bkz.
+     * AlertEpisodeRepository). Yine de her cagri ana akisin SONUNDA, alert_id
+     * elde edildikten sonra yapilir — boylece epizot tarafinda beklenmedik bir
+     * sey olsa bile alarm satiri coktan yazilmis olur.
+     */
+    private final AlertEpisodeRepository episodes;
+
+    public AlertRepository(JdbcTemplate jdbc, AlertEpisodeRepository episodes) {
         this.jdbc = jdbc;
+        this.episodes = episodes;
     }
 
     /** Circular dependency'den kaçınmak için setter injection */
@@ -158,6 +173,8 @@ public class AlertRepository {
             fireNotification(alertId, alertKey, alertCode.getCode(), alertCode.getDefaultSeverity(), instancePk, title, message);
         }
 
+        shadowObserve(alertKey, alertCode.getCode(), alertSource, instancePk,
+            alertCode.getDefaultSeverity());
         return alertId;
     }
 
@@ -236,6 +253,7 @@ public class AlertRepository {
         if (shouldNotify) {
             fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
         }
+        shadowObserve(alertKey, alertCode.getCode(), "adaptive", instancePk, severity);
         return alertId;
     }
 
@@ -307,6 +325,7 @@ public class AlertRepository {
             fireNotification(alertId, alertKey, alertCode.getCode(), severity, instancePk, title, message);
         }
 
+        shadowObserve(alertKey, alertCode.getCode(), alertSource, instancePk, severity);
         return alertId;
     }
 
@@ -400,6 +419,7 @@ public class AlertRepository {
             """,
             alertKey
         );
+        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
     }
 
     /**
@@ -437,6 +457,12 @@ public class AlertRepository {
                                           (Long) rs.getObject("instance_pk")),
             alertKey
         );
+        // Epizot, alarm gercekten open->resolved gectiyse kapanir. rows bos ise
+        // alarm zaten resolved'di ve epizot da coktan kapanmis olmali;
+        // kosulsuz kapatmak, kapanma damgasini her turda ileri iterdi.
+        if (!rows.isEmpty()) {
+            episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
+        }
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -467,6 +493,7 @@ public class AlertRepository {
         if (rows.isEmpty()) {
             return; // zaten resolved'di, bildirim yok
         }
+        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
         long alertId = (Long) rows.get(0)[0];
         String severity = (String) rows.get(0)[1];
         Long instancePk = (Long) rows.get(0)[2];
@@ -487,7 +514,10 @@ public class AlertRepository {
      * @return resolved edilen alert sayısı
      */
     public int autoResolveStale(int staleMinutes) {
-        return jdbc.update("""
+        // RETURNING ile kapatilan anahtarlar geri alinir: epizodu kapatmak icin
+        // hangi alert_key'lerin gercekten degistigini bilmek gerekiyor. Sayiyi
+        // bilip anahtarlari bilmemek, epizotlari acik birakirdi.
+        java.util.List<String> closedKeys = jdbc.query("""
             update ops.alert
             set status = 'resolved',
                 resolved_at = now()
@@ -499,7 +529,66 @@ public class AlertRepository {
                 -- mantikli ama stale fallback gelecekte istenirse kapatabilir.
                 'stats_reset_detected'
               )
-            """, staleMinutes);
+            returning alert_key
+            """, (rs, n) -> rs.getString("alert_key"), staleMinutes);
+
+        for (String key : closedKeys) {
+            // Bu bir cozulme degil, zaman asimi: kosulun duzeldigini kimse
+            // dogrulamadi, alarm sadece tazelenmedi. Epizot bunu ayri bir
+            // sebeple kapatir ki "iyilesti" ile "haber alinamadi" karismasin.
+            episodes.close(key, AlertEpisodeRepository.CLOSE_STALE_TIMEOUT);
+        }
+        return closedKeys.size();
+    }
+
+    /**
+     * Acilan/tazelenen bir alarmi epizoda GOLGE olarak yazar.
+     *
+     * Her zaman ana akisin sonunda, alert satiri yazildiktan sonra cagrilir.
+     * episodes.observe() istisna firlatmaz; buradaki cagri alarm uretiminin
+     * sonucunu degistiremez.
+     *
+     * BILINEN SINIR (Adim 1): repository katmani tablo kimligini bilmiyor, bu
+     * yuzden dbid/relid/relation_generation null gecilir ve expectsGeneration
+     * false. Tablo bazli kurallarin fiziksel kimligi Adim 2'de, evaluator'lar
+     * kimligi tasimaya basladiginda dolar. Kimligi UYDURMAK yerine bos
+     * birakiliyor: yanlis kimlikle acilan bir epizot iki ayri ihlali
+     * birbirine karistirirdi.
+     */
+    private void shadowObserve(String alertKey, String alertCode, String alertSource,
+                                Long instancePk, String severity) {
+        episodes.observe(new AlertEpisodeRepository.Observation(
+            alertKey, alertCode, alertSource, instancePk,
+            null, null, null, false,
+            AlertEpisodeRepository.STATE_BREACHING, severity,
+            java.time.Instant.now()));
+    }
+
+    /**
+     * Acik bir alarmin severity'sini gunceller.
+     *
+     * AlertRuleEvaluator bunu yedi ayri yerde kendi inline SQL'iyle yapiyordu.
+     * Bu yazmalar alarm ACMAZ/KAPATMAZ, acilmis satirin severity'sini yamalar —
+     * ama epizot acisindan onemliler: severity yukselmesi onayi gecersiz kilan
+     * olay ve max_severity'nin kaynagi. Merkezilestirilmeseydi epizodun
+     * severity'si kor kalirdi ve KOR OLDUGU BILINEN BIR GOLGE, deploy kapisi
+     * olarak kullanilamaz.
+     *
+     * @param ruleId null degilse ops.alert.rule_id de guncellenir
+     */
+    public void patchSeverity(String alertKey, String severity, Long ruleId) {
+        if (ruleId != null) {
+            jdbc.update("update ops.alert set severity = ?, rule_id = ? where alert_key = ?",
+                severity, ruleId, alertKey);
+        } else {
+            jdbc.update("update ops.alert set severity = ? where alert_key = ?",
+                severity, alertKey);
+        }
+        // Epizodun severity'si ana satirla ayni anda ilerlemeli. Yalnizca
+        // GUNCELLER, acmaz: yama her zaman acilmis bir alarmin uzerine gelir,
+        // burada epizot yoksa uydurma bir alert_code ile satir acmak yanlis
+        // olurdu.
+        episodes.observeSeverity(alertKey, severity);
     }
 
     /** Bildirim servisine async olarak iletir. Hata olursa alert akışını bozmaz. */

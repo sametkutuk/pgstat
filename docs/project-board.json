@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-08-31",
+  "updated_at": "2026-09-03",
   "project": {
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
@@ -1807,7 +1807,7 @@
       "priority": "P0",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "Work the order set by review: leg B eligibility and severity, then the shared breach-episode lifecycle covering stale age and acknowledgement together, then the materiality gate, then notification backoff. Rule 176 stays enabled and watched; verify its first alert by hand.",
+      "next_action": "Adim 1 (epizot golge yazimi) kodlandi ve dogrulandi; deploy sonrasi cift yonlu karsilastirma sorgusu calistirilip sifir satir dondugu gorulmeden Adim 2 baslamaz. Kural 176 acik ve izleniyor; ilk alarmi elle dogrulanacak.",
       "title": "Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant",
       "problem": "The customer reviewed the Telegram feed on 2026-09-02 and called it insufficient and wrong. Three separate defects sit behind that, all confirmed in code. First, the stale statistics notification carries only a count: one alert had been open since 2026-08-31 with 9 notifications over 49 hours, none of them naming management.payment_types_currencies. The DEFERRED notify mode was a deliberate 2026-08-28 choice to keep Telegram short, which is right for fifty tables and pure loss for one. Second, the dead tuple rule fires CRITICAL on pgstat's own control tables - control.instance_state at 26 live rows, control.alert_rule_last_eval at 170, dim.role_ref at 715, control.table_relopts_snapshot at 14033 - whose absolute dead tuple counts measured 63, 130, 555 and 2952. Leg A's minimum-row gate counts dead tuples in the sum, so the complaint qualifies itself; leg B's absolute floor of 500 is below any scale at which dead tuples cost anything. Third, stale_hours is computed as now() minus the last ANALYZE rather than from the moment the autoanalyze threshold was breached, so a table analyzed 178 hours ago that crossed its threshold an hour ago reports 178 hours and goes straight to CRITICAL.",
       "requirements": [
@@ -1862,6 +1862,26 @@
           "id": "AC8",
           "text": "Notifications are event-driven: open, severity increase, material change, resolve. Unacknowledged criticals back off 6h, 12h, 24h, then daily. Warnings do not repeat. Reminder state is its own counter, not occurrence_count.",
           "status": "pending"
+        },
+        {
+          "id": "AC9",
+          "text": "Ihlal epizodu semasi (ops.alert_episode + ops.alert_episode_ack, V114) kurulur ve mevcut alarm akisinin yaninda GOLGE olarak doldurulur. Alarm, bildirim ve UI davranisi degismez; epizot bu surumde yalnizca yazilir, okunmaz. Uc durum yazilir ve unknown epizodu kapatmaz, ihlal saatini ilerletmez - veri yoklugu saglik kaniti degildir. first_observed_breaching_at yalnizca yanlis-dogru gecisinde yazilir, sirasiz veya tekrarlanan sample_ts durumu ilerletmez.",
+          "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "Golge yazim hatasi ana alarm akisini durdurmaz ve gizlenmez: repository istisna firlatmaz, WARN + stack trace uretir, sayaci artirir. Ayri transaction sarti yazili bir degismez haline getirildi ve AlertPathTransactionGuardTest ile korunuyor - collector genelinde @Transactional/TransactionTemplate yok ve Hikari autoCommit=true oldugu dogrulandi, ama bu garanti kazaraydi.",
+          "status": "done"
+        },
+        {
+          "id": "AC11",
+          "text": "Kapanmis epizot saklamasi ayni surumde gelir, control.retention_policy.alert_retention_days ile - yeni ayar dugmesi eklenmez. Acik epizotlar silinmez.",
+          "status": "done"
+        },
+        {
+          "id": "AC12",
+          "text": "Deploy sonrasi cift yonlu karsilastirma sorgusu calistirilir ve SIFIR satir doner: epizodu olmayan acik alarm VE alarmi olmayan acik epizot. Tek yonlu sorgu eksik yazimi yakalar ama fazla yazimi ve kapanmayan epizodu kacirir. Sifir degilse golge guvenilir degildir ve Adim 2 baslatilmaz.",
+          "status": "pending"
         }
       ],
       "implementation_plan": [
@@ -1877,7 +1897,8 @@
       ],
       "required_docs": [
         "docs/alert-reference.md",
-        "docs/generated/project-status.md"
+        "docs/generated/project-status.md",
+        "docs/alert-lifecycle-design.md"
       ],
       "dependencies": [],
       "customer_acceptance": {
@@ -1900,7 +1921,11 @@
         "The one confirmed unfixed defect points the other way. Historical baseline nights use raw table_size over reltuples while the current observation uses a delta-corrected row count. A stale reltuples on a growing table makes that night bytes-per-row too high, so the baseline is too high; the corrected current row count makes the current bytes-per-row too low. The ratio is therefore understated. The known error biases toward silence, not toward false alarms, and the proven-baseline path does not carry it at all.",
         "Cost of being wrong here is one Telegram message to the person who built the rule, not a customer-visible incident - this is the team monitoring its own fleet. Against that, a disabled rule teaches nothing: everything verified so far is that it stays quiet, which is necessary and not sufficient. Its first real alert is the evidence we have never had. Kept enabled with one condition: the first alert is checked by hand against pg_relation_size and a row count before it is acted on.",
         "No per-rule notification switch exists, and channel routing cannot isolate it either - alert_code is user_defined_rule for every user rule, so filtering it would also silence stale statistics. Shadow mode was therefore not available as a middle option; the choice was binary.",
-        "Enabling rule 176 was premature and that was my recommendation. The dry run was clean, but a clean dry run reports today's ratios - all 1.00, because the tables had just been rewritten - and says nothing about alerts that will fire as they re-bloat. The anchor epoch check is fail-closed but incomplete: a statistics refresh that leaves reltuples numerically unchanged is invisible to it, and the anchor then stays stale while deltas double-count. V108 disabled this rule for the same class of reason, and the same reasoning applies."
+        "Enabling rule 176 was premature and that was my recommendation. The dry run was clean, but a clean dry run reports today's ratios - all 1.00, because the tables had just been rewritten - and says nothing about alerts that will fire as they re-bloat. The anchor epoch check is fail-closed but incomplete: a statistics refresh that leaves reltuples numerically unchanged is invisible to it, and the anchor then stays stale while deltas double-count. V108 disabled this rule for the same class of reason, and the same reasoning applies.",
+        "Adim 1 kodlandi 2026-09-03. Kanca noktasi bes sinif degil IKI sinif cikti - sayim dogrulandi: satir olusturan yalnizca AlertRepository (3 insert) ve AlertService (1); LongRunningQueryEvaluator, SlotLifecycleEvaluator ve XidFreezeEvaluator hic dogrudan SQL yazmiyor, hepsi AlertRepository uzerinden geciyor. AlertRuleEvaluator un yedi yazmasi alarm acmiyor/kapatmiyor, acilmis satirin severity sini yamaliyordu; bunlar AlertRepository.patchSeverity e cekildi cunku kor oldugu bilinen bir golge deploy kapisi olarak kullanilamaz.",
+        "Tasarim sirasinda yeni bir kusur bulundu: iki kod yolunun ACK politikasi birbirinin tersi. AlertRepository nin uc upsert i de acknowledged durumu open a cevirip acknowledged_at i null yapiyor, AlertService ise ikisini de koruyor. Yani sistem alarmlarinda kullanicinin onayi yasiyor, kullanici kurali alarmlarinda oluyor - ayni uruntde iki zit davranis ve ikisi de yazili bir karar degil, upsert in yan etkisi. Tek politika Adim 2 de epizoda tasinacak: onay silinmez, gecersizlestirilir.",
+        "Migration ve durum makinesi uretime dokunmadan tek kullanimlik bir PostgreSQL 17 konteynerinde gercekten kosturuldu (uretimle ayni ana surum): sema kurulur, V114 uygulanir, repository nin GERCEK upsert ifadesi PREPARE/EXECUTE ile calistirilir. Onbir davranisin hepsi tasarlandigi gibi - ihlal saati yeniden degerlendirmede degismedi, sirasiz ornek durumu ilerletmedi, max_severity dusen severity de geri gitmedi, aktif tekillik ikinci acik epizodu reddetti, kapali epizot sebepsiz yazilamadi. Karsilastirma sorgusu sentetik veride kasten birakilan \"epizodu var alarmi yok\" durumunu yakaladi. Bu kosum CI da otomatik degil, elle yapildi.",
+        "backfilled kolonu ilk yazimda her zaman false kaliyordu, yani hicbir zaman dogru olmayan bir kolon uretiyordu. Gozlem verisinde yalan, tam da duzeltmeye calistigimiz sey oldugu icin ya doldurulmali ya kaldirilmaliydi; alarmin first_seen_at ine bakan bir alt sorguyla dolduruldu ve uc gun onceki bir alarm uzerine acilan epizodun t olarak isaretlendigi dogrulandi."
       ]
     },
     {
@@ -4426,6 +4451,61 @@
         "Second, and missed entirely in the original design: source eligibility. The intra-day watched-table path writes to the same snapshot table every 30 minutes, but only for tables that already have an open bloat alert - so those observations are biased toward the bloated state and dense enough for noise to drag the minimum down. They now carry source=watched and are excluded from the baseline pool; they still confirm current state and persistence, which is what they were added for.",
         "The gate is now: same relation incarnation, same fillfactor regime, a time-consistent row estimate bridged to its anchor, source nightly, at least 21 distinct nights, and a span of at least 28 days, with the baseline taken as a median rather than a minimum. Failing it yields no finding rather than a low-confidence one - validity is binary while confidence is graded, and an invalid baseline is not a weak finding but no finding. The practical cost is that the rule cannot speak about any table for roughly four weeks after deploy, which is accepted: an invalid baseline is worse than silence.",
         "Deploy verified 2026-08-31: migrations V100 through V110 all applied, the rule is disabled with a six-hour evaluation interval, and the stale statistics rule remains enabled at hourly. The description was found stale - it still said the baseline is the lowest historical value, which V110 replaced with the median of the three lowest nights - and was refreshed in V111. Keeping descriptions faithful to what is measured mattered repeatedly this week: three unsupported claims were removed from messages for the same reason."
+      ]
+    },
+    {
+      "id": "PGSTAT-P1-020",
+      "order": 64,
+      "priority": "P1",
+      "workstream": "collector",
+      "status": "planned",
+      "next_action": "Testcontainers degerlendir; SQL i olan repository/evaluator mantigi icin gercek PostgreSQL 17 e karsi kosan bir test katmani kur.",
+      "title": "Collector da gercek veritabanina karsi kosan test altyapisi yok",
+      "problem": "Collector testlerinin tamami saf birim testi (2026-09-03 itibariyla 112 test); Testcontainers, H2 veya baska bir DB kosum yolu yok. Sonucu: mantigin SQL de olan kismi test edilemiyor. PGSTAT-P0-048 Adim 1 in durum makinesi tamamen SQL de ve elle kurulan tek kullanimlik bir konteynerde dogrulandi - dogru sonuc verdi ama CI da tekrarlanmiyor, yani regresyon korumasi yok. Ayni bosluk alert SQL leri, delta hesaplari ve partition mantigi icin de gecerli.",
+      "requirements": [
+        "Gercek PostgreSQL 17 e karsi kosan testler yazilabilmeli; uretim veritabanina ASLA baglanilmamali.",
+        "Docker olmayan bir ortamda kosum kirilmamali - bu testler isaretlenip atlanabilmeli.",
+        "Migration lar test veritabanina uygulanabilmeli ki sema ile kod ayni anda dogrulansin."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Gercek PostgreSQL e karsi kosan en az bir test var ve migration lari uyguluyor.",
+          "status": "pending"
+        },
+        {
+          "id": "AC2",
+          "text": "Docker yoksa test kosumu HATA vermez, ilgili testler atlanir ve atlandigi GORUNUR olur - sessizce gecmis gibi gorunmez.",
+          "status": "pending"
+        },
+        {
+          "id": "AC3",
+          "text": "PGSTAT-P0-048 Adim 1 in durum makinesi dogrulamasi (elle kosturulan onbir senaryo) bu altyapiya tasinir.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Testcontainers ile mevcut spring-boot-starter-test in maliyetini ve CI suresini olc.",
+        "Migration lari uygulayan ortak bir test taban sinifi.",
+        "P0-048 senaryolarini tasi."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Docker kapaliyken de mvn -o test yesil kalmali"
+      ],
+      "required_docs": [
+        "docs/test-strategy.md"
+      ],
+      "dependencies": [
+        "PGSTAT-P0-048"
+      ],
+      "customer_acceptance": {
+        "required": false,
+        "status": "not_required",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Bu maddenin kendisi P0-048 sirasinda ortaya cikti: durum makinesi dogrulamasi icin gecici bir postgres:17 konteyneri kuruldu, onbir senaryo kosturuldu ve konteyner silindi. Dogrulama gecerli ama tekrarlanabilir degil. Boyle bir altyapiyi tek bir ozelligin yan urunu olarak eklemek dogru olmadigi icin ayri madde acildi."
       ]
     }
   ]
