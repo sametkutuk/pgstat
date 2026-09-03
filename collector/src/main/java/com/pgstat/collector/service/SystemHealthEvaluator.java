@@ -40,10 +40,13 @@ public class SystemHealthEvaluator {
 
     private final JdbcTemplate jdbc;
     private final AlertService alertService;
+    private final com.pgstat.collector.repository.AlertEpisodeRepository episodes;
 
-    public SystemHealthEvaluator(JdbcTemplate jdbc, AlertService alertService) {
+    public SystemHealthEvaluator(JdbcTemplate jdbc, AlertService alertService,
+                                 com.pgstat.collector.repository.AlertEpisodeRepository episodes) {
         this.jdbc = jdbc;
         this.alertService = alertService;
+        this.episodes = episodes;
     }
 
     @Scheduled(fixedDelay = 5 * 60 * 1000L, initialDelay = 30_000L)
@@ -55,7 +58,46 @@ public class SystemHealthEvaluator {
         runCheck("collector_stale", this::checkCollectorStale);
         runCheck("cleanup_failed", this::checkCleanupFailed);
         runCheck("disk_full", this::checkDiskFull);
+        runCheck("alert_episode_shadow", this::checkEpisodeShadowWrites);
         log.info("SystemHealthEvaluator evaluate cycle finished");
+    }
+
+    /**
+     * Epizot golge yaziminin sagligi (PGSTAT-P0-048, Adim 1).
+     *
+     * Sayac YALNIZCA bellekte ve yalnizca testlerden okunuyordu; uretimde
+     * gorunur bir yeri yoktu, dolayisiyla gercek deploy kapisi "logda WARN
+     * gormedim"e dusuyordu (inceleme 2026-09-03). Bir sayac gorunmuyorsa
+     * sayac degil.
+     *
+     * control.health_check_state'e yaziliyor: sorgulanabilir, mevcut desen ve
+     * SystemHealthDashboard'da zaten gorunuyor.
+     *
+     * TELEGRAM ALARMI URETILMIYOR ve bu bilincli. Golge yazim tanimi geregi
+     * hicbir seyi etkilemiyor; tasarim geregi zararsiz bir sey icin bildirim
+     * gondermek, tam da bu maddede duzeltmeye calistigimiz alarm kalitesi
+     * sorunu olurdu.
+     */
+    private void checkEpisodeShadowWrites() {
+        long failures = episodes.getWriteFailures();
+        long missingIdentity = episodes.getMissingIdentityCount();
+
+        if (failures == 0) {
+            recordHealthState("alert_episode_shadow", "ok",
+                "Golge yazim hatasi yok"
+                + (missingIdentity > 0 ? "; kimlik eksikligi: " + missingIdentity : ""));
+            return;
+        }
+
+        // Sayac collector basladigindan beri kumulatif; sifirlanmiyor. Tek bir
+        // hata bile golge verisinde bosluk demek, yani karsilastirma sorgusu
+        // sifir dondurse bile guvenilmez.
+        String detail = "Golge yazim hatasi: " + failures
+            + (episodes.getLastFailureMessage() != null
+                ? " (son: " + episodes.getLastFailureMessage() + ")" : "")
+            + (missingIdentity > 0 ? "; kimlik eksikligi: " + missingIdentity : "");
+        log.warn("Epizot golge yazimi saglikli degil - {}", detail);
+        recordHealthState("alert_episode_shadow", "warning", detail);
     }
 
     private void runCheck(String name, Runnable check) {

@@ -12,8 +12,15 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * DEGISMEZ: Alarm yazma yolunda hicbir metot bir transaction'a katilmaz.
- * ops.alert ve ops.alert_episode yazimlari ayri autocommit ifadeleridir.
+ * DEGISMEZ: COLLECTOR'un alarm yazma yolunda hicbir metot bir transaction'a
+ * katilmaz. ops.alert ve ops.alert_episode yazimlari ayri autocommit
+ * ifadeleridir.
+ *
+ * KAPSAM: yalnizca collector. API (api/src/routes/*) mesru olarak acik
+ * transaction kullaniyor ve kullanmasi da DOGRU — orada alarm ve epizot
+ * kapanisi ayni mantiksal islem, birlikte commit olmali. Collector'da ayrilik
+ * gerekiyor cunku epizot GOLGE bir yazim ve ana akisi bozamamali. Ilk surumde
+ * bu ayrim yazilmamisti ve degismez oldugundan genis ifade edilmisti.
  *
  * ---------------------------------------------------------------------------
  * NEDEN BU TEST VAR
@@ -49,15 +56,31 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class AlertPathTransactionGuardTest {
 
-    /** Alarm yazma yolundaki siniflar — hepsi ops.alert veya ops.alert_episode yazar. */
+    /**
+     * Alarm yazma yolundaki siniflar.
+     *
+     * DOGRUDAN yazanlar yetmez. Transaction, cagiran taraftan gelir: bir
+     * @Transactional JobOrchestrator.runAlerts() uzerinde dursa, altindaki
+     * butun yazmalar — AlertRepository ve AlertEpisodeRepository dahil — o
+     * transaction'a katilir. Ilk surumde yalnizca dogrudan yazanlar taraniyordu
+     * ve bu, testin korudugunu iddia ettigi degismezi tam korumuyordu:
+     * SystemHealthEvaluator ve JobOrchestrator, AlertService uzerinden dolayli
+     * uretici (inceleme 2026-09-03).
+     */
     private static final List<String> ALERT_PATH_SOURCES = List.of(
+        // Dogrudan yazanlar
         "src/main/java/com/pgstat/collector/repository/AlertRepository.java",
         "src/main/java/com/pgstat/collector/repository/AlertEpisodeRepository.java",
         "src/main/java/com/pgstat/collector/service/AlertService.java",
         "src/main/java/com/pgstat/collector/service/AlertRuleEvaluator.java",
         "src/main/java/com/pgstat/collector/service/LongRunningQueryEvaluator.java",
         "src/main/java/com/pgstat/collector/service/SlotLifecycleEvaluator.java",
-        "src/main/java/com/pgstat/collector/service/XidFreezeEvaluator.java"
+        "src/main/java/com/pgstat/collector/service/XidFreezeEvaluator.java",
+        // Dolayli cagiranlar — transaction buradan da gelebilir
+        "src/main/java/com/pgstat/collector/service/SystemHealthEvaluator.java",
+        "src/main/java/com/pgstat/collector/scheduler/JobOrchestrator.java",
+        // Epizodu purge eden yol
+        "src/main/java/com/pgstat/collector/service/PurgeEvaluator.java"
     );
 
     /**

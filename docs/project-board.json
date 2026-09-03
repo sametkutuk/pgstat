@@ -1880,8 +1880,23 @@
         },
         {
           "id": "AC12",
-          "text": "Deploy sonrasi cift yonlu karsilastirma sorgusu calistirilir ve SIFIR satir doner: epizodu olmayan acik alarm VE alarmi olmayan acik epizot. Tek yonlu sorgu eksik yazimi yakalar ama fazla yazimi ve kapanmayan epizodu kacirir. Sifir degilse golge guvenilir degildir ve Adim 2 baslatilmaz.",
+          "text": "Deploy sonrasi cift yonlu karsilastirma sorgusu calistirilir ve SIFIR satir doner. IKI YONUN KAPSAMI AYNI DEGIL: V114 geriye donuk doldurma yapmadigi icin A yonu yalnizca golge yazim basladiktan SONRA yeniden gorulmus alarmlara uygulanir (last_seen_at), B yonu tum acik epizotlara. Ilk surumde ikisi de tum alarmlari kapsiyordu ve deploy oncesinden kalan, yeniden degerlendirilmemis alarmlar yanlis uyusmazlik uretecekti - kapi ilk gun kirmizi yanip gercek kusurlari gurultude bogardi. Sifir satir tek basina yetmez: epizot sayisi sifirdan buyuk olmali ve control.health_check_state alert_episode_shadow satiri ok olmali, yoksa \"hic yazmadi\" ile \"dogru yazdi\" ayni gorunur.",
           "status": "pending"
+        },
+        {
+          "id": "AC13",
+          "text": "Yasam dongusunun KAPANISI API dahil butun ureticilerde kancalanir. api/src/routes/alerts.ts manuel Coz dugmesi ve api/src/routes/databaseCleanup.ts takipten cikarma akisi ops.alert i dogrudan kapatiyordu ve epizodu acik birakiyordu; boyle kalirsa kullanicinin bir dugmeye basmasi dogrulama kapisini kendi basina kirardi. Ikisi de kancalandi, epizodun state i DEGISTIRILMEZ (kosulun gectigi dogrulanmadi) ve close_reason sirasiyla manual / superseded olur (V115).",
+          "status": "done"
+        },
+        {
+          "id": "AC14",
+          "text": "confirmed_healthy durumu KALICI olarak yazilir. Once yalnizca closed_at/close_reason yaziliyordu ve kapali epizodun state i confirmed_breaching kaliyordu, yani epizot kapandigi anda kosulun dogru oldugunu soyluyordu. Kosulun gectigi DOGRULANDIGINDA confirmed_healthy yazilir; kimlik degisimi ve zaman asimi kapanislarinda durum korunur cunku kosul hakkinda hicbir sey ogrenilmedi.",
+          "status": "done"
+        },
+        {
+          "id": "AC15",
+          "text": "Golge yazim hata sayaci URETIMDE gorunur: SystemHealthEvaluator her turda control.health_check_state e alert_episode_shadow satirini yazar. Once sayac yalnizca bellekteydi ve yalnizca testlerden okunuyordu, yani gercek deploy kapisi \"logda WARN gormedim\"e dusuyordu - gorunmeyen bir sayac sayac degildir. Telegram alarmi bilincli olarak uretilmez: golge yazim tanimi geregi hicbir seyi etkilemiyor ve zararsiz bir sey icin bildirim gondermek tam da bu maddede duzeltilen sorun olurdu.",
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -1925,7 +1940,11 @@
         "Adim 1 kodlandi 2026-09-03. Kanca noktasi bes sinif degil IKI sinif cikti - sayim dogrulandi: satir olusturan yalnizca AlertRepository (3 insert) ve AlertService (1); LongRunningQueryEvaluator, SlotLifecycleEvaluator ve XidFreezeEvaluator hic dogrudan SQL yazmiyor, hepsi AlertRepository uzerinden geciyor. AlertRuleEvaluator un yedi yazmasi alarm acmiyor/kapatmiyor, acilmis satirin severity sini yamaliyordu; bunlar AlertRepository.patchSeverity e cekildi cunku kor oldugu bilinen bir golge deploy kapisi olarak kullanilamaz.",
         "Tasarim sirasinda yeni bir kusur bulundu: iki kod yolunun ACK politikasi birbirinin tersi. AlertRepository nin uc upsert i de acknowledged durumu open a cevirip acknowledged_at i null yapiyor, AlertService ise ikisini de koruyor. Yani sistem alarmlarinda kullanicinin onayi yasiyor, kullanici kurali alarmlarinda oluyor - ayni uruntde iki zit davranis ve ikisi de yazili bir karar degil, upsert in yan etkisi. Tek politika Adim 2 de epizoda tasinacak: onay silinmez, gecersizlestirilir.",
         "Migration ve durum makinesi uretime dokunmadan tek kullanimlik bir PostgreSQL 17 konteynerinde gercekten kosturuldu (uretimle ayni ana surum): sema kurulur, V114 uygulanir, repository nin GERCEK upsert ifadesi PREPARE/EXECUTE ile calistirilir. Onbir davranisin hepsi tasarlandigi gibi - ihlal saati yeniden degerlendirmede degismedi, sirasiz ornek durumu ilerletmedi, max_severity dusen severity de geri gitmedi, aktif tekillik ikinci acik epizodu reddetti, kapali epizot sebepsiz yazilamadi. Karsilastirma sorgusu sentetik veride kasten birakilan \"epizodu var alarmi yok\" durumunu yakaladi. Bu kosum CI da otomatik degil, elle yapildi.",
-        "backfilled kolonu ilk yazimda her zaman false kaliyordu, yani hicbir zaman dogru olmayan bir kolon uretiyordu. Gozlem verisinde yalan, tam da duzeltmeye calistigimiz sey oldugu icin ya doldurulmali ya kaldirilmaliydi; alarmin first_seen_at ine bakan bir alt sorguyla dolduruldu ve uc gun onceki bir alarm uzerine acilan epizodun t olarak isaretlendigi dogrulandi."
+        "backfilled kolonu ilk yazimda her zaman false kaliyordu, yani hicbir zaman dogru olmayan bir kolon uretiyordu. Gozlem verisinde yalan, tam da duzeltmeye calistigimiz sey oldugu icin ya doldurulmali ya kaldirilmaliydi; alarmin first_seen_at ine bakan bir alt sorguyla dolduruldu ve uc gun onceki bir alarm uzerine acilan epizodun t olarak isaretlendigi dogrulandi.",
+        "Dis inceleme 2026-09-03 aksami alti kusur buldu, altisi da gercekti ve hicbiri reddedilmedi. Ikisi kapi hatasiydi: (1) API deki manuel resolve ve database-cleanup ops.alert i kapatip epizodu acik birakiyordu, yani cift yonlu sorgu epizot_var_alarm_yok dondururdu - \"kanca iki sinif\" tespiti alarm ACILISI icin dogruydu ama yasam dongusunun KAPANISINDA API de bir uretici; (2) karsilastirma sorgusu deploy oncesinden kalan tum acik alarmlari kapsiyordu ve V114 backfill yapmadigi icin yeniden degerlendirilmemis alarmlar dogal olarak epizotsuz kalacakti.",
+        "Kapsam degisikligi acikca kayda gecirildi: baslangicta \"Adim 1 yalniz kullanici kurallari icin golge yazim\" denmisti, merkezi kanca fiilen butun ureticileri yaziyor. Bilincli: kismi bir golge ops.alert ile 1:1 eslenemez ve o zaman cift yonlu karsilastirma sorgusu - tek gercek dogrulama aracimiz - anlamsizlasir. Ayrica repository katmaninda tek kanca, bes evaluator a ayri ayri dokunmaktan daha kucuk bir degisiklik yuzeyi.",
+        "Duzeltmeler yine gercek bir postgres:17 konteynerinde dogrulandi. Kritik olan iki sonuc birlikte: 30 gun once acilmis ve o gunden beri yeniden gorulmemis bir alarm artik yanlis uyusmazlik URETMIYOR, ama yeniden gorulmus epizotsuz bir alarm HALA yakalaniyor. Yani kapsam daraltmasi gurultuyu kesiyor, sorgunun asil isini korlestirmiyor. Ayrica confirmed_healthy in kapanista gercekten yazildigi ve stale_timeout kapanisinin durumu korudugu dogrulandi.",
+        "Transaction degismezi iki yerden eksikti. Guard testi yalnizca dogrudan yazanlari tariyordu; transaction cagiran taraftan gelir, yani JobOrchestrator.runAlerts() uzerine konan bir @Transactional altindaki butun yazmalari icine alirdi - SystemHealthEvaluator, JobOrchestrator ve PurgeEvaluator eklendi. Ayrica degismez fazla genis ifade edilmisti: kapsam YALNIZCA collector. API mesru olarak acik transaction kullaniyor ve kullanmasi da dogru, orada alarm ve epizot kapanisi ayni mantiksal islem."
       ]
     },
     {

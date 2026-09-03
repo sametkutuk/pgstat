@@ -98,12 +98,34 @@ router.post('/disable', async (req, res, next) => {
             [instance_pk, dbid, datname, reason || null, alert_id || null]
         );
 
-        // Alert'i resolve et (varsa)
+        // Alert'i resolve et (varsa) — ihlal epizodu da ayni anda kapanir
+        // (PGSTAT-P0-048). Kapatilmazsa epizot sonsuza kadar acik kalir ve
+        // cift yonlu karsilastirma sorgusu 'epizot_var_alarm_yok' dondurur.
+        //
+        // Burasi ACIK bir transaction icinde (client + commit/rollback), yani
+        // ikisi birlikte commit olur ya da birlikte geri alinir. Collector'daki
+        // "ayri autocommit" degismezi API icin GECERLI DEGIL ve olmasi da
+        // gerekmiyor: orada golge yazim ana akisi bozmamali diye ayriliyordu,
+        // burada ikisi ayni mantiksal islem.
+        //
+        // state DEGISTIRILMEZ: veritabani takipten cikarildigi icin kapaniyor,
+        // sismenin gectigi dogrulanmadi.
         if (alert_id) {
             await client.query(
                 `update ops.alert
                  set status = 'resolved', resolved_at = now()
                  where alert_id = $1 and status in ('open', 'acknowledged')`,
+                [alert_id]
+            );
+            await client.query(
+                `update ops.alert_episode e
+                 set closed_at = now(),
+                     close_reason = 'superseded',
+                     last_confirmed_at = now()
+                 from ops.alert a
+                 where a.alert_id = $1
+                   and e.alert_key = a.alert_key
+                   and e.closed_at is null`,
                 [alert_id]
             );
         }

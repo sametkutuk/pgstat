@@ -16,7 +16,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 118 |
+| Migrations scanned | 119 |
 | Tables discovered | 100 |
 | Columns discovered | 1248 |
 | Indexes discovered | 137 |
@@ -1934,7 +1934,7 @@ This generated inventory is the bridge between code and the manual project docum
 | Table | Columns | Partitioned | Partition key | First migration | Last migration |
 | --- | --- | --- | --- | --- | --- |
 | ops.alert | 20 | no |  | V006__ops_tables.sql | V073__system_alerts_overhaul.sql |
-| ops.alert_episode | 26 | no |  | V114__alert_episode.sql | V114__alert_episode.sql |
+| ops.alert_episode | 26 | no |  | V114__alert_episode.sql | V115__alert_episode_manual_close.sql |
 | ops.alert_episode_ack | 8 | no |  | V114__alert_episode.sql | V114__alert_episode.sql |
 | ops.audit_log | 10 | no |  | V038__audit_log.sql | V038__audit_log.sql |
 | ops.job_run | 10 | no |  | V006__ops_tables.sql | V006__ops_tables.sql |
@@ -2444,11 +2444,11 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | --- | --- |
 | api/src/routes/adaptiveAlerting.ts | control.alert_code_notification_channel, control.alert_message_template, control.alert_rule, control.alert_snooze, control.baseline_trigger, control.baseline_version, control.database_access_subscription, control.instance_group, control.instance_group_member, control.instance_inventory, control.invalidate_baseline, control.long_query_subscription, control.maintenance_window, control.metric_baseline, control.nightly_snapshot_trigger, control.notification_channel, control.slot_lifecycle_subscription, control.slot_observation_state, control.xid_freeze_subscription, fact.pg_activity_snapshot, fact.pg_database_freeze_snapshot, fact.pg_settings_snapshot, ops.alert |
 | api/src/routes/alertRules.ts | control.alert_message_template, control.alert_rule, control.alert_rule_last_eval, control.alert_rule_notification_channel, control.instance_inventory, ops.alert |
-| api/src/routes/alerts.ts | control.alert_rule, control.collector_command, control.instance_inventory, ops.alert |
+| api/src/routes/alerts.ts | control.alert_rule, control.collector_command, control.instance_inventory, ops.alert, ops.alert_episode |
 | api/src/routes/auditLog.ts | ops.audit_log |
 | api/src/routes/clusters.ts | control.instance_capability, control.instance_inventory, control.instance_state, control.v_cluster_summary, control.v_instance_cluster, ops.alert |
 | api/src/routes/dashboard.ts | control.instance_capability, control.instance_inventory, control.instance_state, dim.database_ref, dim.query_text, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_database_delta, fact.pg_replication_snapshot, fact.pg_slru_snapshot, fact.pg_table_stat_delta, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert, ops.job_run |
-| api/src/routes/databaseCleanup.ts | control.database_action_log, control.instance_inventory, dim.database_ref, ops.alert |
+| api/src/routes/databaseCleanup.ts | control.database_action_log, control.instance_inventory, dim.database_ref, ops.alert, ops.alert_episode |
 | api/src/routes/insights.ts | agg.pg_table_stat_hourly, agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.db_objects_trigger, control.instance_inventory, control.retention_policy, dim.database_ref, dim.query_text, dim.relation_ref, dim.statement_series, fact.pg_archiver_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_settings_snapshot, fact.pg_table_freeze_snapshot, fact.pg_table_stat_delta, fact.pgss_delta |
 | api/src/routes/instances.ts | agg.pg_wal_hourly, agg.pgss_daily, agg.pgss_hourly, control.collector_command, control.database_state, control.instance_capability, control.instance_inventory, control.instance_state, control.retention_policy, control.schedule_profile, control.v_instance_cluster, dim.database_ref, dim.query_text, dim.role_ref, dim.statement_series, fact.pg_activity_snapshot, fact.pg_archiver_snapshot, fact.pg_cluster_delta, fact.pg_database_conflict_snapshot, fact.pg_database_delta, fact.pg_database_freeze_snapshot, fact.pg_index_stat_delta, fact.pg_io_stat_delta, fact.pg_lock_snapshot, fact.pg_progress_analyze_snapshot, fact.pg_progress_basebackup_snapshot, fact.pg_progress_cluster_snapshot, fact.pg_progress_copy_snapshot, fact.pg_progress_create_index_snapshot, fact.pg_progress_snapshot, fact.pg_progress_vacuum_snapshot, fact.pg_recovery_prefetch_snapshot, fact.pg_relation_size_snapshot, fact.pg_replication_slot_snapshot, fact.pg_replication_snapshot, fact.pg_sequence_io_snapshot, fact.pg_sequence_state_snapshot, fact.pg_settings_snapshot, fact.pg_slru_snapshot, fact.pg_subscription_snapshot, fact.pg_table_stat_delta, fact.pg_user_function_snapshot, fact.pg_wal_receiver_snapshot, fact.pg_wal_snapshot, fact.pgss_delta, ops.alert |
 | api/src/routes/jobRuns.ts | control.instance_inventory, ops.job_run, ops.job_run_instance |

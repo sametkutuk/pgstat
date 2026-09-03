@@ -150,7 +150,14 @@ public class AlertEpisodeRepository {
             }
 
             if (STATE_HEALTHY.equals(obs.state())) {
-                close(obs.alertKey(), CLOSE_RESOLVED);
+                // Durum da YAZILIR. Once yalnizca closed_at/close_reason
+                // yaziliyordu ve satirin state'i 'confirmed_breaching' olarak
+                // kaliyordu: kapali bir epizot, kapandigi anda kosulun DOGRU
+                // oldugunu soyluyordu. Kapanma sebebi ile kapanis anindaki
+                // durum ayri iki sey ve ikisi de kaydedilmeli — "cozuldu"
+                // ile "kimlik degisti" ayni close_reason'a sahip olamaz ama
+                // ayni state'e de sahip olmamali.
+                close(obs.alertKey(), CLOSE_RESOLVED, STATE_HEALTHY);
                 return;
             }
 
@@ -174,16 +181,32 @@ public class AlertEpisodeRepository {
      * Zaten kapaliysa veya hic yoksa hicbir sey yapmaz.
      */
     public void close(String alertKey, String reason) {
+        close(alertKey, reason, null);
+    }
+
+    /**
+     * Acik epizodu kapatir ve istege bagli olarak kapanis durumunu yazar.
+     * ASLA ISTISNA FIRLATMAZ.
+     *
+     * @param finalState null ise mevcut durum korunur. Yalnizca kosulun
+     *                   gectigi DOGRULANDIGINDA confirmed_healthy gecilir;
+     *                   kimlik degisimi ve zaman asimi kapanislarinda kosul
+     *                   hakkinda hicbir sey ogrenmedik, o yuzden durum
+     *                   degistirilmez — bunlari "iyilesti" diye kaydetmek,
+     *                   veri yoklugunu saglik kaniti saymak olurdu.
+     */
+    public void close(String alertKey, String reason, String finalState) {
         try {
             if (alertKey == null) return;
             jdbc.update("""
                 update ops.alert_episode
                 set closed_at = now(),
                     close_reason = ?,
+                    state = coalesce(?, state),
                     last_confirmed_at = now()
                 where alert_key = ?
                   and closed_at is null
-                """, reason == null ? CLOSE_RESOLVED : reason, alertKey);
+                """, reason == null ? CLOSE_RESOLVED : reason, finalState, alertKey);
         } catch (Exception e) {
             recordFailure("close alert_key=" + alertKey, e);
         }

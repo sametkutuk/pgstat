@@ -109,6 +109,51 @@ class AlertEpisodeShadowFailureTest {
     }
 
     @Test
+    void aHealthyObservationClosesTheEpisodeAndRecordsTheState() {
+        // Once yalnizca closed_at/close_reason yaziliyordu ve satirin state'i
+        // 'confirmed_breaching' olarak kaliyordu: kapali bir epizot, kapandigi
+        // anda kosulun DOGRU oldugunu soyluyordu (inceleme 2026-09-03).
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AlertEpisodeRepository episodes = new AlertEpisodeRepository(jdbc);
+
+        episodes.observe(new AlertEpisodeRepository.Observation(
+            "rule:1:instance:2", "user_defined_rule", "user_rule", 2L,
+            null, null, null, false,
+            AlertEpisodeRepository.STATE_HEALTHY, "warning", Instant.now()));
+
+        org.mockito.ArgumentCaptor<Object[]> args =
+            org.mockito.ArgumentCaptor.forClass(Object[].class);
+        org.mockito.Mockito.verify(jdbc).update(
+            org.mockito.ArgumentMatchers.contains("update ops.alert_episode"),
+            args.capture());
+
+        // (close_reason, finalState, alertKey)
+        assertThat(args.getValue()).containsExactly(
+            AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.STATE_HEALTHY,
+            "rule:1:instance:2");
+    }
+
+    @Test
+    void anUnverifiedCloseDoesNotClaimTheConditionCleared() {
+        // Zaman asimi ve kimlik degisimi kapanislarinda kosul hakkinda hicbir
+        // sey ogrenmedik. Bunlari 'confirmed_healthy' diye kaydetmek, veri
+        // yoklugunu saglik kaniti saymak olurdu — bu tasarimin onlemeye
+        // calistigi seyin ta kendisi.
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        AlertEpisodeRepository episodes = new AlertEpisodeRepository(jdbc);
+
+        episodes.close("rule:1:instance:2", AlertEpisodeRepository.CLOSE_STALE_TIMEOUT);
+
+        org.mockito.ArgumentCaptor<Object[]> args =
+            org.mockito.ArgumentCaptor.forClass(Object[].class);
+        org.mockito.Mockito.verify(jdbc).update(anyString(), args.capture());
+
+        assertThat(args.getValue()[0]).isEqualTo(AlertEpisodeRepository.CLOSE_STALE_TIMEOUT);
+        assertThat(args.getValue()[1]).isNull();  // state korunur
+    }
+
+    @Test
     void theMainAlertPathSurvivesAFailingEpisodeWrite() {
         // Asil kanit: epizot tarafi tamamen coktugunde bile alert satiri
         // yazilir ve alert_id doner. Alarm uretimi golge yazimin basarisina

@@ -110,11 +110,37 @@ router.post('/evaluate-now', async (_req, res, next) => {
 router.patch('/:id/resolve', async (req, res, next) => {
   try {
     const { id } = req.params;
+    // Alert'i kapatirken ihlal epizodunu da kapat (PGSTAT-P0-048).
+    //
+    // Bu kanca ATLANIRSA epizot sonsuza kadar acik kalir ve cift yonlu
+    // karsilastirma sorgusu 'epizot_var_alarm_yok' dondurur — yani kullanicinin
+    // "Coz" dugmesi, dogrulama kapisini kendi basina kirar. "Kanca yalnizca
+    // AlertRepository ve AlertService" tespiti alarm ACILISI icin dogruydu;
+    // yasam dongusunun KAPANISINDA API de bir uretici.
+    //
+    // Tek ifade icinde CTE ile yapiliyor ki ikisi atomik olsun: alert kapanip
+    // epizot acik kalan bir ara durum olusamaz.
+    //
+    // Epizodun state'i DEGISTIRILMEZ. Bu manuel bir kapatma; kosulun gectigini
+    // kimse dogrulamadi, yalnizca kullanici alarmi kapatti. 'confirmed_healthy'
+    // yazmak, veri yoklugunu saglik kaniti saymak olurdu.
     const result = await pool.query(`
-      update ops.alert
-      set status = 'resolved', resolved_at = now(), last_seen_at = now()
-      where alert_id = $1 and status <> 'resolved'
-      returning *
+      with kapanan as (
+        update ops.alert
+        set status = 'resolved', resolved_at = now(), last_seen_at = now()
+        where alert_id = $1 and status <> 'resolved'
+        returning *
+      ), epizot as (
+        update ops.alert_episode e
+        set closed_at = now(),
+            close_reason = 'manual',
+            last_confirmed_at = now()
+        from kapanan k
+        where e.alert_key = k.alert_key
+          and e.closed_at is null
+        returning e.episode_id
+      )
+      select * from kapanan
     `, [id]);
     if (result.rows.length === 0) {
       res.status(404).json({ error: 'Alert not found or already resolved' });

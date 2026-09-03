@@ -419,7 +419,8 @@ public class AlertRepository {
             """,
             alertKey
         );
-        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
+        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.STATE_HEALTHY);
     }
 
     /**
@@ -461,7 +462,8 @@ public class AlertRepository {
         // alarm zaten resolved'di ve epizot da coktan kapanmis olmali;
         // kosulsuz kapatmak, kapanma damgasini her turda ileri iterdi.
         if (!rows.isEmpty()) {
-            episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
+            episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.STATE_HEALTHY);
         }
         return rows.isEmpty() ? null : rows.get(0);
     }
@@ -493,7 +495,8 @@ public class AlertRepository {
         if (rows.isEmpty()) {
             return; // zaten resolved'di, bildirim yok
         }
-        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED);
+        episodes.close(alertKey, AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.STATE_HEALTHY);
         long alertId = (Long) rows.get(0)[0];
         String severity = (String) rows.get(0)[1];
         Long instancePk = (Long) rows.get(0)[2];

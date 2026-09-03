@@ -116,12 +116,29 @@ Bu iş tek seferde yapılamaz; `ops.alert` 20'den fazla dosyadan okunuyor, `ackn
 `ops.alert_episode` + `ops.alert_episode_ack` oluşturulur ve mevcut alarm akışının
 **yanında** doldurulur. Alarm, bildirim ve UI davranışı **hiç değişmez**.
 
-Kanca noktası **iki sınıf**: `AlertRepository` ve `AlertService`. Sayım doğrulandı —
+**Açılış kancası iki sınıf**: `AlertRepository` ve `AlertService`. Sayım doğrulandı —
 `LongRunningQueryEvaluator`, `SlotLifecycleEvaluator` ve `XidFreezeEvaluator`'ın doğrudan
 SQL'i yoktur, hepsi `AlertRepository` üzerinden geçer. `AlertRuleEvaluator`'ın yedi
 yazması ise alarm açmaz/kapatmaz, açılmış satırın severity'sini yamalar; bunlar
 `AlertRepository.patchSeverity` üzerinden merkezileştirilir ki epizodun severity'si kör
 kalmasın. Kör bilindiği hâlde kurulan bir gölge, kapı olarak kullanılamaz.
+
+**Kapanış kancası collector'la sınırlı değil.** İnceleme bunu yakaladı ve haklıydı: API
+de bir üretici. `api/src/routes/alerts.ts`'teki manuel "Çöz" düğmesi ve
+`api/src/routes/databaseCleanup.ts`'teki takipten çıkarma akışı `ops.alert`'i doğrudan
+kapatıyor. Kancalanmazlarsa epizot sonsuza kadar açık kalır ve **kullanıcının bir düğmeye
+basması doğrulama kapısını kendi başına kırar.** İkisi de kancalandı; `alerts.ts` tek bir
+CTE'li ifadeyle, `databaseCleanup.ts` zaten var olan açık transaction'ının içinde.
+
+Bu kapanışlarda epizodun `state`'i **değiştirilmez**: koşulun geçtiğini kimse doğrulamadı,
+yalnızca kullanıcı kapattı. `close_reason` sırasıyla `manual` ve `superseded` (V115).
+
+**Kapsam, ilk plandan geniş.** Başlangıçta "Adım 1 yalnız kullanıcı kuralları için gölge
+yazım" denmişti; merkezî kanca fiilen **bütün üreticileri** yazıyor. Bu bilinçli bir
+değişiklik: kısmi bir gölge, `ops.alert` ile 1:1 eşlenemez ve o zaman çift yönlü
+karşılaştırma sorgusu — yani tek gerçek doğrulama aracımız — anlamsızlaşır. Ayrıca
+repository katmanında tek kanca, beş evaluator'a ayrı ayrı dokunmaktan **daha küçük** bir
+değişiklik yüzeyi.
 
 ### Adım 2 — `stale_statistics` epizoda taşınır
 
@@ -168,10 +185,20 @@ INSERT'inin transaction'ını abort edemez.
 yazım sessizce o transaction'a katılır ve incelemenin tarif ettiği senaryo gerçek olur.
 Bu yüzden garanti **yazılı bir değişmez** hâline getirilir ve **test edilir**:
 
-> **Değişmez:** Alarm yazma yolunda hiçbir metot bir transaction'a katılmaz.
-> `ops.alert` ve `ops.alert_episode` yazımları ayrı autocommit ifadeleridir.
+> **Değişmez:** **Collector'un** alarm yazma yolunda hiçbir metot bir transaction'a
+> katılmaz. `ops.alert` ve `ops.alert_episode` yazımları ayrı autocommit ifadeleridir.
 
-Bunu bozacak bir `@Transactional` eklenirse `AlertPathTransactionGuardTest` kırılır.
+Bunu bozacak bir `@Transactional` eklenirse `AlertPathTransactionGuardTest` kırılır. Test
+doğrudan yazanların yanı sıra **dolaylı çağıranları** da tarar — `SystemHealthEvaluator`,
+`JobOrchestrator`, `PurgeEvaluator` — çünkü transaction çağıran taraftan gelir:
+`runAlerts()` üzerine konan bir `@Transactional`, altındaki bütün yazmaları içine alırdı.
+İlk sürüm yalnızca doğrudan yazanları tarıyordu ve koruduğunu iddia ettiği değişmezi tam
+korumuyordu.
+
+**Kapsam yalnızca collector.** API meşru olarak açık transaction kullanıyor ve kullanması
+da doğru: orada alarm ve epizot kapanışı aynı mantıksal işlem, birlikte commit olmalı.
+Collector'da ayrılık gerekiyor çünkü epizot gölge bir yazım ve ana akışı bozamamalı. İlk
+sürümde bu ayrım yazılmamış, değişmez olduğundan geniş ifade edilmişti.
 
 Ek olarak gölge yazım:
 
@@ -179,6 +206,13 @@ Ek olarak gölge yazım:
 - başarısızlıkta **WARN + stack trace** üretir — `DEBUG`'da yutulmaz
 - bir **hata sayacı** artırır (`shadowWriteFailures`), son hata zamanı ve mesajıyla
   birlikte okunabilir; sessizce kaybolmaz
+- sayacı **üretimde görünür** kılar: `SystemHealthEvaluator` her turda
+  `control.health_check_state`'e `alert_episode_shadow` satırını yazar. İlk sürümde sayaç
+  yalnızca bellekteydi ve yalnızca testlerden okunuyordu, yani gerçek deploy kapısı
+  "logda WARN görmedim"e düşüyordu. **Görünmeyen bir sayaç sayaç değildir.** Telegram
+  alarmı bilinçli olarak üretilmiyor: gölge yazım tanımı gereği hiçbir şeyi etkilemiyor
+  ve zararsız bir şey için bildirim göndermek, tam da bu maddede düzelttiğimiz alarm
+  kalitesi sorunu olurdu
 
 Bu, bu haftanın dersinin iki yüzünü birden karşılar: sessiz `catch` işi gizler, ama
 gizlenmemiş bir istisna da alarm üretimini kesebilir. İkisi de kabul edilemez.
@@ -222,16 +256,39 @@ bırakılan bir temizlik, büyüyen bir tablo demektir.
 Deploy kapısı. Tek yönlü bir sorgu ("her alarmın epizodu var mı") eksik yazımı yakalar
 ama fazla yazımı kaçırır; epizodun kapanmadığı durumu görmez.
 
+**İki yönün kapsamı aynı değil** — ilk sürümde aynıydı ve yanlıştı. V114 geriye dönük
+doldurma yapmıyor, yani deploy anında açık olan ve o günden beri **yeniden
+değerlendirilmemiş** bir alarm (event tipi alarmlar aylarca öyle kalabilir) doğal olarak
+epizotsuzdur. Bu bir kusur değil, tasarımın kendisi; A yönünü tüm açık alarmlara
+uygulamak, kapıyı ilk gün kırmızı yakıp gerçek kusurları gürültüde boğardı.
+
+- **A yönü** yalnızca gölge yazım başladıktan **sonra yeniden görülmüş** alarmlara
+  uygulanır (`last_seen_at`, yani en son tetiklendiği an).
+- **B yönü** tüm açık epizotlara uygulanabilir — çünkü her epizot tanımı gereği gölge
+  yazımdan sonra oluştu.
+
+Eşik olarak ilk epizodun yazıldığı an kullanılıyor; ayrı bir "deploy zamanı" alanı
+tutmaya gerek yok. Beş dakikalık pay, aynı değerlendirme turundaki satırların saniye
+farklarını tolere etmek için.
+
 ```sql
--- A) Acik alarmi olup epizodu olmayan  (golge yazim eksik)
-select 'alarm_var_epizot_yok' as sorun, a.alert_key, a.alert_source, a.first_seen_at as an
+with baslangic as (
+  -- Golge yazimin fiilen basladigi an. Tablo bossa golge HIC yazmamis demektir;
+  -- bu, sifir satirla sessizce gecilecek bir durum degil (asagida ayrica kontrol).
+  select min(created_at) as t from ops.alert_episode
+)
+-- A) Golge basladiktan SONRA yeniden gorulmus, ama epizodu olmayan acik alarm
+select 'alarm_var_epizot_yok' as sorun, a.alert_key, a.alert_source, a.last_seen_at as an
   from ops.alert a
+  cross join baslangic b
   left join ops.alert_episode e
     on e.alert_key = a.alert_key and e.closed_at is null
  where a.status in ('open', 'acknowledged')
    and e.episode_id is null
+   and b.t is not null
+   and a.last_seen_at >= b.t - interval '5 minutes'
 union all
--- B) Acik epizodu olup acik alarmi olmayan  (epizot kapanmamis)
+-- B) Acik epizodu olup acik alarmi olmayan  (epizot kapanmamis) — kapsam sinirsiz
 select 'epizot_var_alarm_yok', e.alert_key, e.alert_source, e.opened_at
   from ops.alert_episode e
   left join ops.alert a
@@ -244,14 +301,26 @@ order by 1, 4;
 Beklenen: **sıfır satır.** Sıfır değilse gölge yazım güvenilir değildir ve 2. adım
 başlatılmaz.
 
-Yardımcı sağlık sorgusu:
+**Sıfır satır tek başına yetmez.** Üç şey birlikte sağlanmalı, yoksa "hiç yazmadı" ile
+"doğru yazdı" aynı görünür:
 
 ```sql
+-- 1) Golge gercekten yazdi mi?
+select count(*) as epizot_sayisi, min(created_at) as ilk, max(created_at) as son
+  from ops.alert_episode;
+
+-- 2) Golge yazim hatasi var mi? ('ok' olmali)
+select check_name, last_status, detail_message, last_run_at
+  from control.health_check_state
+ where check_name = 'alert_episode_shadow';
+
+-- 3) Durum dagilimi makul mu?
 select state, identity_status, count(*), min(opened_at), max(last_confirmed_at)
   from ops.alert_episode
  where closed_at is null
  group by 1, 2 order by 3 desc;
 ```
+
 
 ## 10. Doğrulama (2026-09-03)
 
@@ -278,7 +347,24 @@ V114 uygulanır, repository'nin **gerçek** upsert ifadesi `PREPARE`/`EXECUTE` i
 sorgu, sentetik veride kasten bırakılan "epizodu var, alarmı yok" durumunu yakaladı —
 yani B yönü çalışıyor, tek yönlü bir sorgunun kaçıracağı hâli görüyor.
 
-Birim testleri 105 → **112**, hepsi geçiyor.
+### İnceleme sonrası düzeltmeler (aynı gün)
+
+Dış inceleme altı kusur buldu, altısı da gerçekti. Düzeltmeler yine gerçek bir PG17
+konteynerinde doğrulandı:
+
+| Beklenen | Sonuç |
+|---|---|
+| `manual` kapanma sebebi kabul ediliyor (V115), durum **değişmiyor** | ✓ |
+| `confirmed_healthy` kapanışta gerçekten **yazılıyor** | ✓ |
+| Doğrulanmamış kapanış (`stale_timeout`) durumu **koruyor** | ✓ `confirmed_breaching` kaldı |
+| `databaseCleanup` kapanışı `superseded` yazıyor | ✓ |
+| **Deploy öncesi, yeniden görülmemiş alarm yanlış uyuşmazlık üretmiyor** | ✓ 30 gün önceki alarm sustu |
+| **Gerçek eksik yazım hâlâ yakalanıyor** | ✓ yeniden görülmüş epizotsuz alarm bildirildi |
+
+Son iki satır birlikte önemli: kapsam daraltması gürültüyü kesiyor ama sorgunun asıl
+işini körleştirmiyor.
+
+Birim testleri 105 → **114**, hepsi geçiyor. API `tsc --noEmit` temiz.
 
 ## 11. Bilinen sınırlar
 
