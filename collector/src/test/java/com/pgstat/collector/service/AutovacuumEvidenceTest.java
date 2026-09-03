@@ -493,7 +493,44 @@ class AutovacuumEvidenceTest {
         assertThat(note).contains("Satır sayısı tahmindir");
     }
 
-    private static java.util.Map<String, Object> staleRow(String db, String schema, String table) {
+        // ---------------------------------------------------------------
+    // Etkin severity: oran ve mutlak bacak birlikte (PGSTAT-P0-048 AC4)
+    // ---------------------------------------------------------------
+
+    @Test
+    void theAbsoluteLegCanRaiseAWarningWhenTheRatioSaysNothing() {
+        // Eskiden severity YALNIZ orandan hesaplaniyordu: mutlak esikten gelen
+        // dusuk oranli kayit severity=null alip atiliyordu ve mutlak bacak
+        // fiilen calismiyordu (dogrulandi 2026-09-02). Buyuk bir tabloda dusuk
+        // oran ama cok olu satir tam da B bacaginin var olma sebebi.
+        assertThat(AlertRuleEvaluator.maxSeverity(null, "warning")).isEqualTo("warning");
+    }
+
+    @Test
+    void theMoreSeriousOfTheTwoWins() {
+        assertThat(AlertRuleEvaluator.maxSeverity("warning", "critical")).isEqualTo("critical");
+        assertThat(AlertRuleEvaluator.maxSeverity("critical", "warning")).isEqualTo("critical");
+        assertThat(AlertRuleEvaluator.maxSeverity("critical", null)).isEqualTo("critical");
+    }
+
+    @Test
+    void neitherLegFiringMeansNoAlert() {
+        // Ikisi de sessizse kayit uretilmez — "bir sebep bulduk" diye
+        // severity uydurulmaz.
+        assertThat(AlertRuleEvaluator.maxSeverity(null, null)).isNull();
+    }
+
+    @Test
+    void theAbsoluteLegNeverProducesCriticalOnItsOwn() {
+        // Mutlak olu satir sayisi icin CRITICAL esigi secmek, evrensel bir sabit
+        // uydurmak olurdu: etkin autovacuum esigi 50 + 0.2 * canli satir, yani
+        // 250 bin satirda ~50 bin, 30 milyon satirda ~6 milyon olu satir demek.
+        // SQL bu yuzden abs_severity icin yalnizca 'warning' uretir; CRITICAL
+        // ya orandan gelir ya da esik asimi kanitindan.
+        assertThat(AlertRuleEvaluator.maxSeverity(null, "warning")).isNotEqualTo("critical");
+    }
+
+private static java.util.Map<String, Object> staleRow(String db, String schema, String table) {
         java.util.Map<String, Object> r = new java.util.HashMap<>();
         r.put("datname", db);
         r.put("schemaname", schema);

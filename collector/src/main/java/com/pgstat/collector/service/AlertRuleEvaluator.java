@@ -750,7 +750,16 @@ public class AlertRuleEvaluator {
                 // Instance ozeti: en ciddi kayit. Alarm ACILDIKTAN sonra
                 // izlenir, cunku cooldown yuzunden atlanan bir kayit
                 // instance'i alarmli gostermemeli.
-                if ("critical".equals(severity) || worstSeverity == null) {
+                // Gercekten daha kotuyse degistir. Kayitlar wasted_bytes sirasiyla
+                // geliyor, yani ilk critical en buyuk israfa sahip olan; kosulsuz
+                // ezmek SON critical'i kazandirir ve last_value yanlis adayi
+                // gosterirdi. Severity yukselmesi ya da ayni severity icinde daha
+                // yuksek oran araniyor.
+                boolean escalates = "critical".equals(severity)
+                    && !"critical".equals(worstSeverity);
+                boolean higherAtSameSeverity = severity.equals(worstSeverity)
+                    && (worstVal == null || ratio.compareTo(worstVal) > 0);
+                if (worstSeverity == null || escalates || higherAtSameSeverity) {
                     worstSeverity = severity;
                     worstVal = ratio;
                 }
@@ -2954,7 +2963,13 @@ public class AlertRuleEvaluator {
             for (Map<String, Object> record : exceeding) {
                 String recordKey = recordAlertKey(ruleId, instancePk, record, metricType);
                 BigDecimal currentVal = toBDSafe(record.get("current_val"));
-                String severity = determineSeverity(currentVal, operator, warningThreshold, criticalThreshold);
+                // ETKIN SEVERITY = max(oran, mutlak). Kayit yalnizca mutlak
+                // bacaktan geldiyse orani esigin altinda olabilir; eskiden o
+                // durumda severity null olup kayit atiliyordu ve mutlak bacak
+                // fiilen calismiyordu (PGSTAT-P0-048 AC4).
+                String severity = maxSeverity(
+                    determineSeverity(currentVal, operator, warningThreshold, criticalThreshold),
+                    (String) record.get("abs_severity"));
                 String prevSeverity = alertRepo.openSeverity(recordKey);
                 if (worstVal == null) worstVal = currentVal;
 
@@ -3923,7 +3938,20 @@ public class AlertRuleEvaluator {
     // satirlik esik yerine cok daha kucuk bir min-rows (Bacak A) + satir
     // sayisindan tamamen bagimsiz mutlak esik (Bacak B) birlikte kullanilir.
     private static final long DEFAULT_BLOAT_MIN_ROWS = 100;
-    private static final long DEFAULT_BLOAT_ABS_DEAD_TUP = 500;
+    /**
+     * Mutlak olu satir bacaginin (B) esigi — orandan bagimsiz.
+     *
+     * 500'du ve her olcekte gurultu uretiyordu: 715 satirlik dim.role_ref 555
+     * olu satirla tetikliyordu, ki bu birkac yuz KB eder (musteri itirazi
+     * 2026-09-02, pgstat kendi kontrol tablolari CRITICAL veriyordu).
+     *
+     * 50.000 GECICI bir gurultu filtresi, evrensel bir esik DEGIL. Anlamli
+     * referans etkin autovacuum esigidir: 50 + 0.2 * canli satir, yani 250 bin
+     * satirda ~50 bin, 30 milyon satirda ~6 milyon. Nihai deger 2-4 haftalik
+     * fleet backtest'iyle secilecek (PGSTAT-P0-048 AC7); o zamana kadar bu sabit
+     * yalnizca gurultuyu kesiyor.
+     */
+    private static final long DEFAULT_BLOAT_ABS_DEAD_TUP = 50_000;
     private static final int DEFAULT_BLOAT_VACUUM_INEFFECTIVE_COUNT = 20;
 
     /**
@@ -3956,6 +3984,24 @@ public class AlertRuleEvaluator {
             "       100.0 * t.n_dead_tup_estimate::numeric" +
             "         / nullif(coalesce(t.reltuples, t.n_live_tup_estimate) + t.n_dead_tup_estimate, 0) as current_val," +
             "       t.n_dead_tup_estimate as dead_tup," +
+            // MUTLAK BACAK (B) KENDI SEVERITY'SINI TASIR.
+            //
+            // Onceden severity YALNIZCA orandan hesaplaniyordu. SQL mutlak
+            // esikten bir kayit dondurdugunde, orani esigin altinda kalan o
+            // kayit severity=null aliyor ve ATILIYORDU — ustelik giderken
+            // LIMIT'i doldurup gercek oran adaylarini disari itebiliyordu.
+            // Yani B bacagi bagimsiz bir tetikleyici degildi (dogrulandi
+            // 2026-09-02).
+            //
+            // B YALNIZCA WARNING uretir, CRITICAL uretmez. Mutlak olu satir
+            // sayisi icin bir CRITICAL esigi secmek, dis incelemenin hakli
+            // olarak reddettigi "evrensel sabit" hatasinin aynisi olurdu:
+            // etkin autovacuum esigi 50 + 0.2 * canli satir, yani 250 bin
+            // satirda ~50 bin, 30 milyon satirda ~6 milyon olu satir demek.
+            // CRITICAL ya oran yolundan gelir ya da esik asimi kanitindan
+            // (materiality kapisi, PGSTAT-P0-048 AC7).
+            "       case when t.n_dead_tup_estimate >= ? then 'warning' end as abs_severity," +
+            "       case when t.n_dead_tup_estimate >= ? then 'absolute' end as abs_trigger," +
             "       coalesce(t.reltuples, t.n_live_tup_estimate) as live_tup," +
             "       t.reltuples, t.n_live_tup_estimate as stat_live_tup, dbr.datname," +
             "       (t.autovacuum_count_sum >= ? and t.n_dead_tup_estimate >= ?) as vacuum_ineffective," +
@@ -4023,7 +4069,10 @@ public class AlertRuleEvaluator {
             "    and 100.0 * t.n_dead_tup_estimate::numeric" +
             "        / nullif(coalesce(t.reltuples, t.n_live_tup_estimate) + t.n_dead_tup_estimate, 0) " + op + " ?" +
             "  ) or (" +
-            // Bacak B: mutlak dead-tuple sayisi, satir sayisindan bagimsiz
+            // Bacak B: mutlak olu satir sayisi, orandan bagimsiz. Buraya CANLI
+            // SATIR KAPISI KONMAZ — toplu DELETE sonrasi az canli satir ama cok
+            // olu satir ve buyuk heap tam da B bacaginin var olma sebebi. Kapi
+            // gerekiyorsa FIZIKSEL BOYUT olmali (PGSTAT-P0-048 AC7).
             "    t.n_dead_tup_estimate >= ?" +
             "  )" +
             // Siralama MUTLAK dead_tup'a gore, current_val (oran) DEGIL —
@@ -4034,6 +4083,7 @@ public class AlertRuleEvaluator {
             // yuzdeyle degil — bu yuzden en cok etkiye sahip tablo alert
             // mesajinda gorunmeliydi ama gorunmedi.
             "  order by dead_tup desc nulls last limit " + (PER_RECORD_QUERY_LIMIT + 1),
+            absDeadTup, absDeadTup,
             vacuumIneffectiveCount, absDeadTup,
             instancePk, windowMinutes + " minutes",
             minRows, threshold,
@@ -6275,6 +6325,19 @@ public class AlertRuleEvaluator {
             .map(v -> v instanceof BigDecimal bd ? bd : new BigDecimal(v.toString()))
             .findFirst()
             .orElse(null);
+    }
+
+    /**
+     * Iki severity'nin daha ciddisi; ikisi de null ise null.
+     *
+     * Bir kaydin birden fazla sebeple alarm vermesi mumkun (oran esigi ve
+     * mutlak olu satir sayisi). En ciddi olan kazanir; birini digerinin ustune
+     * yazmak, kaydin neden secildigini gormezden gelmek olurdu.
+     */
+    static String maxSeverity(String a, String b) {
+        if ("critical".equals(a) || "critical".equals(b)) return "critical";
+        if ("warning".equals(a) || "warning".equals(b)) return "warning";
+        return null;
     }
 
     private String determineSeverity(BigDecimal value, String op,
