@@ -14,9 +14,11 @@
 #
 # Ilki uc durum bile degil: PG14 varsayilan olarak pgss 1.9 ile gelir.
 #
-# KOLON SINIRLARI DOKUMANTASYONDAN KOPYALANMADI. pg_stat_statements view'inin
-# kolonlari 1.4'ten 1.11'e kadar gercek PostgreSQL'de sayildi. 1.12 (PG18)
-# OLCULMEDI ve verified: false ile isaretlendi.
+# KOLON SINIRLARI DOKUMANTASYONDAN KOPYALANMADI. pg_stat_statements view inin
+# kolonlari 1.4 ten 1.12 ye kadar gercek PostgreSQL de sayildi. 1.12 sinirlari
+# postgres:18.6 uzerinde olculdu (2026-09-14): 1.11 e gore TAM OLARAK uc kolon
+# ekleniyor - parallel_workers_launched, parallel_workers_to_launch,
+# wal_buffers_full - ve hicbir sey kaldirilmiyor.
 #
 # KAPSAM AYRIMI
 # -------------
@@ -32,7 +34,7 @@ telemetry_scope: instance
 access_scope: database
 discovery_strategy: preferred_database_then_scan
 measured_on: "2026-09-14"
-measured_against: "postgres:17 (pgss 1.4-1.11)"
+measured_against: "postgres:17 (pgss 1.4-1.11), postgres:18.6 (pgss 1.11-1.12)"
 
 capabilities:
 
@@ -169,13 +171,13 @@ capabilities:
       - { target: wal_records, type: bigint,  default: "0", sources: [ { name: wal_records, min: "1.8" } ] }
       - { target: wal_fpi,     type: bigint,  default: "0", sources: [ { name: wal_fpi,     min: "1.8" } ] }
       - { target: wal_bytes,   type: numeric, default: "0", sources: [ { name: wal_bytes,   min: "1.8" } ] }
-      # OLCULMEDI: 1.12 sinirini postgres:17 tasimiyor.
+            # OLCULDU 2026-09-14, postgres:18.6: 1.12, 1.11 e gore tam olarak uc kolon
+      # ekliyor (parallel_workers_launched, parallel_workers_to_launch,
+      # wal_buffers_full) ve hicbir sey kaldirmiyor.
       #
-      # Uretimde de ayirt edilemedi (2026-09-14): PG18 dahil her satirda sifir.
-      # Iki acikama da mumkun — kolon 1.12'de yok ve sessizce sifirlaniyor, ya
-      # da kolon var ama bu is yukunde WAL buffer hic dolmadi. Sifir bir deger,
-      # yoklugun kaniti degil.
-      - { target: wal_buffers_full, type: bigint, default: "0", verified: false, sources: [ { name: wal_buffers_full, min: "1.12" } ] }
+      # Uretim verisi tek basina yetmiyordu: PG18 dahil her satirda sifirdi ve
+      # sifir, yoklugun kaniti degil. Sinir ancak kolon listesi sayilarak kapandi.
+      - { target: wal_buffers_full, type: bigint, default: "0", sources: [ { name: wal_buffers_full, min: "1.12" } ] }
 
   - key: statements.jit
     title: JIT derleme
@@ -206,19 +208,14 @@ capabilities:
   - key: statements.parallel
     title: Paralel isci sayaclari
     min_pgss: "1.12"
-    verified: false
-    # OLCULMEDI — postgres:17 en fazla 1.11 tasiyor. Sinir dokumantasyondan
-    # alindi ve PG18 konteyneriyle dogrulanmali.
+    # OLCULDU 2026-09-14, postgres:18.6 uzerinde kolon listesi sayilarak.
     #
-    # URETIM KANITI VAR AMA SINIRI KAPATMIYOR (2026-09-14, deploy sonrasi):
-    # PG18 instance'larinda son 24 saatte parallel_workers_to_launch_delta ve
-    # parallel_workers_launched_delta ucer satirda sifirdan farkli geldi; PG17'de
-    # 36.815 satirin hepsi sifir. Yani iki kolon da gercekten okunuyor.
-    #
-    # Buna ragmen verified: false KALIYOR. Kanit "PG18 instance'larinda bu
-    # kolonlar var" diyor, "pgss 1.12'de var" demiyor — surumu pg_major'dan
-    # cikarmis oluruz ki bu gorevin duzeltmek icin var oldugu karistirmanin ta
-    # kendisi. extversion merkezi kayda yazilana kadar (AC4) sinir kapanamaz.
+    # Once verified: false idi ve uretim verisi tek basina sinirlamiyordu:
+    # PG18 satirlarinda deger sifirdan farkli geliyordu ama bu "PG18
+    # instance larinda var" demekti, "pgss 1.12 de var" demek degil - surumu
+    # pg_major dan cikarmak, bu isin kaldirdigi karistirmanin ta kendisi.
+    # extversion merkezi kayda yazildiktan (V119) ve 1.12 kolon listesi
+    # sayildiktan sonra sinir kapandi.
     columns:
-      - { target: parallel_workers_to_launch, type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_to_launch, min: "1.12" } ] }
-      - { target: parallel_workers_launched,  type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_launched,  min: "1.12" } ] }
+      - { target: parallel_workers_to_launch, type: bigint, default: "0", sources: [ { name: parallel_workers_to_launch, min: "1.12" } ] }
+      - { target: parallel_workers_launched,  type: bigint, default: "0", sources: [ { name: parallel_workers_launched,  min: "1.12" } ] }

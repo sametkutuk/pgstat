@@ -170,13 +170,29 @@ class PgssCapabilityCatalogTest {
     }
 
     @Test
-    void unverifiedBoundariesAreAlwaysReadSafely() {
-        // 1.12 (PG18) sinirlari OLCULMEDI. Dogrudan referans, sinir yanlissa
-        // sorgunun TAMAMINI dusurur; to_jsonb ile okumak yalnizca o kolonu
-        // bosaltir. Emin olmadigimiz yerde tahmin degil, guvenli yol.
+    void theOneTwelveBoundaryIsMeasuredNotGuessed() {
+        // OLCULDU 2026-09-14, postgres:18.6: 1.12, 1.11'e gore TAM OLARAK uc
+        // kolon ekliyor ve hicbir sey kaldirmiyor.
+        //
+        // Once verified: false idi ve to_jsonb ile guvenli okunuyordu. Uretim
+        // verisi tek basina sinirlamiyordu: PG18 satirlarinda deger sifirdan
+        // farkli geliyordu ama bu "PG18 instance'larinda var" demekti, "pgss
+        // 1.12'de var" demek degil — surumu pg_major'dan cikarmak bu isin
+        // kaldirdigi karistirmanin ta kendisi. Sinir, extversion merkezi kayda
+        // yazildiktan (V119) ve kolon listesi sayildiktan sonra kapandi.
+        String v11 = catalog.buildSelectList(PgssVersion.of("1.11"));
         String v12 = catalog.buildSelectList(PgssVersion.of("1.12"));
-        assertThat(v12).contains("(j->>'parallel_workers_launched')")
-                       .contains("(j->>'wal_buffers_full')");
+
+        for (String col : new String[]{
+                "parallel_workers_to_launch", "parallel_workers_launched", "wal_buffers_full"}) {
+            assertThat(lineFor(v11, "as " + col))
+                .as(col + " 1.11'de yok")
+                .doesNotContain("(j->>")
+                .contains("0::");
+            assertThat(lineFor(v12, "as " + col))
+                .as(col + " 1.12'de dogrudan okunur")
+                .isEqualTo("  " + col + " as " + col);
+        }
     }
 
     @Test

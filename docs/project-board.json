@@ -4546,7 +4546,7 @@
       "priority": "P1",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "AC4 ve AC6 bitti (extversion + tipli durum kaniti, V119). Deploy sonrasi pgss_status dagilimi kontrol edilmeli. Kalan: AC5 veritabanlari arasi pgss kesfi, AC7 test matrisi, AC11 katalog fail-fast, AC12 to_jsonb maliyeti, AC13 PG18 olcumu, AC14 catalog_version kaniti.",
+      "next_action": "AC4/AC6/AC13 bitti ve uretimde dogrulandi. Kalan: AC5 veritabanlari arasi pgss kesfi, AC7 test matrisi, AC11 katalog fail-fast dogrulamasi, AC12 to_jsonb maliyeti, AC14 catalog_version kaniti.",
       "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
       "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
       "requirements": [
@@ -4620,7 +4620,7 @@
         {
           "id": "AC13",
           "text": "PG18 / pgss 1.12 sinirlari gercek DB de olculsun; verified:false kaldirilsin.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC14",
@@ -4663,7 +4663,10 @@
         "AC4/AC6 uygulandi (V119) ve UC TUR incelemeden gecti. Birinci tur bes tasarim sorusu: pgss_checked_at hatada da yazilir (yoksa \"hic bakilmadi\" ile \"bakildi, reddedildi\" ayirt edilemez); has_pg_stat_statements literal anlaminda kalir ve kullanilabilirlik karari tipli statuye tasinir (BootstrapHandler:121 ve InstanceDetail.tsx dogrulandi - true birakmak instance i baselining e alip statements isini her turda patlatirdi); ayri pgss_last_error_text EKLENMEDI cunku tipli status + dbname zaten tasiyor ve ikinci bir serbest metin alani, bugun yakalanan \"hicbir sey temizlemiyor\" kusurunu cogaltirdi.",
         "Probe view yerine collector un gercekten calistirdigi fonksiyonu test ediyor - eskisi view i sorguluyordu, farkli nesne ve farkli yetki, yani probe gecerken toplama patlayabilirdi. Gercek PostgreSQL 17 de olculdu: EXECUTE geri alindiginda probe tam olarak SQLSTATE 42501 uretiyor; yetki varken plan \"Function Scan on pg_stat_statements (never executed)\" diyor, yani yetki executor init te kontrol ediliyor ve SRF hic cagrilmiyor - probe sifir maliyetli. Hatalar siniflandirildi: 42501 permission_denied, 08 sinifi gercek baglanti hatasi olarak yeniden firlatilir, digerleri (orn. 42883) collection_failed.",
         "Backfill in birakigi null pgss_checked_at, bir sonraki cluster cevriminde yeniden kesfe yol aciyor - yoksa version_unknown nadiren yeniden kesfedilen instance larda aylarca kalirdi (bazilarinda last_discovered_at 2026-05-16 idi). Bu yeniden kesif gercek surum degisikliginden AYRI tutuldu: ben yalnizca yaniltici LOG u yakalamistim, incelemede sahte INSTANCE_PG_VERSION_CHANGED alert i uretildigi de bulundu - log kimseyi rahatsiz etmez, sahte alert kullaniciya gider. Ikisi de duzeltildi.",
-        "Yedi durumdan yalnizca besi bu dilimde uretiliyor (unsupported ve version_incompatible sonraki uyumluluk dilimlerine ayrildi) ve bu GIZLENMEDI, migration yorumuna yazildi - kisit yedi deger kabul ederken kod dordunu uretirse durum modeli tamammis gibi gorunur. pg_read_all_stats eksikligi bilerek pgss_status e katilmadi: o izin olmadan sayisal telemetri toplanmaya devam eder, yalnizca sorgu metni kapsami eksilir; calisan bir seyi kullanilamaz gostermek yanlis olurdu. Ayri bir statements.query_text yetenegi olarak kaydedildi."
+        "Yedi durumdan yalnizca besi bu dilimde uretiliyor (unsupported ve version_incompatible sonraki uyumluluk dilimlerine ayrildi) ve bu GIZLENMEDI, migration yorumuna yazildi - kisit yedi deger kabul ederken kod dordunu uretirse durum modeli tamammis gibi gorunur. pg_read_all_stats eksikligi bilerek pgss_status e katilmadi: o izin olmadan sayisal telemetri toplanmaya devam eder, yalnizca sorgu metni kapsami eksilir; calisan bir seyi kullanilamaz gostermek yanlis olurdu. Ayri bir statements.query_text yetenegi olarak kaydedildi.",
+        "V119 deploy edildi 2026-09-14 15:15 ve uretimde dogrulandi: backfill once 25/25 instance i version_unknown + bos pgss_checked_at birakti, bir sonraki cluster cevriminde 14 saniye icinde hepsi yeniden kesfedildi ve 25/25 available oldu. Tek bir permission_denied veya collection_failed cikmadi.",
+        "Bu isin asil getirisi ilk kez kullanildi: hangi instance ta hangi pgss surumu var, artik varsayilmadan goruluyor. PG12->1.7, PG13->1.8, PG15->1.10, PG16->1.10, PG17->1.11, PG18->1.12. Fleet te GERI KALMIS TEK BIR EXTENSION YOK - her instance in pgss i sunucusunun varsayilaniyla eslesiyor. Kirilmanin olmamasinin sebebi buydu ve bunu bugune kadar variyorduk, simdi okunmus degerle biliyoruz.",
+        "AC13 kapandi: pgss 1.12 sinirlari postgres:18.6 uzerinde olculdu. 1.12, 1.11 e gore TAM OLARAK uc kolon ekliyor (parallel_workers_launched, parallel_workers_to_launch, wal_buffers_full) ve hicbir sey kaldirmiyor - yani katalogdaki min 1.12 sinirlari dogru. wal_buffers_full u uretim verisi kapatamiyordu cunku PG18 dahil her yerde sifirdi ve sifir, yoklugun kaniti degil; ancak kolon listesi sayilarak kapandi. Katalogda artik verified: false alan YOK. Uretilen 1.12 projection i gercek PG18.6 da hatasiz kosuyor ve uc kolonu dogrudan okuyor."
       ]
     }
   ]
