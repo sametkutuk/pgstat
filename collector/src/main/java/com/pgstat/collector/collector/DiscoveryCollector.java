@@ -13,6 +13,7 @@ import com.pgstat.collector.service.SecretResolver;
 import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
 import com.pgstat.collector.sql.SourceQueries;
+import com.pgstat.collector.telemetry.PgssCapabilityCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -53,6 +54,7 @@ public class DiscoveryCollector {
     private final StateRepository stateRepo;
     private final DimensionRepository dimensionRepo;
     private final PgStatStatementsExtensionResolver pgssResolver;
+    private final PgssCapabilityCatalog pgssCatalog;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final AlertService alertService;
 
@@ -62,6 +64,7 @@ public class DiscoveryCollector {
                               StateRepository stateRepo,
                               DimensionRepository dimensionRepo,
                               PgStatStatementsExtensionResolver pgssResolver,
+                              PgssCapabilityCatalog pgssCatalog,
                               org.springframework.jdbc.core.JdbcTemplate jdbc,
                               AlertService alertService) {
         this.connectionFactory = connectionFactory;
@@ -70,6 +73,7 @@ public class DiscoveryCollector {
         this.stateRepo = stateRepo;
         this.dimensionRepo = dimensionRepo;
         this.pgssResolver = pgssResolver;
+        this.pgssCatalog = pgssCatalog;
         this.jdbc = jdbc;
         this.alertService = alertService;
     }
@@ -97,17 +101,28 @@ public class DiscoveryCollector {
             }
 
             Integer recordedServerVersionNum = capabilityRepo.findServerVersionNum(instance.instancePk());
-            if (recordedServerVersionNum != null && recordedServerVersionNum == liveServerVersionNum) {
+            OffsetDateTime pgssCheckedAt = capabilityRepo.findPgssCheckedAt(instance.instancePk());
+            boolean versionChanged = recordedServerVersionNum == null
+                    || recordedServerVersionNum != liveServerVersionNum;
+            if (!versionChanged
+                    && pgssCheckedAt != null) {
                 return;
             }
 
             int oldPgMajor = recordedServerVersionNum != null
                     ? SqlFamilyResolver.extractPgMajor(recordedServerVersionNum) : -1;
             int newPgMajor = SqlFamilyResolver.extractPgMajor(liveServerVersionNum);
-            log.info("PG surum degisikligi tespit edildi: {} — PG{} -> PG{} ({} -> {}), yeniden kesfediliyor",
-                    instance.instanceId(), oldPgMajor, newPgMajor, recordedServerVersionNum, liveServerVersionNum);
+            if (versionChanged) {
+                log.info("PG surum degisikligi tespit edildi: {} — PG{} -> PG{} ({} -> {}), yeniden kesfediliyor",
+                        instance.instanceId(), oldPgMajor, newPgMajor, recordedServerVersionNum, liveServerVersionNum);
+            } else {
+                log.info("pgss kesif kaniti eksik: {} — PG{} degismedi, yeniden kesfediliyor",
+                        instance.instanceId(), newPgMajor);
+            }
 
             discover(instance);
+
+            if (!versionChanged) return;
 
             // Bu bir kalici sorun degil, tek seferlik bir bilgilendirme —
             // raise hemen ardindan resolve edilerek UI'da "acik alert" olarak
@@ -227,8 +242,44 @@ public class DiscoveryCollector {
 
             // Adim 2: Admin DB'de extension var mi? Schema search_path'e bagli
             // olmadigi icin pg_extension'dan okunur ve sorgular schema-qualified calisir.
-            PgStatStatementsExtension pgssExtension = pgssResolver.resolve(conn);
+            PgStatStatementsExtension pgssExtension = null;
+            boolean pgssPermissionDenied = false;
+            boolean pgssCollectionFailed = false;
+            try {
+                pgssExtension = pgssResolver.resolve(conn);
+            } catch (SQLException e) {
+                if ("42501".equals(e.getSQLState())) {
+                    pgssPermissionDenied = true;
+                    log.warn("pg_stat_statements kesfi icin yetki yok: instance={}, database={}",
+                            instance.instanceId(), instance.adminDbname());
+                } else {
+                    throw e;
+                }
+            }
             hasPgss = pgssExtension != null;
+
+            // pg_extension satirini gorebilmek, pgss nesnesini okuyabilmekle ayni
+            // sey degildir. LIMIT 0 veri tasimadan schema USAGE / relation SELECT
+            // yolunu gercekten dogrular. Yetki yoksa extension metadata'sini yine
+            // kanita yazariz, fakat durumu available olarak gostermeyiz.
+            if (pgssExtension != null) {
+                try (Statement stmt = conn.createStatement()) {
+                    stmt.executeQuery("select 1 from "
+                            + pgssExtension.qualify("pg_stat_statements") + "(false) limit 0").close();
+                } catch (SQLException e) {
+                    if ("42501".equals(e.getSQLState())) {
+                        pgssPermissionDenied = true;
+                        log.warn("pg_stat_statements nesnesi okunamiyor: instance={}, database={}, schema={}",
+                                instance.instanceId(), instance.adminDbname(), pgssExtension.schemaName());
+                    } else if (e.getSQLState() != null && e.getSQLState().startsWith("08")) {
+                        throw e;
+                    } else {
+                        pgssCollectionFailed = true;
+                        log.warn("pg_stat_statements probe basarisiz: instance={}, database={}, sqlstate={}, hata={}",
+                                instance.instanceId(), instance.adminDbname(), e.getSQLState(), e.getMessage());
+                    }
+                }
+            }
 
             // Adim 3: Admin DB'de yok ama preload'da varsa baska DB'de olabilir.
             // Collector statements job'unda admin DB'ye baglanir; extension objeleri
@@ -268,7 +319,11 @@ public class DiscoveryCollector {
 
             // 5. pgss stats reset zamani (PG14+)
             OffsetDateTime pgssStatsResetAt = null;
-            if (queries.supportsPgssInfo() && hasPgss) {
+            PgssCapabilityCatalog.PgssVersion discoveredPgssVersion = pgssExtension != null
+                    ? PgssCapabilityCatalog.PgssVersion.of(pgssExtension.extVersion())
+                    : null;
+            if (pgssCatalog.supportsInfoView(discoveredPgssVersion)
+                    && hasPgss && !pgssPermissionDenied && !pgssCollectionFailed) {
                 try (Statement stmt = conn.createStatement();
                      ResultSet rs = stmt.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
                     if (rs.next()) {
@@ -292,9 +347,8 @@ public class DiscoveryCollector {
             // onermemesi icin bu ayrimi lastErrorText'e not dusuyoruz (musteri raporu,
             // 2026-08-17: db1.dc-etstur.com-test — pg_stat_statements etstur DB'sinde
             // kuruluydu ama admin_dbname=postgres'te degildi).
-            String pgssNote = (!hasPgss && pgssInPreload)
-                ? "pg_stat_statements_in_preload_but_missing_in_admin_db:" + instance.adminDbname()
-                : null;
+            String pgssStatus = pgssStatus(pgssExtension, pgssPermissionDenied, pgssCollectionFailed);
+            OffsetDateTime pgssVerifiedAt = OffsetDateTime.now();
             InstanceCapability capability = new InstanceCapability(
                 instance.instancePk(),
                 serverVersionNum,
@@ -306,13 +360,19 @@ public class DiscoveryCollector {
                 hasPgssInfo,
                 hasPgStatIo,
                 hasPgStatCheckpointer,
+                pgssStatus,
+                pgssExtension != null ? pgssExtension.extVersion() : null,
+                instance.adminDbname(),
+                pgssInPreload,
+                pgssCatalog.catalogVersion(),
+                pgssVerifiedAt,
                 computeQueryIdMode,
                 sqlFamily,
                 postmasterStartAt,
                 pgssStatsResetAt,
                 OffsetDateTime.now(), // lastDiscoveredAt
                 null, // lastErrorAt
-                pgssNote  // lastErrorText
+                null  // Basarili discovery eski serbest metin hatasini temizler.
             );
 
             capabilityRepo.upsert(capability);
@@ -341,6 +401,17 @@ public class DiscoveryCollector {
             stateRepo.updateLastError(instance.instancePk(), detail);
             return null;
         }
+    }
+
+    /** Mevcut admin DB kesfinin kanita yazilan deterministik pgss durumu. */
+    static String pgssStatus(PgStatStatementsExtension extension, boolean permissionDenied,
+                             boolean collectionFailed) {
+        if (permissionDenied) return "permission_denied";
+        if (collectionFailed) return "collection_failed";
+        if (extension == null) return "not_installed";
+        return PgssCapabilityCatalog.PgssVersion.of(extension.extVersion()) == null
+                ? "version_unknown"
+                : "available";
     }
 
     /** Exception'dan anlaşılır hata mesajı üretir. */

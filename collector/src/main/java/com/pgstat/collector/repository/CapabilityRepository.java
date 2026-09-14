@@ -4,6 +4,8 @@ import com.pgstat.collector.model.InstanceCapability;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.OffsetDateTime;
+
 /**
  * instance_capability upsert ve sorgulari.
  * Discovery adimindan sonra kabiliyetler buraya yazilir.
@@ -42,11 +44,17 @@ public class CapabilityRepository {
               has_pg_stat_statements_info,
               has_pg_stat_io,
               has_pg_stat_checkpointer,
+              pgss_status,
+              pgss_extversion,
+              pgss_collection_dbname,
+              pgss_preloaded,
+              pgss_catalog_version,
+              pgss_checked_at,
               compute_query_id_mode,
               last_discovered_at,
               last_error_text
             )
-            values (?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?, ?, now(), ?)
+            values (?, ?, ?, ?, ?, true, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), ?)
             on conflict (instance_pk) do update
             set server_version_num          = excluded.server_version_num,
                 pg_major                    = excluded.pg_major,
@@ -58,8 +66,15 @@ public class CapabilityRepository {
                 has_pg_stat_statements_info = excluded.has_pg_stat_statements_info,
                 has_pg_stat_io              = excluded.has_pg_stat_io,
                 has_pg_stat_checkpointer    = excluded.has_pg_stat_checkpointer,
+                pgss_status                 = excluded.pgss_status,
+                pgss_extversion             = excluded.pgss_extversion,
+                pgss_collection_dbname      = excluded.pgss_collection_dbname,
+                pgss_preloaded              = excluded.pgss_preloaded,
+                pgss_catalog_version        = excluded.pgss_catalog_version,
+                pgss_checked_at             = excluded.pgss_checked_at,
                 compute_query_id_mode       = excluded.compute_query_id_mode,
                 last_discovered_at          = now(),
+                last_error_at               = null,
                 last_error_text             = excluded.last_error_text
             """,
             cap.instancePk(),
@@ -72,6 +87,12 @@ public class CapabilityRepository {
             cap.hasPgStatStatementsInfo(),
             cap.hasPgStatIo(),
             cap.hasPgStatCheckpointer(),
+            cap.pgssStatus(),
+            cap.pgssExtversion(),
+            cap.pgssCollectionDbname(),
+            cap.pgssPreloaded(),
+            cap.pgssCatalogVersion(),
+            cap.pgssCheckedAt(),
             cap.computeQueryIdMode(),
             cap.lastErrorText()
         );
@@ -124,5 +145,10 @@ public class CapabilityRepository {
             String.class,
             instancePk
         );
+    }
+
+    public OffsetDateTime findPgssCheckedAt(long instancePk) {
+        return jdbc.queryForObject("select pgss_checked_at from control.instance_capability where instance_pk = ?",
+                OffsetDateTime.class, instancePk);
     }
 }

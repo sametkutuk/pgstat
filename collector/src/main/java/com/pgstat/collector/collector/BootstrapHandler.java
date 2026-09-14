@@ -118,7 +118,7 @@ public class BootstrapHandler {
         }
 
         // pg_stat_statements yoksa degraded'a gec (temel ozelligi eksik)
-        if (!cap.hasPgStatStatements()) {
+        if (!"available".equals(cap.pgssStatus())) {
             log.warn("pg_stat_statements bulunamadi, degraded: {}", instance.instanceId());
             inventoryRepo.scheduleBootstrapRetry(instance.instancePk());
             return;

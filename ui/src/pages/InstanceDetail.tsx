@@ -576,7 +576,7 @@ function OverviewTab({ inst, cap }: { inst: any; cap: any }) {
                         <CapabilityCard
                             name="pg_stat_statements"
                             desc="Sorgu istatistikleri"
-                            available={cap.has_pg_stat_statements}
+                            available={(cap.pgss_status ?? (cap.has_pg_stat_statements ? 'available' : 'not_installed')) === 'available'}
                         />
                         <CapabilityCard
                             name="pg_stat_statements_info"
@@ -1615,16 +1615,13 @@ function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; insta
     const issue = (alertsQ.data || []).find((a: any) => bootstrapCodes.includes(a.alert_code));
 
     // Alert yoksa generic uyarı (örn. capability flag'lere göre)
-    const noPgss = cap && cap.has_pg_stat_statements === false;
-    // DiscoveryCollector bu notu sadece extension preload'da olup admin DB'de
-    // CREATE EXTENSION yapılmamışsa yazar (bkz. DiscoveryCollector.java pgssNote) —
-    // extension hiç kurulu değilse bu alan null kalır, aşağıdaki iki senaryo
-    // birbirine karışmasın (2026-08-17 müşteri raporu: yanlış senaryonun
-    // gösterilmesi "postgresql.conf'a ekle + restart et" gibi gereksiz adımlar
-    // önerdi, oysa extension başka bir database'de zaten kuruluydu).
-    const preloadNoteMatch = typeof cap?.last_error_text === 'string'
-        && cap.last_error_text.match(/^pg_stat_statements_in_preload_but_missing_in_admin_db:(.+)$/);
-    const adminDbNameFromNote = preloadNoteMatch ? preloadNoteMatch[1] : null;
+    const pgssStatus = cap?.pgss_status ?? (cap?.has_pg_stat_statements ? 'available' : 'not_installed');
+    const noPgss = cap && pgssStatus !== 'available';
+    // Serbest last_error_text yerine tipli preload + kontrol edilen DB kaniti
+    // kullanilir; boylece eski hata metni UI kararina donusmez.
+    const adminDbNameFromNote = cap?.pgss_preloaded && pgssStatus === 'not_installed'
+        ? cap.pgss_collection_dbname
+        : null;
 
     if (!issue && !noPgss) return null;
 
@@ -1634,7 +1631,12 @@ function BootstrapBanner({ inst, cap, instanceId }: { inst: any; cap: any; insta
                 <span className="text-2xl">⚠️</span>
                 <div className="flex-1 min-w-0">
                     <h3 className="font-bold text-amber-900">
-                        {issue ? issue.title : 'pg_stat_statements extension yüklü değil'}
+                        {issue ? issue.title
+                            : pgssStatus === 'permission_denied'
+                                ? 'pg_stat_statements okunamıyor'
+                                : pgssStatus === 'version_unknown'
+                                    ? 'pg_stat_statements sürümü belirlenemedi'
+                                    : 'pg_stat_statements extension yüklü değil'}
                     </h3>
                     {issue?.message && (
                         <pre className="mt-2 text-xs whitespace-pre-wrap text-amber-900 font-sans bg-white/50 rounded px-3 py-2">

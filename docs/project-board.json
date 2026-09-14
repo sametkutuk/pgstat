@@ -4546,7 +4546,7 @@
       "priority": "P1",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "Dis inceleme uc bloklayici doğruluk hatasi buldu, ucu de duzeltildi ve gercek PG17 de dogrulandi. Kalan M1: extversion merkezi kayda, veritabanlari arasi kesif, durum modeli. Kalan katalog isleri: fail-fast dogrulama (AC11), to_jsonb maliyeti (AC12), PG18 olcumu (AC13), catalog_version kaniti (AC14).",
+      "next_action": "AC4 ve AC6 bitti (extversion + tipli durum kaniti, V119). Deploy sonrasi pgss_status dagilimi kontrol edilmeli. Kalan: AC5 veritabanlari arasi pgss kesfi, AC7 test matrisi, AC11 katalog fail-fast, AC12 to_jsonb maliyeti, AC13 PG18 olcumu, AC14 catalog_version kaniti.",
       "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
       "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
       "requirements": [
@@ -4575,7 +4575,7 @@
         {
           "id": "AC4",
           "text": "extversion merkezi kayda yazilir ve UI/kanit katmanindan gorulebilir.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC5",
@@ -4585,7 +4585,7 @@
         {
           "id": "AC6",
           "text": "Durumlar ayrilir: unsupported / not_installed / permission_denied / version_incompatible / version_unknown / available / collection_failed. last_error_text basarida temizlenir.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC7",
@@ -4659,7 +4659,11 @@
         "Duzeltmeler gercek PostgreSQL 17 de yeniden dogrulandi: alti pgss suruminde (1.4/1.7/1.8/1.9/1.10/1.11) hem kendi projection i hem savunmaci projection hatasiz kosuyor. Uretilen ifade kontrol edildi: blk_read_time = coalesce(shared,0) + coalesce(local,0), temp yok; savunmaci modda ayni turetme j->> uzerinden. Test 123 -> 126.",
         "Deploy edildi 2026-09-14 14:05 ve uretimde dogrulandi: 25 aktif instance in 25 i pgss verisi gonderiyor (PG12/13/15/16/17/18 hepsi tam), statements isinde 15 dakikada tek hata yok. Tek bilinmeyen PG18 idi (pgss 1.12 olculmemisti, eski Pg17_18 sorgusuyla ayni dogrudan referanslar kullanildigi icin en az eskisi kadar guvenli olmasi bekleniyordu) - uc PG18 instance i da ayakta.",
         "\"Sorgu cokmedi\" ile \"kolon gercekten okunuyor\" ayri seyler ve savunmaci okunan bir kolon sinir yanlissa SESSIZCE 0 doner. Uretim verisiyle ayirt edildi: PG18 de son 24 saatte parallel_workers_to_launch ve parallel_workers_launched ucer satirda sifirdan farkli; PG17 de 36.815 satirin hepsi sifir. Iki kolon da okunuyor. wal_buffers_full PG18 dahil her yerde sifir ve ayirt edilemedi - sifir bir degerdir, yoklugun kaniti degil.",
-        "verified: false yine de KALDIRILMADI ve gerekcesi bu gorevin kendisiyle ayni: uretim kaniti \"PG18 instance larinda bu kolonlar var\" diyor, \"pgss 1.12 de var\" demiyor. Surumu pg_major dan cikarmak, tam da bu gorevin duzeltmek icin var oldugu karistirma. extversion merkezi kayda yazilana kadar (AC4) sinir kapanamaz - yani AC4 yalnizca operasyonel aciklanabilirlik degil, katalog dogrulamasinin da onkosulu."
+        "verified: false yine de KALDIRILMADI ve gerekcesi bu gorevin kendisiyle ayni: uretim kaniti \"PG18 instance larinda bu kolonlar var\" diyor, \"pgss 1.12 de var\" demiyor. Surumu pg_major dan cikarmak, tam da bu gorevin duzeltmek icin var oldugu karistirma. extversion merkezi kayda yazilana kadar (AC4) sinir kapanamaz - yani AC4 yalnizca operasyonel aciklanabilirlik degil, katalog dogrulamasinin da onkosulu.",
+        "AC4/AC6 uygulandi (V119) ve UC TUR incelemeden gecti. Birinci tur bes tasarim sorusu: pgss_checked_at hatada da yazilir (yoksa \"hic bakilmadi\" ile \"bakildi, reddedildi\" ayirt edilemez); has_pg_stat_statements literal anlaminda kalir ve kullanilabilirlik karari tipli statuye tasinir (BootstrapHandler:121 ve InstanceDetail.tsx dogrulandi - true birakmak instance i baselining e alip statements isini her turda patlatirdi); ayri pgss_last_error_text EKLENMEDI cunku tipli status + dbname zaten tasiyor ve ikinci bir serbest metin alani, bugun yakalanan \"hicbir sey temizlemiyor\" kusurunu cogaltirdi.",
+        "Probe view yerine collector un gercekten calistirdigi fonksiyonu test ediyor - eskisi view i sorguluyordu, farkli nesne ve farkli yetki, yani probe gecerken toplama patlayabilirdi. Gercek PostgreSQL 17 de olculdu: EXECUTE geri alindiginda probe tam olarak SQLSTATE 42501 uretiyor; yetki varken plan \"Function Scan on pg_stat_statements (never executed)\" diyor, yani yetki executor init te kontrol ediliyor ve SRF hic cagrilmiyor - probe sifir maliyetli. Hatalar siniflandirildi: 42501 permission_denied, 08 sinifi gercek baglanti hatasi olarak yeniden firlatilir, digerleri (orn. 42883) collection_failed.",
+        "Backfill in birakigi null pgss_checked_at, bir sonraki cluster cevriminde yeniden kesfe yol aciyor - yoksa version_unknown nadiren yeniden kesfedilen instance larda aylarca kalirdi (bazilarinda last_discovered_at 2026-05-16 idi). Bu yeniden kesif gercek surum degisikliginden AYRI tutuldu: ben yalnizca yaniltici LOG u yakalamistim, incelemede sahte INSTANCE_PG_VERSION_CHANGED alert i uretildigi de bulundu - log kimseyi rahatsiz etmez, sahte alert kullaniciya gider. Ikisi de duzeltildi.",
+        "Yedi durumdan yalnizca besi bu dilimde uretiliyor (unsupported ve version_incompatible sonraki uyumluluk dilimlerine ayrildi) ve bu GIZLENMEDI, migration yorumuna yazildi - kisit yedi deger kabul ederken kod dordunu uretirse durum modeli tamammis gibi gorunur. pg_read_all_stats eksikligi bilerek pgss_status e katilmadi: o izin olmadan sayisal telemetri toplanmaya devam eder, yalnizca sorgu metni kapsami eksilir; calisan bir seyi kullanilamaz gostermek yanlis olurdu. Ayri bir statements.query_text yetenegi olarak kaydedildi."
       ]
     }
   ]

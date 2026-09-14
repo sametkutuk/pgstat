@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 122 |
+| Migrations scanned | 123 |
 | Tables discovered | 100 |
-| Columns discovered | 1248 |
-| Indexes discovered | 138 |
+| Columns discovered | 1254 |
+| Indexes discovered | 139 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
@@ -232,7 +232,7 @@ This generated inventory is the bridge between code and the manual project docum
 | control.database_state | 10 | no |  | V002__control_tables.sql | V002__control_tables.sql |
 | control.db_objects_trigger | 8 | no |  | V079__db_objects_trigger.sql | V079__db_objects_trigger.sql |
 | control.health_check_state | 5 | no |  | V074__health_check_state.sql | V074__health_check_state.sql |
-| control.instance_capability | 17 | no |  | V002__control_tables.sql | V002__control_tables.sql |
+| control.instance_capability | 23 | no |  | V002__control_tables.sql | V119__pgss_discovery_evidence.sql |
 | control.instance_group | 4 | no |  | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |
 | control.instance_group_member | 3 | no |  | V018__adaptive_alerting.sql | V018__adaptive_alerting.sql |
 | control.instance_inventory | 23 | no |  | V002__control_tables.sql | V050__cluster_view.sql |
@@ -526,7 +526,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>control.instance_capability columns (17)</summary>
+<details><summary>control.instance_capability columns (23)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -547,6 +547,12 @@ This generated inventory is the bridge between code and the manual project docum
 | last_discovered_at | timestamptz | V002__control_tables.sql |
 | last_error_at | timestamptz | V002__control_tables.sql |
 | last_error_text | text | V002__control_tables.sql |
+| pgss_status | text | V119__pgss_discovery_evidence.sql |
+| pgss_extversion | text | V119__pgss_discovery_evidence.sql |
+| pgss_collection_dbname | text | V119__pgss_discovery_evidence.sql |
+| pgss_preloaded | boolean | V119__pgss_discovery_evidence.sql |
+| pgss_catalog_version | integer | V119__pgss_discovery_evidence.sql |
+| pgss_checked_at | timestamptz | V119__pgss_discovery_evidence.sql |
 
 </details>
 
