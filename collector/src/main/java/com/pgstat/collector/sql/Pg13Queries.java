@@ -157,56 +157,7 @@ public class Pg13Queries extends Pg11_12Queries {
     // =========================================================================
     // Statements - plans ve wal eklendi
     // =========================================================================
-
-    @Override
-    public String pgssStatsQuery(String pgssFunction) {
-        // PG13: plans, wal, min/max/stddev exec+plan, mean_exec/plan var; jit detay+temp_blk yok
-        return """
-            select
-              userid, dbid, queryid,
-              null::boolean as toplevel,
-              calls,
-              plans,
-              total_plan_time,
-              total_exec_time,
-              min_exec_time, max_exec_time, stddev_exec_time,
-              min_plan_time, max_plan_time, stddev_plan_time,
-              mean_exec_time,
-              mean_plan_time,
-              rows,
-              shared_blks_hit, shared_blks_read,
-              shared_blks_dirtied, shared_blks_written,
-              local_blks_hit, local_blks_read,
-              local_blks_dirtied, local_blks_written,
-              temp_blks_read, temp_blks_written,
-              blk_read_time, blk_write_time,
-              0::double precision as temp_blk_read_time,
-              0::double precision as temp_blk_write_time,
-              wal_records, wal_fpi, wal_bytes,
-              0::bigint as wal_buffers_full,
-              0::bigint as jit_functions,
-              0::double precision as jit_generation_time,
-              0::double precision as jit_inlining_time,
-              0::double precision as jit_optimization_time,
-              0::double precision as jit_emission_time,
-              0::bigint as jit_deform_count,
-              0::double precision as jit_deform_time,
-              0::bigint as jit_inlining_count,
-              0::bigint as jit_optimization_count,
-              0::bigint as jit_emission_count,
-              null::timestamptz as stats_since,
-              null::timestamptz as minmax_stats_since,
-              0::bigint as parallel_workers_to_launch,
-              0::bigint as parallel_workers_launched,
-              0::double precision as shared_blk_read_time,
-              0::double precision as shared_blk_write_time,
-              0::double precision as local_blk_read_time,
-              0::double precision as local_blk_write_time
-            from %s(false)
-            """.formatted(pgssFunction);
-    }
-
-    // =========================================================================
+        // =========================================================================
     // Per-database — session_time/active_time yok (PG14+)
     // =========================================================================
 

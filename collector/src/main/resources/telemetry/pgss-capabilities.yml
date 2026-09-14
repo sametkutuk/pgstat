@@ -1,0 +1,186 @@
+# =============================================================================
+# pg_stat_statements telemetri yetenek katalogu — PGSTAT-P1-021 (M1)
+#
+# NEDEN VAR
+# ---------
+# pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. pg_upgrade sonrasi
+# "ALTER EXTENSION pg_stat_statements UPDATE" calistirilmazsa extension geride
+# kalir; sunucu surumune gore secilen sorgu var olmayan bir kolona referans
+# verip TAMAMEN basarisiz olur.
+#
+# OLCULDU (2026-09-14, postgres:17 uzerinde her surum tek tek kurularak):
+#   pgss 1.9  + repo'nun Pg14_16 sorgusu -> ERROR: column "jit_generation_time" does not exist
+#   pgss 1.10 + repo'nun Pg17_18 sorgusu -> ERROR: column "shared_blk_read_time" does not exist
+#
+# Ilki uc durum bile degil: PG14 varsayilan olarak pgss 1.9 ile gelir.
+#
+# KOLON SINIRLARI DOKUMANTASYONDAN KOPYALANMADI. pg_stat_statements view'inin
+# kolonlari 1.4'ten 1.11'e kadar gercek PostgreSQL'de sayildi. 1.12 (PG18)
+# OLCULMEDI ve verified: false ile isaretlendi.
+#
+# KAPSAM AYRIMI
+# -------------
+# pgss VERISI kume genelidir (telemetry_scope: instance), ama extension
+# NESNELERI yalnizca kurulu oldugu veritabaninda gorunur (access_scope:
+# database). Bu yuzden her veritabanindan toplamak gerekmez; uygun bir
+# veritabani bulunup oradan tek kez toplanir.
+# =============================================================================
+
+catalog_version: 1
+source: pg_stat_statements
+telemetry_scope: instance
+access_scope: database
+discovery_strategy: preferred_database_then_scan
+measured_on: "2026-09-14"
+measured_against: "postgres:17 (pgss 1.4-1.11)"
+
+capabilities:
+
+  - key: statements.identity
+    title: Sorgu kimligi
+    min_pgss: "1.4"
+    columns:
+      - { target: userid,  type: oid,    sources: [ { name: userid } ] }
+      - { target: dbid,    type: oid,    sources: [ { name: dbid } ] }
+      - { target: queryid, type: bigint, sources: [ { name: queryid } ] }
+
+  - key: statements.toplevel
+    title: Ust duzey cagri ayrimi
+    min_pgss: "1.9"
+    # 1.9 oncesi ic ice cagrilar ayirt edilemez. null uretilir, 0 DEGIL:
+    # "olculmedi" ile "ust duzey degil" ayni sey degildir.
+    columns:
+      - target: toplevel
+        type: boolean
+        default: "null"
+        sources: [ { name: toplevel, min: "1.9" } ]
+
+  - key: statements.execution
+    title: Yurutme sureleri
+    min_pgss: "1.4"
+    # 1.8'de YENIDEN ADLANDIRILDI: total_time -> total_exec_time.
+    # Ayni olcum, farkli ad — bu yuzden iki kaynak tanimli.
+    columns:
+      - { target: calls, type: bigint, sources: [ { name: calls } ] }
+      - { target: rows,  type: bigint, sources: [ { name: rows } ] }
+      - target: total_exec_time
+        type: double precision
+        default: "0"
+        sources: [ { name: total_exec_time, min: "1.8" }, { name: total_time, max: "1.7" } ]
+      - target: min_exec_time
+        type: double precision
+        default: "0"
+        sources: [ { name: min_exec_time, min: "1.8" }, { name: min_time, max: "1.7" } ]
+      - target: max_exec_time
+        type: double precision
+        default: "0"
+        sources: [ { name: max_exec_time, min: "1.8" }, { name: max_time, max: "1.7" } ]
+      - target: mean_exec_time
+        type: double precision
+        default: "0"
+        sources: [ { name: mean_exec_time, min: "1.8" }, { name: mean_time, max: "1.7" } ]
+      - target: stddev_exec_time
+        type: double precision
+        default: "0"
+        sources: [ { name: stddev_exec_time, min: "1.8" }, { name: stddev_time, max: "1.7" } ]
+
+  - key: statements.planning
+    title: Planlama sureleri
+    min_pgss: "1.8"
+    # 1.8 oncesi planlama ayri olculmez. Uretilen 0, "planlama suresi yok"
+    # demek DEGIL, "olculmedi" demektir.
+    columns:
+      - { target: plans,            type: bigint,           default: "0", sources: [ { name: plans,            min: "1.8" } ] }
+      - { target: total_plan_time,  type: double precision, default: "0", sources: [ { name: total_plan_time,  min: "1.8" } ] }
+      - { target: min_plan_time,    type: double precision, default: "0", sources: [ { name: min_plan_time,    min: "1.8" } ] }
+      - { target: max_plan_time,    type: double precision, default: "0", sources: [ { name: max_plan_time,    min: "1.8" } ] }
+      - { target: mean_plan_time,   type: double precision, default: "0", sources: [ { name: mean_plan_time,   min: "1.8" } ] }
+      - { target: stddev_plan_time, type: double precision, default: "0", sources: [ { name: stddev_plan_time, min: "1.8" } ] }
+
+  - key: statements.blocks
+    title: Blok sayaclari
+    min_pgss: "1.4"
+    columns:
+      - { target: shared_blks_hit,     type: bigint, sources: [ { name: shared_blks_hit } ] }
+      - { target: shared_blks_read,    type: bigint, sources: [ { name: shared_blks_read } ] }
+      - { target: shared_blks_dirtied, type: bigint, sources: [ { name: shared_blks_dirtied } ] }
+      - { target: shared_blks_written, type: bigint, sources: [ { name: shared_blks_written } ] }
+      - { target: local_blks_hit,      type: bigint, sources: [ { name: local_blks_hit } ] }
+      - { target: local_blks_read,     type: bigint, sources: [ { name: local_blks_read } ] }
+      - { target: local_blks_dirtied,  type: bigint, sources: [ { name: local_blks_dirtied } ] }
+      - { target: local_blks_written,  type: bigint, sources: [ { name: local_blks_written } ] }
+      - { target: temp_blks_read,      type: bigint, sources: [ { name: temp_blks_read } ] }
+      - { target: temp_blks_written,   type: bigint, sources: [ { name: temp_blks_written } ] }
+
+  - key: statements.io_time
+    title: Blok G/C sureleri
+    min_pgss: "1.4"
+    # KATALOGDAKI TEK KALDIRMA VAKASI. 1.11'de blk_read_time / blk_write_time
+    # KALDIRILDI; yerine shared_blk_*, local_blk_* ve temp_blk_* geldi.
+    # Merkezi sema geriye donuk blk_read_time/blk_write_time tutmaya devam
+    # ediyor, 1.11+ icin ucu toplanarak ayni anlam korunuyor.
+    columns:
+      - target: blk_read_time
+        type: double precision
+        default: "0"
+        sources:
+          - { name: blk_read_time, max: "1.10" }
+          - { expr: "coalesce(shared_blk_read_time,0) + coalesce(local_blk_read_time,0) + coalesce(temp_blk_read_time,0)", min: "1.11" }
+      - target: blk_write_time
+        type: double precision
+        default: "0"
+        sources:
+          - { name: blk_write_time, max: "1.10" }
+          - { expr: "coalesce(shared_blk_write_time,0) + coalesce(local_blk_write_time,0) + coalesce(temp_blk_write_time,0)", min: "1.11" }
+      - { target: temp_blk_read_time,    type: double precision, default: "0", sources: [ { name: temp_blk_read_time,    min: "1.10" } ] }
+      - { target: temp_blk_write_time,   type: double precision, default: "0", sources: [ { name: temp_blk_write_time,   min: "1.10" } ] }
+      - { target: shared_blk_read_time,  type: double precision, default: "0", sources: [ { name: shared_blk_read_time,  min: "1.11" } ] }
+      - { target: shared_blk_write_time, type: double precision, default: "0", sources: [ { name: shared_blk_write_time, min: "1.11" } ] }
+      - { target: local_blk_read_time,   type: double precision, default: "0", sources: [ { name: local_blk_read_time,   min: "1.11" } ] }
+      - { target: local_blk_write_time,  type: double precision, default: "0", sources: [ { name: local_blk_write_time,  min: "1.11" } ] }
+
+  - key: statements.wal
+    title: WAL uretimi
+    min_pgss: "1.8"
+    columns:
+      - { target: wal_records, type: bigint,  default: "0", sources: [ { name: wal_records, min: "1.8" } ] }
+      - { target: wal_fpi,     type: bigint,  default: "0", sources: [ { name: wal_fpi,     min: "1.8" } ] }
+      - { target: wal_bytes,   type: numeric, default: "0", sources: [ { name: wal_bytes,   min: "1.8" } ] }
+      # OLCULMEDI: 1.12 sinirini postgres:17 tasimiyor.
+      - { target: wal_buffers_full, type: bigint, default: "0", verified: false, sources: [ { name: wal_buffers_full, min: "1.12" } ] }
+
+  - key: statements.jit
+    title: JIT derleme
+    min_pgss: "1.10"
+    # TUM jit_* kolonlari 1.10'da BIRLIKTE geldi. Kodda bir kismi daha erken
+    # varmis gibi dogrudan referans ediliyordu; olculen kirilma noktasi buydu.
+    columns:
+      - { target: jit_functions,          type: bigint,           default: "0", sources: [ { name: jit_functions,          min: "1.10" } ] }
+      - { target: jit_generation_time,    type: double precision, default: "0", sources: [ { name: jit_generation_time,    min: "1.10" } ] }
+      - { target: jit_inlining_count,     type: bigint,           default: "0", sources: [ { name: jit_inlining_count,     min: "1.10" } ] }
+      - { target: jit_inlining_time,      type: double precision, default: "0", sources: [ { name: jit_inlining_time,      min: "1.10" } ] }
+      - { target: jit_optimization_count, type: bigint,           default: "0", sources: [ { name: jit_optimization_count, min: "1.10" } ] }
+      - { target: jit_optimization_time,  type: double precision, default: "0", sources: [ { name: jit_optimization_time,  min: "1.10" } ] }
+      - { target: jit_emission_count,     type: bigint,           default: "0", sources: [ { name: jit_emission_count,     min: "1.10" } ] }
+      - { target: jit_emission_time,      type: double precision, default: "0", sources: [ { name: jit_emission_time,      min: "1.10" } ] }
+      - { target: jit_deform_count,       type: bigint,           default: "0", sources: [ { name: jit_deform_count,       min: "1.11" } ] }
+      - { target: jit_deform_time,        type: double precision, default: "0", sources: [ { name: jit_deform_time,        min: "1.11" } ] }
+
+  - key: statements.stats_window
+    title: Istatistik penceresi
+    min_pgss: "1.11"
+    # 1.11 oncesi bir kaydin ne zamandan beri biriktigi bilinemez. Delta
+    # hesabinin guvenilirligini dogrudan etkiler, o yuzden null uretilir.
+    columns:
+      - { target: stats_since,        type: timestamptz, default: "null", sources: [ { name: stats_since,        min: "1.11" } ] }
+      - { target: minmax_stats_since, type: timestamptz, default: "null", sources: [ { name: minmax_stats_since, min: "1.11" } ] }
+
+  - key: statements.parallel
+    title: Paralel isci sayaclari
+    min_pgss: "1.12"
+    verified: false
+    # OLCULMEDI — postgres:17 en fazla 1.11 tasiyor. Sinir dokumantasyondan
+    # alindi ve PG18 konteyneriyle dogrulanmali.
+    columns:
+      - { target: parallel_workers_to_launch, type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_to_launch, min: "1.12" } ] }
+      - { target: parallel_workers_launched,  type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_launched,  min: "1.12" } ] }

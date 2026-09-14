@@ -2114,31 +2114,31 @@ Any generated table absent from purge/partition ownership must be reviewed befor
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg11_12Queries.java
 
-Methods: `activityQuery`, `bgwriterQuery`, `computeQueryIdQuery`, `databaseListQuery`, `databaseStatsQuery`, `discoveryQuery`, `extensionCheckQuery`, `familyCode`, `indexStatsQuery`, `lockQuery`, `pgssStatsQuery`, `pgssTextQuery`, `postmasterStartTimeQuery`, `progressClusterQuery`, `progressCreateIndexQuery`, `progressVacuumQuery`, `recoveryPrefetchQuery`, `replicationQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
+Methods: `activityQuery`, `bgwriterQuery`, `computeQueryIdQuery`, `databaseListQuery`, `databaseStatsQuery`, `discoveryQuery`, `extensionCheckQuery`, `familyCode`, `indexStatsQuery`, `lockQuery`, `pgssTextQuery`, `postmasterStartTimeQuery`, `progressClusterQuery`, `progressCreateIndexQuery`, `progressVacuumQuery`, `recoveryPrefetchQuery`, `replicationQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
 
 PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_control_system`, `pg_current_wal_lsn`, `pg_database`, `pg_extension`, `pg_index`, `pg_is_in_recovery`, `pg_locks`, `pg_postmaster_start_time`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_cluster`, `pg_stat_progress_create_index`, `pg_stat_progress_vacuum`, `pg_stat_recovery_prefetch`, `pg_stat_replication`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_statio_user_indexes`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg13Queries.java
 
-Methods: `activityQuery`, `familyCode`, `pgssStatsQuery`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
+Methods: `activityQuery`, `familyCode`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`
 
 PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg14_16Queries.java
 
-Methods: `activityQuery`, `computeQueryIdQuery`, `databaseStatsQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `pgssStatsQuery`, `progressCopyQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `subscriptionQuery`, `tableStatsQuery`, `walQuery`
+Methods: `activityQuery`, `computeQueryIdQuery`, `databaseStatsQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `progressCopyQuery`, `recoveryPrefetchQuery`, `replicationSlotsQuery`, `subscriptionQuery`, `tableStatsQuery`, `walQuery`
 
 PostgreSQL source tokens: `pg_backend_pid`, `pg_class`, `pg_current_wal_lsn`, `pg_database`, `pg_index`, `pg_locks`, `pg_relation_size`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_io`, `pg_stat_progress_copy`, `pg_stat_recovery_prefetch`, `pg_stat_replication_slots`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_statio_user_indexes`, `pg_statio_user_tables`
 
 ### collector/src/main/java/com/pgstat/collector/sql/Pg17_18Queries.java
 
-Methods: `bgwriterQuery`, `checkpointerQuery`, `familyCode`, `pgssStatsQuery`, `subscriptionQuery`, `walQuery`
+Methods: `bgwriterQuery`, `checkpointerQuery`, `familyCode`, `subscriptionQuery`, `walQuery`
 
 PostgreSQL source tokens: `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_statements`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_wal`
 
 ### collector/src/main/java/com/pgstat/collector/sql/SourceQueries.java
 
-Methods: `activityQuery`, `archiverQuery`, `bgwriterQuery`, `checkpointerQuery`, `computeQueryIdQuery`, `databaseConflictsQuery`, `databaseListQuery`, `databaseStatsQuery`, `discoveryQuery`, `extensionCheckQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `pgssStatsQuery`, `pgssTextQuery`, `postmasterStartTimeQuery`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `progressClusterQuery`, `progressCopyQuery`, `progressCreateIndexQuery`, `progressVacuumFullQuery`, `progressVacuumQuery`, `recoveryPrefetchQuery`, `replicationQuery`, `replicationSlotsQuery`, `sequenceIoQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`, `userFunctionsQuery`, `walLsnQuery`, `walQuery`, `walReceiverQuery`
+Methods: `activityQuery`, `archiverQuery`, `bgwriterQuery`, `checkpointerQuery`, `computeQueryIdQuery`, `databaseConflictsQuery`, `databaseListQuery`, `databaseStatsQuery`, `discoveryQuery`, `extensionCheckQuery`, `familyCode`, `indexStatsQuery`, `ioStatQuery`, `lockQuery`, `pgssInfoQuery`, `pgssTextQuery`, `postmasterStartTimeQuery`, `progressAnalyzeQuery`, `progressBasebackupQuery`, `progressClusterQuery`, `progressCopyQuery`, `progressCreateIndexQuery`, `progressVacuumFullQuery`, `progressVacuumQuery`, `recoveryPrefetchQuery`, `replicationQuery`, `replicationSlotsQuery`, `sequenceIoQuery`, `slruQuery`, `subscriptionQuery`, `tableStatsQuery`, `userFunctionsQuery`, `walLsnQuery`, `walQuery`, `walReceiverQuery`
 
 PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recovery`, `pg_last_wal_receive_lsn`, `pg_last_wal_replay_lsn`, `pg_locks`, `pg_ls_waldir`, `pg_postmaster_start_time`, `pg_replication_slots`, `pg_stat_activity`, `pg_stat_archiver`, `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_database`, `pg_stat_database_conflicts`, `pg_stat_io`, `pg_stat_progress_analyze`, `pg_stat_progress_basebackup`, `pg_stat_progress_cluster`, `pg_stat_progress_copy`, `pg_stat_progress_create_index`, `pg_stat_progress_vacuum`, `pg_stat_recovery_prefetch`, `pg_stat_replication`, `pg_stat_replication_slots`, `pg_stat_slru`, `pg_stat_statements`, `pg_stat_statements_info`, `pg_stat_subscription`, `pg_stat_subscription_stats`, `pg_stat_user_functions`, `pg_stat_user_indexes`, `pg_stat_user_tables`, `pg_stat_wal`, `pg_stat_wal_receiver`, `pg_statio_all_sequences`, `pg_statio_user_indexes`, `pg_statio_user_tables`, `pg_wal_lsn_diff`, `pg_walfile_name`
 

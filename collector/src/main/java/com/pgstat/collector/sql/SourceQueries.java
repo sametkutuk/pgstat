@@ -360,7 +360,6 @@ public interface SourceQueries {
     // =========================================================================
 
     /** pg_stat_statements(false) — yalnizca sayisal kolonlar (text yok). */
-    String pgssStatsQuery(String pgssFunction);
 
     /** pg_stat_statements(true) — SQL text dahil (enrichment icin). */
     String pgssTextQuery(String pgssFunction);

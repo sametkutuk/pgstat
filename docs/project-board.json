@@ -4539,6 +4539,87 @@
       "verification_evidence": [
         "Bu maddenin kendisi P0-048 sirasinda ortaya cikti: durum makinesi dogrulamasi icin gecici bir postgres:17 konteyneri kuruldu, onbir senaryo kosturuldu ve konteyner silindi. Dogrulama gecerli ama tekrarlanabilir degil. Boyle bir altyapiyi tek bir ozelligin yan urunu olarak eklemek dogru olmadigi icin ayri madde acildi."
       ]
+    },
+    {
+      "id": "PGSTAT-P1-021",
+      "order": 65,
+      "priority": "P1",
+      "workstream": "collector",
+      "status": "in_progress",
+      "next_action": "Kalan M1 kapsami: pgss extversion merkezi kayda yazilsin; erisilebilir veritabanlarinda extension varligi/surumu/okuma yetkisi kesfedilsin ve secilen toplama veritabani kaydedilsin; durumlar ayrilsin (unsupported/not_installed/permission_denied/version_incompatible/version_unknown/available/collection_failed); last_error_text basarida temizlensin.",
+      "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
+      "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
+      "requirements": [
+        "Sorgu, PostgreSQL surumune degil okunan extension surumune gore uretilmeli.",
+        "Kolon-surum sinirlari tek bir deklaratif kaynakta tutulmali ve dokumantasyondan kopyalanmak yerine gercek PostgreSQL de olculmeli.",
+        "Surum bilinmiyorsa iyimser davranilmamali; hicbir surumde patlamayan bir sorgu uretilmeli ve durum kaydedilmeli.",
+        "Dogrulanmamis sinirlar (henuz olculmemis surumler) isaretlenmeli ve her zaman guvenli okunmali.",
+        "Merkezi sema tek tip kalmali: hangi surum olursa olsun ayni hedef kolonlar ayni sirada."
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "AC1",
+          "text": "Kolon-surum sinirlari deklaratif bir katalogda (telemetry/pgss-capabilities.yml) ve gercek PostgreSQL de olculmus. pgss 1.4-1.11 tek tek kurulup kolonlar sayildi; 1.12 (PG18) olculmedi ve verified:false ile isaretlendi.",
+          "status": "done"
+        },
+        {
+          "id": "AC2",
+          "text": "pgss sorgusu katalogdan uretiliyor ve StatementsCollector extension surumunu kullaniyor. Dort elle yazilmis pgssStatsQuery implementasyonu ve arayuz bildirimi kaldirildi (265 satir).",
+          "status": "done"
+        },
+        {
+          "id": "AC3",
+          "text": "Uretilen sorgu gercek PostgreSQL de her pgss suruminde (1.4/1.7/1.8/1.9/1.10/1.11) hatasiz kosuyor; savunmaci (surum bilinmeyen) projection da altisinda birden.",
+          "status": "done"
+        },
+        {
+          "id": "AC4",
+          "text": "extversion merkezi kayda yazilir ve UI/kanit katmanindan gorulebilir.",
+          "status": "pending"
+        },
+        {
+          "id": "AC5",
+          "text": "Erisilebilir veritabanlarinda pgss kesfi: varlik, surum, okuma yetkisi; secilen toplama veritabani kaydedilir. telemetry_scope=instance ile access_scope=database ayrimi korunur - pgss VERISI kume genelidir, her veritabanindan toplamak GEREKMEZ.",
+          "status": "pending"
+        },
+        {
+          "id": "AC6",
+          "text": "Durumlar ayrilir: unsupported / not_installed / permission_denied / version_incompatible / version_unknown / available / collection_failed. last_error_text basarida temizlenir.",
+          "status": "pending"
+        },
+        {
+          "id": "AC7",
+          "text": "Test matrisi: pgss 1.8/1.9/1.10/guncel, \"yalniz appdb de kurulu\" ve 42501 senaryolari. CI de otomatik kosum PGSTAT-P1-020 ye bagli.",
+          "status": "pending"
+        }
+      ],
+      "implementation_plan": [
+        "Kolon sinirlarini gercek PostgreSQL de olc (yapildi).",
+        "Deklaratif katalog + surume gore projection uretimi (yapildi).",
+        "StatementsCollector i katalogdan uretilen sorguya bagla, olu sorgulari kaldir (yapildi).",
+        "extversion i merkezi kayda yaz.",
+        "Veritabanlari arasinda pgss kesfi ve secilen toplama veritabani.",
+        "Durum modeli ve last_error_text yasam dongusu."
+      ],
+      "verification_plan": [
+        "mvn -o test",
+        "Gercek PostgreSQL: her pgss suruminde uretilen sorgu ve savunmaci projection kosturulur"
+      ],
+      "required_docs": [
+        "docs/platform-governance-and-sdlc.md"
+      ],
+      "dependencies": [],
+      "customer_acceptance": {
+        "required": false,
+        "status": "not_required",
+        "evidence": ""
+      },
+      "verification_evidence": [
+        "Kirilma OLCULDU, tahmin edilmedi (2026-09-14, postgres:17 uzerinde pgss her surumde tek tek kurularak): pgss 1.9 + repo nun Pg14_16 sorgusu -> ERROR: column \"jit_generation_time\" does not exist. pgss 1.10 + repo nun Pg17_18 sorgusu -> ERROR: column \"shared_blk_read_time\" does not exist. Ilki uc durum bile degil: PG14 varsayilan olarak pgss 1.9 ile gelir. Tum jit_* kolonlari 1.10 da BIRLIKTE geldi; kod bir kismini daha erken varmis gibi dogrudan referans ediyordu.",
+        "FLEET ETKISI SIFIR ve bu acikca kaydedildi. 25 aktif instance: PG12(5), 13(5), 15(4), 16(3), 17(5), 18(3). PG14 YOK ve 25 in 25 i son 24 saatte pgss verisi gonderiyor. Yani bugun veri kaybi yok; duzeltmenin gerekcesi \"su an kaybediyoruz\" degil, yukseltme guvenligi ve katalog temeli. Ilk tahminim fleet etkisi bekliyordu, cikmadi.",
+        "\"En dusuk surumun projection i her yerde calisir\" varsayimi YANLIS cikti ve bunu ancak gercek veritabaninda kosturunca gorduk: pgss 1.8 total_time i total_exec_time olarak YENIDEN ADLANDIRDI, yani 1.4 projection i 1.8+ uzerinde patliyor. Surum uzayi ikiye bolunmus; tek bir dogrudan referansli guvenli taban yok. Bilinmeyen surumde surume bagli her kolon to_jsonb uzerinden okunuyor ve bu alti surumun altisinda da dogrulandi.",
+        "Katalog icin yeni bagimlilik eklenmedi: SnakeYAML zaten spring-boot-starter ile geliyor. YAML secildi cunku yorumlar yerel ve katalog ileride Node tarafindan da okunabilir olmali."
+      ]
     }
   ]
 }
