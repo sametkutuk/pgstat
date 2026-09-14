@@ -87,9 +87,67 @@ class PgssCapabilityCatalogTest {
             .contains("blk_read_time as blk_read_time");
 
         String v11 = catalog.buildSelectList(PgssVersion.of("1.11"));
-        assertThat(v11).contains("shared_blk_read_time,0")
-                       .contains("local_blk_read_time,0")
+        assertThat(v11).contains("coalesce(shared_blk_read_time, 0) + coalesce(local_blk_read_time, 0)")
                        .contains("as blk_read_time");
+    }
+
+    @Test
+    void theRebuiltBlockTimeExcludesTempAndDoesNotDoubleCount() {
+        // ESKI blk_read_time = shared + local, TEMP DAHIL DEGIL. 1.11 oncesinde
+        // pgss gecici dosya G/C suresini blk_read_time icinde HIC olcmuyordu;
+        // temp_blk_read_time ayri bir kolon olarak 1.10'da geldi.
+        //
+        // Uceyi toplamak hem eski anlami degistirir hem temp'i IKI KEZ sayar
+        // (bir kez blk_read_time icinde, bir kez kendi kolonunda). Bu hata
+        // mevcut Pg17_18Queries'te vardi ve katologa sorgulanmadan tasinmisti;
+        // dis inceleme yakaladi.
+        for (String v : new String[]{"1.11", "1.12"}) {
+            String sql = catalog.buildSelectList(PgssVersion.of(v));
+            String blkRead = lineFor(sql, "as blk_read_time");
+            assertThat(blkRead).as("surum " + v).doesNotContain("temp_blk_read_time");
+
+            String blkWrite = lineFor(sql, "as blk_write_time");
+            assertThat(blkWrite).as("surum " + v).doesNotContain("temp_blk_write_time");
+        }
+        // temp kendi kolonunda duruyor — kaybolmadi, yalnizca cift sayilmiyor.
+        assertThat(catalog.buildSelectList(PgssVersion.of("1.11")))
+            .contains("temp_blk_read_time as temp_blk_read_time");
+    }
+
+    @Test
+    void derivedColumnsSurviveTheDefensiveModeInsteadOfSilentlyZeroing() {
+        // Ilk surumde turetme serbest SQL ile yazilmisti ve savunmaci modda
+        // uretilemiyordu; blk_read_time 1.11+ uzerinde SESSIZCE sifira
+        // duruyordu. Kod yorumu bunun kaydedildigini soyluyordu ama boyle bir
+        // kayit yoktu. Sinirli derive islemleri bu kaybi ortadan kaldirdi.
+        String unknown = catalog.buildSelectList(null);
+        String blkRead = lineFor(unknown, "as blk_read_time");
+        assertThat(blkRead)
+            .contains("(j->>'blk_read_time')")          // 1.4-1.10 yolu
+            .contains("(j->>'shared_blk_read_time')")   // 1.11+ turetmesi
+            .contains("(j->>'local_blk_read_time')")
+            .doesNotContain("temp_blk_read_time");
+    }
+
+    @Test
+    void theInfoViewGateComesFromTheExtensionVersionNotThePgFamily() {
+        // pg_stat_statements_info pgss 1.9'da geldi. Karar PG ailesinden
+        // veriliyordu (supportsPgssInfo yalnizca Pg14_16Queries'te true) ve
+        // PG14+ sunucuda pgss 1.8 kalmissa sorgu patliyordu.
+        assertThat(catalog.supportsInfoView(PgssVersion.of("1.8"))).isFalse();
+        assertThat(catalog.supportsInfoView(PgssVersion.of("1.9"))).isTrue();
+        assertThat(catalog.supportsInfoView(PgssVersion.of("1.11"))).isTrue();
+        // Surum bilinmiyorsa okunamayacagi varsayilir: olmayan bir view'i
+        // sorgulamaktan iyidir.
+        assertThat(catalog.supportsInfoView(null)).isFalse();
+    }
+
+    /** Uretilen SELECT listesinden belirli bir hedefin satirini alir. */
+    private static String lineFor(String selectList, String marker) {
+        for (String line : selectList.split(",\n")) {
+            if (line.contains(marker)) return line;
+        }
+        throw new AssertionError("satir bulunamadi: " + marker);
     }
 
     // -----------------------------------------------------------------------

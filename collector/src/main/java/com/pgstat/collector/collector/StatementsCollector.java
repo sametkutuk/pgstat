@@ -122,6 +122,22 @@ public class StatementsCollector {
             String pgssFunction = pgssExtension.qualify("pg_stat_statements");
             String pgssInfoRelation = pgssExtension.qualify("pg_stat_statements_info");
 
+            // YETENEK KARARI EXTENSION SURUMUNDEN VERILIR, PG AILESINDEN DEGIL
+            // (PGSTAT-P1-021). pgss extension surumu PostgreSQL surumunden
+            // bagimsizdir; pg_upgrade sonrasi "ALTER EXTENSION
+            // pg_stat_statements UPDATE" calistirilmazsa extension geride kalir.
+            //
+            // Olculdu 2026-09-14 (postgres:17, her surum tek tek kurularak):
+            //   pgss 1.9  + eski Pg14_16 sorgusu -> jit_generation_time yok
+            //   pgss 1.10 + eski Pg17_18 sorgusu -> shared_blk_read_time yok
+            // Ilki uc durum bile degil: PG14 varsayilan olarak 1.9 ile gelir.
+            PgssCapabilityCatalog.PgssVersion pgssVersion =
+                PgssCapabilityCatalog.PgssVersion.of(pgssExtension.extVersion());
+            if (pgssVersion == null) {
+                log.warn("pgss extension surumu okunamadi instance={} (ham deger={}), "
+                       + "savunmaci projection kullaniliyor", instancePk, pgssExtension.extVersion());
+            }
+
             // Once role'leri yukle — pgss_delta'daki userid'leri rolname'e cevirebilmek icin
             // dim.role_ref tablosunun dolu olmasi gerek. Hafif sorgu, her cycle'da idempotent.
             try (Statement roleStmt = conn.createStatement();
@@ -157,7 +173,7 @@ public class StatementsCollector {
                     postmasterStartAt = rs2.getObject("start_time", OffsetDateTime.class);
                 }
             }
-            if (queries.supportsPgssInfo()) {
+            if (pgssCatalog.supportsInfoView(pgssVersion)) {
                 try (Statement stmt2 = conn.createStatement();
                      ResultSet rs2 = stmt2.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
                     if (rs2.next()) {
@@ -213,26 +229,7 @@ public class StatementsCollector {
 
             // Statement satirlarini oku.
             //
-            // SORGU ARTIK EXTENSION SURUMUNDEN URETILIYOR, pg_major'dan DEGIL
-            // (PGSTAT-P1-021). pgss extension surumu PostgreSQL surumunden
-            // bagimsizdir: pg_upgrade sonrasi "ALTER EXTENSION
-            // pg_stat_statements UPDATE" calistirilmazsa extension geride
-            // kalir ve sunucu surumune gore secilen sorgu var olmayan bir
-            // kolona referans verip TAMAMEN basarisiz olur.
-            //
-            // Olculdu 2026-09-14 (postgres:17, her surum tek tek kurularak):
-            //   pgss 1.9  + eski Pg14_16 sorgusu -> jit_generation_time yok
-            //   pgss 1.10 + eski Pg17_18 sorgusu -> shared_blk_read_time yok
-            // Ilki uc durum bile degil: PG14 varsayilan olarak 1.9 ile gelir.
-            //
-            // Surum okunamazsa katalog savunmaci projection uretir; hicbir
-            // surumde patlamayan ama bazi kolonlari bosaltan bir sorgu.
-            PgssCapabilityCatalog.PgssVersion pgssVersion =
-                PgssCapabilityCatalog.PgssVersion.of(pgssExtension.extVersion());
-            if (pgssVersion == null) {
-                log.warn("pgss extension surumu okunamadi instance={} (ham deger={}), "
-                       + "savunmaci projection kullaniliyor", instancePk, pgssExtension.extVersion());
-            }
+            // Sorgu katalogdan, yukarida cozulen extension surumune gore uretilir.
             try (Statement stmt = conn.createStatement();
                  ResultSet rs = stmt.executeQuery(
                      pgssCatalog.buildStatsQuery(pgssFunction, pgssVersion))) {

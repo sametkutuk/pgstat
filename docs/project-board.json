@@ -4546,7 +4546,7 @@
       "priority": "P1",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "Kalan M1 kapsami: pgss extversion merkezi kayda yazilsin; erisilebilir veritabanlarinda extension varligi/surumu/okuma yetkisi kesfedilsin ve secilen toplama veritabani kaydedilsin; durumlar ayrilsin (unsupported/not_installed/permission_denied/version_incompatible/version_unknown/available/collection_failed); last_error_text basarida temizlensin.",
+      "next_action": "Dis inceleme uc bloklayici doğruluk hatasi buldu, ucu de duzeltildi ve gercek PG17 de dogrulandi. Kalan M1: extversion merkezi kayda, veritabanlari arasi kesif, durum modeli. Kalan katalog isleri: fail-fast dogrulama (AC11), to_jsonb maliyeti (AC12), PG18 olcumu (AC13), catalog_version kaniti (AC14).",
       "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
       "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
       "requirements": [
@@ -4591,6 +4591,41 @@
           "id": "AC7",
           "text": "Test matrisi: pgss 1.8/1.9/1.10/guncel, \"yalniz appdb de kurulu\" ve 42501 senaryolari. CI de otomatik kosum PGSTAT-P1-020 ye bagli.",
           "status": "pending"
+        },
+        {
+          "id": "AC8",
+          "text": "blk_read_time / blk_write_time geriye donuk eslemesi shared + local; TEMP HARIC. 1.11 oncesinde pgss gecici dosya G/C suresini blk_*_time icinde hic olcmuyordu ve temp_blk_*_time ayri kolon olarak 1.10 da geldi; uceyi toplamak eski anlami degistirir ve temp i iki kez sayar.",
+          "status": "done"
+        },
+        {
+          "id": "AC9",
+          "text": "Turetilmis kolonlar savunmaci modda da uretilir. Serbest SQL yerine sinirli derive (op: sum) kullanildi; serbest ifade to_jsonb modunda uretilemiyordu ve degeri sessizce sifirliyordu.",
+          "status": "done"
+        },
+        {
+          "id": "AC10",
+          "text": "pg_stat_statements_info kapisi extension surumunden verilir (min 1.9), PG ailesinden degil. Surum bilinmiyorsa false.",
+          "status": "done"
+        },
+        {
+          "id": "AC11",
+          "text": "Katalog parser i fail-fast dogrulasin: duplicate target, cakisan surum araligi, bos source, gecersiz type/default, kapsanmayan aralik. Ayrica katalog paritesi readSample() ve merkezi INSERT kolonlarina karsi test edilsin.",
+          "status": "pending"
+        },
+        {
+          "id": "AC12",
+          "text": "to_jsonb maliyeti olculsun (1k/10k/50k satir, EXPLAIN ANALYZE BUFFERS) ve yalnizca gerektiginde uretilsin; dogrulanmis surumde gereksiz.",
+          "status": "pending"
+        },
+        {
+          "id": "AC13",
+          "text": "PG18 / pgss 1.12 sinirlari gercek DB de olculsun; verified:false kaldirilsin.",
+          "status": "pending"
+        },
+        {
+          "id": "AC14",
+          "text": "catalog_version runtime kanitina baglansin ve availableCapabilities(null) semantigi duzeltilsin (bilinmeyen surum \"mevcut\" degildir).",
+          "status": "pending"
         }
       ],
       "implementation_plan": [
@@ -4618,7 +4653,10 @@
         "Kirilma OLCULDU, tahmin edilmedi (2026-09-14, postgres:17 uzerinde pgss her surumde tek tek kurularak): pgss 1.9 + repo nun Pg14_16 sorgusu -> ERROR: column \"jit_generation_time\" does not exist. pgss 1.10 + repo nun Pg17_18 sorgusu -> ERROR: column \"shared_blk_read_time\" does not exist. Ilki uc durum bile degil: PG14 varsayilan olarak pgss 1.9 ile gelir. Tum jit_* kolonlari 1.10 da BIRLIKTE geldi; kod bir kismini daha erken varmis gibi dogrudan referans ediyordu.",
         "FLEET ETKISI SIFIR ve bu acikca kaydedildi. 25 aktif instance: PG12(5), 13(5), 15(4), 16(3), 17(5), 18(3). PG14 YOK ve 25 in 25 i son 24 saatte pgss verisi gonderiyor. Yani bugun veri kaybi yok; duzeltmenin gerekcesi \"su an kaybediyoruz\" degil, yukseltme guvenligi ve katalog temeli. Ilk tahminim fleet etkisi bekliyordu, cikmadi.",
         "\"En dusuk surumun projection i her yerde calisir\" varsayimi YANLIS cikti ve bunu ancak gercek veritabaninda kosturunca gorduk: pgss 1.8 total_time i total_exec_time olarak YENIDEN ADLANDIRDI, yani 1.4 projection i 1.8+ uzerinde patliyor. Surum uzayi ikiye bolunmus; tek bir dogrudan referansli guvenli taban yok. Bilinmeyen surumde surume bagli her kolon to_jsonb uzerinden okunuyor ve bu alti surumun altisinda da dogrulandi.",
-        "Katalog icin yeni bagimlilik eklenmedi: SnakeYAML zaten spring-boot-starter ile geliyor. YAML secildi cunku yorumlar yerel ve katalog ileride Node tarafindan da okunabilir olmali."
+        "Katalog icin yeni bagimlilik eklenmedi: SnakeYAML zaten spring-boot-starter ile geliyor. YAML secildi cunku yorumlar yerel ve katalog ileride Node tarafindan da okunabilir olmali.",
+        "Dis inceleme 2026-09-14 uc bloklayici doğruluk hatasi buldu ve ucu de gecerliydi. (1) blk_read_time eslemesi YANLISTI: shared + local + temp toplaniyordu. Eski blk_read_time veri dosyasi bloklarinin suresiydi; gecici dosya sureleri 1.10 dan beri ZATEN ayri temp_blk_*_time kolonlarinda. Uceyi toplamak eski anlami degistiriyor ve temp i iki kez sayiyor. Bu hata mevcut Pg17_18Queries te de vardi; ben icat etmedim ama sorgulamadan katologa tasidim. Duzeltildi: shared + local.",
+        "(2) Savunmaci modda turetilmis kolon SESSIZCE sifirlaniyordu ve kod yorumu bunun version_unknown olarak kaydedildigini soyluyordu — boyle bir kayit yoktu, yorum gercekle celisiyordu. Serbest SQL expr yerine sinirli derive (op: sum) kullanildi; artik hem dogrudan hem to_jsonb modunda ayni deger uretiliyor. (3) supportsPgssInfo() hala PG ailesine bakiyordu; pg_stat_statements_info pgss 1.9 da geldi ve karar artik extension surumunden veriliyor. Uretimde bu hatanin izi vardi (bipgsql-test, 2026-04-30).",
+        "Duzeltmeler gercek PostgreSQL 17 de yeniden dogrulandi: alti pgss suruminde (1.4/1.7/1.8/1.9/1.10/1.11) hem kendi projection i hem savunmaci projection hatasiz kosuyor. Uretilen ifade kontrol edildi: blk_read_time = coalesce(shared,0) + coalesce(local,0), temp yok; savunmaci modda ayni turetme j->> uzerinden. Test 123 -> 126."
       ]
     }
   ]

@@ -41,9 +41,16 @@ import java.util.Set;
  * ---------------------------------------------------------------------------
  * BILINMEYEN SURUM POLITIKASI
  * ---------------------------------------------------------------------------
- * Surum okunamazsa EN DUSUK desteklenen surumun projection'i kullanilir —
- * yani butun surumlerde var olan kolonlar. Iyimser davranip en yeni sorguyu
- * denemek, tam da duzeltmeye calistigimiz kirilmayi ureten davranistir.
+ * Surum okunamazsa surume bagli HER kolon to_jsonb uzerinden okunur.
+ *
+ * Once "en dusuk surumun projection'i her yerde calisir" varsayilmisti; bu
+ * YANLIS cikti ve ancak gercek veritabaninda kosturunca goruldu: pgss 1.8
+ * total_time'i total_exec_time olarak YENIDEN ADLANDIRDI, yani 1.4
+ * projection'i 1.8+ uzerinde "column total_time does not exist" ile patliyor.
+ * Surum uzayi ikiye bolunmus; tek bir dogrudan referansli guvenli taban yok.
+ *
+ * Iyimser davranip en yeni sorguyu denemek ise tam da duzeltmeye calistigimiz
+ * kirilmayi ureten davranistir.
  *
  * Katalogda "verified": false isaretli sinirlar (pgss 1.12 / PG18) OLCULMEDI;
  * o kolonlar her zaman to_jsonb ile guvenli okunur, cunku sinirin dogrulugundan
@@ -102,14 +109,43 @@ public class PgssCapabilityCatalog {
         @Override public String toString() { return major + "." + minor; }
     }
 
-    /** Bir hedef kolonun tek bir surum araligindaki kaynagi. */
-    record Source(String name, String expr, PgssVersion min, PgssVersion max) {
+    /**
+     * Bir hedef kolonun tek bir surum araligindaki kaynagi.
+     *
+     * Ya tek bir kolon adi (name) ya da SINIRLI bir turetme (derive). Serbest
+     * SQL bilerek desteklenmiyor: serbest bir ifade savunmaci (to_jsonb) modda
+     * uretilemiyordu ve degeri sessizce sifirliyordu.
+     */
+    record Source(String name, String deriveOp, List<String> deriveOf, PgssVersion min, PgssVersion max) {
         boolean covers(PgssVersion v) {
             if (min != null && v.compareTo(min) < 0) return false;
             if (max != null && v.compareTo(max) > 0) return false;
             return true;
         }
-        String sql() { return expr != null ? "(" + expr + ")" : name; }
+        boolean isDerived() { return deriveOp != null; }
+
+        /** Dogrudan mod: kolonlara referans. */
+        String sql(String type) {
+            if (!isDerived()) return name;
+            return "(" + join(deriveOf.stream()
+                .map(c -> "coalesce(" + c + ", 0)").toList()) + ")";
+        }
+
+        /** Savunmaci mod: ayni turetme, to_jsonb uzerinden. */
+        String jsonSql(String type) {
+            if (!isDerived()) return "(j->>'" + name + "')::" + type;
+            return "(" + join(deriveOf.stream()
+                .map(c -> "coalesce((j->>'" + c + "')::" + type + ", 0)").toList()) + ")";
+        }
+
+        private String join(List<String> parts) {
+            // Su an tek islem: sum. Yeni bir islem eklenirse burada acikca
+            // ele alinmali; sessiz bir varsayilan yanlis metrik uretir.
+            if (!"sum".equals(deriveOp)) {
+                throw new IllegalStateException("Bilinmeyen derive islemi: " + deriveOp);
+            }
+            return String.join(" + ", parts);
+        }
     }
 
     record Column(String target, String type, String defaultValue, boolean verified, List<Source> sources) {}
@@ -140,9 +176,17 @@ public class PgssCapabilityCatalog {
             for (Map<String, Object> col : nodes(c, "columns")) {
                 List<Source> sources = new ArrayList<>();
                 for (Map<String, Object> s : nodes(col, "sources")) {
+                    String op = null;
+                    List<String> of = null;
+                    if (s.get("derive") instanceof Map<?, ?> d) {
+                        op = d.get("op") == null ? null : String.valueOf(d.get("op"));
+                        if (d.get("of") instanceof List<?> l) {
+                            of = l.stream().map(String::valueOf).toList();
+                        }
+                    }
                     sources.add(new Source(
                         str(s, "name", null),
-                        str(s, "expr", null),
+                        op, of,
                         PgssVersion.of(str(s, "min", null)),
                         PgssVersion.of(str(s, "max", null))));
                 }
@@ -220,17 +264,17 @@ public class PgssCapabilityCatalog {
      * kaynak adaylari sirayla denenerek okunur. Boylece sorgu HICBIR surumde
      * patlamaz.
      *
-     * Bedeli: ifade (expr) tabanli kaynaklar kullanilamaz — onlar kolonlara
-     * dogrudan referans veriyor. blk_read_time 1.11+ uzerinde bu modda
-     * varsayilana duser. Bu kayip SESSIZ DEGIL: cagiran taraf durumu
-     * version_unknown olarak kaydeder.
+     * TURETILMIS kolonlar da bu modda uretilir. Ilk surumde serbest SQL
+     * kullanilmisti ve savunmaci modda uretilemiyordu; sonuc olarak
+     * blk_read_time 1.11+ uzerinde SESSIZCE sifira duruyordu. Kod yorumu
+     * bunun "version_unknown olarak kaydedildigini" soyluyordu ama boyle bir
+     * kayit yoktu — yorum gercekle celisiyordu (dis inceleme, 2026-09-14).
+     * Sinirli derive islemleri bu kaybi tamamen ortadan kaldirdi.
      */
     private String defensiveProjectionFor(Column col) {
         List<String> candidates = new ArrayList<>();
         for (Source s : col.sources()) {
-            if (s.name() != null) {
-                candidates.add("(j->>'" + s.name() + "')::" + col.type());
-            }
+            candidates.add(s.jsonSql(col.type()));
         }
         if (candidates.isEmpty()) {
             return col.defaultValue() + "::" + col.type() + " as " + col.target();
@@ -251,14 +295,14 @@ public class PgssCapabilityCatalog {
             return col.defaultValue() + "::" + col.type() + " as " + col.target();
         }
 
-        if (!col.verified() && hit.expr() == null) {
+        if (!col.verified() && !hit.isDerived()) {
             // Sinir OLCULMEDI. Dogrudan referans, sinir yanlissa sorgunun
             // tamamini dusurur; to_jsonb ile okumak yalnizca o kolonu bosaltir.
             return "coalesce((j->>'" + hit.name() + "')::" + col.type() + ", "
                  + col.defaultValue() + ") as " + col.target();
         }
 
-        return hit.sql() + " as " + col.target();
+        return hit.sql(col.type()) + " as " + col.target();
     }
 
     /**
@@ -282,6 +326,21 @@ public class PgssCapabilityCatalog {
             %s
             from src
             """.formatted(pgssFunction, buildSelectList(version));
+    }
+
+    /**
+     * pg_stat_statements_info bu surumde okunabilir mi?
+     *
+     * Karar PG AILESINDEN degil, kesfedilen extension surumunden verilir.
+     * Onceden supportsPgssInfo() yalnizca Pg14_16Queries'te true idi; PG14+
+     * sunucuda pgss 1.8 kalmissa view yok ve sorgu patliyordu. Uretimde bu
+     * hatanin izi var (bipgsql-test, 2026-04-30).
+     *
+     * Surum bilinmiyorsa FALSE doner: okunamayacagini varsaymak, olmayan bir
+     * view'i sorgulamaktan iyidir.
+     */
+    public boolean supportsInfoView(PgssVersion version) {
+        return version != null && availableCapabilities(version).contains("statements.info");
     }
 
     /** Katalog surumu — merkezi kayitla birlikte saklanir. */

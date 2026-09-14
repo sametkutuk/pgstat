@@ -36,6 +36,16 @@ measured_against: "postgres:17 (pgss 1.4-1.11)"
 
 capabilities:
 
+  # pg_stat_statements_info AYRI BIR VIEW ve pgss 1.9'da geldi. Kolonu yok,
+  # bu yuzden columns bos: yalnizca "bu surumde okunabilir mi" sorusunu
+  # cevapliyor. Onceden bu karar PG AILESINDEN veriliyordu
+  # (supportsPgssInfo yalnizca Pg14_16Queries'te true) ve PG14+ sunucuda pgss
+  # 1.8 kalmissa sorgu patliyordu — ayni kok neden, ayri bir yer.
+  - key: statements.info
+    title: pg_stat_statements_info goruntusu
+    min_pgss: "1.9"
+    columns: []
+
   - key: statements.identity
     title: Sorgu kimligi
     min_pgss: "1.4"
@@ -117,21 +127,34 @@ capabilities:
     min_pgss: "1.4"
     # KATALOGDAKI TEK KALDIRMA VAKASI. 1.11'de blk_read_time / blk_write_time
     # KALDIRILDI; yerine shared_blk_*, local_blk_* ve temp_blk_* geldi.
-    # Merkezi sema geriye donuk blk_read_time/blk_write_time tutmaya devam
-    # ediyor, 1.11+ icin ucu toplanarak ayni anlam korunuyor.
+    #
+    # ESKI blk_read_time = shared + local, TEMP DAHIL DEGIL.
+    # 1.11 oncesinde pgss gecici dosya G/C suresini blk_read_time icinde HIC
+    # olcmuyordu; temp_blk_read_time ayri bir kolon olarak 1.10'da geldi. Uceyi
+    # birden toplamak hem eski anlami degistirir hem de temp'i iki kez sayar
+    # (bir kez blk_read_time icinde, bir kez kendi kolonunda) — toplam alan
+    # raporlarda cift sayim uretir.
+    #
+    # Bu hata mevcut Pg17_18Queries'te de vardi ve katologa sorgulanmadan
+    # tasinmisti; dis inceleme yakaladi (2026-09-14).
+    #
+    # derive: serbest SQL yerine SINIRLI islem. Boylece hem dogrudan hem
+    # savunmaci (to_jsonb) modda uretilebiliyor ve katalog dogrulanabilir
+    # kaliyor; serbest bir expr savunmaci modda kullanilamiyordu ve degeri
+    # sessizce sifirliyordu.
     columns:
       - target: blk_read_time
         type: double precision
         default: "0"
         sources:
           - { name: blk_read_time, max: "1.10" }
-          - { expr: "coalesce(shared_blk_read_time,0) + coalesce(local_blk_read_time,0) + coalesce(temp_blk_read_time,0)", min: "1.11" }
+          - { derive: { op: sum, of: [ shared_blk_read_time, local_blk_read_time ] }, min: "1.11" }
       - target: blk_write_time
         type: double precision
         default: "0"
         sources:
           - { name: blk_write_time, max: "1.10" }
-          - { expr: "coalesce(shared_blk_write_time,0) + coalesce(local_blk_write_time,0) + coalesce(temp_blk_write_time,0)", min: "1.11" }
+          - { derive: { op: sum, of: [ shared_blk_write_time, local_blk_write_time ] }, min: "1.11" }
       - { target: temp_blk_read_time,    type: double precision, default: "0", sources: [ { name: temp_blk_read_time,    min: "1.10" } ] }
       - { target: temp_blk_write_time,   type: double precision, default: "0", sources: [ { name: temp_blk_write_time,   min: "1.10" } ] }
       - { target: shared_blk_read_time,  type: double precision, default: "0", sources: [ { name: shared_blk_read_time,  min: "1.11" } ] }
