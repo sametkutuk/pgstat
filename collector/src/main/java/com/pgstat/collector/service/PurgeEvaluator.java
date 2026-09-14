@@ -568,6 +568,31 @@ public class PurgeEvaluator {
             if (episodesDeleted > 0) {
                 log.info("Alert epizot purge: {} satir silindi ({} gun)", episodesDeleted, days);
             }
+
+            // GECICI (PGSTAT-P0-048 Adim 2, V116). Bayat istatistik alarmlari
+            // instance basina tek anahtardan tablo basina anahtara gecti. V116
+            // migration anindaki eski satirlari kapatti, ama eski surumu
+            // calistiran bir collector kopyasi (kademeli deploy, geri alma,
+            // unutulmus ikinci kopya) yenilerini uretmeye devam edebilir; o
+            // satirlar hicbir zaman auto-resolve edilmez cunku yeni kod o
+            // anahtarlari artik hic uretmiyor.
+            //
+            // BIR SURUM SONRA SILINECEK. Kalici birakmak, eski kodun hala
+            // calisiyor olabilecegini kalici olarak kabul etmek olurdu.
+            // Kendi try'inde: kod migration'dan ONCE deploy edilirse fonksiyon
+            // henuz yoktur ve bu, disaridaki catch'e dusup "Alert purge hatasi"
+            // diye yaniltici bir satir yazardi — oysa purge basariyla kostu.
+            try {
+                Integer legacyClosed = jdbc.queryForObject(
+                    "select ops.close_legacy_stale_statistics_alerts()", Integer.class);
+                if (legacyClosed != null && legacyClosed > 0) {
+                    log.warn("Eski sema bayat istatistik alarmi kapatildi: {} satir. "
+                           + "Eski surumu calistiran bir collector kopyasi olabilir.", legacyClosed);
+                }
+            } catch (Exception e) {
+                log.warn("Eski sema bayat istatistik temizligi atlandi (V116 uygulanmamis olabilir): {}",
+                    e.getMessage());
+            }
         } catch (Exception e) {
             log.warn("Alert purge hatasi: {}", e.getMessage());
         }

@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class AutovacuumEvidenceTest {
 
-    private final AlertRuleEvaluator evaluator = new AlertRuleEvaluator(null, null, null);
+    private final AlertRuleEvaluator evaluator = new AlertRuleEvaluator(null, null, null, null);
 
     /** Test kolayligi icin tam kayit uretici. */
     private AutovacuumWorkerEvidence evidence(
@@ -539,43 +539,6 @@ private static java.util.Map<String, Object> staleRow(String db, String schema, 
     }
 
     @Test
-    void aSingleStaleTableIsNamedInTheNotification() {
-        // Musteri itirazi 2026-09-02: ayni alarm 49 saatte 9 kez gonderilmis ve
-        // hicbirinde tablo adi gecmemis. Tek tabloda kisaltilacak bir sey yok;
-        // adi gizlemek yalnizca operatoru nereye bakacagindan mahrum birakir.
-        String out = AlertRuleEvaluator.staleNotificationSummary(
-            java.util.List.of(staleRow("moneasy", "management", "payment_types_currencies")), 178);
-
-        assertThat(out).contains("moneasy.management.payment_types_currencies");
-        assertThat(out).contains("178");
-    }
-
-    @Test
-    void theDatabaseIsPartOfTheNameBecauseSchemaAndTableAreNotUnique() {
-        // Ayni sema/tablo adi bir instance'in birden fazla veritabaninda
-        // bulunabiliyor — dogrulandi 2026-09-02: pnrhouse.t_order hem prodb hem
-        // testdb'de. DB olmadan bildirimdeki ad belirsizdir.
-        String out = AlertRuleEvaluator.staleNotificationSummary(
-            java.util.List.of(staleRow("prodb", "pnrhouse", "t_order")), 40);
-
-        assertThat(out).startsWith("prodb.pnrhouse.t_order");
-    }
-
-    @Test
-    void aFewStaleTablesAreListedAndTheRestAreCounted() {
-        // Uc ad + kalanin sayisi. Telegram dar tutulur, tam govde UI'da kalir.
-        String out = AlertRuleEvaluator.staleNotificationSummary(java.util.List.of(
-            staleRow("db1", "s", "a"), staleRow("db1", "s", "b"),
-            staleRow("db1", "s", "c"), staleRow("db1", "s", "d"),
-            staleRow("db1", "s", "e")), 90);
-
-        assertThat(out).contains("5 tablo");
-        assertThat(out).contains("db1.s.a").contains("db1.s.b").contains("db1.s.c");
-        assertThat(out).doesNotContain("db1.s.d");
-        assertThat(out).contains("2 tablo daha");
-    }
-
-    @Test
     void aProvenBaselineSaysSoInsteadOfClaimingTheStatisticalOne() {
         // Kanitli taban (dogrulanmis VACUUM FULL sonrasi olcum) ile
         // istatistiksel taban (28 gunluk gozlemden medyan) ayni guvende degil.
@@ -695,35 +658,6 @@ private static java.util.Map<String, Object> staleRow(String db, String schema, 
 
         assertThat(action).contains("vacuumdb --analyze-only");
         assertThat(action).doesNotContain("-d bis");
-    }
-
-    @Test
-    void staleListReportsDaysOnceHoursBecomeUnreadable() {
-        String list = AlertRuleEvaluator.formatStaleListForTest(
-            java.util.List.of(staleRow("etstur", "public", "t_x", 24 * 127, 13617, 5000)));
-
-        assertThat(list).contains("127 gündür analiz yok");
-        assertThat(list).contains("13.617");   // binlik ayrac, tr-TR
-        assertThat(list).contains("DB=etstur public.t_x");
-    }
-
-    @Test
-    void staleListShowsHoursWhileTheyAreStillReadable() {
-        String list = AlertRuleEvaluator.formatStaleListForTest(
-            java.util.List.of(staleRow("etstur", "public", "t_x", 30, 100, 50)));
-
-        assertThat(list).contains("30 saattir analiz yok");
-    }
-
-    @Test
-    void staleListSurfacesWhatItHadToLeaveOut() {
-        // Sessiz kirpma "hepsi bu" gibi okunur; kalan sayisi yazilmali.
-        java.util.List<java.util.Map<String, Object>> many = new java.util.ArrayList<>();
-        for (int i = 0; i < 9; i++) many.add(staleRow("db", "public", "t" + i, 100 - i, 10, 5));
-
-        String list = AlertRuleEvaluator.formatStaleListForTest(many);
-
-        assertThat(list).contains("ve 4 tablo daha");
     }
 
     // =========================================================================

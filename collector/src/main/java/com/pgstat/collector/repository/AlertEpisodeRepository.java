@@ -213,6 +213,101 @@ public class AlertEpisodeRepository {
     }
 
     /**
+     * Ihlalin ne zaman basladigi — acik epizodun first_observed_breaching_at'i.
+     * Epizot yoksa, henuz ihlal damgasi yoksa veya okuma basarisiz olursa null.
+     *
+     * ADIM 2'NIN KALBI. Adim 1'de epizot yalnizca yaziliyordu; kidem
+     * severity'sini hesaplamak icin ilk kez OKUNUYOR.
+     *
+     * Neden gerekli: stale_hours bugun "son ANALYZE'dan bu yana" olarak
+     * olculuyor ve bu YANLIS SAAT. 178 saat once analiz edilmis ama esigini bir
+     * saat once gecmis bir tablo 178 saat rapor edip dogrudan CRITICAL'a
+     * gidiyor — oysa sorun bir saatlik. Ikisi farkli saatler ve yalnizca biri
+     * aciliyet soyluyor.
+     *
+     * NULL DONMESI "IHLAL YOK" DEMEK DEGIL, "HENUZ BILMIYORUZ" DEMEK. Cagiran
+     * taraf bunu ihlal suresi sifir gibi ele almali, sonsuz gibi degil: yeni
+     * damgalanmis bir epizodun kidemi sifirdir ve zamanla dogal olarak buyur.
+     */
+    public java.time.Instant getBreachStart(String alertKey) {
+        try {
+            if (alertKey == null) return null;
+            java.util.List<java.sql.Timestamp> rows = jdbc.query("""
+                select first_observed_breaching_at
+                  from ops.alert_episode
+                 where alert_key = ?
+                   and closed_at is null
+                """,
+                (rs, n) -> rs.getTimestamp("first_observed_breaching_at"), alertKey);
+            if (rows.isEmpty() || rows.get(0) == null) return null;
+            return rows.get(0).toInstant();
+        } catch (Exception e) {
+            recordFailure("getBreachStart alert_key=" + alertKey, e);
+            return null;
+        }
+    }
+
+    /** LIKE joker karakterlerini kacirir — anahtarlarda _ ve % gecebilir. */
+    private static String likePrefix(String prefix) {
+        return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
+    /**
+     * Bir onek altindaki TUM acik epizotlari 'unknown' isaretler.
+     * ASLA ISTISNA FIRLATMAZ.
+     *
+     * Sorgu patladiginda veya instance'a ulasilamadiginda cagrilir: kosul
+     * hakkinda hicbir sey ogrenmedik. Epizot KAPANMAZ ve ihlal saati
+     * ILERLEMEZ; yalnizca "bu turda bakamadik" kaydedilir.
+     *
+     * Bunu yapmamak, veri yoklugunu sessizce saglik kaniti saymak olurdu — bu
+     * tasarimin onlemek icin var oldugu sey.
+     */
+    public void markUnknownByPrefix(String keyPrefix) {
+        try {
+            if (keyPrefix == null) return;
+            jdbc.update("""
+                update ops.alert_episode
+                set state = ?
+                where alert_key like ? escape '\\'
+                  and closed_at is null
+                  and state is distinct from ?
+                """, STATE_UNKNOWN, likePrefix(keyPrefix), STATE_UNKNOWN);
+        } catch (Exception e) {
+            recordFailure("markUnknownByPrefix prefix=" + keyPrefix, e);
+        }
+    }
+
+    /**
+     * Onek altindaki, bu turda ARTIK IHLAL ETMEYEN epizotlari kapatir.
+     * ASLA ISTISNA FIRLATMAZ.
+     *
+     * stillBreaching, bu degerlendirmede esigi asmis kayitlarin anahtarlari.
+     * Listede olmayan her acik epizot icin kosulun gectigi DOGRULANDI, cunku
+     * sorgu basariyla kostu ve o kaydi dondurmedi — bu yuzden
+     * confirmed_healthy yazilabilir.
+     *
+     * Sorgu HATA verdiyse burasi cagrilmaz; o yol markUnknownByPrefix'e gider.
+     * Ayrim onemli: "baktik, duzelmis" ile "bakamadik" ayni sey degil.
+     */
+    public void closeNoLongerBreaching(String keyPrefix, java.util.Set<String> stillBreaching) {
+        try {
+            if (keyPrefix == null) return;
+            java.util.List<String> open = jdbc.queryForList("""
+                select alert_key from ops.alert_episode
+                 where alert_key like ? escape '\\' and closed_at is null
+                """, String.class, likePrefix(keyPrefix));
+            for (String key : open) {
+                if (stillBreaching == null || !stillBreaching.contains(key)) {
+                    close(key, CLOSE_RESOLVED, STATE_HEALTHY);
+                }
+            }
+        } catch (Exception e) {
+            recordFailure("closeNoLongerBreaching prefix=" + keyPrefix, e);
+        }
+    }
+
+    /**
      * Acik epizodun severity'sini gunceller. ASLA ISTISNA FIRLATMAZ.
      *
      * YALNIZCA GUNCELLER, EPIZOT ACMAZ. AlertRuleEvaluator'in severity

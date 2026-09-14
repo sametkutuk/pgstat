@@ -146,6 +146,53 @@ Tablo başına alarm; severity `first_observed_breaching_at`'ten. Son ANALYZE ay
 olarak kalır. Eski instance-anahtarlı alarmları kapatan migration, ve en az bir sürüm
 boyunca savunmacı kapatma. ACK'in doğruluk kaynağı epizoda taşınır.
 
+**Bu yeni bir desen değil, geride kalmış tek kuralın yakalanması.** Granular kurallar
+2026-08-28'de zaten tablo başına alarma geçti ve gerekçesi kayıtlı: instance başına tek
+anahtarla yalnızca listenin **ilk** kaydı değerlendiriliyordu, altındaki bozuk tablolar
+hiç görünmüyordu (instance 2'de `security.user` eşiğin altında olduğu için listeyi
+tıkıyor, altındaki dördü — üçü kritik — hiç değerlendirilmiyordu). `stale_statistics` o
+düzeltmenin dışında kaldı; hâlâ `rule:{id}:instance:{pk}` kullanıyor. Adım 2 mevcut
+`recordAlertKey(..., "table_metric")` yardımcısını kullanır, yeni bir anahtar şeması
+icat etmez.
+
+Bildirim davranışı değişmez: `DEFERRED` + tek özet mesaj — beş bozuk tablo beş
+`ops.alert` satırı ama tek Telegram mesajı (müşteri kararı 2026-08-28).
+
+#### Değişmez değişiyor: 1:1 değil, "alarm açmış epizot"
+
+Adım 1'de doğrulanan "her açık epizodun bir açık alarmı vardır" eşlemesi **Adım 2'de
+kasıtlı olarak bozuluyor**, çünkü severity zamana bağlanınca epizot ile alarm farklı
+şeyleri ifade etmeye başlıyor:
+
+| | Anlamı |
+|---|---|
+| **Epizot açık** | Koşul **doğru** — eşik aşıldı |
+| **Alarm açık** | Koşul **yeterince uzun süredir** doğru — birine söylemeye değer |
+
+Eşiği beş dakika önce aşmış bir tablonun epizodu açılır (saat o an başlamalı, yoksa
+kıdem hiç ölçülemez) ama alarmı açılmaz. Bu bir kusur değil, **kıdem ölçümünün ta
+kendisi**: alarm ancak epizot yeterince yaşlandığında doğar.
+
+Bu yüzden karşılaştırma sorgusunun B yönü daralır — ayırt edici, epizodun `severity`
+alanı:
+
+- `severity is null` → ihlâl kaydedildi, henüz alarm açılmadı. **Beklenen durum.**
+- `severity is not null` → bu epizot alarm açtı; açık bir alarmı **olmalı**.
+
+```sql
+-- B yonu (Adim 2 sonrasi): alarm ACMIS ama acik alarmi olmayan epizot
+select e.alert_key, e.severity, e.opened_at, e.first_observed_breaching_at
+  from ops.alert_episode e
+  left join ops.alert a
+    on a.alert_key = e.alert_key and a.status in ('open', 'acknowledged')
+ where e.closed_at is null
+   and e.severity is not null
+   and a.alert_id is null;
+```
+
+A yönü değişmez. Bu daralma **Adım 2 deploy edilene kadar uygulanmamalı**; o zamana
+kadar dar hâli gerçek kusurları gizler.
+
 ### Adım 3 — Bildirim denetimi
 
 `rendered_title`, `rendered_body`, `payload_hash`, `episode_id` köprüsü, `event_type`,

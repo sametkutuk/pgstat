@@ -1,6 +1,7 @@
 package com.pgstat.collector.service;
 
 import com.pgstat.collector.model.AlertCode;
+import com.pgstat.collector.repository.AlertEpisodeRepository;
 import com.pgstat.collector.repository.AlertRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,11 +37,33 @@ public class AlertRuleEvaluator {
     private final AlertRepository alertRepo;
     private final AlertMessageRenderer renderer;
 
+    /**
+     * Ihlal epizotlari (PGSTAT-P0-048).
+     *
+     * Adim 1'de epizot yalnizca YAZILIYORDU. Adim 2'den itibaren
+     * stale_statistics kidem severity'sini buradan OKUYOR: aciliyeti belirleyen
+     * esigin ne zaman asildigidir, son ANALYZE'dan bu yana gecen sure degil.
+     * Diger kurallar hala yalnizca golge yazim yapiyor.
+     */
+    private final AlertEpisodeRepository episodes;
+
     public AlertRuleEvaluator(JdbcTemplate jdbc, AlertRepository alertRepo,
-                              AlertMessageRenderer renderer) {
+                              AlertMessageRenderer renderer,
+                              AlertEpisodeRepository episodes) {
         this.jdbc = jdbc;
         this.alertRepo = alertRepo;
         this.renderer = renderer;
+        this.episodes = episodes;
+    }
+
+    /** Sorgu patladi: kosul hakkinda hicbir sey ogrenmedik (bkz. markUnknownByPrefix). */
+    private void markOpenEpisodesUnknown(String keyPrefix) {
+        episodes.markUnknownByPrefix(keyPrefix);
+    }
+
+    /** Artik esigi asmayan kayitlarin epizotlari kapanir. */
+    private void closeEpisodesNoLongerBreaching(String keyPrefix, java.util.Set<String> stillBreaching) {
+        episodes.closeNoLongerBreaching(keyPrefix, stillBreaching);
     }
 
     private record TempRuleDetails(
@@ -536,60 +559,139 @@ public class AlertRuleEvaluator {
         for (Map<String, Object> target : loadTargetInstances(rule)) {
             long instancePk = toLong(target.get("instance_pk"));
             String serviceGroup = (String) target.get("service_group");
-            String alertKey = "rule:" + ruleId + ":instance:" + instancePk;
+            String keyPrefix = recordAlertKeyPrefix(ruleId, instancePk);
 
             List<Map<String, Object>> stale;
             try {
                 stale = findStaleStatisticsTables(instancePk);
             } catch (Exception e) {
+                // Sorgu patladi: KOSUL HAKKINDA HICBIR SEY OGRENMEDIK. Acik
+                // epizotlar 'unknown' isaretlenir ki ihlal saati ilerlemesin ve
+                // veri yoklugu sessizce "iyilesti" diye okunmasin.
                 log.warn("stale_statistics sorgusu hatasi instance={}: {}", instancePk, e.getMessage());
+                markOpenEpisodesUnknown(keyPrefix);
                 continue;
             }
 
-            // En uzun sure bayat kalan tablo severity'yi belirler.
-            double worstHours = 0;
-            for (Map<String, Object> r : stale) {
-                double h = r.get("stale_hours") instanceof Number n ? n.doubleValue() : 0;
-                if (h > worstHours) worstHours = h;
-            }
+            java.util.Set<String> stillAlerting = new java.util.HashSet<>();
+            java.util.List<RaisedRecordAlert> raised = new java.util.ArrayList<>();
+            java.util.List<ResolvedRecordAlert> resolved = new java.util.ArrayList<>();
+            BigDecimal worstVal = null;
+            String worstSeverity = null;
 
-            String severity = null;
-            if (critHours != null && worstHours >= critHours.doubleValue()) severity = "critical";
-            else if (warnHours != null && worstHours >= warnHours.doubleValue()) severity = "warning";
+            for (Map<String, Object> rec : stale) {
+                String recordKey = recordAlertKey(ruleId, instancePk, rec, "table_metric");
 
-            String prevSeverity = alertRepo.openSeverity(alertKey);
+                // 1) IHLALI KAYDET. Bu tablo esigi ASMIS durumda; epizot burada
+                //    acilir ve first_observed_breaching_at yanlis->dogru
+                //    gecisinde bir kez damgalanir. Alarm acilmasa bile yapilir:
+                //    ihlal saati, alarmin dogdugu an degil esigin asildigi an.
+                episodes.observe(new AlertEpisodeRepository.Observation(
+                    recordKey, AlertCode.USER_DEFINED_RULE.getCode(), "user_rule",
+                    instancePk, toLongOrNull(rec.get("dbid")), toLongOrNull(rec.get("relid")),
+                    null, false,
+                    AlertEpisodeRepository.STATE_BREACHING, null, java.time.Instant.now()));
 
-            if (severity == null) {
-                if (prevSeverity != null && autoResolve) {
-                    resolveAlert(alertKey, rule, instancePk, null);
+                // 2) KIDEMI EPIZOTTAN OKU. Eskiden severity stale_hours'tan,
+                //    yani SON ANALYZE'DAN bu yana gecen sureden hesaplaniyordu.
+                //    Yanlis saat: 178 saat once analiz edilmis ama esigini bir
+                //    saat once gecmis bir tablo 178 saat rapor edip dogrudan
+                //    CRITICAL'a gidiyordu. Aciliyeti belirleyen, esigin ne zaman
+                //    asildigi.
+                double breachHours = hoursSince(episodes.getBreachStart(recordKey));
+
+                String severity = null;
+                if (critHours != null && breachHours >= critHours.doubleValue()) severity = "critical";
+                else if (warnHours != null && breachHours >= warnHours.doubleValue()) severity = "warning";
+
+                String prevSeverity = alertRepo.openSeverity(recordKey);
+
+                if (severity == null) {
+                    // Esik asilmis ama HENUZ yeterince uzun sure degil. Epizot
+                    // acik kalir (saat isliyor), alarm acilmaz. Bu, kidem
+                    // olcumunun kendisi — kusur degil.
+                    if (prevSeverity != null && autoResolve) {
+                        resolveRecordDeferred(recordKey, instancePk,
+                            recordLabel(rec, "table_metric"), resolved);
+                    }
+                    stillAlerting.add(recordKey);
+                    continue;
                 }
-                updateLastEval(ruleId, instancePk, BigDecimal.valueOf(worstHours), null);
-                continue;
+                if (prevSeverity == null && alertRepo.resolvedWithin(recordKey, cooldownMinutes)) {
+                    stillAlerting.add(recordKey);
+                    continue;
+                }
+
+                BigDecimal hours = BigDecimal.valueOf(Math.round(breachHours));
+                boolean escalates = "critical".equals(severity) && !"critical".equals(worstSeverity);
+                boolean higherAtSameSeverity = severity.equals(worstSeverity)
+                    && (worstVal == null || hours.compareTo(worstVal) > 0);
+                if (worstSeverity == null || escalates || higherAtSameSeverity) {
+                    worstSeverity = severity;
+                    worstVal = hours;
+                }
+
+                Map<String, Object> ctx = baseContext(rule, instancePk, severity);
+                ctx.put("value", hours);
+                ctx.put("breach_hours", hours);
+                // SON ANALYZE ARTIK BAGLAM, TETIKLEYICI DEGIL. Ikisi farkli
+                // saatler ve yalnizca biri aciliyet soyluyor; ama "en son ne
+                // zaman analiz edildi" hala operatorun gormek istedigi bir sey.
+                ctx.put("stale_hours", BigDecimal.valueOf(Math.round(
+                    rec.get("stale_hours") instanceof Number n ? n.doubleValue() : 0)));
+                ctx.put("last_any_analyze", rec.get("last_any_analyze"));
+                ctx.put("stale_count", stale.size());
+                ctx.put("stale_action", staleStatisticsAction(java.util.List.of(rec)));
+                populateRecordCtx(ctx, rec, "table_metric");
+
+                String fallback = String.format(
+                    "%s.%s istatistikleri %d saattir bayat (autoanalyze eşiği aşılalı beri).",
+                    rec.get("schemaname"), rec.get("relname"), Math.round(breachHours));
+                String[] rendered = renderWithCode(rule, ctx, ruleName, fallback, "stale_statistics");
+
+                // DEFERRED: bes bayat tablo bes ops.alert satiri ama TEK Telegram
+                // mesaji (musteri karari 2026-08-28). Granular kurallarda zaten
+                // uygulanan ilke; bu kural onun disinda kalmisti.
+                long alertId = alertRepo.upsertWithSeverity(recordKey, AlertCode.USER_DEFINED_RULE,
+                    severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
+                    buildStaleDetailsJson(java.util.List.of(rec)),
+                    AlertRepository.NotifyMode.DEFERRED);
+
+                stillAlerting.add(recordKey);
+                raised.add(new RaisedRecordAlert(alertId, recordKey, severity,
+                    recordLabel(rec, "table_metric"), hours, warnHours, rendered[0]));
             }
-            if (prevSeverity == null && alertRepo.resolvedWithin(alertKey, cooldownMinutes)) continue;
 
-            Map<String, Object> ctx = baseContext(rule, instancePk, severity);
-            ctx.put("value", BigDecimal.valueOf(Math.round(worstHours)));
-            ctx.put("stale_count", stale.size());
-            ctx.put("stale_list", formatStaleList(stale));
-            ctx.put("stale_action", staleStatisticsAction(stale));
+            // Artik esigi asmayan tablolar: epizot KAPANIR (kosulun gectigi
+            // dogrulandi) ve varsa alarmi cozulur.
+            if (autoResolve) {
+                for (String openKey : alertRepo.openAlertKeysWithPrefix(keyPrefix)) {
+                    if (!stillAlerting.contains(openKey)) {
+                        resolveRecordDeferred(openKey, instancePk,
+                            previousRecordsLabel(openKey, "table_metric"), resolved);
+                    }
+                }
+            }
+            closeEpisodesNoLongerBreaching(keyPrefix, stillAlerting);
 
-            String fallback = String.format("%s: %d tablonun istatistikleri bayat (en eskisi %d saat).",
-                lookupInstanceName(instancePk), stale.size(), Math.round(worstHours));
-            String[] rendered = renderWithCode(rule, ctx, ruleName, fallback, "stale_statistics");
-
-            // DEFERRED: alert'in tam govdesi (tablo listesi + aksiyon) ops.alert'te
-            // durur ve UI'da goruluyor; bildirime yalnizca baslik ve tek satirlik
-            // ozet gider (musteri talebi 2026-08-28, granular kurallarda uygulanan
-            // ayni ilke — bu kural onunla tutarsiz kalmisti).
-            long alertId = alertRepo.upsertWithSeverity(alertKey, AlertCode.USER_DEFINED_RULE,
-                severity, instancePk, serviceGroup, rendered[0], rendered[1], ruleId,
-                buildStaleDetailsJson(stale), AlertRepository.NotifyMode.DEFERRED);
-            alertRepo.notifySummary(alertId, alertKey, AlertCode.USER_DEFINED_RULE.getCode(),
-                severity, instancePk, rendered[0],
-                staleNotificationSummary(stale, Math.round(worstHours)));
-            updateLastEval(ruleId, instancePk, BigDecimal.valueOf(Math.round(worstHours)), severity);
+            notifyRaisedBatch(raised, instancePk, ruleName);
+            notifyResolvedBatch(resolved, instancePk, ruleName);
+            updateLastEval(ruleId, instancePk, worstVal, worstSeverity);
         }
+    }
+
+    /**
+     * Ihlal baslangicindan bu yana gecen saat. Damga yoksa SIFIR doner.
+     *
+     * Null "ihlal yok" degil "henuz bilmiyoruz" demek: epizot bu turda yeni
+     * damgalandiysa kidem gercekten sifirdir. Sonsuz varsaymak, ilk gorulen
+     * ihlali aninda CRITICAL yapardi — duzeltmeye calistigimiz hatanin ta
+     * kendisi.
+     */
+    static double hoursSince(java.time.Instant since) {
+        if (since == null) return 0;
+        double h = java.time.Duration.between(since, java.time.Instant.now()).toMillis() / 3_600_000.0;
+        return h < 0 ? 0 : h;
     }
 
     /**
@@ -1220,81 +1322,10 @@ public class AlertRuleEvaluator {
         return String.format("%.0f B", b);
     }
 
-    static String formatStaleListForTest(List<Map<String, Object>> stale) {
-        return formatStaleList(stale);
-    }
-
     static String staleStatisticsActionForTest(List<Map<String, Object>> stale) {
         return staleStatisticsAction(stale);
     }
 
-    /**
-     * Bildirimdeki ozet — tablo ADLARIYLA.
-     *
-     * Onceden yalnizca "%d tablo, en eskisi %d saattir analiz edilmemis."
-     * gonderiliyordu. Gerekce, tam govdeyi UI'da tutup Telegram'i kisa tutmakti
-     * (2026-08-28) ve cok tabloda dogru. TEK TABLODA ise kisaltilacak bir sey
-     * yok, sadece bilgi eksiltiliyor: operator hangi tabloya bakacagini
-     * bilmiyor (musteri itirazi 2026-09-02, ayni alarm 49 saatte 9 kez
-     * gonderilmis ve hicbirinde tablo adi gecmemis).
-     *
-     * Kimlik DB.sema.tablo — ayni sema/tablo adi bir instance'in birden fazla
-     * veritabaninda bulunabiliyor (dogrulandi: pnrhouse.t_order hem prodb hem
-     * testdb'de), DB olmadan ad belirsiz kalir.
-     */
-    static String staleNotificationSummary(List<Map<String, Object>> stale, long worstHours) {
-        if (stale.isEmpty()) {
-            return String.format("En eskisi %d saattir analiz edilmemiş.", worstHours);
-        }
-        if (stale.size() == 1) {
-            return String.format("%s — %d saattir analiz edilmemiş.",
-                staleQualifiedName(stale.get(0)), worstHours);
-        }
-        StringBuilder names = new StringBuilder();
-        int shown = 0;
-        for (Map<String, Object> r : stale) {
-            if (shown >= STALE_NOTIFICATION_NAME_LIMIT) break;
-            if (shown > 0) names.append(", ");
-            names.append(staleQualifiedName(r));
-            shown++;
-        }
-        String rest = stale.size() > shown
-            ? String.format(" ve %d tablo daha", stale.size() - shown) : "";
-        return String.format("%d tablo: %s%s. En eskisi %d saattir analiz edilmemiş.",
-            stale.size(), names, rest, worstHours);
-    }
-
-    /** DB.sema.tablo — DB olmadan ad belirsiz kalir. */
-    private static String staleQualifiedName(Map<String, Object> r) {
-        Object db = r.get("datname");
-        return String.format("%s.%s.%s",
-            db != null ? db : "?", r.get("schemaname"), r.get("relname"));
-    }
-
-    /** Bildirimde en fazla kac tablo adi yazilir. Telegram dar, govde UI'da. */
-    private static final int STALE_NOTIFICATION_NAME_LIMIT = 3;
-
-    /** Mesajdaki tablo listesi — en uzun sure bayat kalanlar once. */
-    private static String formatStaleList(List<Map<String, Object>> stale) {
-        StringBuilder sb = new StringBuilder();
-        int shown = 0;
-        for (Map<String, Object> r : stale) {
-            if (shown++ >= BATCH_NOTIFICATION_LIST_LIMIT) break;
-            double hours = r.get("stale_hours") instanceof Number n ? n.doubleValue() : 0;
-            long mods = r.get("n_mod_since_analyze") instanceof Number n ? n.longValue() : 0;
-            long thresh = r.get("analyze_threshold") instanceof Number n ? n.longValue() : 0;
-            sb.append(String.format("• DB=%s %s.%s — %s, %,d satır değişmiş (eşik %,d)%n",
-                r.get("datname") != null ? r.get("datname") : "?",
-                r.get("schemaname"), r.get("relname"),
-                hours >= 48 ? String.format("%d gündür analiz yok", Math.round(hours / 24))
-                            : String.format("%d saattir analiz yok", Math.round(hours)),
-                mods, thresh));
-        }
-        if (stale.size() > BATCH_NOTIFICATION_LIST_LIMIT) {
-            sb.append(String.format("… ve %d tablo daha", stale.size() - BATCH_NOTIFICATION_LIST_LIMIT));
-        }
-        return sb.toString().stripTrailing();
-    }
 
     /**
      * Aksiyon metni. Tek tablo varsa onu hedefler; birden fazlaysa instance

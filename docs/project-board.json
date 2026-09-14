@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-09-03",
+  "updated_at": "2026-09-14",
   "project": {
     "name": "pgstat product family",
     "customer_role": "product customer / acceptance tester",
@@ -1807,7 +1807,7 @@
       "priority": "P0",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "Adim 1 (epizot golge yazimi) kodlandi ve dogrulandi; deploy sonrasi cift yonlu karsilastirma sorgusu calistirilip sifir satir dondugu gorulmeden Adim 2 baslamaz. Kural 176 acik ve izleniyor; ilk alarmi elle dogrulanacak.",
+      "next_action": "Adim 2 kodlandi (bayat istatistik tablo basina + kidem saati epizottan). V116 KONTEYNERDE DOGRULANMADI (Docker kapaliydi) - deploy oncesi dogrulanmali. Deploy sonrasi: eski instance-anahtarli alarmlarin kapandigi, yeni :rec: anahtarlarinin acildigi ve B yonu sorgusunun daraltilmis halinin sifir dondugu gorulmeli. Sonra AC6 (ACK epizoda).",
       "title": "Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant",
       "problem": "The customer reviewed the Telegram feed on 2026-09-02 and called it insufficient and wrong. Three separate defects sit behind that, all confirmed in code. First, the stale statistics notification carries only a count: one alert had been open since 2026-08-31 with 9 notifications over 49 hours, none of them naming management.payment_types_currencies. The DEFERRED notify mode was a deliberate 2026-08-28 choice to keep Telegram short, which is right for fifty tables and pure loss for one. Second, the dead tuple rule fires CRITICAL on pgstat's own control tables - control.instance_state at 26 live rows, control.alert_rule_last_eval at 170, dim.role_ref at 715, control.table_relopts_snapshot at 14033 - whose absolute dead tuple counts measured 63, 130, 555 and 2952. Leg A's minimum-row gate counts dead tuples in the sum, so the complaint qualifies itself; leg B's absolute floor of 500 is below any scale at which dead tuples cost anything. Third, stale_hours is computed as now() minus the last ANALYZE rather than from the moment the autoanalyze threshold was breached, so a table analyzed 178 hours ago that crossed its threshold an hour ago reports 178 hours and goes straight to CRITICAL.",
       "requirements": [
@@ -1846,7 +1846,7 @@
         {
           "id": "AC5",
           "text": "Staleness severity is driven by time since the threshold breach began, recorded once on the false-to-true transition and never rewritten by re-evaluation. Absence of data must not reset the clock. Time since last ANALYZE stays as context.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC6",
@@ -1881,7 +1881,7 @@
         {
           "id": "AC12",
           "text": "Deploy sonrasi cift yonlu karsilastirma sorgusu calistirilir ve SIFIR satir doner. IKI YONUN KAPSAMI AYNI DEGIL: V114 geriye donuk doldurma yapmadigi icin A yonu yalnizca golge yazim basladiktan SONRA yeniden gorulmus alarmlara uygulanir (last_seen_at), B yonu tum acik epizotlara. Ilk surumde ikisi de tum alarmlari kapsiyordu ve deploy oncesinden kalan, yeniden degerlendirilmemis alarmlar yanlis uyusmazlik uretecekti - kapi ilk gun kirmizi yanip gercek kusurlari gurultude bogardi. Sifir satir tek basina yetmez: epizot sayisi sifirdan buyuk olmali ve control.health_check_state alert_episode_shadow satiri ok olmali, yoksa \"hic yazmadi\" ile \"dogru yazdi\" ayni gorunur.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC13",
@@ -1944,7 +1944,12 @@
         "Dis inceleme 2026-09-03 aksami alti kusur buldu, altisi da gercekti ve hicbiri reddedilmedi. Ikisi kapi hatasiydi: (1) API deki manuel resolve ve database-cleanup ops.alert i kapatip epizodu acik birakiyordu, yani cift yonlu sorgu epizot_var_alarm_yok dondururdu - \"kanca iki sinif\" tespiti alarm ACILISI icin dogruydu ama yasam dongusunun KAPANISINDA API de bir uretici; (2) karsilastirma sorgusu deploy oncesinden kalan tum acik alarmlari kapsiyordu ve V114 backfill yapmadigi icin yeniden degerlendirilmemis alarmlar dogal olarak epizotsuz kalacakti.",
         "Kapsam degisikligi acikca kayda gecirildi: baslangicta \"Adim 1 yalniz kullanici kurallari icin golge yazim\" denmisti, merkezi kanca fiilen butun ureticileri yaziyor. Bilincli: kismi bir golge ops.alert ile 1:1 eslenemez ve o zaman cift yonlu karsilastirma sorgusu - tek gercek dogrulama aracimiz - anlamsizlasir. Ayrica repository katmaninda tek kanca, bes evaluator a ayri ayri dokunmaktan daha kucuk bir degisiklik yuzeyi.",
         "Duzeltmeler yine gercek bir postgres:17 konteynerinde dogrulandi. Kritik olan iki sonuc birlikte: 30 gun once acilmis ve o gunden beri yeniden gorulmemis bir alarm artik yanlis uyusmazlik URETMIYOR, ama yeniden gorulmus epizotsuz bir alarm HALA yakalaniyor. Yani kapsam daraltmasi gurultuyu kesiyor, sorgunun asil isini korlestirmiyor. Ayrica confirmed_healthy in kapanista gercekten yazildigi ve stale_timeout kapanisinin durumu korudugu dogrulandi.",
-        "Transaction degismezi iki yerden eksikti. Guard testi yalnizca dogrudan yazanlari tariyordu; transaction cagiran taraftan gelir, yani JobOrchestrator.runAlerts() uzerine konan bir @Transactional altindaki butun yazmalari icine alirdi - SystemHealthEvaluator, JobOrchestrator ve PurgeEvaluator eklendi. Ayrica degismez fazla genis ifade edilmisti: kapsam YALNIZCA collector. API mesru olarak acik transaction kullaniyor ve kullanmasi da dogru, orada alarm ve epizot kapanisi ayni mantiksal islem."
+        "Transaction degismezi iki yerden eksikti. Guard testi yalnizca dogrudan yazanlari tariyordu; transaction cagiran taraftan gelir, yani JobOrchestrator.runAlerts() uzerine konan bir @Transactional altindaki butun yazmalari icine alirdi - SystemHealthEvaluator, JobOrchestrator ve PurgeEvaluator eklendi. Ayrica degismez fazla genis ifade edilmisti: kapsam YALNIZCA collector. API mesru olarak acik transaction kullaniyor ve kullanmasi da dogru, orada alarm ve epizot kapanisi ayni mantiksal islem.",
+        "Adim 1 deploy kapisi 2026-09-14 gecildi, 11 gunluk gercek trafikle: 1306 epizot (ilk yazim 2026-09-03 18:08 deploy ani, son yazim 2026-09-14 10:52 yani hala yaziyor), control.health_check_state alert_episode_shadow ok ve tek bir yazim hatasi yok, cift yonlu karsilastirma sorgusu SIFIR satir. Epizot modeli ops.alert ile birebir tuttu.",
+        "Adim 2 de yeni bir desen degil, geride kalmis tek kuralin yakalanmasi cikti. Granular kurallar 2026-08-28 de zaten tablo basina alarma gecmisti ve gerekcesi kayitliydi: instance basina tek anahtarla yalnizca listenin ilk kaydi degerlendiriliyor, altindaki bozuk tablolar hic gorunmuyordu. stale_statistics o duzeltmenin disinda kalmis, hala rule:{id}:instance:{pk} kullaniyordu. Mevcut recordAlertKey yardimcisi kullanildi, yeni anahtar semasi icat edilmedi.",
+        "Adim 2 bir DEGISMEZI kasitli olarak bozuyor ve bu yazildi. Adim 1 de dogrulanan \"her acik epizodun bir acik alarmi vardir\" eslemesi artik gecerli degil: severity zamana baglaninca epizot \"kosul dogru\", alarm ise \"kosul yeterince uzun suredir dogru\" anlamina geliyor. Esigi bes dakika once asmis bir tablonun epizodu acilir ama alarmi acilmaz - bu kidem olcumunun kendisi. B yonu sorgusu severity is not null ile daraltildi ve daraltma Adim 2 deploy edilene kadar UYGULANMAMALI, yoksa gercek kusurlari gizler.",
+        "Olu kod birakilmadi: staleNotificationSummary ve formatStaleList artik yalnizca testlerden cagriliyordu, yani uretimde calismayan kodu test eden yesil testler \"AC2 test ediliyor\" diye yanlis guven veriyordu. Altisi da silindi. AC2 nin kendisi gerilemedi, notifyRaisedBatch uzerinden korunuyor: tek tablo kendi basligiyla, birkac tablo DB=ad sema.tablo listesiyle, fazlasi sayilarak. Yerine kidem saatinin ve tablo basina kimligin testleri yazildi.",
+        "V116 KONTEYNERDE DOGRULANMADI: Docker bu oturumda kapaliydi, V114/V115 icin yapilan gercek PG17 kosumu tekrarlanamadi. Migration ve savunmaci kapatma fonksiyonu yalnizca gozle incelendi. Deploy oncesi kosturulmali; ozellikle yeni :rec: anahtarlarina ve diger kurallara DOKUNMADIGI dogrulanmali."
       ]
     },
     {
