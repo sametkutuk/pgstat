@@ -151,4 +151,19 @@ public class CapabilityRepository {
         return jdbc.queryForObject("select pgss_checked_at from control.instance_capability where instance_pk = ?",
                 OffsetDateTime.class, instancePk);
     }
+
+    /**
+     * Bu instance'in yetenek kaniti hangi katalog revizyonuyla yazildi?
+     *
+     * Kanitin anlami kataloga baglidir: ayni kolon, katalog degistiginde farkli
+     * bir kaynaktan ya da farkli bir semantikle uretilmis olabilir. Kayitli
+     * revizyon calisandan farkliysa kanit eskimistir ve yeniden kesfedilmelidir.
+     *
+     * Kolon V119'da geldi ve o gune kadar yazilan satirlarda null.
+     */
+    public Integer findPgssCatalogVersion(long instancePk) {
+        return jdbc.queryForObject(
+                "select pgss_catalog_version from control.instance_capability where instance_pk = ?",
+                Integer.class, instancePk);
+    }
 }

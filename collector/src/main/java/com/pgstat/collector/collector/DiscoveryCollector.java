@@ -104,8 +104,17 @@ public class DiscoveryCollector {
             OffsetDateTime pgssCheckedAt = capabilityRepo.findPgssCheckedAt(instance.instancePk());
             boolean versionChanged = recordedServerVersionNum == null
                     || recordedServerVersionNum != liveServerVersionNum;
-            if (!versionChanged
-                    && pgssCheckedAt != null) {
+
+            // KANITIN ANLAMI KATALOGA BAGLIDIR. Ayni kolon, katalog
+            // degistiginde farkli bir kaynaktan ya da farkli bir semantikle
+            // uretilmis olabilir; kayitli revizyon calisandan farkliysa o
+            // instance'in yetenek kaniti baska bir katalogla yazilmistir.
+            // Yazip hic okumamak, kaydi susleme haline getirirdi.
+            Integer recordedCatalogVersion = capabilityRepo.findPgssCatalogVersion(instance.instancePk());
+            boolean catalogChanged = recordedCatalogVersion == null
+                    || recordedCatalogVersion != pgssCatalog.catalogVersion();
+
+            if (!versionChanged && pgssCheckedAt != null && !catalogChanged) {
                 return;
             }
 
@@ -115,9 +124,12 @@ public class DiscoveryCollector {
             if (versionChanged) {
                 log.info("PG surum degisikligi tespit edildi: {} — PG{} -> PG{} ({} -> {}), yeniden kesfediliyor",
                         instance.instanceId(), oldPgMajor, newPgMajor, recordedServerVersionNum, liveServerVersionNum);
-            } else {
+            } else if (pgssCheckedAt == null) {
                 log.info("pgss kesif kaniti eksik: {} — PG{} degismedi, yeniden kesfediliyor",
                         instance.instanceId(), newPgMajor);
+            } else {
+                log.info("pgss katalog revizyonu degisti: {} — kayitli {} -> calisan {}, yeniden kesfediliyor",
+                        instance.instanceId(), recordedCatalogVersion, pgssCatalog.catalogVersion());
             }
 
             discover(instance);

@@ -4546,7 +4546,7 @@
       "priority": "P1",
       "workstream": "collector",
       "status": "in_progress",
-      "next_action": "AC14 sirada: catalog_version runtime da gercekten tuketilsin/dogrulansin; availableCapabilities(null) bos kume donsun veya sonuc unknown olarak modellensin; bilinmeyen surum hicbir yetenek icin available sayilmasin; guvenli projection ile yetenek uygunlugu ayrilsin - sorgunun calisabilmesi, yetenegin kanitlanmis olmasi demek degil. Kalan: AC5, AC7, AC12.",
+      "next_action": "Kalan: AC5 veritabanlari arasi pgss kesfi, AC7 test matrisi (pgss 1.8/1.9/1.10/guncel + yalniz appdb + 42501), AC12 to_jsonb maliyeti olcumu.",
       "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
       "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
       "requirements": [
@@ -4625,7 +4625,7 @@
         {
           "id": "AC14",
           "text": "catalog_version runtime kanitina baglansin ve availableCapabilities(null) semantigi duzeltilsin (bilinmeyen surum \"mevcut\" degildir).",
-          "status": "pending"
+          "status": "done"
         }
       ],
       "implementation_plan": [
@@ -4671,7 +4671,11 @@
         "AC11: katalog artik baslangicta fail-fast dogrulaniyor - yinelenen capability key ve target, bos sources, gecersiz identifier, izin verilmeyen type, tipe uymayan default, gecersiz surum bicimi, min > max, cakisan surum araliklari, kaynaklar arasindaki kapsanmayan bosluklar, ayni source ta name ile derive cakismasi, desteklenmeyen derive.op ve bos derive.of. Katalog artik uretim kararlarini yonettigi icin kendisi de dogrulanmali.",
         "Capability seviyesindeki verified: false artik kolonlara gercekten aktariliyor (capabilityVerified && column). Canli katalogda verified: false kalmadigi icin bu yol olu kalirdi; sentetik bir katalogla test edildi. Parite testleri eklendi: katalog target lari StatementSample in record bilesenleriyle (reflection, camelCase->snake_case) ve metrik sayisi FactRepository.insertPgssDelta parametre sayisiyla karsilastiriliyor.",
         "Bilincli kabul edilen risk: bosluk kontrolu bitisikligi minor + 1 olarak hesapliyor, yani pgss surumlerinin minor atlamadan yayimlandigini VARSAYIYOR. PostgreSQL bu duzeni degistirirse gecerli bir katalog reddedilir ve dogrulama @Component constructor inda oldugu icin collector hic baslamaz. Fail-fast korundu cunku gercek katalog her build te test ediliyor ve bozuk bir katalog CI yi gecemez; varsayim kodda acikca yazildi ki bir gun collector acilmazsa sebep aranirken oraya bakilsin. Yeni pgss surumu eklenirken ayrica dogrulanmali.",
-        "Turkce sistem locale inde toLowerCase() \"jitInlining\" -> \"jit_inlining\" yerine noktasiz i ile \"jit_ınlining\" uretiyordu ve parite testi bu yuzden kiriliyordu; Locale.ROOT ile duzeltildi. Test sayisi 132 (temiz mvn test kosumu); surefire-reports eski XML tutabildigi icin dizinden saymak guvenilir degil."
+        "Turkce sistem locale inde toLowerCase() \"jitInlining\" -> \"jit_inlining\" yerine noktasiz i ile \"jit_ınlining\" uretiyordu ve parite testi bu yuzden kiriliyordu; Locale.ROOT ile duzeltildi. Test sayisi 132 (temiz mvn test kosumu); surefire-reports eski XML tutabildigi icin dizinden saymak guvenilir degil.",
+        "AC14: availableCapabilities/missingCapabilities ciftinin yerini uc kumeli assess() aldi - available / missing / unknown. Onceki API bilinmeyen surumu EN DUSUK surum sayiyordu, yani 1.4 te var olan her yetenegi available gosteriyordu; bu cevabi uydurmakti ve surumu baska bir seyden cikarma hatasinin bir baska bicimiydi. Artik surum bilinmiyorsa hicbir yetenek var ya da yok degil, hepsi bilinmiyor.",
+        "SORGUNUN CALISABILMESI, YETENEGIN KANITLANMIS OLMASI DEMEK DEGIL - bu ayrim artik hem API de hem testte acik. Savunmaci projection surum bilinmese de her surumde kosar, ama o modda bir kolonun sifir donmesi \"olculdu ve sifir\" ile \"kolon yok\" arasinda ayrim tasimaz. Iki soru ayri ayri cevaplaniyor.",
+        "pgss_catalog_version artik OKUNUYOR: kayitli revizyon calisandan farkliysa instance yeniden kesfediliyor (null pgss_checked_at ile ayni yol, ama ayri log dali). Kanitin anlami kataloga baglidir; ayni kolon katalog degistiginde farkli bir kaynaktan ya da farkli semantikle uretilmis olabilir. Yazip hic okumamak kaydi susleme haline getiriyordu.",
+        "FLOOR sabiti davranis olarak olmustu ama iki yerde YANLIS IDDIA birakmisti: javadoc \"null ise FLOOR kullanilir\" diyordu ve log \"guvenli taban projection kullaniliyor (1.4)\" yaziyordu - ikisi de curutulmus eski politikayi anlatiyordu ve operatore yanlis sey soyluyordu. Sabit kaldirildi, log artik savunmaci projection kullanildigini ve YETENEK KANITI OLMADIGINI soyluyor."
       ]
     }
   ]

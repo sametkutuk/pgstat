@@ -66,9 +66,6 @@ public class PgssCapabilityCatalog {
 
     private static final String RESOURCE = "telemetry/pgss-capabilities.yml";
 
-    /** Katalogdaki en dusuk surum — bilinmeyen surumde bu kullanilir. */
-    static final PgssVersion FLOOR = PgssVersion.of("1.4");
-
     private final java.util.Map<String, Object> root;
     private final List<Capability> capabilities;
 
@@ -355,30 +352,53 @@ public class PgssCapabilityCatalog {
         return out;
     }
 
-    /** Verilen surumde kullanilabilir yetenek anahtarlari. */
-    public Set<String> availableCapabilities(PgssVersion version) {
-        PgssVersion v = version != null ? version : FLOOR;
-        Set<String> out = new LinkedHashSet<>();
-        for (Capability c : capabilities) {
-            if (c.minPgss() == null || v.compareTo(c.minPgss()) >= 0) out.add(c.key());
-        }
-        return out;
+    /**
+     * Bir surumde yeteneklerin durumu.
+     *
+     * UC KUMEDIR, IKI DEGIL. Surum bilinmiyorsa hicbir yetenek "var" ya da
+     * "yok" degildir — hepsi BILINMIYOR. Onceki API bilinmeyen surumu en dusuk
+     * surum sayiyordu; bu, sorunun cevabini uydurmak oluyordu ve tam da bu
+     * calismanin kaldirdigi "surumu baska bir seyden cikarma" hatasinin bir
+     * baska bicimiydi.
+     *
+     * @param available kanitlanmis olarak MEVCUT
+     * @param missing   kanitlanmis olarak YOK
+     * @param unknown   surum okunamadigi icin karar verilemeyen
+     */
+    public record CapabilityAssessment(Set<String> available, Set<String> missing, Set<String> unknown) {
+        public boolean versionKnown() { return unknown.isEmpty(); }
     }
 
-    /** Verilen surumde KULLANILAMAYAN yetenek anahtarlari — kanit icin gerekli. */
-    public Set<String> missingCapabilities(PgssVersion version) {
-        PgssVersion v = version != null ? version : FLOOR;
-        Set<String> out = new LinkedHashSet<>();
+    /**
+     * Verilen surumde yeteneklerin durumu.
+     *
+     * SORGUNUN CALISABILMESI, YETENEGIN KANITLANMIS OLMASI DEMEK DEGILDIR.
+     * Surum bilinmedigi halde savunmaci projection her surumde kosar; ama o
+     * modda bir kolonun sifir donmesi "olculdu ve sifir" ile "kolon yok"
+     * arasinda ayrim tasimaz. Sorgunun ayakta kalmasi ile verinin anlamli
+     * olmasi iki ayri sey.
+     */
+    public CapabilityAssessment assess(PgssVersion version) {
+        Set<String> available = new LinkedHashSet<>();
+        Set<String> missing = new LinkedHashSet<>();
+        Set<String> unknown = new LinkedHashSet<>();
         for (Capability c : capabilities) {
-            if (c.minPgss() != null && v.compareTo(c.minPgss()) < 0) out.add(c.key());
+            if (version == null) {
+                unknown.add(c.key());
+            } else if (c.minPgss() == null || version.compareTo(c.minPgss()) >= 0) {
+                available.add(c.key());
+            } else {
+                missing.add(c.key());
+            }
         }
-        return out;
+        return new CapabilityAssessment(available, missing, unknown);
     }
 
     /**
      * Verilen pgss surumu icin SELECT listesini uretir.
      *
-     * @param version null ise FLOOR kullanilir (butun surumlerde var olan kolonlar).
+     *  version null ise savunmaci projection uretilir (surume bagli her
+     *                kolon to_jsonb uzerinden okunur).
      */
     public String buildSelectList(PgssVersion version) {
         List<String> lines = new ArrayList<>();
@@ -457,7 +477,12 @@ public class PgssCapabilityCatalog {
      */
     public String buildStatsQuery(String pgssFunction, PgssVersion version) {
         if (version == null) {
-            log.warn("pgss surumu bilinmiyor, guvenli taban projection kullaniliyor ({})", FLOOR);
+            // "Guvenli taban" demek yaniltici olurdu: en dusuk surumun
+            // projection.i her yerde calismiyor (1.8 yeniden adlandirmasi).
+            // Uretilen sey savunmaci projection — her surumde kosar ama
+            // kolonlarin bir kismi sessizce varsayilana dusebilir.
+            log.warn("pgss surumu bilinmiyor, savunmaci projection kullaniliyor; "
+                   + "yetenek kaniti YOK ve bazi kolonlar varsayilana dusebilir");
         }
         return """
             with src as (
@@ -481,10 +506,20 @@ public class PgssCapabilityCatalog {
      * view'i sorgulamaktan iyidir.
      */
     public boolean supportsInfoView(PgssVersion version) {
-        return version != null && availableCapabilities(version).contains("statements.info");
+        return assess(version).available().contains("statements.info");
     }
 
-    /** Katalog surumu — merkezi kayitla birlikte saklanir. */
+    /**
+     * Katalog revizyonu — merkezi kayitla birlikte saklanir ve OKUNUR.
+     *
+     * Kanitin anlami kataloga baglidir: ayni kolon, katalog degistiginde farkli
+     * bir kaynaktan veya farkli bir semantikle uretilmis olabilir. Kayitli
+     * revizyon calisandan farkliysa o instance in yetenek kaniti baska bir
+     * katalogla yazilmis demektir ve yeniden kesfedilmelidir.
+     *
+     * NE ZAMAN ARTIRILIR: bir kolonun ANLAMI degistiginde ya da bir sinir
+     * duzeltildiginde. Yalnizca yorum veya baslik degisikligi artirmaz.
+     */
     public int catalogVersion() {
         Object v = root.get("catalog_version");
         return v instanceof Number n ? n.intValue() : 0;

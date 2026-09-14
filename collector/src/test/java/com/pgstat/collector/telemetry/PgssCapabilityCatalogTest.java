@@ -175,7 +175,7 @@ class PgssCapabilityCatalogTest {
             .contains("(j->>'total_exec_time')")
             .contains("(j->>'total_time')")
             .contains("(j->>'toplevel')");
-        assertThat(unknown).isNotEqualTo(catalog.buildSelectList(PgssCapabilityCatalog.FLOOR));
+        assertThat(unknown).isNotEqualTo(catalog.buildSelectList(PgssVersion.of("1.4")));
     }
 
     @Test
@@ -218,13 +218,41 @@ class PgssCapabilityCatalogTest {
 
     @Test
     void capabilityAvailabilityTracksTheVersion() {
-        assertThat(catalog.availableCapabilities(PgssVersion.of("1.7")))
+        var at17 = catalog.assess(PgssVersion.of("1.7"));
+        assertThat(at17.available())
             .contains("statements.execution", "statements.blocks")
             .doesNotContain("statements.planning", "statements.jit");
+        assertThat(at17.missing()).contains("statements.planning", "statements.jit");
+        assertThat(at17.unknown()).isEmpty();
+        assertThat(at17.versionKnown()).isTrue();
 
-        assertThat(catalog.missingCapabilities(PgssVersion.of("1.9")))
+        var at19 = catalog.assess(PgssVersion.of("1.9"));
+        assertThat(at19.missing())
             .contains("statements.jit", "statements.stats_window")
             .doesNotContain("statements.toplevel");
+    }
+
+    @Test
+    void anUnknownVersionMakesEveryCapabilityUnknownRatherThanAvailable() {
+        // Onceki API bilinmeyen surumu EN DUSUK surum sayiyordu, yani
+        // 1.4'te var olan her yetenegi "available" gosteriyordu. Bu, cevabi
+        // uydurmakti — ve surumu baska bir seyden cikarma hatasinin bir baska
+        // bicimiydi; tam da bu calismanin kaldirdigi sey.
+        var unknown = catalog.assess(null);
+        assertThat(unknown.available()).isEmpty();
+        assertThat(unknown.missing()).isEmpty();
+        assertThat(unknown.unknown()).contains("statements.execution", "statements.jit");
+        assertThat(unknown.versionKnown()).isFalse();
+    }
+
+    @Test
+    void aRunnableQueryIsNotProofOfCapability() {
+        // SORGUNUN CALISABILMESI, YETENEGIN KANITLANMIS OLMASI DEMEK DEGIL.
+        // Savunmaci projection surum bilinmese de her surumde kosar; ama o
+        // modda bir kolonun sifir donmesi "olculdu ve sifir" ile "kolon yok"
+        // arasinda ayrim tasimaz. Iki soru ayri ayri cevaplanmali.
+        assertThat(catalog.buildSelectList(null)).isNotBlank();       // sorgu uretilebilir
+        assertThat(catalog.assess(null).versionKnown()).isFalse();    // ama kanit yok
     }
 
     @Test
