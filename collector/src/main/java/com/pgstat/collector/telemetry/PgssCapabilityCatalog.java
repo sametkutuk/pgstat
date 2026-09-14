@@ -8,10 +8,13 @@ import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * pg_stat_statements yetenek katalogu ve surume gore projection uretimi.
@@ -52,9 +55,9 @@ import java.util.Set;
  * Iyimser davranip en yeni sorguyu denemek ise tam da duzeltmeye calistigimiz
  * kirilmayi ureten davranistir.
  *
- * Katalogda "verified": false isaretli sinirlar (pgss 1.12 / PG18) OLCULMEDI;
- * o kolonlar her zaman to_jsonb ile guvenli okunur, cunku sinirin dogrulugundan
- * emin degiliz. Emin olmadigimiz yerde tahmin degil, guvenli yol.
+ * Katalogda "verified": false isaretli bir sinir olursa o kolon her zaman
+ * to_jsonb ile guvenli okunur. Su anki sinirlarin tamami gercek PostgreSQL'de
+ * olculdu; mekanizma gelecekteki dogrulanmamis eklemeler icin korunuyor.
  */
 @Component
 public class PgssCapabilityCatalog {
@@ -69,9 +72,19 @@ public class PgssCapabilityCatalog {
     private final java.util.Map<String, Object> root;
     private final List<Capability> capabilities;
 
+    private static final Pattern IDENTIFIER = Pattern.compile("[a-z][a-z0-9_]*");
+    private static final Set<String> ALLOWED_TYPES = Set.of(
+            "oid", "bigint", "numeric", "double precision", "boolean", "timestamptz");
+
     public PgssCapabilityCatalog() {
-        this.root = load();
+        this(load());
+    }
+
+    /** Testlerin bozuk kataloglari dosya sistemi olmadan dogrulayabilmesi icin. */
+    PgssCapabilityCatalog(Map<String, Object> root) {
+        this.root = root;
         this.capabilities = parse(root);
+        validate(root, capabilities);
     }
 
     @SuppressWarnings("unchecked")
@@ -172,6 +185,7 @@ public class PgssCapabilityCatalog {
     private static List<Capability> parse(Map<String, Object> root) {
         List<Capability> out = new ArrayList<>();
         for (Map<String, Object> c : nodes(root, "capabilities")) {
+            boolean capabilityVerified = bool(c, "verified", true);
             List<Column> cols = new ArrayList<>();
             for (Map<String, Object> col : nodes(c, "columns")) {
                 List<Source> sources = new ArrayList<>();
@@ -194,17 +208,144 @@ public class PgssCapabilityCatalog {
                     str(col, "target", null),
                     str(col, "type", "text"),
                     str(col, "default", "0"),
-                    bool(col, "verified", true),
+                    capabilityVerified && bool(col, "verified", true),
                     sources));
             }
             out.add(new Capability(
                 str(c, "key", null),
                 str(c, "title", ""),
                 PgssVersion.of(str(c, "min_pgss", "1.4")),
-                bool(c, "verified", true),
+                capabilityVerified,
                 cols));
         }
         return out;
+    }
+
+    private static void validate(Map<String, Object> root, List<Capability> capabilities) {
+        validateRawVersions(root);
+        Object catalogVersion = root.get("catalog_version");
+        if (!(catalogVersion instanceof Number n) || n.intValue() <= 0) {
+            fail("catalog_version", "pozitif bir tamsayi olmali");
+        }
+        if (capabilities.isEmpty()) fail("capabilities", "en az bir capability gerekli");
+
+        Set<String> keys = new HashSet<>();
+        Set<String> targets = new HashSet<>();
+        for (Capability capability : capabilities) {
+            String cp = "capability[" + capability.key() + "]";
+            if (blank(capability.key())) fail(cp, "key bos olamaz");
+            if (!keys.add(capability.key())) fail(cp, "yinelenen capability key");
+            if (capability.minPgss() == null) fail(cp, "min_pgss gecersiz");
+
+            for (Column column : capability.columns()) {
+                String p = cp + ".column[" + column.target() + "]";
+                if (blank(column.target()) || !IDENTIFIER.matcher(column.target()).matches()) {
+                    fail(p, "target gecerli bir SQL identifier olmali");
+                }
+                if (!targets.add(column.target())) fail(p, "yinelenen target");
+                if (!ALLOWED_TYPES.contains(column.type())) fail(p, "izin verilmeyen type: " + column.type());
+                validateDefault(p, column.type(), column.defaultValue());
+                if (column.sources().isEmpty()) fail(p, "sources bos olamaz");
+
+                for (int i = 0; i < column.sources().size(); i++) {
+                    Source source = column.sources().get(i);
+                    String sp = p + ".sources[" + i + "]";
+                    boolean hasName = !blank(source.name());
+                    boolean hasDerive = !blank(source.deriveOp());
+                    if (hasName == hasDerive) fail(sp, "tam olarak name veya derive tanimlanmali");
+                    if (hasName && !IDENTIFIER.matcher(source.name()).matches()) fail(sp, "gecersiz source name");
+                    if (source.min() != null && source.max() != null
+                            && source.min().compareTo(source.max()) > 0) fail(sp, "min max'tan buyuk");
+                    if (hasDerive) {
+                        if (!"sum".equals(source.deriveOp())) fail(sp, "desteklenmeyen derive.op: " + source.deriveOp());
+                        if (source.deriveOf() == null || source.deriveOf().isEmpty()) fail(sp, "derive.of bos olamaz");
+                        for (String name : source.deriveOf()) {
+                            if (blank(name) || !IDENTIFIER.matcher(name).matches()) fail(sp, "gecersiz derive.of");
+                        }
+                    }
+                    for (int j = i + 1; j < column.sources().size(); j++) {
+                        if (overlaps(source, column.sources().get(j))) fail(sp, "surum araligi sources[" + j + "] ile cakisisiyor");
+                    }
+                }
+                validateNoInternalGaps(p, column.sources());
+            }
+        }
+    }
+
+    /**
+     * Bir kolonun kaynaklari arasinda kapsanmayan surum araligi birakilmis mi?
+     *
+     * VARSAYIM: pgss surumleri minor numaralarini ATLAMADAN yayimlanir
+     * (1.4, 1.5, ... 1.12 boyle geldi). Bitisiklik bu yuzden minor + 1 olarak
+     * hesaplaniyor.
+     *
+     * PostgreSQL bu duzeni degistirir ve bir minor atlarsa — orn. 1.12 sonrasi
+     * dogrudan 1.14 — GECERLI bir katalog burada reddedilir ve dogrulama
+     *  constructor.inda calistigi icin COLLECTOR HIC BASLAMAZ.
+     *
+     * Fail-fast bilerek korundu: gercek katalog her build.te test ediliyor,
+     * yani bozuk bir katalog CI.yi gecemez; bu kontrol ikinci savunma hatti.
+     * Ama yeni bir pgss surumu eklenirken bu varsayim AYRICA dogrulanmalidir.
+     */
+    private static void validateNoInternalGaps(String path, List<Source> sources) {
+        if (sources.size() < 2) return;
+        List<Source> ordered = new ArrayList<>(sources);
+        ordered.sort(Comparator.comparing(Source::min,
+                Comparator.nullsFirst(Comparator.naturalOrder())));
+        for (int i = 1; i < ordered.size(); i++) {
+            PgssVersion previousMax = ordered.get(i - 1).max();
+            PgssVersion currentMin = ordered.get(i).min();
+            if (previousMax == null || currentMin == null) continue;
+            PgssVersion next = new PgssVersion(previousMax.major(), previousMax.minor() + 1);
+            if (currentMin.compareTo(next) > 0) {
+                fail(path, "sources arasinda kapsanmayan surum araligi: "
+                        + previousMax + " sonrasi " + currentMin);
+            }
+        }
+    }
+
+    private static void validateRawVersions(Map<String, Object> root) {
+        for (Map<String, Object> capability : nodes(root, "capabilities")) {
+            validateVersionValue(capability, "min_pgss", "capability[" + capability.get("key") + "]");
+            for (Map<String, Object> column : nodes(capability, "columns")) {
+                String path = "capability[" + capability.get("key") + "].column[" + column.get("target") + "]";
+                for (Map<String, Object> source : nodes(column, "sources")) {
+                    validateVersionValue(source, "min", path);
+                    validateVersionValue(source, "max", path);
+                }
+            }
+        }
+    }
+
+    private static void validateVersionValue(Map<String, Object> node, String key, String path) {
+        if (!node.containsKey(key)) return;
+        String raw = String.valueOf(node.get(key));
+        if (!raw.matches("\\d+\\.\\d+") || PgssVersion.of(raw) == null) {
+            fail(path, key + " gecersiz: " + raw);
+        }
+    }
+
+    private static boolean overlaps(Source a, Source b) {
+        return (a.max() == null || b.min() == null || a.max().compareTo(b.min()) >= 0)
+                && (b.max() == null || a.min() == null || b.max().compareTo(a.min()) >= 0);
+    }
+
+    private static void validateDefault(String path, String type, String value) {
+        if ("null".equalsIgnoreCase(value)) return;
+        boolean valid = switch (type) {
+            case "oid", "bigint" -> value.matches("-?\\d+");
+            case "numeric", "double precision" -> value.matches("-?\\d+(\\.\\d+)?");
+            case "boolean" -> "true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value);
+            case "timestamptz" -> false;
+            default -> false;
+        };
+        if (!valid) fail(path, "default '" + value + "' type " + type + " ile uyumsuz");
+    }
+
+    private static boolean blank(String value) { return value == null || value.isBlank(); }
+
+    private static void fail(String path, String message) {
+        throw new IllegalStateException("Gecersiz pgss katalogu: " + path + " — " + message);
     }
 
     /** Katalogdaki tum hedef kolonlar, katalog sirasinda. */

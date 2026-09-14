@@ -1,12 +1,21 @@
 package com.pgstat.collector.telemetry;
 
 import com.pgstat.collector.telemetry.PgssCapabilityCatalog.PgssVersion;
+import com.pgstat.collector.model.StatementSample;
+import com.pgstat.collector.repository.FactRepository;
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.Yaml;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * pgss yetenek katalogu (PGSTAT-P1-021 / M1).
@@ -216,6 +225,175 @@ class PgssCapabilityCatalogTest {
         assertThat(catalog.missingCapabilities(PgssVersion.of("1.9")))
             .contains("statements.jit", "statements.stats_window")
             .doesNotContain("statements.toplevel");
+    }
+
+    @Test
+    void catalogTargetsMatchTheStatementSampleContract() {
+        Set<String> modelColumns = Arrays.stream(StatementSample.class.getRecordComponents())
+                .map(c -> c.getName().replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        assertThat(Set.copyOf(catalog.targetColumns())).isEqualTo(modelColumns);
+    }
+
+    @Test
+    void catalogMetricCountMatchesTheCentralInsertContract() {
+        int identityColumns = 4; // userid, dbid, queryid, toplevel
+        int insertContextParameters = 3; // sampleTs, instancePk, statementSeriesId
+        int insertParameters = Arrays.stream(FactRepository.class.getDeclaredMethods())
+                .filter(m -> m.getName().equals("insertPgssDelta"))
+                .findFirst()
+                .orElseThrow()
+                .getParameterCount();
+
+        assertThat(catalog.targetColumns().size() - identityColumns)
+                .isEqualTo(insertParameters - insertContextParameters);
+    }
+
+    @Test
+    void capabilityLevelVerificationForcesDefensiveProjection() {
+        Map<String, Object> root = new Yaml().load("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                verified: false
+                columns:
+                  - { target: calls, type: bigint, sources: [ { name: calls } ] }
+            """);
+        assertThat(new PgssCapabilityCatalog(root).buildSelectList(PgssVersion.of("1.12")))
+                .contains("coalesce((j->>'calls')::bigint, 0) as calls");
+    }
+
+    @Test
+    void malformedCatalogsFailFastWithTheirLocation() {
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - { target: calls, type: bigint, sources: [] }
+            """, "column[calls]", "sources bos");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources: [ { name: calls }, { name: calls, min: "1.9" } ]
+            """, "column[calls]", "cakisisiyor");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources: [ { name: calls, derive: { op: sum, of: [calls] } } ]
+            """, "sources[0]", "tam olarak name veya derive");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - { target: calls, type: varchar, sources: [ { name: calls } ] }
+            """, "column[calls]", "izin verilmeyen type");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.bad"
+                columns: []
+            """, "capability[statements.x]", "min_pgss gecersiz");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - { key: statements.x, min_pgss: "1.4", columns: [] }
+              - { key: statements.x, min_pgss: "1.4", columns: [] }
+            """, "capability[statements.x]", "yinelenen capability key");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - { target: calls, type: bigint, sources: [ { name: calls } ] }
+                  - { target: calls, type: bigint, sources: [ { name: plans } ] }
+            """, "column[calls]", "yinelenen target");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - { target: calls, type: bigint, default: nope, sources: [ { name: calls } ] }
+            """, "column[calls]", "uyumsuz");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources: [ { name: calls, min: "1.9", max: "1.8" } ]
+            """, "sources[0]", "min max'tan buyuk");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources: [ { derive: { op: average, of: [calls] } } ]
+            """, "sources[0]", "desteklenmeyen derive.op");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources: [ { derive: { op: sum, of: [] } } ]
+            """, "sources[0]", "derive.of bos");
+
+        assertInvalid("""
+            catalog_version: 1
+            capabilities:
+              - key: statements.x
+                min_pgss: "1.4"
+                columns:
+                  - target: calls
+                    type: bigint
+                    sources:
+                      - { name: old_calls, max: "1.7" }
+                      - { name: calls, min: "1.9" }
+            """, "column[calls]", "kapsanmayan surum araligi");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void assertInvalid(String yaml, String path, String reason) {
+        Map<String, Object> root = new Yaml().load(yaml);
+        assertThatThrownBy(() -> new PgssCapabilityCatalog(root))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(path)
+                .hasMessageContaining(reason);
     }
 
     // -----------------------------------------------------------------------
