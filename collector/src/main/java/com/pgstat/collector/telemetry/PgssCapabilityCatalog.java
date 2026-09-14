@@ -469,8 +469,12 @@ public class PgssCapabilityCatalog {
     /**
      * Tam pgss sorgusu.
      *
-     * to_jsonb(s.*) her zaman uretilir: dogrulanmamis sinirlardaki kolonlar
-     * bunun uzerinden okunuyor ve maliyeti zaten mevcut sorgularda var.
+     * to_jsonb(s.*) YALNIZ savunmaci bir kolon gercekten gerekiyorsa uretilir.
+     * AC12 olcumu (PG18.6, 2026-09-14) bunun bedelinin ihmal edilemeyecegini
+     * gosterdi: 10k fixture satirinda dogrudan projection 1.7ms, inline
+     * savunmaci projection 12.6s; 50k'da 8.8ms ve 74.9s. MATERIALIZED ile
+     * JSON satir basina bir kez hesaplaninca savunmaci yol 279ms / 1.39s'ye
+     * indi. Bilinen/dogrulanmis surumde JSON uretmek yine de gereksizdir.
      *
      * @param pgssFunction schema-qualified pg_stat_statements fonksiyonu
      * @param version      okunan extension surumu; null ise guvenli taban
@@ -484,14 +488,34 @@ public class PgssCapabilityCatalog {
             log.warn("pgss surumu bilinmiyor, savunmaci projection kullaniliyor; "
                    + "yetenek kaniti YOK ve bazi kolonlar varsayilana dusebilir");
         }
+        if (requiresDefensiveJson(version)) {
+            return """
+                with src as materialized (
+                  select to_jsonb(s.*) as j, s.* from %s(false) s
+                )
+                select
+                %s
+                from src
+                """.formatted(pgssFunction, buildSelectList(version));
+        }
         return """
-            with src as (
-              select to_jsonb(s.*) as j, s.* from %s(false) s
-            )
             select
             %s
-            from src
-            """.formatted(pgssFunction, buildSelectList(version));
+            from %s(false) s
+            """.formatted(buildSelectList(version), pgssFunction);
+    }
+
+    private boolean requiresDefensiveJson(PgssVersion version) {
+        if (version == null) return true;
+        for (Capability capability : capabilities) {
+            for (Column column : capability.columns()) {
+                if (column.verified()) continue;
+                for (Source source : column.sources()) {
+                    if (source.covers(version) && !source.isDerived()) return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

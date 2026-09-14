@@ -179,6 +179,16 @@ class PgssCapabilityCatalogTest {
     }
 
     @Test
+    void knownVerifiedVersionsDoNotPayTheDefensiveJsonCost() {
+        assertThat(catalog.buildStatsQuery("pg_stat_statements", PgssVersion.of("1.12")))
+                .doesNotContain("to_jsonb(s.*)")
+                .contains("from pg_stat_statements(false) s");
+        assertThat(catalog.buildStatsQuery("pg_stat_statements", null))
+                .contains("with src as materialized (")
+                .contains("to_jsonb(s.*)");
+    }
+
+    @Test
     void theOneTwelveBoundaryIsMeasuredNotGuessed() {
         // OLCULDU 2026-09-14, postgres:18.6: 1.12, 1.11'e gore TAM OLARAK uc
         // kolon ekliyor ve hicbir sey kaldirmiyor.
