@@ -510,6 +510,28 @@ public class PgssCapabilityCatalog {
     }
 
     /**
+     * Katalogun bildigi EN YUKSEK pgss surumu.
+     *
+     * Veritabani taramasinda erken cikis siniri: bu surumu tasiyan bir aday
+     * bulundugunda daha iyisi zaten okunamaz, cunku katalog otesini tanimiyor.
+     * Boylece "en yuksek surum kazanir" kurali, her adaya baglanmayi zorunlu
+     * kilmadan uygulanabiliyor.
+     */
+    public PgssVersion highestKnownVersion() {
+        PgssVersion max = null;
+        for (Capability c : capabilities) {
+            for (Column col : c.columns()) {
+                for (Source s : col.sources()) {
+                    if (s.min() != null && (max == null || s.min().compareTo(max) > 0)) {
+                        max = s.min();
+                    }
+                }
+            }
+        }
+        return max;
+    }
+
+    /**
      * Katalog revizyonu — merkezi kayitla birlikte saklanir ve OKUNUR.
      *
      * Kanitin anlami kataloga baglidir: ayni kolon, katalog degistiginde farkli

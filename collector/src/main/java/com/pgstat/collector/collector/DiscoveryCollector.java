@@ -14,6 +14,7 @@ import com.pgstat.collector.service.SqlFamilyResolver;
 import com.pgstat.collector.service.SourceConnectionFactory;
 import com.pgstat.collector.sql.SourceQueries;
 import com.pgstat.collector.telemetry.PgssCapabilityCatalog;
+import com.pgstat.collector.telemetry.PgssCapabilityCatalog.PgssVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -384,16 +385,37 @@ public class DiscoveryCollector {
         PgssDiscovery evidence = inspectPgss(instance, adminConnection, adminDbname);
         if (evidence.available()) return evidence;
 
+        // EN YUKSEK SURUM KAZANIR, ALFABETIK ILK DEGIL.
+        //
+        // pgss extension surumu VERITABANI BASINADIR: ayni sunucuda appdb'de
+        // 1.9, zebra'da 1.11 olabilir (biri guncellenmis, digeri degil). Veri
+        // kume geneli oldugu icin hangisinden okudugumuz VERIYI degistirmez,
+        // ama HANGI KOLONLARI gorebildigimizi degistirir — 1.9'dan okursak
+        // toplevel, jit_* ve stats_since kolonlarini, ayni sunucuda mevcut
+        // olmalarina ragmen kaybederiz.
+        //
+        // Bedeli: ilk bulunanda durmak yerine adaylar taranmaya devam eder.
+        // Katalogun bildigi en yuksek surum bulunursa erken cikilir, cunku
+        // daha iyisi zaten okunamaz. Bu yol nadir — admin DB'de bulunamazsa
+        // calisir — ve dogruluk, oradaki birkac baglantidan onemli.
+        PgssDiscovery best = null;
+        PgssVersion ceiling = pgssCatalog.highestKnownVersion();
+
         for (String dbname : listDatabaseNames(adminConnection, queries)) {
             if (adminDbname.equals(dbname)) continue;
             try (Connection candidate = connectionFactory.connect(instance, dbname)) {
                 PgssDiscovery found = inspectPgss(instance, candidate, dbname);
-                if (found.available()) {
-                    log.info("pg_stat_statements admin DB disinda bulundu: instance={}, database={}",
-                            instance.instanceId(), dbname);
-                    return found;
+                if (!found.available()) {
+                    evidence = evidence.merge(found);
+                    continue;
                 }
-                evidence = evidence.merge(found);
+                if (best == null || isHigherVersion(found, best)) {
+                    best = found;
+                }
+                PgssVersion bestVersion = versionOf(best);
+                if (bestVersion != null && ceiling != null && bestVersion.compareTo(ceiling) >= 0) {
+                    break;
+                }
             } catch (SQLException e) {
                 // Bir DB'ye CONNECT izni olmamasi, instance veya pgss'in tamamini
                 // erisilemez yapmaz. Diger adaylar taranmaya devam edilir.
@@ -401,7 +423,33 @@ public class DiscoveryCollector {
                         instance.instanceId(), dbname, e.getSQLState(), e.getMessage());
             }
         }
+
+        if (best != null) {
+            log.info("pg_stat_statements admin DB disinda bulundu: instance={}, database={}, surum={}",
+                    instance.instanceId(), best.databaseName(), versionOf(best));
+            return best;
+        }
         return evidence;
+    }
+
+    private static PgssVersion versionOf(PgssDiscovery discovery) {
+        return discovery.extension() == null ? null : PgssVersion.of(discovery.extension().extVersion());
+    }
+
+    /**
+     * Aday, mevcut en iyiden daha yuksek surumlu mu?
+     *
+     * Ayristirilamayan surum EN DUSUK sayilir: okunabilir ama surumu bilinmeyen
+     * bir kurulum, surumu bilinen birine tercih edilmemeli — bilinmeyen surum
+     * savunmaci projection'a duser ve kolonlarin bir kismi varsayilan olur.
+     * Esitlikte ilk gelen kalir; liste ada gore sirali oldugu icin secim kararli.
+     */
+    private static boolean isHigherVersion(PgssDiscovery candidate, PgssDiscovery current) {
+        PgssVersion a = versionOf(candidate);
+        PgssVersion b = versionOf(current);
+        if (a == null) return false;
+        if (b == null) return true;
+        return a.compareTo(b) > 0;
     }
 
     private List<String> listDatabaseNames(Connection conn, SourceQueries queries) throws SQLException {
