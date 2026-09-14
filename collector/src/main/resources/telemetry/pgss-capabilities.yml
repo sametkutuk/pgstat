@@ -170,6 +170,11 @@ capabilities:
       - { target: wal_fpi,     type: bigint,  default: "0", sources: [ { name: wal_fpi,     min: "1.8" } ] }
       - { target: wal_bytes,   type: numeric, default: "0", sources: [ { name: wal_bytes,   min: "1.8" } ] }
       # OLCULMEDI: 1.12 sinirini postgres:17 tasimiyor.
+      #
+      # Uretimde de ayirt edilemedi (2026-09-14): PG18 dahil her satirda sifir.
+      # Iki acikama da mumkun — kolon 1.12'de yok ve sessizce sifirlaniyor, ya
+      # da kolon var ama bu is yukunde WAL buffer hic dolmadi. Sifir bir deger,
+      # yoklugun kaniti degil.
       - { target: wal_buffers_full, type: bigint, default: "0", verified: false, sources: [ { name: wal_buffers_full, min: "1.12" } ] }
 
   - key: statements.jit
@@ -204,6 +209,16 @@ capabilities:
     verified: false
     # OLCULMEDI — postgres:17 en fazla 1.11 tasiyor. Sinir dokumantasyondan
     # alindi ve PG18 konteyneriyle dogrulanmali.
+    #
+    # URETIM KANITI VAR AMA SINIRI KAPATMIYOR (2026-09-14, deploy sonrasi):
+    # PG18 instance'larinda son 24 saatte parallel_workers_to_launch_delta ve
+    # parallel_workers_launched_delta ucer satirda sifirdan farkli geldi; PG17'de
+    # 36.815 satirin hepsi sifir. Yani iki kolon da gercekten okunuyor.
+    #
+    # Buna ragmen verified: false KALIYOR. Kanit "PG18 instance'larinda bu
+    # kolonlar var" diyor, "pgss 1.12'de var" demiyor — surumu pg_major'dan
+    # cikarmis oluruz ki bu gorevin duzeltmek icin var oldugu karistirmanin ta
+    # kendisi. extversion merkezi kayda yazilana kadar (AC4) sinir kapanamaz.
     columns:
       - { target: parallel_workers_to_launch, type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_to_launch, min: "1.12" } ] }
       - { target: parallel_workers_launched,  type: bigint, default: "0", verified: false, sources: [ { name: parallel_workers_launched,  min: "1.12" } ] }
