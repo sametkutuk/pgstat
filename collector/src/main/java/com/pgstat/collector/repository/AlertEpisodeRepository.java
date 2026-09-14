@@ -94,6 +94,29 @@ public class AlertEpisodeRepository {
     public static final String CLOSE_IDENTITY_CHANGED = "identity_changed";
     public static final String CLOSE_SUPERSEDED       = "superseded";
     public static final String CLOSE_STALE_TIMEOUT    = "stale_timeout";
+    /** Kullanicinin "Coz" dugmesi — kosulun gectigi DOGRULANMADI (V115). */
+    public static final String CLOSE_MANUAL           = "manual";
+
+    /**
+     * Kosulun gectiginin DOGRULANMADIGI kapanislar.
+     *
+     * Bu sebeplerle kapanmis bir epizottan sonra ayni anahtar yeniden ihlal
+     * ederse IHLAL SAATI DEVRALINIR, sifirlanmaz: kosul zaten hic gecmemisti.
+     *
+     * CLOSE_RESOLVED bu listede DEGIL ve olmamali — orada kosulun gectigi
+     * dogrulandi, dolayisiyla sonraki ihlal gercekten yeni bir ihlaldir ve
+     * saati sifirdan baslar.
+     *
+     * CLOSE_IDENTITY_CHANGED de listede degil: fiziksel nesil degistiginde
+     * tablo baska bir nesnedir, eski nesildeki ihlalin suresini yeni nesne
+     * uzerine tasimak yanlis olurdu.
+     */
+    static final java.util.List<String> UNVERIFIED_CLOSE_REASONS =
+        java.util.List.of(CLOSE_MANUAL, CLOSE_SUPERSEDED, CLOSE_STALE_TIMEOUT);
+
+    /** UNVERIFIED_CLOSE_REASONS'in SQL IN listesi — tek kaynak. */
+    private static final String UNVERIFIED_CLOSE_SQL_LIST =
+        "'" + String.join("', '", UNVERIFIED_CLOSE_REASONS) + "'";
 
     /**
      * Bir gozlem.
@@ -387,7 +410,35 @@ public class AlertEpisodeRepository {
               backfilled
             )
             values (?, ?, ?, ?, ?, ?, ?, 'complete', ?, ?, ?,
-                    case when ?::boolean then ?::timestamptz else null end,
+                    -- IHLAL SAATI: DOGRULANMAMIS BIR KAPANISTAN SONRA DEVRALINIR.
+                    --
+                    -- Kullanici "Coz"e bastiginda epizot 'manual' ile kapaniyor,
+                    -- ama kosul hala dogru; sonraki degerlendirme yeni epizot
+                    -- aciyordu ve ihlal saati SIFIRLANIYORDU. Sonucu: alti gundur
+                    -- bayat bir tabloda kullanici bir dugmeye basinca tablo taze
+                    -- gorunuyor ve alarm yeniden ciktiginda "24 saat" diyor. Bu,
+                    -- duzeltmeye calistigimiz "178 saat" hatasinin TERSTEN AYNISI —
+                    -- yanlis sure raporlama.
+                    --
+                    -- Yalnizca EN SON kapanisa bakilir. manual -> ihlal -> healthy
+                    -- -> ihlal sirasinda eski 'manual' damgasini devralmak yanlis
+                    -- olurdu: arada kosulun gectigi DOGRULANDI, yani o noktada
+                    -- gercekten yeni bir ihlal basliyor.
+                    --
+                    -- confirmed_healthy kapanisindan sonra sifirlanir ve bu dogru:
+                    -- kosul gercekten gecti, sonraki ihlal yeni bir ihlaldir.
+                    case when ?::boolean then coalesce(
+                          (select case when e2.close_reason
+                                         in (""" + UNVERIFIED_CLOSE_SQL_LIST + """
+                                            )
+                                       then e2.first_observed_breaching_at end
+                             from ops.alert_episode e2
+                            where e2.alert_key = ?
+                              and e2.closed_at is not null
+                            order by e2.closed_at desc
+                            limit 1),
+                          ?::timestamptz)
+                         else null end,
                     now(), ?, 1,
                     -- BACKFILLED: alarm bizden once acilmis mi? Oyleyse bu
                     -- epizodun ihlal saati GEC baslamis demektir ve kidemi
@@ -432,7 +483,7 @@ public class AlertEpisodeRepository {
             obs.alertKey(), obs.alertCode(), obs.alertSource(), obs.instancePk(),
             obs.dbid(), obs.relid(), obs.relationGeneration(),
             obs.state(), obs.severity(), obs.severity(),
-            breaching, sampleTs,
+            breaching, obs.alertKey(), sampleTs,
             sampleTs,
             obs.alertKey(),
             CONFIRM_REFRESH_INTERVAL

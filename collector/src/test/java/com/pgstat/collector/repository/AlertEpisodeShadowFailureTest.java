@@ -154,6 +154,41 @@ class AlertEpisodeShadowFailureTest {
     }
 
     @Test
+    void everyCloseReasonIsClassifiedAsVerifiedOrNot() {
+        // Dogrulanmamis bir kapanistan sonra ihlal saati DEVRALINIR, sifirlanmaz:
+        // kullanici "Coz"e bastiginda kosul hala dogruydu, saat yeniden baslarsa
+        // alti gunluk bir ihlal "24 saat" diye raporlanir — duzeltmeye
+        // calistigimiz "178 saat" hatasinin tersten aynisi.
+        //
+        // Yeni bir kapanma sebebi eklenip siniflandirilmazsa bu test kirilir.
+        // Siniflandirilmamis bir sebep sessizce "sifirla" tarafina duserdi ve
+        // hangi karari verdigimiz hicbir yerde yazili olmazdi.
+        java.util.Set<String> tumSebepler = java.util.Set.of(
+            AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.CLOSE_IDENTITY_CHANGED,
+            AlertEpisodeRepository.CLOSE_SUPERSEDED,
+            AlertEpisodeRepository.CLOSE_STALE_TIMEOUT,
+            AlertEpisodeRepository.CLOSE_MANUAL);
+
+        // Dogrulanmis = saat sifirlanir. resolved: kosulun gectigi dogrulandi.
+        // identity_changed: tablo fiziksel olarak baska bir nesne, eski nesildeki
+        // ihlalin suresini yenisine tasimak yanlis olurdu.
+        java.util.Set<String> dogrulanmis = java.util.Set.of(
+            AlertEpisodeRepository.CLOSE_RESOLVED,
+            AlertEpisodeRepository.CLOSE_IDENTITY_CHANGED);
+
+        java.util.Set<String> siniflandirilan = new java.util.HashSet<>(dogrulanmis);
+        siniflandirilan.addAll(AlertEpisodeRepository.UNVERIFIED_CLOSE_REASONS);
+
+        assertThat(siniflandirilan)
+            .as("her kapanma sebebi ya saati sifirlar ya devralir; ucuncu bir secenek yok")
+            .isEqualTo(tumSebepler);
+
+        assertThat(AlertEpisodeRepository.UNVERIFIED_CLOSE_REASONS)
+            .doesNotContain(AlertEpisodeRepository.CLOSE_RESOLVED);
+    }
+
+    @Test
     void theMainAlertPathSurvivesAFailingEpisodeWrite() {
         // Asil kanit: epizot tarafi tamamen coktugunde bile alert satiri
         // yazilir ve alert_id doner. Alarm uretimi golge yazimin basarisina

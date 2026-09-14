@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 120 |
+| Migrations scanned | 121 |
 | Tables discovered | 100 |
 | Columns discovered | 1248 |
-| Indexes discovered | 137 |
+| Indexes discovered | 138 |
 | Collector SQL family files | 5 |
 | API routes discovered | 213 |
 | API ColumnRegistry objects discovered | 33 |
