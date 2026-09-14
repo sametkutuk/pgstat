@@ -25,12 +25,8 @@ public class CapabilityRepository {
      * ON CONFLICT ile idempotent — ayni instance_pk icin tekrar calistirilabilir.
      */
     public void upsert(InstanceCapability cap) {
-        // last_error_text burada "erisilemezlik hatasi" anlaminda degil, discovery
-        // basarili olsa da not edilmesi gereken bir coverage bulgusu icin kullanilir
-        // (orn. pg_stat_statements admin DB disinda kurulu — bkz. DiscoveryCollector
-        // pgssNote). Basarili discovery'de her zaman guncellenir: eski not gecerliligini
-        // korumuyorsa (orn. extension artik admin DB'de kuruldu) bir sonraki
-        // discovery'de null'a donup temizlenir.
+        // Basarili discovery eski serbest metin hatasini temizler. pgss kaniti
+        // last_error_text'e gomulmez; tipli status/dbname/version alanlarindadir.
         jdbc.update("""
             insert into control.instance_capability (
               instance_pk,
@@ -165,5 +161,17 @@ public class CapabilityRepository {
         return jdbc.queryForObject(
                 "select pgss_catalog_version from control.instance_capability where instance_pk = ?",
                 Integer.class, instancePk);
+    }
+
+    /** pgss'in kesfedildigi ve statements/enrichment islerinin baglanacagi DB. */
+    public String findPgssCollectionDbname(long instancePk) {
+        return jdbc.queryForObject(
+                "select pgss_collection_dbname from control.instance_capability where instance_pk = ?",
+                String.class, instancePk);
+    }
+
+    public String resolvePgssCollectionDbname(long instancePk, String fallbackDbname) {
+        String discovered = findPgssCollectionDbname(instancePk);
+        return discovered == null || discovered.isBlank() ? fallbackDbname : discovered;
     }
 }

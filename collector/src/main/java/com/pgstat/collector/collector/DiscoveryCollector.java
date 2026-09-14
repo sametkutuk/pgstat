@@ -252,55 +252,17 @@ public class DiscoveryCollector {
                 log.debug("shared_preload_libraries okunamadi: {}", e.getMessage());
             }
 
-            // Adim 2: Admin DB'de extension var mi? Schema search_path'e bagli
-            // olmadigi icin pg_extension'dan okunur ve sorgular schema-qualified calisir.
-            PgStatStatementsExtension pgssExtension = null;
-            boolean pgssPermissionDenied = false;
-            boolean pgssCollectionFailed = false;
-            try {
-                pgssExtension = pgssResolver.resolve(conn);
-            } catch (SQLException e) {
-                if ("42501".equals(e.getSQLState())) {
-                    pgssPermissionDenied = true;
-                    log.warn("pg_stat_statements kesfi icin yetki yok: instance={}, database={}",
-                            instance.instanceId(), instance.adminDbname());
-                } else {
-                    throw e;
-                }
-            }
+            // Adim 2: Admin DB once denenir. Orada kullanilabilir degilse
+            // baglantiya acik diger DB'ler deterministik sirayla taranir.
+            // Extension nesneleri DB-yereldir; pgss verisi ise kume genelidir.
+            // Bu nedenle ilk kullanilabilir DB secilir ve yalnizca oradan toplanir.
+            PgssDiscovery pgssDiscovery = discoverPgssAcrossDatabases(
+                    instance, conn, queries, instance.adminDbname());
+            PgStatStatementsExtension pgssExtension = pgssDiscovery.extension();
+            String pgssCollectionDbname = pgssDiscovery.databaseName();
+            boolean pgssPermissionDenied = pgssDiscovery.permissionDenied();
+            boolean pgssCollectionFailed = pgssDiscovery.collectionFailed();
             hasPgss = pgssExtension != null;
-
-            // pg_extension satirini gorebilmek, pgss nesnesini okuyabilmekle ayni
-            // sey degildir. LIMIT 0 veri tasimadan schema USAGE / relation SELECT
-            // yolunu gercekten dogrular. Yetki yoksa extension metadata'sini yine
-            // kanita yazariz, fakat durumu available olarak gostermeyiz.
-            if (pgssExtension != null) {
-                try (Statement stmt = conn.createStatement()) {
-                    stmt.executeQuery("select 1 from "
-                            + pgssExtension.qualify("pg_stat_statements") + "(false) limit 0").close();
-                } catch (SQLException e) {
-                    if ("42501".equals(e.getSQLState())) {
-                        pgssPermissionDenied = true;
-                        log.warn("pg_stat_statements nesnesi okunamiyor: instance={}, database={}, schema={}",
-                                instance.instanceId(), instance.adminDbname(), pgssExtension.schemaName());
-                    } else if (e.getSQLState() != null && e.getSQLState().startsWith("08")) {
-                        throw e;
-                    } else {
-                        pgssCollectionFailed = true;
-                        log.warn("pg_stat_statements probe basarisiz: instance={}, database={}, sqlstate={}, hata={}",
-                                instance.instanceId(), instance.adminDbname(), e.getSQLState(), e.getMessage());
-                    }
-                }
-            }
-
-            // Adim 3: Admin DB'de yok ama preload'da varsa baska DB'de olabilir.
-            // Collector statements job'unda admin DB'ye baglanir; extension objeleri
-            // admin DB'de queryable degilse ready kabul edilmemeli.
-            if (!hasPgss && pgssInPreload) {
-                log.warn("pg_stat_statements admin DB'de ({}) yok ama shared_preload_libraries'de var. " +
-                         "Collector admin DB'de extension objelerini sorgulayamadigi icin degraded olacak.",
-                         instance.adminDbname());
-            }
 
             String pgssInfoRelation = pgssExtension != null
                     ? pgssExtension.qualify("pg_stat_statements_info") : null;
@@ -336,29 +298,30 @@ public class DiscoveryCollector {
                     : null;
             if (pgssCatalog.supportsInfoView(discoveredPgssVersion)
                     && hasPgss && !pgssPermissionDenied && !pgssCollectionFailed) {
-                try (Statement stmt = conn.createStatement();
-                     ResultSet rs = stmt.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
-                    if (rs.next()) {
-                        pgssStatsResetAt = rs.getObject("last_stats_reset", OffsetDateTime.class);
-                        hasPgssInfo = true;
+                Connection pgssConn = conn;
+                boolean closePgssConn = !instance.adminDbname().equals(pgssCollectionDbname);
+                try {
+                    if (closePgssConn) pgssConn = connectionFactory.connect(instance, pgssCollectionDbname);
+                    try (Statement stmt = pgssConn.createStatement();
+                         ResultSet rs = stmt.executeQuery(queries.pgssInfoQuery(pgssInfoRelation))) {
+                        if (rs.next()) {
+                            pgssStatsResetAt = rs.getObject("last_stats_reset", OffsetDateTime.class);
+                            hasPgssInfo = true;
+                        }
                     }
                 } catch (Exception e) {
                     log.warn("pg_stat_statements_info okunamadi: instance={}, schema={}, hata={}",
                             instance.instanceId(),
                             pgssExtension != null ? pgssExtension.schemaName() : null,
                             e.getMessage());
+                } finally {
+                    if (closePgssConn && pgssConn != conn) {
+                        try { pgssConn.close(); } catch (SQLException ignored) { }
+                    }
                 }
             }
 
-            // 6. Capability olustur ve kaydet.
-            // pgssInPreload && !hasPgss: extension shared_preload_libraries'de var ama
-            // admin_dbname'de (collector'un baglandigi DB) CREATE EXTENSION yapilmamis —
-            // bu, "extension hic kurulu degil" senaryosundan tamamen farkli bir kok neden
-            // (muhtemelen baska bir database'de kurulu, orn. uygulama DB'si). UI'nin
-            // yanlislikla "shared_preload_libraries'e ekle + restart et" adimlarini
-            // onermemesi icin bu ayrimi lastErrorText'e not dusuyoruz (musteri raporu,
-            // 2026-08-17: db1.dc-etstur.com-test — pg_stat_statements etstur DB'sinde
-            // kuruluydu ama admin_dbname=postgres'te degildi).
+            // 6. Capability olustur ve secilen toplama DB'sini kanita kaydet.
             String pgssStatus = pgssStatus(pgssExtension, pgssPermissionDenied, pgssCollectionFailed);
             OffsetDateTime pgssVerifiedAt = OffsetDateTime.now();
             InstanceCapability capability = new InstanceCapability(
@@ -374,7 +337,7 @@ public class DiscoveryCollector {
                 hasPgStatCheckpointer,
                 pgssStatus,
                 pgssExtension != null ? pgssExtension.extVersion() : null,
-                instance.adminDbname(),
+                pgssCollectionDbname,
                 pgssInPreload,
                 pgssCatalog.catalogVersion(),
                 pgssVerifiedAt,
@@ -415,7 +378,96 @@ public class DiscoveryCollector {
         }
     }
 
-    /** Mevcut admin DB kesfinin kanita yazilan deterministik pgss durumu. */
+    PgssDiscovery discoverPgssAcrossDatabases(InstanceInfo instance, Connection adminConnection,
+                                               SourceQueries queries, String adminDbname)
+            throws SQLException {
+        PgssDiscovery evidence = inspectPgss(instance, adminConnection, adminDbname);
+        if (evidence.available()) return evidence;
+
+        for (String dbname : listDatabaseNames(adminConnection, queries)) {
+            if (adminDbname.equals(dbname)) continue;
+            try (Connection candidate = connectionFactory.connect(instance, dbname)) {
+                PgssDiscovery found = inspectPgss(instance, candidate, dbname);
+                if (found.available()) {
+                    log.info("pg_stat_statements admin DB disinda bulundu: instance={}, database={}",
+                            instance.instanceId(), dbname);
+                    return found;
+                }
+                evidence = evidence.merge(found);
+            } catch (SQLException e) {
+                // Bir DB'ye CONNECT izni olmamasi, instance veya pgss'in tamamini
+                // erisilemez yapmaz. Diger adaylar taranmaya devam edilir.
+                log.debug("pgss DB adayi atlandi: instance={}, database={}, sqlstate={}, hata={}",
+                        instance.instanceId(), dbname, e.getSQLState(), e.getMessage());
+            }
+        }
+        return evidence;
+    }
+
+    private List<String> listDatabaseNames(Connection conn, SourceQueries queries) throws SQLException {
+        List<String> names = new ArrayList<>();
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(queries.databaseListQuery())) {
+            while (rs.next()) names.add(rs.getString("datname"));
+        }
+        return names;
+    }
+
+    private PgssDiscovery inspectPgss(InstanceInfo instance, Connection conn, String dbname)
+            throws SQLException {
+        PgStatStatementsExtension extension;
+        try {
+            extension = pgssResolver.resolve(conn);
+        } catch (SQLException e) {
+            if ("42501".equals(e.getSQLState())) {
+                log.warn("pg_stat_statements kesfi icin yetki yok: instance={}, database={}",
+                        instance.instanceId(), dbname);
+                return new PgssDiscovery(null, dbname, true, false);
+            }
+            if (e.getSQLState() != null && e.getSQLState().startsWith("08")) throw e;
+            log.warn("pg_stat_statements metadata kesfi basarisiz: instance={}, database={}, sqlstate={}, hata={}",
+                    instance.instanceId(), dbname, e.getSQLState(), e.getMessage());
+            return new PgssDiscovery(null, dbname, false, true);
+        }
+        if (extension == null) return new PgssDiscovery(null, dbname, false, false);
+
+        // Metadata gorunurlugu, collector'in gercekte cagirdigi SRF icin EXECUTE
+        // yetkisini kanitlamaz. LIMIT 0 executor init'te yetkiyi denetler, fakat
+        // fonksiyonu calistirip satir tasimaz.
+        try (Statement stmt = conn.createStatement()) {
+            stmt.executeQuery("select 1 from "
+                    + extension.qualify("pg_stat_statements") + "(false) limit 0").close();
+            return new PgssDiscovery(extension, dbname, false, false);
+        } catch (SQLException e) {
+            if ("42501".equals(e.getSQLState())) {
+                log.warn("pg_stat_statements nesnesi okunamiyor: instance={}, database={}, schema={}",
+                        instance.instanceId(), dbname, extension.schemaName());
+                return new PgssDiscovery(extension, dbname, true, false);
+            }
+            if (e.getSQLState() != null && e.getSQLState().startsWith("08")) throw e;
+            log.warn("pg_stat_statements probe basarisiz: instance={}, database={}, sqlstate={}, hata={}",
+                    instance.instanceId(), dbname, e.getSQLState(), e.getMessage());
+            return new PgssDiscovery(extension, dbname, false, true);
+        }
+    }
+
+    record PgssDiscovery(PgStatStatementsExtension extension, String databaseName,
+                         boolean permissionDenied, boolean collectionFailed) {
+        boolean available() {
+            return extension != null && !permissionDenied && !collectionFailed;
+        }
+
+        PgssDiscovery merge(PgssDiscovery other) {
+            PgStatStatementsExtension chosenExtension = extension != null ? extension : other.extension;
+            String chosenDatabase = extension != null ? databaseName
+                    : other.extension != null ? other.databaseName : databaseName;
+            return new PgssDiscovery(chosenExtension, chosenDatabase,
+                    permissionDenied || other.permissionDenied,
+                    collectionFailed || other.collectionFailed);
+        }
+    }
+
+    /** Veritabani kapsami taramasinin kanita yazilan deterministik pgss durumu. */
     static String pgssStatus(PgStatStatementsExtension extension, boolean permissionDenied,
                              boolean collectionFailed) {
         if (permissionDenied) return "permission_denied";

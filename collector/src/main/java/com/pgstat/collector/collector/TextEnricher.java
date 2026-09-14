@@ -87,11 +87,13 @@ public class TextEnricher {
         SourceQueries queries = familyResolver.resolveByCode(sqlFamily);
         int enrichedCount = 0;
 
-        try (Connection conn = connectionFactory.connect(instance)) {
+        String collectionDbname = capabilityRepo.resolvePgssCollectionDbname(
+                instancePk, instance.adminDbname());
+        try (Connection conn = connectionFactory.connect(instance, collectionDbname)) {
             PgStatStatementsExtension pgssExtension = pgssResolver.resolve(conn);
             if (pgssExtension == null) {
-                throw new IllegalStateException("pg_stat_statements extension admin DB'de bulunamadi: "
-                        + instance.adminDbname());
+                throw new IllegalStateException("pg_stat_statements extension toplama DB'sinde bulunamadi: "
+                        + collectionDbname);
             }
 
             // Sadece enrichment bekleyen queryid'ler icin filtrele — pg_stat_statements(true)

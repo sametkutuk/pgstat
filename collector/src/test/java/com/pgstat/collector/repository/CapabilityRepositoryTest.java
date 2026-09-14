@@ -9,8 +9,11 @@ import java.time.OffsetDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class CapabilityRepositoryTest {
 
@@ -39,5 +42,16 @@ class CapabilityRepositoryTest {
                 .contains("last_error_at               = null");
         assertThat(args.getValue()).containsSubsequence(
                 "available", "1.12", "postgres", true, 1, verifiedAt);
+    }
+
+    @Test
+    void collectionDatabaseUsesDiscoveryEvidenceAndOnlyFallsBackForLegacyRows() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        CapabilityRepository repository = new CapabilityRepository(jdbc);
+        when(jdbc.queryForObject(anyString(), eq(String.class), eq(7L)))
+                .thenReturn("appdb", null);
+
+        assertThat(repository.resolvePgssCollectionDbname(7L, "postgres")).isEqualTo("appdb");
+        assertThat(repository.resolvePgssCollectionDbname(7L, "postgres")).isEqualTo("postgres");
     }
 }
