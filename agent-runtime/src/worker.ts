@@ -13,6 +13,32 @@ const TOTAL_JOB_MS = 180_000;
 // Son cevaba ayrilan cikti butcesi buyudugu icin toplam tavan da yukseltildi;
 // yoksa kirpilma yerine butce asimi hatasi alinirdi.
 const TOTAL_TOKEN_BUDGET = 30_000;
+/** Kota sinirinda kac kez beklenip tekrar denenecegi. */
+const RATE_LIMIT_RETRIES = 2;
+/** Saglayici sure soylemezse kullanilan bekleme. */
+const DEFAULT_RATE_LIMIT_WAIT_MS = 30_000;
+/** Tek bir beklemenin ust siniri — is suresini bekleyerek tuketmeyelim. */
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+/**
+ * Saglayicinin hata metnindeki "retry in 36.28s" ipucunu saniyeye cevirir.
+ * Ipucu yoksa varsayilan bekleme kullanilir.
+ */
+export function retryDelayMs(providerDetail: string | null): number {
+  const match = providerDetail?.match(/retry in\s+([0-9]+(?:\.[0-9]+)?)\s*s/i);
+  const seconds = match ? Number(match[1]) : NaN;
+  const wait = Number.isFinite(seconds) ? Math.ceil(seconds * 1000) + 1000 : DEFAULT_RATE_LIMIT_WAIT_MS;
+  return Math.min(Math.max(wait, 1000), MAX_RATE_LIMIT_WAIT_MS);
+}
+
+/** Iptal edilirse beklemeyi kısa keser. */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+    function done() { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); }
+  });
+}
 
 /**
  * Serbest metin alani: uzunluk asilirsa REDDEDILMEZ, kirpilir.
@@ -171,7 +197,27 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
   const model = async (provider: ProviderConfig, system: string, prompt: string,
                        maxOutputTokens?: number) => {
     if (++modelCalls > MODEL_CALL_BUDGET) throw new Error('MODEL_CALL_BUDGET_EXCEEDED');
-    const response = await requestModel(provider, system, prompt, controller.signal, maxOutputTokens);
+
+    // Kota siniri gecicidir ve saglayici genelde ne kadar beklenecegini
+    // soyler (olculdu 2026-09-15: Gemini ucretsiz katman, "retry in 36.28s").
+    // Kullanicinin sorusunu dakikalik bir sinir yuzunden kalici olarak
+    // oldurmek yerine bir kez bekleyip tekrar deniyoruz. Is suresi
+    // (TOTAL_JOB_MS) ve iptal sinyali yine gecerli: beklemek deadline'i
+    // uzatmaz.
+    let attempt = 0;
+    let response: Awaited<ReturnType<typeof requestModel>>;
+    for (;;) {
+      try {
+        response = await requestModel(provider, system, prompt, controller.signal, maxOutputTokens);
+        break;
+      } catch (error) {
+        const rateLimited = error instanceof ModelRequestError && error.code === 'MODEL_RATE_LIMITED';
+        if (!rateLimited || attempt >= RATE_LIMIT_RETRIES || controller.signal.aborted) throw error;
+        attempt += 1;
+        await sleepUnlessAborted(retryDelayMs(error.providerDetail), controller.signal);
+      }
+    }
+
     if (response.inputTokens === null || response.outputTokens === null) usageKnown = false;
     inputTokens += response.inputTokens ?? 0;
     outputTokens += response.outputTokens ?? 0;
