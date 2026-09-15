@@ -269,7 +269,18 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
       + 'biçiminde yaz; genel geçer ifade kullanma. En fazla 5 observed_fact, '
       + '3 interpretation, 3 hypothesis, 3 limitation ver — en önemlilerini seç. '
       + 'interpretations, hypotheses ve limitations DÜZ METİN dizisidir: ["cümle", "cümle"]. '
-      + 'Nesne koyma.',
+      + 'Nesne koyma.\n'
+      // Gozlendi (2026-09-15): model "yuksek" guven verdi ve ayni cevapta
+      // "bu kesin kanit degildir" yazdi. Guven, kendi listeledigi
+      // sinirlamalarla tutarli olmak zorunda.
+      + 'GÜVEN KALİBRASYONU: confidence, kendi limitations listenle TUTARLI olmalı. '
+      + 'Sonucu niteleyen bir sınırlama yazdıysan "high" veremezsin. '
+      + 'high = kanıt doğrudan ölçülmüş ve sonucu sınırlayan bir şey yok. '
+      + 'medium = kanıt var ama en az bir sınırlama sonucu zayıflatıyor. '
+      + 'low = kanıt dolaylı, eksik ya da çelişkili. '
+      + 'confidence_reason bu seçimi gerekçelendirsin.\n'
+      + 'HİPOTEZ: yalnızca kanıtla sınanabilecek olanları yaz. '
+      + '"başka bir faktör olabilir" gibi doğrulanamaz ifadeler kullanma.',
       MAX_ANSWER_OUTPUT_TOKENS);
     const answer = parseModelJson(answerText, answerSchema, 'MODEL_ANSWER_INVALID');
     const actualIds = new Set(recorded.map(item => item.evidence_id));
