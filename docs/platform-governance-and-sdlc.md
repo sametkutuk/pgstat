@@ -399,3 +399,29 @@ Required next documents or tools:
 5. Recommendation schema v1 validation tests
 6. Documentation impact checker rule hardening
 7. Documentation steward agent workflow
+
+## 15. Migration Ordering Gate
+
+A migration set is only correct if a **clean database** can be built from it.
+`db/apply.sh` and `db/Dockerfile` replay every `V*.sql` in name order, and
+there is no version table, so a migration that depends on DDL introduced by a
+later file breaks every fresh install while leaving long-lived databases
+looking healthy.
+
+Measured on 2026-09-15 against `postgres:17-alpine` using the `db/Dockerfile`
+path, five such defects existed and none of them were visible in production:
+
+| File | Defect | Effect on a clean database |
+| --- | --- | --- |
+| V011 | `set_updated_at()` called without its `control` schema | init aborts |
+| V011 / V012 / V014 | `on conflict (rule_name, metric_type, metric_name)` used before V015 created that unique constraint | init aborts |
+| V014 / V016 | anomaly templates insert NULL thresholds before V016 relaxes the check, and V016 then adds a constraint its own data violates | init aborts |
+| V025 / V026 | `wal_metric`, `slru_metric` and friends inserted before V027/V028 widen `ck_alert_rule_metric_type` | init aborts |
+
+After the fix a clean bootstrap completes with zero errors and produces 53
+alert templates, including the 14 anomaly templates that had never been
+created in any database because V014 could not succeed.
+
+**Rule:** any change under `db/migrations/` must be proven by building a
+disposable database from scratch — applying the file to an existing database
+proves only that it is compatible with state that already exists.

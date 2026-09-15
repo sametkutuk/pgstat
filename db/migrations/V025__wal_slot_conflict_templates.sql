@@ -2,6 +2,21 @@
 -- ============================================================================
 -- Tumu is_enabled=false (kullanici aktiflestirir)
 
+-- Bu migration'in ekledigi metric_type'lari once constraint'e tanit. Aksi
+-- halde temiz bir veritabaninda asagidaki insert
+-- "violates check constraint ck_alert_rule_metric_type" ile kiriliyordu:
+-- kisitlamayi genisleten V027 bu dosyadan SONRA calisiyor. V027/V028 ayni
+-- kisitlamayi daha genis listeyle yeniden kurdugu icin burasi onlari bozmaz.
+alter table control.alert_rule drop constraint if exists ck_alert_rule_metric_type;
+alter table control.alert_rule add constraint ck_alert_rule_metric_type check (
+  metric_type in (
+    'cluster_metric', 'io_metric', 'database_metric',
+    'statement_metric', 'table_metric', 'index_metric',
+    'activity_metric', 'replication_metric',
+    'wal_metric', 'archiver_metric', 'slot_metric', 'conflict_metric'
+  )
+);
+
 insert into control.alert_rule (
   rule_name, description,
   metric_type, metric_name, scope,

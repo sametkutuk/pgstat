@@ -1,5 +1,17 @@
 -- Anomali tespit template'leri (day_over_day, week_over_week, alltime_high/low)
 
+-- Anomali kurallari esik girmez (warning/critical NULL); V011'deki
+-- ck_alert_rule_threshold bunu reddediyordu ve kisitlamayi gevseten V016 bu
+-- dosyadan SONRA calisiyor, yani temiz bir veritabaninda asagidaki insert
+-- kiriliyordu. Burada evaluation_type uzerinden gevsetiliyor (V013'ten beri
+-- mevcut); V016 ayni kisitlamayi alert_category uzerinden yeniden kurar.
+alter table control.alert_rule drop constraint if exists ck_alert_rule_threshold;
+alter table control.alert_rule add constraint ck_alert_rule_threshold check (
+  evaluation_type <> 'threshold'
+  or warning_threshold is not null
+  or critical_threshold is not null
+);
+
 insert into control.alert_rule
   (rule_name, description, metric_type, metric_name, scope,
    condition_operator, warning_threshold, critical_threshold,

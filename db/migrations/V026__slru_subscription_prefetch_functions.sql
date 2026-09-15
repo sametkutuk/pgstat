@@ -133,6 +133,21 @@ comment on table fact.pg_user_function_snapshot     is 'pg_stat_user_functions â
 -- ----------------------------------------------------------------------------
 -- 5) Hazir alert templates
 -- ----------------------------------------------------------------------------
+
+-- V025 ile ayni gerekce: bu dosyanin ekledigi metric_type'lar kisitlamada
+-- yoktu ve temiz bir veritabaninda insert kiriliyordu. Kisitlamayi genisleten
+-- V027/V028 bu dosyadan SONRA calisiyor.
+alter table control.alert_rule drop constraint if exists ck_alert_rule_metric_type;
+alter table control.alert_rule add constraint ck_alert_rule_metric_type check (
+  metric_type in (
+    'cluster_metric', 'io_metric', 'database_metric',
+    'statement_metric', 'table_metric', 'index_metric',
+    'activity_metric', 'replication_metric',
+    'wal_metric', 'archiver_metric', 'slot_metric', 'conflict_metric',
+    'slru_metric', 'subscription_metric', 'prefetch_metric', 'function_metric'
+  )
+);
+
 insert into control.alert_rule (
   rule_name, description,
   metric_type, metric_name, scope,

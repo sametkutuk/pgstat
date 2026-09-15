@@ -16,12 +16,12 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 125 |
+| Migrations scanned | 126 |
 | Tables discovered | 107 |
 | Columns discovered | 1337 |
-| Indexes discovered | 146 |
+| Indexes discovered | 147 |
 | Collector SQL family files | 5 |
-| API routes discovered | 228 |
+| API routes discovered | 229 |
 | API ColumnRegistry objects discovered | 33 |
 | UI files with endpoint references | 23 |
 
@@ -31,7 +31,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Table | Columns | Partitioned | Partition key | First migration | Last migration |
 | --- | --- | --- | --- | --- | --- |
-| agent.investigation | 17 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.investigation | 17 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V122__investigation_clarification.sql |
 | agent.investigation_message | 5 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.investigation_result | 10 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.investigation_tool_call | 13 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
@@ -2386,6 +2386,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | GET | /:id/table-vacuum-evidence | api/src/routes/agent-evidence.ts |
 | POST | /investigations | api/src/routes/agent.ts |
 | POST | /investigations/:id/cancel | api/src/routes/agent.ts |
+| POST | /investigations/:id/clarify | api/src/routes/agent.ts |
 | GET | /investigations | api/src/routes/agent.ts |
 | GET | /providers | api/src/routes/agent.ts |
 | PUT | /providers/:provider | api/src/routes/agent.ts |

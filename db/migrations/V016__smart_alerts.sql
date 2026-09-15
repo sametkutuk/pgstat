@@ -54,6 +54,18 @@ alter table control.alert_rule
 
 comment on column control.alert_rule.alert_category    is 'smart: esik girmeden izleme, threshold: manuel esik';
 
+-- Esik GIRMEYEN kural tanim geregi smart'tir. alert_category yukarida
+-- 'threshold' varsayilaniyla eklendigi icin V014'un anomali template'leri
+-- (warning/critical NULL, evaluation_type <> 'threshold') asagidaki
+-- kisitlamayi ihlal ediyordu ve V016 temiz bir veritabaninda kiriliyordu.
+-- Yalnizca ihlal edecek satirlar siniflandirilir; digerlerine dokunulmaz.
+update control.alert_rule
+   set alert_category = 'smart'
+ where alert_category = 'threshold'
+   and evaluation_type <> 'threshold'
+   and warning_threshold is null
+   and critical_threshold is null;
+
 -- Smart kurallar icin threshold zorunlulugunu kaldir
 -- (V011'deki ck_alert_rule_threshold: warning OR critical NOT NULL)
 alter table control.alert_rule

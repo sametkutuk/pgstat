@@ -69,7 +69,27 @@ create table if not exists control.alert_rule_last_eval (
   primary key (rule_id, instance_pk)
 );
 
+-- Template'lerin ON CONFLICT hedefi. V012 ve V014 bu constraint'e dayaniyordu
+-- ama constraint yalnizca V015'te olusturuluyordu; temiz bir veritabaninda
+-- V012 "there is no unique or exclusion constraint matching the ON CONFLICT
+-- specification" ile kiriliyordu. V015 ayni bloga sahip oldugu icin orada
+-- no-op'a duser.
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'uq_alert_rule_name_metric'
+      and conrelid = 'control.alert_rule'::regclass
+  ) then
+    alter table control.alert_rule
+      add constraint uq_alert_rule_name_metric
+      unique (rule_name, metric_type, metric_name);
+  end if;
+end $$;
+
 -- updated_at trigger
+-- Fonksiyon control semasinda tanimli (V001). Semasiz cagri yalnizca
+-- search_path'te control varsa cozulur; temiz bir veritabaninda
+-- "function set_updated_at() does not exist" ile kiriliyordu.
 create trigger trg_alert_rule_updated_at
   before update on control.alert_rule
-  for each row execute function set_updated_at();
+  for each row execute function control.set_updated_at();
