@@ -14,7 +14,7 @@ node scripts/generate-doc-inventory.mjs
 | Queue | Count | Action |
 | --- | --- | --- |
 | Table/data-family contracts needing semantic review | 61 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 1092 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Field contracts needing exact source/version review | 1096 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
 | Sensitive or conditional AI fields | 650 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 2 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
@@ -33,7 +33,7 @@ node scripts/generate-doc-inventory.mjs
 
 | Table | Semantics | Columns | Retention | API consumers | UI consumers | Reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| agent.investigation | agent | 17 | not detected | not detected | not detected | generated default; needs review |
+| agent.investigation | agent | 21 | not detected | not detected | not detected | generated default; needs review |
 | agent.investigation_message | agent | 5 | not detected | not detected | not detected | generated default; needs review |
 | agent.investigation_result | agent | 10 | not detected | not detected | not detected | generated default; needs review |
 | agent.investigation_tool_call | agent | 13 | not detected | not detected | not detected | generated default; needs review |

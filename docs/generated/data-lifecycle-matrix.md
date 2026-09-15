@@ -27,7 +27,7 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Table | Semantics | Columns | Timestamp columns | Schema partitioned | Partition policy | Retention / purge policy | Purge owner | Rollup role | First migration | Last migration | Code refs |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| agent.investigation | agent | 17 | completed_at, created_at, started_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V122__investigation_clarification.sql |  |
+| agent.investigation | agent | 21 | claimed_at, completed_at, created_at, heartbeat_at, started_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V123__investigation_worker_claim.sql |  |
 | agent.investigation_message | agent | 5 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
 | agent.investigation_result | agent | 10 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
 | agent.investigation_tool_call | agent | 13 | completed_at, started_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |

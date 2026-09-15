@@ -378,3 +378,30 @@ with the real V120 and V122 migrations: 1 test, passed, 0 skipped. It covers
 zero, one and several active instances, an explicit target, an inactive
 target, the defaulted window and its message, and cancelling an investigation
 that is still waiting for an answer. The HTTP layer is not exercised.
+
+## 13. Investigation Queue Contract (DB-only dispatch)
+
+`api/src/services/investigationQueue.ts`. No Redis or Kafka; PostgreSQL row
+locks are the whole mechanism.
+
+- `claimNextInvestigation` takes the oldest `queued` investigation, sets it to
+  `planning` and records `claimed_by`, `claimed_at`, `heartbeat_at` and an
+  incremented `attempt_count`. `needs_clarification` is never claimed, because
+  it waits on the user rather than a worker.
+- Every later write is conditioned on `(investigation_id, expected status,
+  claimed_by)`. If the user cancelled in the meantime the write matches zero
+  rows and returns `superseded`, so **a cancelled investigation can never
+  become `completed`**.
+- `reclaimStaleInvestigations` returns work whose heartbeat has gone stale: it
+  is requeued while attempts remain and becomes `timed_out` with
+  `failure_code = 'worker_timeout'` once `MAX_ATTEMPTS` is reached, so a
+  crash-looping worker cannot retry forever.
+
+Correctness comes from the `for update` row lock in the claim subquery, not
+from `skip locked`. Measured 2026-09-15: with the lock removed, six concurrent
+workers claimed two investigations five times; with it, always twice. Removing
+only `skip locked` kept the result correct and merely made workers queue up.
+
+`api/tests/investigationQueue.spec.ts` proves all of the above against a
+disposable PostgreSQL: 1 test, passed, 0 skipped. The suite was verified to
+have teeth by removing the lock and confirming it fails.

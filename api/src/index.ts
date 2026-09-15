@@ -31,6 +31,7 @@ import insightsRoutes from './routes/insights';
 import systemHealthRoutes from './routes/systemHealth';
 import telegramAllowlistRoutes from './routes/telegramAllowlist';
 import agentRoutes from './routes/agent';
+import agentEvidenceRoutes from './routes/agent-evidence';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = [
@@ -191,6 +192,8 @@ app.use('/api/insights', requireAuth, insightsRoutes);
 app.use('/api/system-health', requireAuth, systemHealthRoutes);
 app.use('/api/telegram-allowlist', requireAuth, telegramAllowlistRoutes);
 app.use('/api/agent', requireAuth, agentRoutes);
+// Salt okunur autovacuum kanit API'si — MCP/AI worker bu uclari kullanir.
+app.use('/api/agent-evidence', requireAuth, agentEvidenceRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);

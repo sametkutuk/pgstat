@@ -16,10 +16,10 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 126 |
+| Migrations scanned | 127 |
 | Tables discovered | 107 |
-| Columns discovered | 1337 |
-| Indexes discovered | 147 |
+| Columns discovered | 1341 |
+| Indexes discovered | 149 |
 | Collector SQL family files | 5 |
 | API routes discovered | 229 |
 | API ColumnRegistry objects discovered | 33 |
@@ -31,7 +31,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Table | Columns | Partitioned | Partition key | First migration | Last migration |
 | --- | --- | --- | --- | --- | --- |
-| agent.investigation | 17 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V122__investigation_clarification.sql |
+| agent.investigation | 21 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V123__investigation_worker_claim.sql |
 | agent.investigation_message | 5 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.investigation_result | 10 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.investigation_tool_call | 13 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
@@ -39,7 +39,7 @@ This generated inventory is the bridge between code and the manual project docum
 | agent.telemetry_improvement | 14 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.telemetry_improvement_occurrence | 12 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 
-<details><summary>agent.investigation columns (17)</summary>
+<details><summary>agent.investigation columns (21)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -60,6 +60,10 @@ This generated inventory is the bridge between code and the manual project docum
 | completed_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
 | created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
 | updated_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| claimed_by | text | V123__investigation_worker_claim.sql |
+| claimed_at | timestamptz | V123__investigation_worker_claim.sql |
+| heartbeat_at | timestamptz | V123__investigation_worker_claim.sql |
+| attempt_count | integer | V123__investigation_worker_claim.sql |
 
 </details>
 
