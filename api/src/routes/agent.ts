@@ -7,6 +7,7 @@ import { cancelInvestigation } from '../services/investigationLifecycle';
 import { decideIntake, resolveTarget, resolveWindow } from '../services/investigationIntake';
 import { listImprovements } from '../services/improvementList';
 import { testProviderConnection } from '../services/providerConnectionTest';
+import { listProviderModels } from '../services/providerModelCatalog';
 import rateLimit from 'express-rate-limit';
 
 const router = Router();
@@ -332,6 +333,9 @@ router.get('/providers', async (_req, res, next) => {
 
 const providerTestLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 5,
   message: { error: 'Bağlantı testi sınırına ulaşıldı; daha sonra deneyin' } });
+// Liste cagrisi saglayicinin kotasindan harcar; testten daha sik ama yine sinirli.
+const providerModelsLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 20,
+  message: { error: 'Model listesi sınırına ulaşıldı; daha sonra deneyin' } });
 router.post('/providers/:provider/test', providerTestLimiter, async (req, res, next) => {
   try {
     if (!PROVIDERS.includes(req.params.provider as Provider)) return res.status(400).json({ error: 'Desteklenmeyen AI sağlayıcısı' });
@@ -339,6 +343,41 @@ router.post('/providers/:provider/test', providerTestLimiter, async (req, res, n
     catch (error) {
       if (error instanceof Error && error.message === 'PROVIDER_NOT_ENABLED') return res.status(404).json({ error: 'Aktif sağlayıcı bulunamadı' });
       if (error instanceof Error && /^(PROVIDER_NOT_READY|PROVIDER_URL_INVALID)$/.test(error.message)) return res.status(409).json({ error: error.message });
+      throw error;
+    }
+  } catch (error) { next(error); }
+});
+
+/**
+ * Kayitli anahtarin gercekten kullanabilecegi modeller.
+ *
+ * Model adini elle yazdirmak yanlis/erisilemez ad yuzunden 404'e yol
+ * aciyordu. Liste saglayicidan gelir; anahtar disariya donmez.
+ */
+router.get('/providers/:provider/models', providerModelsLimiter, async (req, res, next) => {
+  try {
+    if (!PROVIDERS.includes(req.params.provider as Provider)) {
+      return res.status(400).json({ error: 'Desteklenmeyen AI sağlayıcısı' });
+    }
+    try {
+      return res.json({ models: await listProviderModels(pool, req.params.provider) });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'UNKNOWN';
+      if (code === 'PROVIDER_NOT_CONFIGURED') {
+        return res.status(404).json({ error: 'Bu sağlayıcı için kayıt yok; önce API anahtarını kaydedin', code });
+      }
+      if (code === 'PROVIDER_NOT_READY' || code === 'PROVIDER_URL_INVALID') {
+        return res.status(409).json({ error: 'Sağlayıcı kaydı eksik ya da geçersiz', code });
+      }
+      if (code === 'PROVIDER_AUTH_FAILED') {
+        return res.status(502).json({ error: 'API anahtarı reddedildi', code });
+      }
+      if (code === 'PROVIDER_RATE_LIMITED') {
+        return res.status(502).json({ error: 'Sağlayıcı kota sınırı; birazdan tekrar deneyin', code });
+      }
+      if (code === 'PROVIDER_UNREACHABLE' || code.startsWith('PROVIDER_HTTP_')) {
+        return res.status(502).json({ error: 'Sağlayıcıya ulaşılamadı', code });
+      }
       throw error;
     }
   } catch (error) { next(error); }

@@ -21,7 +21,7 @@ This generated inventory is the bridge between code and the manual project docum
 | Columns discovered | 1351 |
 | Indexes discovered | 150 |
 | Collector SQL family files | 5 |
-| API routes discovered | 240 |
+| API routes discovered | 241 |
 | API ColumnRegistry objects discovered | 33 |
 | UI files with endpoint references | 23 |
 
@@ -2422,6 +2422,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | GET | /investigations | api/src/routes/agent.ts |
 | GET | /providers | api/src/routes/agent.ts |
 | POST | /providers/:provider/test | api/src/routes/agent.ts |
+| GET | /providers/:provider/models | api/src/routes/agent.ts |
 | PUT | /providers/:provider | api/src/routes/agent.ts |
 | GET | /investigations/:id | api/src/routes/agent.ts |
 | GET | /improvements | api/src/routes/agent.ts |

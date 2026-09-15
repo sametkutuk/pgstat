@@ -105,6 +105,8 @@ export default function AgentDBA() {
   const [to, setTo] = useState(() => dateInputValue(new Date()));
   const [provider, setProvider] = useState<ProviderName>('gemini');
   const [providerModel, setProviderModel] = useState(providerInfo.gemini.defaultModel);
+  // Sağlayıcıdan çekilen model listesi. Boşken serbest metin alanı gösterilir.
+  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([]);
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('http://host.docker.internal:11434');
   const [policyAccepted, setPolicyAccepted] = useState(false);
@@ -177,6 +179,21 @@ export default function AgentDBA() {
     mutationFn: (id: string) => apiPost(`/agent/investigations/${id}/cancel`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-investigations'] }),
   });
+  // Kayıtlı anahtarın gerçekten kullanabileceği modelleri getirir. Elle model
+  // adı yazmak, erişilemeyen ad yüzünden 404'e yol açıyordu.
+  const providerModels = useMutation({
+    mutationFn: (name: ProviderName) =>
+      apiGet<{ models: { id: string; label: string }[] }>(`/agent/providers/${name}/models`),
+    onSuccess: result => {
+      setAvailableModels(result.models);
+      // Kayıtlı model listede yoksa kullanıcının seçimini zorlamıyoruz;
+      // mevcut değer "(kayıtlı)" olarak korunur.
+      if (result.models.length > 0 && !result.models.some(model => model.id === providerModel)) {
+        setProviderModel(result.models[0].id);
+      }
+    },
+  });
+
   const saveProvider = useMutation({
     mutationFn: () => apiPut<ProviderConnection>(`/agent/providers/${provider}`, {
       model_name: providerModel,
@@ -498,15 +515,49 @@ export default function AgentDBA() {
               const next = event.target.value as ProviderName;
               setProvider(next); setProviderModel(providerInfo[next].defaultModel);
               setPolicyAccepted(next === 'ollama'); setApiKey('');
+              // Liste önceki sağlayıcıya aitti; taşımak yanlış model gösterirdi.
+              setAvailableModels([]); providerModels.reset();
             }} className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm bg-white">
               {(Object.keys(providerInfo) as ProviderName[]).map(name =>
                 <option key={name} value={name}>{providerInfo[name].label}{providerInfo[name].free ? ' — ücretsiz seçenek' : ''}</option>)}
             </select>
             <p className="text-xs text-[#64748B] mt-2">{providerInfo[provider].hint}</p>
 
-            <label className="block text-xs font-semibold text-[#64748B] mt-4 mb-1">Model</label>
-            <input value={providerModel} onChange={event => setProviderModel(event.target.value)} required maxLength={120}
-              className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+            <div className="flex items-baseline justify-between mt-4 mb-1">
+              <label className="block text-xs font-semibold text-[#64748B]">Model</label>
+              <button type="button" onClick={() => providerModels.mutate(provider)}
+                disabled={providerModels.isPending}
+                className="text-xs text-[#3B82F6] disabled:opacity-50">
+                {providerModels.isPending ? 'Sorgulanıyor…' : 'Kullanılabilir modelleri getir'}
+              </button>
+            </div>
+
+            {/* Liste çekildiyse seçim, çekilmediyse serbest metin. Kayıtlı
+                anahtar gerekir; liste sağlayıcıdan gelir, biz varsaymayız. */}
+            {availableModels.length > 0 ? (
+              <select value={providerModel} onChange={event => setProviderModel(event.target.value)}
+                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm bg-white">
+                {availableModels.some(model => model.id === providerModel) ? null : (
+                  <option value={providerModel}>{providerModel} (kayıtlı)</option>
+                )}
+                {availableModels.map(model => (
+                  <option key={model.id} value={model.id}>{model.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input value={providerModel} onChange={event => setProviderModel(event.target.value)} required maxLength={120}
+                className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm" />
+            )}
+
+            {providerModels.error && (
+              <p className="mt-1 text-xs text-red-600">{providerModels.error.message}</p>
+            )}
+            {availableModels.length > 0 && (
+              <p className="mt-1 text-xs text-[#94A3B8]">
+                {availableModels.length} model bu anahtarla kullanılabilir. Kota bilgisi sağlayıcı
+                tarafından sorgulanamıyor; limit ancak aşıldığında hata mesajında görünür.
+              </p>
+            )}
 
             {provider === 'ollama' ? (
               <>

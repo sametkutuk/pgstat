@@ -464,3 +464,35 @@ as decimal strings through intake, API and UI. A disposable PostgreSQL test
 includes instance `9007199254740993` to check the JavaScript precision boundary.
 The evidence router and target contract now also retain the instance BIGINT
 as a string; scoped HTTP access was remeasured against that exact large ID.
+
+## 14. Provider Model Catalog
+
+`GET /api/agent/providers/:provider/models` returns the models the stored key
+can actually use, so the model name is chosen from a list rather than typed.
+Typing it produced MODEL_HTTP_404 against a name that either did not exist for
+that key or could not generate content at all.
+
+| Provider | Endpoint |
+| --- | --- |
+| Gemini | `GET /v1beta/models` (`x-goog-api-key`) |
+| OpenAI / OpenRouter | `GET {base}/models` (bearer) |
+| Anthropic | `GET /v1/models` (`x-api-key`) |
+| Ollama | `GET /api/tags` (local, no key) |
+
+Gemini entries are filtered to those advertising `generateContent`; its catalog
+also lists embedding, image, video and speech models that cannot answer a
+question and would only lead to a broken configuration. The stored key never
+leaves the API, the response is capped at 512 KB and 200 models, and the route
+is rate limited separately from the connection test because each call spends
+the provider's own quota.
+
+**Quota is not reported, because it cannot be queried.** Gemini's model
+endpoint returns metadata only; its rate limits belong to the account tier and
+are reachable through Google Cloud quota APIs with a project and OAuth, not
+through an API key. The screen says so rather than showing a blank or invented
+figure. The real limit does appear in the provider's 429 body when it is hit
+(measured 2026-09-15: `limit: 20, model: gemini-2.5-flash`), and that message
+is already surfaced to the user.
+
+Not verified: no automated test covers this route, and only the Gemini shape
+has been exercised against a live provider.
