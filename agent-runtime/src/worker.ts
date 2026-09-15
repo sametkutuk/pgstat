@@ -14,18 +14,34 @@ const TOTAL_JOB_MS = 180_000;
 // yoksa kirpilma yerine butce asimi hatasi alinirdi.
 const TOTAL_TOKEN_BUDGET = 30_000;
 
+/**
+ * Serbest metin alani: uzunluk asilirsa REDDEDILMEZ, kirpilir.
+ *
+ * Olculdu (2026-09-15): model plan gerekcesini 500 karakterin uzerinde yazdi
+ * ve dogru secilmis arac planinin tamami cope gitti. Uzunluk bir dogruluk
+ * ozelligi degil; aciklama metninin iki cumle uzun olmasi cevabi gecersiz
+ * kilmaz. Kimlik, enum ve yapisal alanlar sıkı kalir — orada esneklik
+ * uydurulmus veriye kapi acardi.
+ */
+function boundedText(max: number) {
+  return z.string()
+    .transform(value => value.trim())
+    .refine(value => value.length > 0, 'bos olamaz')
+    .transform(value => value.length > max ? `${value.slice(0, max - 1)}…` : value);
+}
+
 const planSchema = z.object({
   tools: z.array(z.object({
     name: z.enum(['get_autovacuum_overview', 'find_tables_needing_vacuum_attention']),
     arguments: z.record(z.string(), z.unknown()),
   }).strict()).min(1).max(2),
-  reason: z.string().trim().min(1).max(500),
+  reason: boundedText(500),
   unavailable_capabilities: z.array(z.enum(['query_performance_evidence', 'compare_periods'])).max(2).default([]),
 }).strict();
 const followUpSchema = z.object({
   table: z.object({ dbid: z.number().int().min(0).max(4294967295),
     relid: z.number().int().min(0).max(4294967295) }).strict().nullable(),
-  reason: z.string().trim().min(1).max(500),
+  reason: boundedText(500),
 }).strict();
 /**
  * Tek cumlelik metin alani.
@@ -44,14 +60,14 @@ const sentence = z.preprocess(value => {
     if (parts.length > 0) return parts.join(' — ');
   }
   return value;
-}, z.string().trim().min(1).max(500));
+}, boundedText(500));
 
 const answerSchema = z.object({
-  conclusion: z.string().trim().min(1).max(2000),
+  conclusion: boundedText(2000),
   confidence: z.enum(['low', 'medium', 'high']),
-  confidence_reason: z.string().trim().min(1).max(500),
+  confidence_reason: boundedText(500),
   observed_facts: z.array(z.object({
-    text: z.string().trim().min(1).max(500),
+    text: boundedText(500),
     // Modeller kimligi sik sik sayi olarak dondurur ("evidence_id": 4). Deger
     // aynidir; yalnizca JSON tipi farklidir. Tipi reddedip butun cevabi
     // cope atmak yerine metne cevriliyor. Desen kontrolu korunuyor, yani
