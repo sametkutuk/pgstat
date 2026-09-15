@@ -255,6 +255,8 @@ case "${1:-help}" in
       ensure_generated_env PGSTAT_SECRET_SALT 64
       ensure_generated_env GRAFANA_ADMIN_PASSWORD 32
       ensure_generated_env PGSTAT_GRAFANA_DB_PASSWORD 48
+      # AI worker'in API'ye kimlik dogrulamasi icin. Kullanicidan istenmez.
+      ensure_generated_env PGSTAT_AGENT_SERVICE_SECRET 64
       warn ".env zaten var. Mevcut ayarlarla devam ediliyor."
       echo "  Sıfırdan başlamak için: rm .env && ./pgstat setup"
       echo ""
@@ -412,6 +414,12 @@ EOF
   restart) load_env; $COMPOSE restart; do_health ;;
 
   upgrade)
+    load_env
+
+    # 0) Yeni surumlerin getirdigi zorunlu sirlar. Elle .env duzenlemek
+    #    gerekmemeli: eksikse uretilir, varsa dokunulmaz. AI worker'in API'ye
+    #    kimlik dogrulamasi bu sirra bagli; olmadan is kuyrukta bekler.
+    ensure_generated_env PGSTAT_AGENT_SERVICE_SECRET 64
     load_env
 
     # 1) Git pull (varsa)

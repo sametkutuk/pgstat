@@ -76,7 +76,6 @@ services:
 
   # Opt-in AI worker: scoped API access only; never receives central DB secrets.
   agent-worker:
-    profiles: ["ai"]
     build: ./agent-runtime
     depends_on:
       api:

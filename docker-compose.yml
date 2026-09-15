@@ -73,7 +73,6 @@ services:
 
   # AI worker only talks to the pgstat API. No DB credentials or secret volume.
   agent-worker:
-    profiles: ["ai"]
     build: ./agent-runtime
     depends_on:
       - api
