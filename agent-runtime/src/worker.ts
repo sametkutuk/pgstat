@@ -5,11 +5,14 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { z } from 'zod';
 import { AgentServiceClient, ServiceApiError } from './serviceClient.js';
-import { ModelRequestError, requestModel, type ProviderConfig } from './provider.js';
+import { MAX_ANSWER_OUTPUT_TOKENS, ModelRequestError, requestModel, type ProviderConfig } from './provider.js';
 
 const TOOL_BUDGET = 5;
 const MODEL_CALL_BUDGET = 3;
 const TOTAL_JOB_MS = 180_000;
+// Son cevaba ayrilan cikti butcesi buyudugu icin toplam tavan da yukseltildi;
+// yoksa kirpilma yerine butce asimi hatasi alinirdi.
+const TOTAL_TOKEN_BUDGET = 30_000;
 
 const planSchema = z.object({
   tools: z.array(z.object({
@@ -30,7 +33,14 @@ const answerSchema = z.object({
   confidence_reason: z.string().trim().min(1).max(500),
   observed_facts: z.array(z.object({
     text: z.string().trim().min(1).max(500),
-    evidence_id: z.string().regex(/^[1-9]\d{0,18}$/),
+    // Modeller kimligi sik sik sayi olarak dondurur ("evidence_id": 4). Deger
+    // aynidir; yalnizca JSON tipi farklidir. Tipi reddedip butun cevabi
+    // cope atmak yerine metne cevriliyor. Desen kontrolu korunuyor, yani
+    // uydurulmus bir kimlik yine gecmez.
+    evidence_id: z.union([
+      z.string(),
+      z.number().int().positive().transform(String),
+    ]).refine(value => /^[1-9]\d{0,18}$/.test(value), 'gecerli bir evidence_id degil'),
   }).strict()).max(20),
   interpretations: z.array(z.string().trim().min(1).max(500)).max(20),
   hypotheses: z.array(z.string().trim().min(1).max(500)).max(20),
@@ -123,13 +133,14 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
   let inputTokens = 0;
   let outputTokens = 0;
   let usageKnown = true;
-  const model = async (provider: ProviderConfig, system: string, prompt: string) => {
+  const model = async (provider: ProviderConfig, system: string, prompt: string,
+                       maxOutputTokens?: number) => {
     if (++modelCalls > MODEL_CALL_BUDGET) throw new Error('MODEL_CALL_BUDGET_EXCEEDED');
-    const response = await requestModel(provider, system, prompt, controller.signal);
+    const response = await requestModel(provider, system, prompt, controller.signal, maxOutputTokens);
     if (response.inputTokens === null || response.outputTokens === null) usageKnown = false;
     inputTokens += response.inputTokens ?? 0;
     outputTokens += response.outputTokens ?? 0;
-    if (inputTokens + outputTokens > 12000) throw new Error('TOKEN_BUDGET_EXCEEDED');
+    if (inputTokens + outputTokens > TOTAL_TOKEN_BUDGET) throw new Error('TOKEN_BUDGET_EXCEEDED');
     return response.text;
   };
   try {
@@ -212,7 +223,17 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
       + 'Sonuç JSON şeması: {"conclusion":"...","confidence":"low|medium|high",'
       + '"confidence_reason":"...","observed_facts":[{"text":"...","evidence_id":"..."}],'
       + '"interpretations":[],"hypotheses":[],"limitations":[]}. '
-      + 'Her observed_fact gerçek evidence_id göstermeli. Veri yetersizse güven low ve sınırlama açık olsun.');
+      + 'Her observed_fact gerçek evidence_id göstermeli; evidence_id TIRNAK İÇİNDE metin olsun. '
+      + 'Veri yetersizse güven low ve sınırlama açık olsun.\n'
+      // Uzun paragraf hem okunmasi zor hem de cikti butcesini tuketip cevabi
+      // kirpiyordu. Kisa ve somut cumle istiyoruz: ne gorulduyse o, ve varsa
+      // neye bagli oldugu.
+      + 'BİÇİM: Tek tek kısa cümleler kur, paragraf yazma. conclusion en fazla 3 cümle '
+      + 've 400 karakter olsun. Her dizi öğesi tek cümle, en fazla 200 karakter. '
+      + 'Somut ol: hangi sayı, hangi tablo, hangi ayar. "Şu gözlendi, şundan kaynaklanıyor olabilir" '
+      + 'biçiminde yaz; genel geçer ifade kullanma. En fazla 5 observed_fact, '
+      + '3 interpretation, 3 hypothesis, 3 limitation ver — en önemlilerini seç.',
+      MAX_ANSWER_OUTPUT_TOKENS);
     const answer = parseModelJson(answerText, answerSchema, 'MODEL_ANSWER_INVALID');
     const actualIds = new Set(recorded.map(item => item.evidence_id));
     if (answer.observed_facts.some(fact => !actualIds.has(fact.evidence_id))) throw new Error('MODEL_FACT_REFERENCE_INVALID');

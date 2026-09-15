@@ -19,6 +19,12 @@ const CLOUD_URLS: Record<Exclude<ProviderName, 'ollama'>, string> = {
 export const MODEL_RESPONSE_TIMEOUT_MS = 30_000;
 export const MAX_MODEL_RESPONSE_BYTES = 256 * 1024;
 export const MAX_MODEL_OUTPUT_TOKENS = 1024;
+/**
+ * Son cevap icin daha genis butce. Olculdu (2026-09-15): 1024 token, Turkce
+ * bir sonuc JSON'unu conclusion alaninin ortasinda kirpti ve cevap gecerli
+ * JSON olmaktan cikti. Toplam token tavani worker tarafinda ayrica korunur.
+ */
+export const MAX_ANSWER_OUTPUT_TOKENS = 3072;
 
 export function validateProvider(config: ProviderConfig): URL {
   const provider = providerNameSchema.parse(config.provider);
@@ -96,7 +102,8 @@ async function boundedResponse(response: Response): Promise<unknown> {
 
 /** Raw provider request: caller validates the returned JSON against a product schema. */
 export async function requestModel(config: ProviderConfig, system: string, prompt: string,
-                                   signal?: AbortSignal): Promise<{ text: string; inputTokens: number | null;
+                                   signal?: AbortSignal,
+                                   maxOutputTokens: number = MAX_MODEL_OUTPUT_TOKENS): Promise<{ text: string; inputTokens: number | null;
                                      outputTokens: number | null }> {
   const root = validateProvider(config);
   if (prompt.length > 40_000 || system.length > 8_000) throw new ModelRequestError('MODEL_PROMPT_TOO_LARGE');
@@ -110,7 +117,7 @@ export async function requestModel(config: ProviderConfig, system: string, promp
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: 'application/json',
-        maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS,
+        maxOutputTokens,
         // Gemini 2.5'te dusunme varsayilan olarak aciktir ve maxOutputTokens
         // butcesinden harcanir (olculdu: 2 tokenlik "Pong" cevabinda
         // thoughtsTokenCount 32). Buyuk kanit promptunda butce dusunmeye
@@ -122,17 +129,17 @@ export async function requestModel(config: ProviderConfig, system: string, promp
     url.pathname = '/v1/messages';
     headers['x-api-key'] = config.apiKey!;
     headers['anthropic-version'] = '2023-06-01';
-    body = { model: config.model, max_tokens: MAX_MODEL_OUTPUT_TOKENS, system,
+    body = { model: config.model, max_tokens: maxOutputTokens, system,
       messages: [{ role: 'user', content: prompt }] };
   } else if (config.provider === 'ollama') {
     url.pathname = '/api/chat';
     body = { model: config.model, stream: false, format: 'json', think: false,
-      options: { num_predict: MAX_MODEL_OUTPUT_TOKENS },
+      options: { num_predict: maxOutputTokens },
       messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
   } else {
     url.pathname = `${root.pathname.replace(/\/$/, '')}/chat/completions`;
     headers.authorization = `Bearer ${config.apiKey}`;
-    body = { model: config.model, max_completion_tokens: MAX_MODEL_OUTPUT_TOKENS,
+    body = { model: config.model, max_completion_tokens: maxOutputTokens,
       messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
   }
   const timeout = AbortSignal.timeout(MODEL_RESPONSE_TIMEOUT_MS);
