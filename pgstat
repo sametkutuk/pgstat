@@ -425,7 +425,22 @@ EOF
     # 1) Git pull (varsa)
     if [ -d "$DIR/.git" ]; then
       echo -e "${C}Kod güncelleniyor...${N}"
+      self_before=$(sha256sum "$DIR/pgstat" 2>/dev/null | awk '{print $1}')
       git -C "$DIR" pull --ff-only 2>&1 | tail -3 || warn "git pull başarısız (yerel kod kullanılacak)"
+      self_after=$(sha256sum "$DIR/pgstat" 2>/dev/null | awk '{print $1}')
+
+      # Bash script'i belleğe yüklenmiş halde çalışır. git pull bu dosyayı
+      # değiştirdiyse geri kalan adımlar hâlâ ESKI sürümden gelir; yeni
+      # sürümün getirdiği adımlar (örneğin yeni bir sır üretimi) o koşuda hiç
+      # çalışmaz ve ancak bir sonraki upgrade'de devreye girer. Ölçüldü
+      # (2026-09-15): AI worker sırrı bu yüzden üretilmedi ve worker
+      # AGENT_WORKER_NOT_CONFIGURED ile restart döngüsüne girdi.
+      # Script kendini güncellediyse yeni sürümle baştan devam edilir.
+      if [ -n "$self_before" ] && [ "$self_before" != "$self_after" ] \
+         && [ -z "${PGSTAT_UPGRADE_REEXEC:-}" ]; then
+        ok "pgstat scripti güncellendi — yeni sürümle devam ediliyor"
+        PGSTAT_UPGRADE_REEXEC=1 exec "$DIR/pgstat" upgrade
+      fi
     fi
 
     # 2) Migration — DB tarafı; başarısız olursa build'e geçme
