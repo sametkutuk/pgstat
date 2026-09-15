@@ -38,9 +38,39 @@ export function validateProvider(config: ProviderConfig): URL {
 }
 
 export class ModelRequestError extends Error {
-  constructor(readonly code: string, readonly httpStatus: number | null = null) {
-    super(code);
+  constructor(
+    readonly code: string,
+    readonly httpStatus: number | null = null,
+    /** Saglayicinin kendi hata metni — redakte ve kirpilmis. */
+    readonly providerDetail: string | null = null,
+  ) {
+    super(providerDetail ? `${code}: ${providerDetail}` : code);
   }
+}
+
+/** Saglayici hata metninin kullaniciya gosterilecek en fazla uzunlugu. */
+const MAX_PROVIDER_DETAIL = 400;
+
+/**
+ * Saglayicinin hata gövdesinden okunabilir tek bir cumle cikarir.
+ *
+ * Kod yalnizca "MODEL_HTTP_404" yazdiginda nedeni kor tahminle aramak
+ * gerekiyordu; gercek sebep her zaman govdede yaziyor. API anahtari bu metne
+ * sizabilecegi icin once redakte edilir.
+ */
+export function describeProviderError(data: unknown, apiKey: string | null): string | null {
+  const asError = (data as { error?: { message?: unknown } } | undefined)?.error;
+  const raw = typeof asError?.message === 'string' && asError.message.trim() !== ''
+    ? asError.message
+    : (() => { try { return JSON.stringify(data); } catch { return null; } })();
+  if (!raw) return null;
+
+  let text = raw;
+  if (apiKey && apiKey.length >= 8) text = text.split(apiKey).join('[REDACTED]');
+  // Anahtar bicimleri metinde ayrica gecebilir.
+  text = text.replace(/\b(AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z_-]{10,}|AQ\.[0-9A-Za-z_-]{10,})/g, '[REDACTED]');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length > MAX_PROVIDER_DETAIL ? `${text.slice(0, MAX_PROVIDER_DETAIL)}…` : text;
 }
 
 async function boundedResponse(response: Response): Promise<unknown> {
@@ -110,7 +140,7 @@ export async function requestModel(config: ProviderConfig, system: string, promp
   if (!response.ok) {
     const code = response.status === 401 || response.status === 403 ? 'MODEL_AUTH_FAILED'
       : response.status === 429 ? 'MODEL_RATE_LIMITED' : `MODEL_HTTP_${response.status}`;
-    throw new ModelRequestError(code, response.status);
+    throw new ModelRequestError(code, response.status, describeProviderError(data, config.apiKey));
   }
   const record = z.record(z.string(), z.unknown()).parse(data);
   let text: unknown;

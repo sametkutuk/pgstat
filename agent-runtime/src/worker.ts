@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { z } from 'zod';
 import { AgentServiceClient, ServiceApiError } from './serviceClient.js';
-import { requestModel, type ProviderConfig } from './provider.js';
+import { ModelRequestError, requestModel, type ProviderConfig } from './provider.js';
 
 const TOOL_BUDGET = 5;
 const MODEL_CALL_BUDGET = 3;
@@ -208,10 +208,18 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
     if (controller.signal.aborted || error instanceof ServiceApiError && error.status === 409) {
       return { outcome: 'superseded' };
     }
-    const code = error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message)
-      ? error.message : 'WORKER_FAILED';
-    await service.fail(job.investigation_id, code, 'AI araştırması tamamlanamadı; kanıt olarak sonuç kaydedilmedi.')
-      .catch(() => undefined);
+    // Saglayici hatasinda kod ayri alanda tasinir; error.message artik
+    // aciklamayi da icerdigi icin desen esletmesi tek basina yeterli degil.
+    const code = error instanceof ModelRequestError ? error.code
+      : error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message) ? error.message
+      : 'WORKER_FAILED';
+    // Saglayicinin kendi aciklamasi varsa onu goster: "MODEL_HTTP_404" tek
+    // basina kullaniciyi kor tahmine birakiyordu. Metin provider.ts icinde
+    // redakte ve kirpilmis halde gelir.
+    const detail = error instanceof ModelRequestError && error.providerDetail
+      ? `AI sağlayıcısı isteği reddetti: ${error.providerDetail}`
+      : 'AI araştırması tamamlanamadı; kanıt olarak sonuç kaydedilmedi.';
+    await service.fail(job.investigation_id, code, detail).catch(() => undefined);
     return { outcome: 'failed', code };
   } finally {
     clearTimeout(deadline);
