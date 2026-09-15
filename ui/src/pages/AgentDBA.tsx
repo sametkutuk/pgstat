@@ -345,7 +345,9 @@ export default function AgentDBA() {
             {cancelInvestigation.error && <p role="alert" className="text-sm text-red-600">{cancelInvestigation.error.message}</p>}
             {investigations.isLoading && <p className="text-sm text-[#94A3B8]">Yükleniyor…</p>}
             {investigations.data?.length === 0 && <p className="text-sm text-[#94A3B8]">Henüz araştırma yok.</p>}
-            <div className="space-y-3">
+            {/* Liste birikiyor; sayfayı sonsuza kadar uzatmak yerine kendi
+                içinde kaydırılır. Sıra yeniden eskiye. */}
+            <div className="space-y-3 max-h-[32rem] overflow-y-auto pr-1">
               {investigations.data?.map(item => (
                 <div key={item.investigation_id} className="border-b border-[#F1F5F9] pb-3 last:border-0">
                   <div className="flex items-start justify-between gap-2">

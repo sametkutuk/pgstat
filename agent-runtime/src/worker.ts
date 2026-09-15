@@ -108,6 +108,34 @@ const answerSchema = z.object({
   limitations: z.array(sentence).max(20),
 }).strict();
 
+/**
+ * Arac hatasi — MCP sunucusunun kendi metnini tasir.
+ *
+ * Onceden yalnizca 'MCP_TOOL_FAILED' firlatiliyor ve cevaptaki aciklama
+ * atiliyordu; bir arastirma hicbir kanit uretmeden duserken nedenini
+ * ogrenmenin yolu kalmiyordu.
+ */
+export class ToolFailure extends Error {
+  constructor(readonly code: string, readonly detail: string | null) {
+    super(detail ? `${code}: ${detail}` : code);
+  }
+}
+
+/** MCP hata cevabindaki metin parcalarini tek satira indirger. */
+function mcpErrorText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .filter((item): item is { type: string; text: string } =>
+      typeof item === 'object' && item !== null
+      && (item as { type?: unknown }).type === 'text'
+      && typeof (item as { text?: unknown }).text === 'string')
+    .map(item => item.text.trim())
+    .filter(text => text !== '');
+  if (parts.length === 0) return null;
+  const joined = parts.join(' ').replace(/\s+/g, ' ');
+  return joined.length > 300 ? `${joined.slice(0, 299)}…` : joined;
+}
+
 /** Sema hatasinda kullaniciya gosterilecek model ciktisinin ust siniri. */
 const MAX_MODEL_OUTPUT_SNIPPET = 300;
 
@@ -238,7 +266,7 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
       try {
         const response = await mcp!.callTool({ name, arguments: args },
           { signal: controller.signal, timeout: 10000 });
-        if (response.isError) throw new Error('MCP_TOOL_FAILED');
+        if (response.isError) throw new ToolFailure('MCP_TOOL_FAILED', mcpErrorText(response.content));
         const content = response.content[0];
         if (!content || content.type !== 'text') throw new Error('MCP_RESPONSE_INVALID');
         let envelope: unknown;
@@ -250,8 +278,9 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
         }
         return envelope;
       } catch (error) {
-        const code = error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message)
-          ? error.message : 'MCP_TOOL_FAILED';
+        const code = error instanceof ToolFailure ? error.code
+          : error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message) ? error.message
+          : 'MCP_TOOL_FAILED';
         await service.toolFailure(job.investigation_id, name, code,
           Math.min(Date.now() - started, 30000)).catch(() => undefined);
         throw error;
@@ -349,13 +378,15 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
     }
     // Saglayici hatasinda kod ayri alanda tasinir; error.message artik
     // aciklamayi da icerdigi icin desen esletmesi tek basina yeterli degil.
-    const code = error instanceof ModelRequestError ? error.code
+    const code = error instanceof ToolFailure ? error.code
+      : error instanceof ModelRequestError ? error.code
       : error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message) ? error.message
       : 'WORKER_FAILED';
-    // Saglayicinin kendi aciklamasi varsa onu goster: "MODEL_HTTP_404" tek
-    // basina kullaniciyi kor tahmine birakiyordu. Metin provider.ts icinde
-    // redakte ve kirpilmis halde gelir.
-    const detail = error instanceof ModelRequestError && error.providerDetail
+    // Hata kodu tek basina kullaniciyi kor tahmine birakiyordu. Kaynagin
+    // kendi aciklamasi varsa gosterilir; metinler redakte ve kirpilmis gelir.
+    const detail = error instanceof ToolFailure && error.detail
+      ? `Kanıt aracı hata verdi: ${error.detail}`
+      : error instanceof ModelRequestError && error.providerDetail
       ? `AI sağlayıcısı isteği reddetti: ${error.providerDetail}`
       : 'AI araştırması tamamlanamadı; kanıt olarak sonuç kaydedilmedi.';
     await service.fail(job.investigation_id, code, detail).catch(() => undefined);
