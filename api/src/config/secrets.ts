@@ -86,3 +86,35 @@ export function readSecret(filePath: string): string {
 export function hasSecret(instanceId: string): boolean {
     return existsSync(join(SECRETS_DIR, `${instanceId}.pass`));
 }
+
+function safeSecretSegment(value: string): string {
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value)) {
+        throw new Error('Gecersiz secret adi');
+    }
+    return value.toLowerCase();
+}
+
+/** API/AI gibi collector disi secret'lari ayri ve cakismayan ad alaninda saklar. */
+export function saveNamedSecret(namespace: string, name: string, value: string): string {
+    const safeNamespace = safeSecretSegment(namespace);
+    const safeName = safeSecretSegment(name);
+    const key = getKey();
+    const iv = randomBytes(16);
+    const cipher = createCipheriv(ALGORITHM, key, iv);
+    let encrypted = cipher.update(value, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const payload = `${iv.toString('hex')}:${cipher.getAuthTag().toString('hex')}:${encrypted}`;
+    if (!existsSync(SECRETS_DIR)) mkdirSync(SECRETS_DIR, { recursive: true });
+    // Versioned file: DB update fails after this write, the currently referenced
+    // credential is not silently overwritten. Orphans can be cleaned separately.
+    const version = randomBytes(8).toString('hex');
+    const filePath = join(SECRETS_DIR, `${safeNamespace}-${safeName}-${version}.secret`);
+    writeFileSync(filePath, payload, { mode: 0o600 });
+    chmodSync(filePath, 0o600);
+    return `file:${filePath}`;
+}
+
+export function readSecretRef(secretRef: string): string {
+    if (!secretRef.startsWith('file:')) throw new Error('Desteklenmeyen secret_ref');
+    return readSecret(secretRef.slice('file:'.length));
+}

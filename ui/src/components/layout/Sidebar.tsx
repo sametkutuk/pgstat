@@ -8,6 +8,7 @@ const links = [
     { to: '/instances', label: 'Instances', icon: '🖥️' },
     { to: '/statements', label: 'Statements', icon: '📝' },
     { to: '/insights', label: 'Insights', icon: '🔍' },
+    { to: '/ai-dba', label: 'AI DBA', icon: '✨' },
     { to: '/alerts', label: 'Alerts', icon: '🔔' },
     { to: '/jobs', label: 'Job Runs', icon: '⚙️' },
     { to: '/reports/history', label: 'Raporlar', icon: '📜' },

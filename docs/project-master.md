@@ -24,6 +24,7 @@ The purpose of this document is to answer:
 
 Related documents:
 
+- [AI DBA + MCP Uçtan Uca Uygulama Planı](ai-dba-mcp-implementation-plan.md)
 - [Project Execution Plan](project-execution-plan.md)
 - [Agentic DBA Platform Architecture](agentic-dba-platform-architecture.md)
 - [Platform Governance And SDLC](platform-governance-and-sdlc.md)

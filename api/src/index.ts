@@ -30,6 +30,7 @@ import preferencesRoutes from './routes/preferences';
 import insightsRoutes from './routes/insights';
 import systemHealthRoutes from './routes/systemHealth';
 import telegramAllowlistRoutes from './routes/telegramAllowlist';
+import agentRoutes from './routes/agent';
 
 // Zorunlu env değişkenlerini kontrol et
 const requiredEnv = [
@@ -189,6 +190,7 @@ app.use('/api/preferences', requireAuth, preferencesRoutes);
 app.use('/api/insights', requireAuth, insightsRoutes);
 app.use('/api/system-health', requireAuth, systemHealthRoutes);
 app.use('/api/telegram-allowlist', requireAuth, telegramAllowlistRoutes);
+app.use('/api/agent', requireAuth, agentRoutes);
 
 // Hata yakalama middleware'i
 app.use(errorHandler);

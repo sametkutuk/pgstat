@@ -25,6 +25,7 @@ const ClusterQuery = lazy(() => import('./pages/ClusterQuery'));
 const ClusterGroupDetail = lazy(() => import('./pages/ClusterGroupDetail'));
 const GrafanaEmbed = lazy(() => import('./pages/GrafanaEmbed'));
 const Login = lazy(() => import('./pages/Login'));
+const AgentDBA = lazy(() => import('./pages/AgentDBA'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,6 +79,7 @@ function App() {
                 <Route path="/alerts/:id" element={<Alerts />} />
                 <Route path="/jobs" element={<JobRuns />} />
                 <Route path="/insights" element={<Insights />} />
+                <Route path="/ai-dba" element={<AgentDBA />} />
                 <Route path="/reports/history" element={<ReportHistory />} />
                 <Route path="/cluster-query/:queryid" element={<ClusterQuery />} />
                 {/* /clusters → Instances Hub'da kümeler view'ına redirect */}
