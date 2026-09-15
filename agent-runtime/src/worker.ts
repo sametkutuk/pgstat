@@ -27,6 +27,25 @@ const followUpSchema = z.object({
     relid: z.number().int().min(0).max(4294967295) }).strict().nullable(),
   reason: z.string().trim().min(1).max(500),
 }).strict();
+/**
+ * Tek cumlelik metin alani.
+ *
+ * Modeller duz metin dizisi istendiginde sik sik nesne dizisi dondurur
+ * (olculdu 2026-09-15: hypotheses[0] bir nesneydi). Icerik dogruydu, yalnizca
+ * sarmalanmisti; bu yuzden butun cevabi reddetmek yerine nesnenin metin
+ * alanlari birlestirilip cumleye cevriliyor. Metin disi bir sey gelirse
+ * dogrulama yine reddeder.
+ */
+const sentence = z.preprocess(value => {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const parts = Object.values(value as Record<string, unknown>)
+      .filter((part): part is string => typeof part === 'string' && part.trim() !== '');
+    if (parts.length > 0) return parts.join(' — ');
+  }
+  return value;
+}, z.string().trim().min(1).max(500));
+
 const answerSchema = z.object({
   conclusion: z.string().trim().min(1).max(2000),
   confidence: z.enum(['low', 'medium', 'high']),
@@ -42,9 +61,9 @@ const answerSchema = z.object({
       z.number().int().positive().transform(String),
     ]).refine(value => /^[1-9]\d{0,18}$/.test(value), 'gecerli bir evidence_id degil'),
   }).strict()).max(20),
-  interpretations: z.array(z.string().trim().min(1).max(500)).max(20),
-  hypotheses: z.array(z.string().trim().min(1).max(500)).max(20),
-  limitations: z.array(z.string().trim().min(1).max(500)).max(20),
+  interpretations: z.array(sentence).max(20),
+  hypotheses: z.array(sentence).max(20),
+  limitations: z.array(sentence).max(20),
 }).strict();
 
 /** Sema hatasinda kullaniciya gosterilecek model ciktisinin ust siniri. */
@@ -232,7 +251,9 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
       + 've 400 karakter olsun. Her dizi öğesi tek cümle, en fazla 200 karakter. '
       + 'Somut ol: hangi sayı, hangi tablo, hangi ayar. "Şu gözlendi, şundan kaynaklanıyor olabilir" '
       + 'biçiminde yaz; genel geçer ifade kullanma. En fazla 5 observed_fact, '
-      + '3 interpretation, 3 hypothesis, 3 limitation ver — en önemlilerini seç.',
+      + '3 interpretation, 3 hypothesis, 3 limitation ver — en önemlilerini seç. '
+      + 'interpretations, hypotheses ve limitations DÜZ METİN dizisidir: ["cümle", "cümle"]. '
+      + 'Nesne koyma.',
       MAX_ANSWER_OUTPUT_TOKENS);
     const answer = parseModelJson(answerText, answerSchema, 'MODEL_ANSWER_INVALID');
     const actualIds = new Set(recorded.map(item => item.evidence_id));
