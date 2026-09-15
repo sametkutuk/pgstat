@@ -13,15 +13,16 @@ import { asIso, asSafeInt } from './numeric';
 import { queryBounded } from './db';
 
 /** Pozitif tam sayi parametresi dogrular. */
-export function parsePositiveInt(raw: unknown, field: string): number {
+export function parsePositiveInt(raw: unknown, field: string): string {
     if (raw === undefined || raw === null || String(raw).trim() === '') {
         throw new EvidenceValidationError('missing_parameter', field, `${field} zorunludur`);
     }
-    const n = Number(raw);
-    if (!Number.isInteger(n) || n <= 0) {
+    const value = String(raw);
+    if (!/^[1-9]\d{0,18}$/.test(value)
+        || BigInt(value) > 9223372036854775807n) {
         throw new EvidenceValidationError('invalid_parameter', field, `${field} pozitif tam sayi olmalidir`);
     }
-    return n;
+    return value;
 }
 
 /**
@@ -46,7 +47,7 @@ export function parseOid(raw: unknown, field: string): number {
  * pg_major NULL olabilir: capability kaydi henuz olusmamis olabilir. Bu
  * "eski surum" ANLAMINA GELMEZ; bilinmiyor demektir.
  */
-export async function resolveTarget(instancePk: number): Promise<TargetRef | null> {
+export async function resolveTarget(instancePk: string | number): Promise<TargetRef | null> {
     const rows = await queryBounded({
         text: `
             select inv.instance_pk,
@@ -66,7 +67,7 @@ export async function resolveTarget(instancePk: number): Promise<TargetRef | nul
 
     const row = rows[0];
     return {
-        instance_pk: asSafeInt(row.instance_pk)!,
+        instance_pk: String(row.instance_pk),
         instance_id: String(row.instance_id),
         display_name: String(row.display_name),
         pg_major: asSafeInt(row.pg_major),
@@ -91,7 +92,7 @@ export interface ResolvedTable {
  * Bu yuzden gecmis karsilastirmasinda ilgili sinirlama acikca bildirilir.
  */
 export async function resolveTable(
-    instancePk: number,
+    instancePk: string | number,
     dbid: number,
     relid: number
 ): Promise<ResolvedTable | null> {
@@ -154,7 +155,7 @@ export async function resolveTable(
  * Instance'a ait veritabani adini dogrular. Istemciden gelen datname SQL'e
  * identifier olarak GOMULMEZ; yalnizca parametre olarak eslestirilir.
  */
-export async function resolveDatabaseId(instancePk: number, datname: string): Promise<number | null> {
+export async function resolveDatabaseId(instancePk: string | number, datname: string): Promise<number | null> {
     const rows = await queryBounded({
         text: `
             select dbid from dim.database_ref

@@ -54,7 +54,7 @@ export type ReasonCode =
 
 /** Instance kimligi. AI'in hedefi karistirmamasi icin her cevapta tasinir. */
 export interface TargetRef {
-    instance_pk: number;
+    instance_pk: string;
     instance_id: string;
     display_name: string;
     /** null = capability kaydi yok; "eski surum" demek DEGILDIR. */

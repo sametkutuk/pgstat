@@ -49,8 +49,11 @@ UI konuşması
 - Express/TypeScript API merkezi DB'yi okuyor ve korunan yollar JWT istiyor.
 - Mevcut auth tek `admin` rolüdür; tenant/RBAC varmış gibi davranılmayacak.
 - UI React/Vite tabanlıdır.
-- Bu repoda çalışan AI DBA runtime'ı, MCP server, investigation deposu ve
-  telemetry-improvement UI/API'si henüz yoktur.
+- V120–V124 ile investigation, provider, improvement ve evidence kayıtları;
+  Express servis yolları, autovacuum evidence API'si, ayrı MCP/worker paketi
+  ve AI DBA UI konuşma dilimi kodda bulunmaktadır. Disposable PostgreSQL,
+  stdio MCP ve sahte yerel model testleri vardır; canlı sağlayıcı, fleet ve
+  üretim uçtan uca kanıtı henüz yoktur. Bunları tamamlandı sayma.
 - Mevcut insight/alert sorguları yeniden kullanılabilir, ancak AI'a ham tablo
   olarak açılmaz; semantik API servislerine dönüştürülür.
 - pgss capability temeli ve gerçek PostgreSQL matrisi tamamlanmıştır; bütün

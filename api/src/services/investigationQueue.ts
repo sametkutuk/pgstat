@@ -37,7 +37,7 @@ export interface ClaimedInvestigation {
     investigation_id: string;
     question: string;
     investigation_type: string;
-    instance_pk: number | null;
+    instance_pk: string | null;
     dbid: number | null;
     time_from: Date;
     time_to: Date;
@@ -73,7 +73,7 @@ export async function claimNextInvestigation(
           where inv.investigation_id = (
                 select candidate.investigation_id
                   from agent.investigation candidate
-                 where candidate.status = 'queued'
+                 where candidate.status = 'queued' and candidate.instance_pk is not null
                  order by candidate.created_at
                    for update skip locked
                  limit 1

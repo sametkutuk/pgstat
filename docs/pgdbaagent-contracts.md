@@ -252,8 +252,10 @@ A pgdbaagent-facing feature is done only when:
 ## 11. Autovacuum Evidence API Contract (agent-evidence, v1.0.0)
 
 Implemented in `api/src/services/agent-evidence/` and exposed by
-`api/src/routes/agent-evidence.ts`. Read-only. The router is not mounted yet;
-mounting requires `app.use('/api/agent-evidence', requireAuth, ...)`.
+`api/src/routes/agent-evidence.ts`. Read-only. The router is mounted at
+`/api/agent-evidence`. Admin JWT or a short-lived, investigation/instance/
+window/tool-scoped service claim is required; a static service secret alone
+cannot read evidence.
 
 ### 11.1 Shared envelope
 
@@ -405,3 +407,60 @@ only `skip locked` kept the result correct and merely made workers queue up.
 `api/tests/investigationQueue.spec.ts` proves all of the above against a
 disposable PostgreSQL: 1 test, passed, 0 skipped. The suite was verified to
 have teeth by removing the lock and confirming it fails.
+
+## 14. AI Worker, Service Access and Evidence Persistence (pilot)
+
+V124 adds an immutable `agent.investigation_evidence` snapshot and
+`confidence_reason`. The API records worker-submitted envelopes, their SHA-256
+hash and bounded byte size; a result may cite only evidence IDs belonging to
+its investigation. Result, assistant message and terminal status are written
+in one row-locked transaction. Cancellation or ownership loss prevents a late
+worker from completing it. This is a trusted-worker snapshot, not independent
+cryptographic provenance of the upstream HTTP response.
+
+`agent-runtime/` provides a stdio MCP server with five fixed autovacuum tools.
+It only requests pgstat evidence API paths, never a DB connection or arbitrary
+SQL. The separately profiled `agent-worker` receives API URL and service
+secret, not `PGSTAT_DB_*` or secret volumes. A claim produces a ten-minute
+evidence token limited to the target and tools; the API rechecks live claim
+ownership for each read. The worker has a 180-second job deadline, three model
+calls, five tools, heartbeat and stale-claim recovery. The model returns a
+schema-validated plan and interpretation; it does not directly drive SQL.
+The 180-second deadline writes `timed_out` immediately through an owned
+service transition; a cancelled job cannot be overwritten by that transition.
+
+Provider configuration save and connection test are distinct. A connection
+test sends only a fixed READY probe, no pgstat data. Success demonstrates
+endpoint, credential and model reachability, **not** answer quality or native
+tool calling. The test update checks the exact PostgreSQL timestamp string so
+an in-flight test cannot green-light a changed connection. Supported adapters
+are Gemini, OpenRouter, Ollama, OpenAI and Anthropic; only a fake Ollama server
+has been exercised end to end locally, so the other adapters remain unverified.
+
+Missing `query_performance_evidence` and `compare_periods` functions can be
+reported through a server-controlled capability map. The API reviews saved
+coverage and deduplicates the same product gap across instances. Model text
+cannot choose the technical reason directly. This is an autovacuum pilot,
+not a general telemetry self-health registry. HTTP/MCP/worker/UI full-system
+tests, live provider calls and production pilot still require verification.
+`api/tests/fullHttpPostgres.spec.ts` exercises the real service claim, scoped
+HTTP access, stdio MCP, worker, fake local Ollama and PostgreSQL persistence
+in one process. In its isolated contract mode the evidence bodies are fixed
+fixtures. A second local run used the full V001–V124 disposable schema, seeded
+by the 13 passing `agentEvidence.spec.ts` SQL tests, and mounted the actual
+autovacuum evidence HTTP router. This verifies the HTTP/MCP/worker path against
+real fact fixtures, but not a live collector/fleet or paid/free cloud model.
+CI's `real-evidence-flow` replays both tests; remote CI has not run yet.
+Failed MCP tool calls have an owned `investigation_tool_call` audit row with a
+bounded code and no evidence snapshot; the failure cannot establish a product
+gap or appear as a measured fact.
+Coverage request failure, `permission_denied` and `collection_failed` are not
+converted into product cards. V124 also rejects evidence row UPDATE/DELETE in
+the database, not just in the application. `.github/workflows/agent-dba.yml`
+requires real PostgreSQL contract tests with zero silent skips; the workflow
+has not run remotely yet.
+AI DBA instance, investigation and improvement BIGINT identifiers are carried
+as decimal strings through intake, API and UI. A disposable PostgreSQL test
+includes instance `9007199254740993` to check the JavaScript precision boundary.
+The evidence router and target contract now also retain the instance BIGINT
+as a string; scoped HTTP access was remeasured against that exact large ID.

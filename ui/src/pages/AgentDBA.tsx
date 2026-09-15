@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiGet, apiPatch, apiPost, apiPut } from '../api/client';
 
 interface InstanceOption {
-  instance_pk: number;
+  instance_pk: string;
   display_name: string;
   pg_major: number | null;
   is_active: boolean;
@@ -14,7 +14,7 @@ interface Investigation {
   investigation_id: string;
   question: string;
   investigation_type: 'autovacuum';
-  instance_pk: number | null;
+  instance_pk: string | null;
   instance_name?: string;
   time_from: string;
   time_to: string;
@@ -24,8 +24,24 @@ interface Investigation {
   created_at: string;
 }
 
+interface InvestigationDetail {
+  investigation: Investigation & { failure_code: string | null; failure_detail: string | null;
+    input_tokens: number | null; output_tokens: number | null };
+  messages: { message_id: string; role: 'user' | 'assistant' | 'system'; content: string; created_at: string }[];
+  tool_calls: { tool_call_id: string; tool_name: string; status: string;
+    coverage_state: string | null; duration_ms: number | null }[];
+  evidence: { evidence_id: string; capability: string; status: string; coverage: unknown[];
+    limitations: { message: string }[]; data: Record<string, unknown> | null;
+    sha256_hex: string; recorded_at: string }[];
+  result: { conclusion: string; confidence: 'low' | 'medium' | 'high';
+    confidence_reason: string | null;
+    observed_facts: { text: string; evidence_id: string }[];
+    interpretations: string[]; hypotheses: string[]; limitations: string[] } | null;
+  improvements: { improvement_id: string; title: string; simple_reason: string; status: string }[];
+}
+
 interface Improvement {
-  improvement_id: number;
+  improvement_id: string;
   gap_type: 'DATA_NOT_COLLECTED' | 'DATA_INSUFFICIENT' | 'MCP_FUNCTION_MISSING';
   title: string;
   simple_reason: string;
@@ -73,6 +89,7 @@ const gapLabel: Record<Improvement['gap_type'], string> = {
   DATA_INSUFFICIENT: 'Yetersiz veri',
   MCP_FUNCTION_MISSING: 'Eksik fonksiyon',
 };
+const confidenceLabel = { low: 'Düşük', medium: 'Orta', high: 'Yüksek' };
 
 function dateInputValue(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
@@ -92,6 +109,7 @@ export default function AgentDBA() {
   const [baseUrl, setBaseUrl] = useState('http://host.docker.internal:11434');
   const [policyAccepted, setPolicyAccepted] = useState(false);
   const [improvementPage, setImprovementPage] = useState(0);
+  const [selectedInvestigationId, setSelectedInvestigationId] = useState<string | null>(null);
 
   const instances = useQuery({
     queryKey: ['agent-instances'],
@@ -100,6 +118,12 @@ export default function AgentDBA() {
   const investigations = useQuery({
     queryKey: ['agent-investigations'],
     queryFn: () => apiGet<Investigation[]>('/agent/investigations?limit=50'),
+    refetchInterval: 5_000,
+  });
+  const detail = useQuery({
+    queryKey: ['agent-investigation-detail', selectedInvestigationId],
+    queryFn: () => apiGet<InvestigationDetail>(`/agent/investigations/${selectedInvestigationId}`),
+    enabled: selectedInvestigationId !== null,
     refetchInterval: 5_000,
   });
   const improvements = useQuery({
@@ -115,6 +139,8 @@ export default function AgentDBA() {
   const activeInstances = useMemo(
     () => (instances.data ?? []).filter(instance => instance.is_active), [instances.data],
   );
+  const selectedProvider = providers.data?.some(item => item.provider === provider && item.is_enabled)
+    ? provider : providers.data?.find(item => item.is_enabled)?.provider;
 
   // Yalnizca doldurulan alanlar gonderilir. Instance ve zaman araligi
   // zorunlu degildir: API tek aktif instance varsa onu secer, birden fazlaysa
@@ -123,23 +149,27 @@ export default function AgentDBA() {
     mutationFn: () => apiPost<Investigation>('/agent/investigations', {
       question,
       investigation_type: 'autovacuum',
-      ...(instancePk ? { instance_pk: Number(instancePk) } : {}),
+      ...(selectedProvider ? { model_provider: selectedProvider } : {}),
+      ...(instancePk ? { instance_pk: instancePk } : {}),
       ...(from && to
         ? { time_from: new Date(from).toISOString(), time_to: new Date(to).toISOString() }
         : {}),
     }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-investigations'] }),
+    onSuccess: created => {
+      setSelectedInvestigationId(created.investigation_id);
+      queryClient.invalidateQueries({ queryKey: ['agent-investigations'] });
+    },
   });
 
   // Sorulan hedefi cevaplar ve arastirmayi kuyruga alir.
   const clarifyInvestigation = useMutation({
-    mutationFn: ({ id, instance }: { id: string; instance: number }) =>
+    mutationFn: ({ id, instance }: { id: string; instance: string }) =>
       apiPost(`/agent/investigations/${id}/clarify`, { instance_pk: instance }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-investigations'] }),
   });
 
   const updateImprovement = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: Improvement['status'] }) =>
+    mutationFn: ({ id, status }: { id: string; status: Improvement['status'] }) =>
       apiPatch(`/agent/improvements/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-improvements'] }),
   });
@@ -159,6 +189,11 @@ export default function AgentDBA() {
       setApiKey('');
       queryClient.invalidateQueries({ queryKey: ['agent-providers'] });
     },
+  });
+  const testProvider = useMutation({
+    mutationFn: (name: ProviderName) => apiPost<{ status: string; error_code: string | null }>(
+      `/agent/providers/${name}/test`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-providers'] }),
   });
 
   function submit(event: FormEvent) {
@@ -214,6 +249,16 @@ export default function AgentDBA() {
             <textarea value={question} onChange={e => setQuestion(e.target.value)} maxLength={4000} required rows={5}
               className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm resize-y" />
 
+            <label className="block text-xs font-semibold text-[#64748B] mt-4 mb-1">AI sağlayıcısı</label>
+            <select value={selectedProvider ?? ''} onChange={event => setProvider(event.target.value as ProviderName)}
+              className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm bg-white">
+              {(providers.data ?? []).filter(item => item.is_enabled).map(item => (
+                <option key={item.provider} value={item.provider}>{providerInfo[item.provider].label} · {item.model_name}</option>
+              ))}
+            </select>
+            {(providers.data?.filter(item => item.is_enabled).length ?? 0) === 0 &&
+              <p className="text-xs text-amber-700 mt-2">Araştırma için önce AI Bağlantısı sekmesinde bir sağlayıcı kaydedin.</p>}
+
             <div className="grid sm:grid-cols-2 gap-3 mt-4">
               <label className="text-xs font-semibold text-[#64748B]">Başlangıç
                 <input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)}
@@ -232,7 +277,7 @@ export default function AgentDBA() {
               <p className="mt-3 text-sm text-red-600">{createInvestigation.error.message}</p>}
             {createInvestigation.isSuccess &&
               <p className="mt-3 text-sm text-green-700">Araştırma sıraya alındı.</p>}
-            <button type="submit" disabled={createInvestigation.isPending || !instancePk}
+            <button type="submit" disabled={createInvestigation.isPending || !selectedProvider}
               className="mt-5 bg-[#2563EB] disabled:bg-[#94A3B8] text-white rounded-md px-4 py-2 text-sm font-medium">
               {createInvestigation.isPending ? 'Başlatılıyor…' : 'AI ile incele'}
             </button>
@@ -259,6 +304,8 @@ export default function AgentDBA() {
                       : item.instance_name ?? `#${item.instance_pk}`}
                     {' · '}{new Date(item.created_at).toLocaleString('tr-TR')}
                   </p>
+                  <button type="button" onClick={() => setSelectedInvestigationId(item.investigation_id)}
+                    className="text-xs text-blue-700 mt-2">Konuşmayı ve kanıtı aç</button>
 
                   {/* Hedef sorulduysa cevabi burada alinir; arastirma o zaman kuyruga girer. */}
                   {item.status === 'needs_clarification' && (
@@ -268,8 +315,8 @@ export default function AgentDBA() {
                       </p>
                       <select defaultValue="" disabled={clarifyInvestigation.isPending}
                         onChange={event => {
-                          const value = Number(event.target.value);
-                          if (value > 0) {
+                          const value = event.target.value;
+                          if (value !== '') {
                             clarifyInvestigation.mutate({ id: item.investigation_id, instance: value });
                           }
                         }}
@@ -297,6 +344,83 @@ export default function AgentDBA() {
               ))}
             </div>
           </div>
+          {selectedInvestigationId && (
+            <section className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-lg p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h2 className="font-semibold text-[#1E293B]">Araştırma #{selectedInvestigationId}</h2>
+                <button type="button" onClick={() => setSelectedInvestigationId(null)}
+                  className="text-xs text-[#64748B]">Kapat</button>
+              </div>
+              {detail.isLoading && <p className="text-sm text-[#64748B]">Araştırma yükleniyor…</p>}
+              {detail.error && <p role="alert" className="text-sm text-red-600">{detail.error.message}</p>}
+              {detail.data && (
+                <div className="space-y-5">
+                  <div className="space-y-2" aria-label="Konuşma mesajları">
+                    {detail.data.messages.map(message => (
+                      <div key={message.message_id} className={`rounded-md px-3 py-2 text-sm ${message.role === 'user'
+                        ? 'bg-blue-50 text-blue-900' : 'bg-slate-50 text-[#334155]'}`}>
+                        <span className="text-[11px] font-semibold text-[#64748B]">
+                          {message.role === 'user' ? 'Siz' : message.role === 'assistant' ? 'AI DBA' : 'Sistem'}
+                        </span>
+                        <p className="whitespace-pre-wrap break-words mt-1">{message.content}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-sm text-[#64748B]">Durum: {statusLabel[detail.data.investigation.status] ?? detail.data.investigation.status}</p>
+                  {detail.data.investigation.failure_code &&
+                    <p role="alert" className="text-sm text-red-700">Araştırma tamamlanamadı: {detail.data.investigation.failure_code}</p>}
+                  {detail.data.result && (
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <article className="border border-[#E2E8F0] rounded-md p-4">
+                        <h3 className="font-semibold text-sm mb-2">Sonuç</h3>
+                        <p className="text-sm text-[#334155] whitespace-pre-wrap">{detail.data.result.conclusion}</p>
+                        <p className="text-xs text-[#64748B] mt-3">Güven: {confidenceLabel[detail.data.result.confidence]} · {detail.data.result.confidence_reason ?? 'Gerekçe kaydedilmedi'}</p>
+                      </article>
+                      <article className="border border-[#E2E8F0] rounded-md p-4">
+                        <h3 className="font-semibold text-sm mb-2">Ölçülen kanıt</h3>
+                        {detail.data.result.observed_facts.length === 0 &&
+                          <p className="text-sm text-[#64748B]">Sonuç için doğrulanmış kanıt referansı yok.</p>}
+                        {detail.data.result.observed_facts.map((fact, index) => (
+                          <p key={`${fact.evidence_id}-${index}`} className="text-sm text-[#334155] mb-2">
+                            {fact.text} <span className="text-xs text-[#64748B]">(kanıt #{fact.evidence_id})</span>
+                          </p>
+                        ))}
+                      </article>
+                      <article className="border border-[#E2E8F0] rounded-md p-4">
+                        <h3 className="font-semibold text-sm mb-2">AI yorumu</h3>
+                        {detail.data.result.interpretations.map((text, index) => <p key={index} className="text-sm mb-2">{text}</p>)}
+                        {detail.data.result.hypotheses.map((text, index) => <p key={index} className="text-sm text-[#64748B] mb-2">Olasılık: {text}</p>)}
+                      </article>
+                      <article className="border border-[#E2E8F0] rounded-md p-4">
+                        <h3 className="font-semibold text-sm mb-2">Eksik veya bilinmeyen bilgi</h3>
+                        {detail.data.result.limitations.map((text, index) => <p key={index} className="text-sm mb-2">{text}</p>)}
+                      </article>
+                    </div>
+                  )}
+                  {detail.data.evidence.length > 0 && (
+                    <div className="border border-[#E2E8F0] rounded-md p-4">
+                      <h3 className="font-semibold text-sm mb-2">pgstat kanıt kayıtları</h3>
+                      {detail.data.evidence.map(item => (
+                        <details key={item.evidence_id} className="border-t border-[#E2E8F0] py-2 text-sm">
+                          <summary className="cursor-pointer">#{item.evidence_id} · {item.capability} · {item.status}</summary>
+                          <p className="text-xs text-[#64748B] mt-1">Kaydedildi: {new Date(item.recorded_at).toLocaleString('tr-TR')}</p>
+                          {item.limitations?.map((limit, index) => <p key={index} className="text-xs text-amber-700 mt-1">{limit.message}</p>)}
+                          <pre className="mt-2 text-xs whitespace-pre-wrap break-all max-h-60 overflow-auto bg-slate-50 p-2">{JSON.stringify({ coverage: item.coverage, data: item.data }, null, 2)}</pre>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+                  {detail.data.improvements.length > 0 && (
+                    <div className="border border-amber-200 bg-amber-50 rounded-md p-4">
+                      <h3 className="font-semibold text-sm mb-2">Açılan geliştirme kayıtları</h3>
+                      {detail.data.improvements.map(item => <p key={item.improvement_id} className="text-sm">{item.title} · {item.simple_reason}</p>)}
+                      <button type="button" onClick={() => setTab('improvements')} className="text-xs text-blue-700 mt-2">AI’ın İstedikleri ekranını aç</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       ) : tab === 'improvements' ? (
         <div>
@@ -404,6 +528,7 @@ export default function AgentDBA() {
 
           <div className="bg-white border border-[#E2E8F0] rounded-lg p-4 shadow-sm">
             <h2 className="font-semibold text-[#1E293B] mb-3">Bağlı sağlayıcılar</h2>
+            {testProvider.error && <p role="alert" className="text-xs text-red-700">{testProvider.error.message}</p>}
             {providers.data?.length === 0 && <p className="text-sm text-[#94A3B8]">Henüz sağlayıcı bağlanmadı.</p>}
             <div className="space-y-3">
               {providers.data?.map(item => (
@@ -414,6 +539,13 @@ export default function AgentDBA() {
                   </div>
                   <p className="text-xs text-[#64748B] mt-1">{item.model_name}</p>
                   <p className="text-xs text-[#94A3B8] mt-1">{item.provider === 'ollama' ? item.base_url : item.has_api_key ? 'API anahtarı kayıtlı' : 'API anahtarı yok'}</p>
+                  {item.is_enabled && (
+                    <button type="button" disabled={testProvider.isPending}
+                      onClick={() => testProvider.mutate(item.provider)}
+                      className="text-xs text-blue-700 mt-2 disabled:opacity-40">Bağlantıyı test et</button>
+                  )}
+                  {item.last_test_status === 'failed' &&
+                    <p className="text-xs text-red-700 mt-1">Test başarısız; sağlayıcı/model ayarlarını kontrol edin.</p>}
                 </div>
               ))}
             </div>

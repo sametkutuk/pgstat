@@ -13,8 +13,8 @@
 //  - Her sorgu read-only transaction icinde ve statement_timeout altinda kosar.
 //  - Ham query text, secret ve baglanti bilgisi dondurulmez.
 //
-// Bu router HENUZ index.ts'e mount EDILMEMISTIR; entegrasyon satiri teslim
-// notundadir.
+// Router /api/agent-evidence altinda mount edilir. Servis token'lari yalniz
+// etkin arastirmanin hedef ve penceresinde kullanilabilir.
 
 import { Router } from 'express';
 import { getAutovacuumOverview } from '../services/agent-evidence/autovacuumOverview';
@@ -52,19 +52,20 @@ router.get('/instances', async (req, res, next) => {
                   from control.instance_inventory inv
                   left join control.instance_capability cap
                          on cap.instance_pk = inv.instance_pk
-                 where ($1 = '' or inv.display_name ilike '%' || $1 || '%'
+                 where ($3::bigint is null or inv.instance_pk = $3)
+                   and ($1 = '' or inv.display_name ilike '%' || $1 || '%'
                                 or inv.instance_id  ilike '%' || $1 || '%')
                  order by inv.display_name
                  limit $2
             `,
-            values: [search, limit],
+            values: [search, limit, res.locals.agent_instance_pk ?? null],
         });
 
         res.json({
             schema_version: '1.0.0',
             capability: 'find_instance',
             data: rows.map((row) => ({
-                instance_pk: asSafeInt(row.instance_pk),
+                instance_pk: String(row.instance_pk),
                 instance_id: String(row.instance_id),
                 display_name: String(row.display_name),
                 environment: row.environment === null || row.environment === undefined ? null : String(row.environment),

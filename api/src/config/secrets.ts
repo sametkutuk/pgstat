@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes, pbkdf2Sync } from 'crypto';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from 'fs';
-import { join } from 'path';
+import { join, parse, resolve } from 'path';
 
 // AES-256-GCM ile şifreleme
 // Her iki taraf (Node.js API + Java Collector) aynı PBKDF2 parametreleri kullanır
@@ -117,4 +117,17 @@ export function saveNamedSecret(namespace: string, name: string, value: string):
 export function readSecretRef(secretRef: string): string {
     if (!secretRef.startsWith('file:')) throw new Error('Desteklenmeyen secret_ref');
     return readSecret(secretRef.slice('file:'.length));
+}
+
+/** AI anahtarları için eski düz-metin uyumluluğu kabul edilmez. */
+export function readAgentSecretRef(secretRef: string): string {
+    if (!secretRef.startsWith('file:')) throw new Error('AI_SECRET_REF_INVALID');
+    const filePath = secretRef.slice(5);
+    const parsed = parse(filePath);
+    if (resolve(parsed.dir) !== resolve(SECRETS_DIR) || !/^ai-provider-[a-z0-9_-]+-[a-f0-9]{16}\.secret$/.test(parsed.base)) {
+        throw new Error('AI_SECRET_REF_INVALID');
+    }
+    const payload = readFileSync(filePath, 'utf8').trim();
+    if (!/^[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]+$/i.test(payload)) throw new Error('AI_SECRET_FORMAT_INVALID');
+    return readSecret(filePath);
 }

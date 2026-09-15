@@ -51,7 +51,7 @@ export function auditLogMiddleware(req: Request, res: Response, next: NextFuncti
             if (body) {
                 const summary = typeof body === 'string'
                     ? body.slice(0, 200)
-                    : JSON.stringify(body).slice(0, 200);
+                    : JSON.stringify(sanitizeBody(body)).slice(0, 200);
                 responseSummary = summary;
             }
         } catch { /* ignore */ }
@@ -65,7 +65,7 @@ export function auditLogMiddleware(req: Request, res: Response, next: NextFuncti
         const ip = (req.ip || req.socket.remoteAddress || '').replace(/^::ffff:/, '');
 
         // Tek admin sistemde user 'admin', ileride JWT'den cekilebilir
-        const userName = 'admin';
+        const userName = req.path.startsWith('/api/agent-service/') ? 'agent-service' : 'admin';
 
         pool.query(
             `insert into ops.audit_log

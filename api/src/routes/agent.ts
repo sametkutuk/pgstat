@@ -6,8 +6,15 @@ import { saveNamedSecret } from '../config/secrets';
 import { cancelInvestigation } from '../services/investigationLifecycle';
 import { decideIntake, resolveTarget, resolveWindow } from '../services/investigationIntake';
 import { listImprovements } from '../services/improvementList';
+import { testProviderConnection } from '../services/providerConnectionTest';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
+const PROVIDERS = ['gemini', 'openrouter', 'ollama', 'openai', 'anthropic'] as const;
+const instancePkSchema = z.union([
+  z.string().regex(/^[1-9]\d{0,18}$/),
+  z.number().int().positive().safe().transform(String),
+]).refine(value => BigInt(value) <= 9223372036854775807n);
 
 // Sohbet arayuzu: yalnizca soru zorunludur. Hedef ve zaman araligi
 // verilmezse ya guvenle cozulur ya da kullaniciya sorulur — bkz.
@@ -15,7 +22,8 @@ const router = Router();
 const createInvestigationSchema = z.object({
   question: z.string().trim().min(1).max(4000),
   investigation_type: z.literal('autovacuum').default('autovacuum'),
-  instance_pk: z.coerce.number().int().positive().optional(),
+  model_provider: z.enum(PROVIDERS).optional(),
+  instance_pk: instancePkSchema.optional(),
   dbid: z.coerce.number().int().nonnegative().optional(),
   time_from: z.string().datetime({ offset: true }).optional(),
   time_to: z.string().datetime({ offset: true }).optional(),
@@ -23,7 +31,7 @@ const createInvestigationSchema = z.object({
 
 // Eksik kalan hedefi/araligi tamamlamak icin. En az biri verilmelidir.
 const clarifyInvestigationSchema = z.object({
-  instance_pk: z.coerce.number().int().positive().optional(),
+  instance_pk: instancePkSchema.optional(),
   dbid: z.coerce.number().int().nonnegative().optional(),
   time_from: z.string().datetime({ offset: true }).optional(),
   time_to: z.string().datetime({ offset: true }).optional(),
@@ -48,11 +56,10 @@ const improvementReportSchema = z.object({
   available_text: z.string().trim().min(1).max(1000),
   missing_text: z.string().trim().min(1).max(1000),
   reason_text: z.string().trim().min(1).max(1000),
-  tool_call_id: z.coerce.number().int().positive().optional(),
+  tool_call_id: z.string().regex(/^[1-9]\d{0,18}$/).optional(),
   coverage_summary: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
-const PROVIDERS = ['gemini', 'openrouter', 'ollama', 'openai', 'anthropic'] as const;
 type Provider = typeof PROVIDERS[number];
 const CLOUD_BASE_URLS: Record<Exclude<Provider, 'ollama'>, string> = {
   gemini: 'https://generativelanguage.googleapis.com',
@@ -87,6 +94,10 @@ const parsePositiveInt = (value: unknown): number | null => {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
+const parseBigintId = (value: unknown): string | null => {
+  if (typeof value !== 'string' || !/^[1-9]\d{0,18}$/.test(value)) return null;
+  return BigInt(value) <= 9223372036854775807n ? value : null;
+};
 
 router.post('/investigations', async (req, res, next) => {
   try {
@@ -115,14 +126,25 @@ router.post('/investigations', async (req, res, next) => {
       }
 
       const outcome = decideIntake(target, window);
+      const connection = await client.query(
+        `select provider, model_name from agent.provider_connection
+         where is_enabled and (provider = 'ollama' or data_policy_acknowledged_at is not null)
+           and ($1::text is null or provider = $1)
+         order by connection_id limit 1`, [input.model_provider ?? null]);
+      if (!connection.rows[0]) {
+        await client.query('rollback');
+        return res.status(409).json({ error: 'AI sağlayıcısı bağlı değil; önce AI Bağlantısı ekranından bağlayın' });
+      }
       const created = await client.query(
         `insert into agent.investigation
-           (question, investigation_type, instance_pk, dbid, time_from, time_to, status)
-         values ($1, $2, $3, $4, $5, $6, $7)
+           (question, investigation_type, instance_pk, dbid, time_from, time_to, status,
+            model_provider, model_name)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          returning investigation_id, question, investigation_type, instance_pk,
                    dbid, time_from, time_to, status, created_at`,
         [input.question, input.investigation_type, outcome.instancePk,
-         input.dbid ?? null, outcome.window.from, outcome.window.to, outcome.status],
+         input.dbid ?? null, outcome.window.from, outcome.window.to, outcome.status,
+         connection.rows[0].provider, connection.rows[0].model_name],
       );
       const investigationId = created.rows[0].investigation_id;
       await client.query(
@@ -214,7 +236,7 @@ router.post('/investigations/:id/clarify', async (req, res, next) => {
         });
       }
 
-      let instancePk: number | null = row.instance_pk === null ? null : Number(row.instance_pk);
+      let instancePk: string | null = row.instance_pk === null ? null : String(row.instance_pk);
       if (input.instance_pk !== undefined) {
         const target = await resolveTarget(client, input.instance_pk);
         if (target.kind === 'not_found') {
@@ -270,7 +292,7 @@ router.get('/investigations', async (req, res, next) => {
   try {
     const instancePk = req.query.instance_pk === undefined
       ? null
-      : parsePositiveInt(req.query.instance_pk);
+      : parseBigintId(req.query.instance_pk);
     if (req.query.instance_pk !== undefined && instancePk === null) {
       return res.status(400).json({ error: 'Geçersiz instance_pk' });
     }
@@ -306,6 +328,20 @@ router.get('/providers', async (_req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+const providerTestLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 5,
+  message: { error: 'Bağlantı testi sınırına ulaşıldı; daha sonra deneyin' } });
+router.post('/providers/:provider/test', providerTestLimiter, async (req, res, next) => {
+  try {
+    if (!PROVIDERS.includes(req.params.provider as Provider)) return res.status(400).json({ error: 'Desteklenmeyen AI sağlayıcısı' });
+    try { return res.json(await testProviderConnection(pool, req.params.provider)); }
+    catch (error) {
+      if (error instanceof Error && error.message === 'PROVIDER_NOT_ENABLED') return res.status(404).json({ error: 'Aktif sağlayıcı bulunamadı' });
+      if (error instanceof Error && /^(PROVIDER_NOT_READY|PROVIDER_URL_INVALID)$/.test(error.message)) return res.status(409).json({ error: error.message });
+      throw error;
+    }
+  } catch (error) { next(error); }
 });
 
 router.put('/providers/:provider', async (req, res, next) => {
@@ -359,10 +395,10 @@ router.put('/providers/:provider', async (req, res, next) => {
 
 router.get('/investigations/:id', async (req, res, next) => {
   try {
-    const id = parsePositiveInt(req.params.id);
+    const id = parseBigintId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Geçersiz investigation id' });
 
-    const [investigation, messages, calls, result, improvements] = await Promise.all([
+    const [investigation, messages, calls, evidence, result, improvements] = await Promise.all([
       pool.query(
         `select i.*, ii.display_name as instance_name, c.pg_major
          from agent.investigation i
@@ -379,6 +415,16 @@ router.get('/investigations/:id', async (req, res, next) => {
                 completed_at, duration_ms
          from agent.investigation_tool_call where investigation_id = $1
          order by started_at, tool_call_id`, [id]),
+      pool.query(
+        `select evidence_id, tool_call_id,
+                envelope->>'capability' as capability,
+                envelope->>'status' as status,
+                envelope->'coverage' as coverage,
+                envelope->'limitations' as limitations,
+                envelope->'data' as data,
+                sha256_hex, response_bytes, recorded_at
+         from agent.investigation_evidence where investigation_id = $1
+         order by evidence_id limit 10`, [id]),
       pool.query(`select * from agent.investigation_result where investigation_id = $1`, [id]),
       pool.query(
         `select ti.improvement_id, ti.gap_type, ti.title, ti.simple_reason,
@@ -392,6 +438,7 @@ router.get('/investigations/:id', async (req, res, next) => {
       investigation: investigation.rows[0],
       messages: messages.rows,
       tool_calls: calls.rows,
+      evidence: evidence.rows,
       result: result.rows[0] ?? null,
       improvements: improvements.rows,
     });
@@ -418,7 +465,7 @@ router.get('/improvements', async (req, res, next) => {
 
 router.post('/investigations/:id/improvements', async (req, res, next) => {
   try {
-    const investigationId = parsePositiveInt(req.params.id);
+    const investigationId = parseBigintId(req.params.id);
     if (investigationId === null) return res.status(400).json({ error: 'Geçersiz investigation id' });
     const parsed = improvementReportSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -456,7 +503,7 @@ router.post('/investigations/:id/improvements', async (req, res, next) => {
 
 router.get('/improvements/:id', async (req, res, next) => {
   try {
-    const id = parsePositiveInt(req.params.id);
+    const id = parseBigintId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Geçersiz improvement id' });
     const [item, occurrences] = await Promise.all([
       pool.query(`select * from agent.telemetry_improvement where improvement_id = $1`, [id]),
@@ -476,7 +523,7 @@ router.get('/improvements/:id', async (req, res, next) => {
 
 router.patch('/improvements/:id/status', async (req, res, next) => {
   try {
-    const id = parsePositiveInt(req.params.id);
+    const id = parseBigintId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Geçersiz improvement id' });
     const parsed = improvementStatusSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Geçersiz durum' });

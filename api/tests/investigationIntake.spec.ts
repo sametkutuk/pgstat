@@ -50,7 +50,7 @@ test('intake resolves or asks, never guesses, on disposable PostgreSQL', async (
             assert.equal(target.kind, 'auto_single');
             outcome = decideIntake(target as never, resolveWindow(null, null));
             assert.equal(outcome.status, 'queued');
-            assert.equal(outcome.instancePk, 1);
+            assert.equal(outcome.instancePk, '1');
             assert.match(outcome.assistantMessages.join(' '), /Tek Instance/,
                 'otomatik secim konusmaya yazilmali');
 
@@ -64,13 +64,21 @@ test('intake resolves or asks, never guesses, on disposable PostgreSQL', async (
             assert.equal(outcome.candidates.length, 2);
 
             // --- Acikca verilen hedef ---------------------------------------
-            target = await resolveTarget(client, 2);
-            assert.deepEqual(target, { kind: 'explicit', instancePk: 2 });
+            target = await resolveTarget(client, '2');
+            assert.deepEqual(target, { kind: 'explicit', instancePk: '2' });
 
             // --- Pasif instance acik verilirse girdi hatasidir ---------------
             await pool.query(`insert into control.instance_inventory values (3, 'Pasif', false)`);
-            assert.equal((await resolveTarget(client, 3)).kind, 'not_found');
-            assert.equal((await resolveTarget(client, 999)).kind, 'not_found');
+            assert.equal((await resolveTarget(client, '3')).kind, 'not_found');
+            assert.equal((await resolveTarget(client, '999')).kind, 'not_found');
+            await pool.query(`insert into control.instance_inventory values
+                (9007199254740993, 'Bigint instance', true)`);
+            assert.deepEqual(await resolveTarget(client, '9007199254740993'),
+                { kind: 'explicit', instancePk: '9007199254740993' });
+            const all = await resolveTarget(client, null);
+            assert.equal(all.kind, 'ask');
+            if (all.kind === 'ask') assert.ok(all.candidates.some(candidate =>
+                candidate.instance_pk === '9007199254740993'));
         } finally {
             client.release();
         }
@@ -89,7 +97,7 @@ test('intake resolves or asks, never guesses, on disposable PostgreSQL', async (
         const explicit = resolveWindow('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', now);
         assert.equal(explicit.defaulted, false, 'kullanici verdiginde varsayilan isareti konmamali');
 
-        const messages = decideIntake({ kind: 'explicit', instancePk: 1 }, defaulted).assistantMessages;
+        const messages = decideIntake({ kind: 'explicit', instancePk: '1' }, defaulted).assistantMessages;
         assert.match(messages.join(' '), /son 24 saat/i, 'varsayilan pencere kullaniciya yazilmali');
 
         // --- needs_clarification iptal edilebilmeli ---------------------------

@@ -13,22 +13,22 @@ export const DEFAULT_WINDOW_HOURS = 24;
 export interface IntakeRequest {
     question: string;
     investigationType: string;
-    instancePk: number | null;
+    instancePk: string | null;
     dbid: number | null;
     timeFrom: string | null;
     timeTo: string | null;
 }
 
 export type TargetResolution =
-    | { kind: 'explicit'; instancePk: number }
-    | { kind: 'auto_single'; instancePk: number; displayName: string }
-    | { kind: 'ask'; candidates: { instance_pk: number; display_name: string }[] }
+    | { kind: 'explicit'; instancePk: string }
+    | { kind: 'auto_single'; instancePk: string; displayName: string }
+    | { kind: 'ask'; candidates: { instance_pk: string; display_name: string }[] }
     | { kind: 'not_found' };
 
 /** Hedefi cozer. Secim yapilamiyorsa uydurmaz, sorulacagini bildirir. */
 export async function resolveTarget(
     client: PoolClient,
-    instancePk: number | null
+    instancePk: string | null
 ): Promise<TargetResolution> {
     if (instancePk !== null) {
         const found = await client.query(
@@ -48,14 +48,14 @@ export async function resolveTarget(
     if (active.rowCount === 1) {
         return {
             kind: 'auto_single',
-            instancePk: Number(active.rows[0].instance_pk),
+            instancePk: String(active.rows[0].instance_pk),
             displayName: String(active.rows[0].display_name),
         };
     }
     return {
         kind: 'ask',
         candidates: active.rows.slice(0, 25).map((row) => ({
-            instance_pk: Number(row.instance_pk),
+            instance_pk: String(row.instance_pk),
             display_name: String(row.display_name),
         })),
     };
@@ -85,12 +85,12 @@ export function resolveWindow(timeFrom: string | null, timeTo: string | null, no
 
 export interface IntakeOutcome {
     status: 'queued' | 'needs_clarification';
-    instancePk: number | null;
+    instancePk: string | null;
     window: ResolvedWindow;
     /** Konusmaya yazilacak assistant mesajlari (varsa). */
     assistantMessages: string[];
     /** needs_clarification ise kullaniciya sunulacak secenekler. */
-    candidates: { instance_pk: number; display_name: string }[];
+    candidates: { instance_pk: string; display_name: string }[];
 }
 
 /**

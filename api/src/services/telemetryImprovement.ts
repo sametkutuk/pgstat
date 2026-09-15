@@ -12,7 +12,7 @@ export const TECHNICAL_REASONS = [
 export type TechnicalReason = typeof TECHNICAL_REASONS[number];
 
 export interface ImprovementReport {
-  investigationId: number;
+  investigationId: string;
   gapType: GapType;
   technicalReason?: TechnicalReason;
   requestedCapability: string;
@@ -22,7 +22,7 @@ export interface ImprovementReport {
   availableText: string;
   missingText: string;
   reasonText: string;
-  toolCallId?: number;
+  toolCallId?: string;
   coverageSummary?: Record<string, unknown>;
 }
 
@@ -30,12 +30,16 @@ function normalizedCapability(value: string): string {
   return value.trim().toLocaleLowerCase('en-US');
 }
 
-function dedupKey(gapType: GapType, capability: string, investigationType: string, pgMajor: number | null): string {
-  const semanticKey = [gapType, normalizedCapability(capability), investigationType, pgMajor ?? 'unknown'].join('|');
+function dedupKey(gapType: GapType, capability: string, investigationType: string,
+                  pgMajor: number | null, reason?: TechnicalReason): string {
+  // A missing API function is the same product gap on every instance. Split by
+  // PG major only when the version itself is the verified incompatibility.
+  const scope = reason === 'UNSUPPORTED_VERSION' ? pgMajor ?? 'unknown' : 'all_versions';
+  const semanticKey = [gapType, normalizedCapability(capability), investigationType, scope].join('|');
   return createHash('sha256').update(semanticKey).digest('hex');
 }
 
-async function verifyToolCall(client: PoolClient, investigationId: number, toolCallId?: number): Promise<void> {
+async function verifyToolCall(client: PoolClient, investigationId: string, toolCallId?: string): Promise<void> {
   if (toolCallId === undefined) return;
   const result = await client.query(
     `select 1 from agent.investigation_tool_call
@@ -65,7 +69,7 @@ export async function reportTelemetryImprovement(report: ImprovementReport) {
 
     const context = investigation.rows[0];
     const key = dedupKey(report.gapType, report.requestedCapability,
-      context.investigation_type, context.pg_major);
+      context.investigation_type, context.pg_major, report.technicalReason);
     const improvement = await client.query(
       `insert into agent.telemetry_improvement
          (dedup_key, gap_type, technical_reason, requested_capability, title, simple_reason)

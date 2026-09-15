@@ -32,7 +32,7 @@ export interface CoverageProbe {
 export function buildRoundProbeQuery(options: {
     table: string;
     timeColumn: string;
-    instancePk: number;
+    instancePk: string | number;
     from: string;
     to: string;
     extraPredicate?: string;
@@ -123,7 +123,7 @@ export const STATEMENTS_JOB_TYPE = 'statements';
 export const CLUSTER_JOB_TYPE = 'cluster';
 
 export function buildJobRunProbeQuery(options: {
-    instancePk: number;
+    instancePk: string | number;
     jobType: string;
     from: string;
     to: string;
