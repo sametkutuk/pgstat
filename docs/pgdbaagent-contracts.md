@@ -496,3 +496,18 @@ is already surfaced to the user.
 
 Not verified: no automated test covers this route, and only the Gemini shape
 has been exercised against a live provider.
+
+### 14.1 Per-question model
+
+`POST /api/agent/investigations` accepts an optional `model_name`, so a model
+can be chosen per question rather than only in connection settings: a small
+model for a quick check, a larger one for a deep analysis.
+
+The worker reads `coalesce(investigation.model_name, provider_connection.model_name)`,
+so an unset value falls back to the connection default. Before this the service
+route read the connection's model directly and the investigation's own column
+was recorded but never used.
+
+The name is validated against the same pattern the provider client enforces. It
+is not checked against the provider's catalog at submit time; an unusable name
+surfaces as the provider's own error, which the failure detail now shows.

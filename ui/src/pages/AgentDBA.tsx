@@ -107,6 +107,8 @@ export default function AgentDBA() {
   const [providerModel, setProviderModel] = useState(providerInfo.gemini.defaultModel);
   // Sağlayıcıdan çekilen model listesi. Boşken serbest metin alanı gösterilir.
   const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([]);
+  // Soru basina model secimi; bos ise baglantida kayitli model kullanilir.
+  const [questionModel, setQuestionModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('http://host.docker.internal:11434');
   const [policyAccepted, setPolicyAccepted] = useState(false);
@@ -143,6 +145,10 @@ export default function AgentDBA() {
   );
   const selectedProvider = providers.data?.some(item => item.provider === provider && item.is_enabled)
     ? provider : providers.data?.find(item => item.is_enabled)?.provider;
+  // Soru icin gecerli model: acikca secilmediyse baglantida kayitli olan.
+  const effectiveQuestionModel = questionModel
+    || providers.data?.find(item => item.provider === selectedProvider)?.model_name
+    || '';
 
   // Yalnizca doldurulan alanlar gonderilir. Instance ve zaman araligi
   // zorunlu degildir: API tek aktif instance varsa onu secer, birden fazlaysa
@@ -153,6 +159,7 @@ export default function AgentDBA() {
       investigation_type: 'autovacuum',
       ...(selectedProvider ? { model_provider: selectedProvider } : {}),
       ...(instancePk ? { instance_pk: instancePk } : {}),
+      ...(questionModel ? { model_name: questionModel } : {}),
       ...(from && to
         ? { time_from: new Date(from).toISOString(), time_to: new Date(to).toISOString() }
         : {}),
@@ -267,7 +274,11 @@ export default function AgentDBA() {
               className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm resize-y" />
 
             <label className="block text-xs font-semibold text-[#64748B] mt-4 mb-1">AI sağlayıcısı</label>
-            <select value={selectedProvider ?? ''} onChange={event => setProvider(event.target.value as ProviderName)}
+            <select value={selectedProvider ?? ''} onChange={event => {
+              setProvider(event.target.value as ProviderName);
+              // Liste ve seçim önceki sağlayıcıya aitti.
+              setQuestionModel(''); setAvailableModels([]); providerModels.reset();
+            }}
               className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm bg-white">
               {(providers.data ?? []).filter(item => item.is_enabled).map(item => (
                 <option key={item.provider} value={item.provider}>{providerInfo[item.provider].label} · {item.model_name}</option>
@@ -275,6 +286,34 @@ export default function AgentDBA() {
             </select>
             {(providers.data?.filter(item => item.is_enabled).length ?? 0) === 0 &&
               <p className="text-xs text-amber-700 mt-2">Araştırma için önce AI Bağlantısı sekmesinde bir sağlayıcı kaydedin.</p>}
+
+            {/* Soru başına model. Varsayılan, bağlantıda kayıtlı olan; hızlı bir
+                soruya küçük, derin analize büyük model seçilebilsin diye burada
+                da değiştirilebiliyor. Liste sağlayıcıdan istenerek gelir. */}
+            {selectedProvider && (
+              <>
+                <div className="flex items-baseline justify-between mt-3 mb-1">
+                  <label className="block text-xs font-semibold text-[#64748B]">Model</label>
+                  <button type="button" disabled={providerModels.isPending}
+                    onClick={() => providerModels.mutate(selectedProvider)}
+                    className="text-xs text-[#3B82F6] disabled:opacity-50">
+                    {providerModels.isPending ? 'Sorgulanıyor…' : 'Diğer modeller'}
+                  </button>
+                </div>
+                <select value={effectiveQuestionModel}
+                  onChange={event => setQuestionModel(event.target.value)}
+                  className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm bg-white">
+                  {availableModels.some(model => model.id === effectiveQuestionModel) ? null : (
+                    <option value={effectiveQuestionModel}>{effectiveQuestionModel} (kayıtlı)</option>
+                  )}
+                  {availableModels.map(model => (
+                    <option key={model.id} value={model.id}>{model.label}</option>
+                  ))}
+                </select>
+                {providerModels.error &&
+                  <p className="mt-1 text-xs text-red-600">{providerModels.error.message}</p>}
+              </>
+            )}
 
             <div className="grid sm:grid-cols-2 gap-3 mt-4">
               <label className="text-xs font-semibold text-[#64748B]">Başlangıç

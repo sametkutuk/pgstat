@@ -24,6 +24,9 @@ const createInvestigationSchema = z.object({
   question: z.string().trim().min(1).max(4000),
   investigation_type: z.literal('autovacuum').default('autovacuum'),
   model_provider: z.enum(PROVIDERS).optional(),
+  // Soru basina model. Desen provider.ts'teki dogrulamayla ayni; gecersiz
+  // ya da erisilemez bir ad artik hata mesajinda gorunur.
+  model_name: z.string().trim().min(1).max(120).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/).optional(),
   instance_pk: instancePkSchema.optional(),
   dbid: z.coerce.number().int().nonnegative().optional(),
   time_from: z.string().datetime({ offset: true }).optional(),
@@ -145,7 +148,7 @@ router.post('/investigations', async (req, res, next) => {
                    dbid, time_from, time_to, status, created_at`,
         [input.question, input.investigation_type, outcome.instancePk,
          input.dbid ?? null, outcome.window.from, outcome.window.to, outcome.status,
-         connection.rows[0].provider, connection.rows[0].model_name],
+         connection.rows[0].provider, input.model_name ?? connection.rows[0].model_name],
       );
       const investigationId = created.rows[0].investigation_id;
       await client.query(

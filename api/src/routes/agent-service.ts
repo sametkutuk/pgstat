@@ -197,7 +197,11 @@ router.get('/investigations/:id/provider', async (req, res, next) => {
       return res.status(400).json({ error: 'Geçersiz worker kimliği' });
     }
     const connection = await pool.query(
-      `select p.provider, p.model_name, p.base_url, p.secret_ref
+      // Arastirma kendi modelini tasiyorsa o kullanilir: kullanici soru
+      // basina model secebilir (hizli soruya kucuk model, derin analize
+      // buyuk). Secmediyse baglantinin varsayilanina duser.
+      `select p.provider, coalesce(i.model_name, p.model_name) as model_name,
+              p.base_url, p.secret_ref
        from agent.investigation i join agent.provider_connection p on p.provider = i.model_provider
        where i.investigation_id = $1 and i.claimed_by = $2
          and i.status in ('planning', 'collecting_evidence', 'interpreting')
