@@ -1,6 +1,10 @@
 import type { Pool } from 'pg';
 
-export const ACTIVE_INVESTIGATION_STATES = ['queued', 'planning', 'collecting_evidence', 'interpreting'];
+// needs_clarification dahildir: kullaniciya soru sorulmus ama cevaplanmamis
+// bir arastirma da iptal edilebilmelidir, aksi halde konusmada asili kalir.
+export const ACTIVE_INVESTIGATION_STATES = [
+  'needs_clarification', 'queued', 'planning', 'collecting_evidence', 'interpreting',
+];
 
 // Serialize cancellation with other writers. Worker transitions must also guard
 // their expected state; this does not abort an already dispatched provider request.

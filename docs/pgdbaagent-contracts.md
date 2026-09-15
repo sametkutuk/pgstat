@@ -335,3 +335,46 @@ Not implemented: `get_query_performance_evidence` and `compare_periods`.
 PostgreSQL 17 with all migrations applied: 13 tests, 13 passed, 0 skipped,
 stable across two consecutive runs. The HTTP layer, `EXPLAIN (ANALYZE,
 BUFFERS)` measurement and any fleet-scale claim remain unverified.
+
+## 12. Investigation Intake Contract (target is not mandatory)
+
+AI DBA is a conversation, so `POST /api/agent/investigations` requires only
+`question`. `instance_pk`, `dbid`, `time_from` and `time_to` are optional.
+
+### 12.1 How the target is resolved
+
+| Situation | Behaviour |
+| --- | --- |
+| `instance_pk` supplied and active | used as given |
+| `instance_pk` supplied but unknown or inactive | `404` — this is invalid input, not an ambiguity to ask about |
+| omitted, exactly one active instance exists | that instance is selected, and the conversation records that it was chosen automatically |
+| omitted, zero or several active instances | investigation opens as `needs_clarification` and the user is asked which instance they mean |
+
+No instance is ever guessed from a question's wording by this layer.
+
+### 12.2 Time window
+
+When `time_from`/`time_to` are omitted the last `24 hours` are used. The
+response carries `window_defaulted: true` and an assistant message states the
+exact window that was applied, so a defaulted range is never silently
+attributed to the user.
+
+### 12.3 Answering the question
+
+`POST /api/agent/investigations/:id/clarify` accepts `instance_pk`, `dbid`,
+`time_from`, `time_to` and an optional free-text `message`. It only applies to
+an investigation in `needs_clarification`; anything already queued or finished
+answers `409`, because evidence already gathered would belong to a different
+target. Once the instance is known the status moves to `queued`.
+
+An investigation waiting on the user is still cancellable — `needs_clarification`
+is part of `ACTIVE_INVESTIGATION_STATES` — so an unanswered question cannot
+hang in the conversation forever.
+
+### 12.4 Verification state
+
+`api/tests/investigationIntake.spec.ts` runs against a disposable PostgreSQL
+with the real V120 and V122 migrations: 1 test, passed, 0 skipped. It covers
+zero, one and several active instances, an explicit target, an inactive
+target, the defaulted window and its message, and cancelling an investigation
+that is still waiting for an answer. The HTTP layer is not exercised.

@@ -14,7 +14,7 @@ interface Investigation {
   investigation_id: string;
   question: string;
   investigation_type: 'autovacuum';
-  instance_pk: number;
+  instance_pk: number | null;
   instance_name?: string;
   time_from: string;
   time_to: string;
@@ -61,7 +61,7 @@ const providerInfo: Record<ProviderName, { label: string; hint: string; defaultM
 };
 
 const statusLabel: Record<string, string> = {
-  queued: 'Sırada', planning: 'Planlanıyor', collecting_evidence: 'Kanıt toplanıyor',
+  needs_clarification: 'Bilgi bekleniyor', queued: 'Sırada', planning: 'Planlanıyor', collecting_evidence: 'Kanıt toplanıyor',
   interpreting: 'Yorumlanıyor', completed: 'Tamamlandı',
   insufficient_evidence: 'Kanıt yetersiz', failed: 'Hata', cancelled: 'İptal edildi',
   timed_out: 'Zaman aşımı', review_required: 'İncelenecek', accepted: 'Kabul edildi',
@@ -116,14 +116,25 @@ export default function AgentDBA() {
     () => (instances.data ?? []).filter(instance => instance.is_active), [instances.data],
   );
 
+  // Yalnizca doldurulan alanlar gonderilir. Instance ve zaman araligi
+  // zorunlu degildir: API tek aktif instance varsa onu secer, birden fazlaysa
+  // sorar; aralik verilmezse son 24 saati kullanip bunu konusmaya yazar.
   const createInvestigation = useMutation({
     mutationFn: () => apiPost<Investigation>('/agent/investigations', {
       question,
       investigation_type: 'autovacuum',
-      instance_pk: Number(instancePk),
-      time_from: new Date(from).toISOString(),
-      time_to: new Date(to).toISOString(),
+      ...(instancePk ? { instance_pk: Number(instancePk) } : {}),
+      ...(from && to
+        ? { time_from: new Date(from).toISOString(), time_to: new Date(to).toISOString() }
+        : {}),
     }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-investigations'] }),
+  });
+
+  // Sorulan hedefi cevaplar ve arastirmayi kuyruga alir.
+  const clarifyInvestigation = useMutation({
+    mutationFn: ({ id, instance }: { id: string; instance: number }) =>
+      apiPost(`/agent/investigations/${id}/clarify`, { instance_pk: instance }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-investigations'] }),
   });
 
@@ -152,7 +163,9 @@ export default function AgentDBA() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!instancePk || !question.trim()) return;
+    // Tek zorunlu alan soru. Instance secilmediyse API ya tek aktif olani
+    // secer ya da geri sorar; burada engellemiyoruz.
+    if (!question.trim()) return;
     createInvestigation.mutate();
   }
 
@@ -184,10 +197,12 @@ export default function AgentDBA() {
         <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-5">
           <form onSubmit={submit} className="bg-white border border-[#E2E8F0] rounded-lg p-5 shadow-sm">
             <h2 className="font-semibold text-[#1E293B] mb-4">Yeni araştırma</h2>
-            <label className="block text-xs font-semibold text-[#64748B] mb-1">Instance</label>
-            <select value={instancePk} onChange={e => setInstancePk(e.target.value)} required
+            <label className="block text-xs font-semibold text-[#64748B] mb-1">
+              Instance <span className="font-normal text-[#94A3B8]">(opsiyonel)</span>
+            </label>
+            <select value={instancePk} onChange={e => setInstancePk(e.target.value)}
               className="w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm mb-4 bg-white">
-              <option value="">Instance seçin</option>
+              <option value="">Seçmeyeyim — gerekirse bana sor</option>
               {activeInstances.map(instance => (
                 <option key={instance.instance_pk} value={instance.instance_pk}>
                   {instance.display_name}{instance.pg_major ? ` — PG${instance.pg_major}` : ''}
@@ -201,14 +216,17 @@ export default function AgentDBA() {
 
             <div className="grid sm:grid-cols-2 gap-3 mt-4">
               <label className="text-xs font-semibold text-[#64748B]">Başlangıç
-                <input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} required
+                <input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)}
                   className="block w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm mt-1 font-normal" />
               </label>
               <label className="text-xs font-semibold text-[#64748B]">Bitiş
-                <input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} required
+                <input type="datetime-local" value={to} onChange={e => setTo(e.target.value)}
                   className="block w-full border border-[#CBD5E1] rounded-md px-3 py-2 text-sm mt-1 font-normal" />
               </label>
             </div>
+            <p className="mt-2 text-xs text-[#94A3B8]">
+              Boş bırakırsanız son 24 saat kullanılır ve bu araştırma notuna yazılır.
+            </p>
 
             {createInvestigation.error &&
               <p className="mt-3 text-sm text-red-600">{createInvestigation.error.message}</p>}
@@ -236,9 +254,39 @@ export default function AgentDBA() {
                     </span>
                   </div>
                   <p className="text-xs text-[#94A3B8] mt-1">
-                    {item.instance_name ?? `#${item.instance_pk}`} · {new Date(item.created_at).toLocaleString('tr-TR')}
+                    {item.instance_pk === null
+                      ? 'Instance henüz belirlenmedi'
+                      : item.instance_name ?? `#${item.instance_pk}`}
+                    {' · '}{new Date(item.created_at).toLocaleString('tr-TR')}
                   </p>
-                  {['queued', 'planning', 'collecting_evidence', 'interpreting'].includes(item.status) && (
+
+                  {/* Hedef sorulduysa cevabi burada alinir; arastirma o zaman kuyruga girer. */}
+                  {item.status === 'needs_clarification' && (
+                    <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 p-2">
+                      <p className="text-xs text-amber-900 mb-2">
+                        Hangi instance için bakayım?
+                      </p>
+                      <select defaultValue="" disabled={clarifyInvestigation.isPending}
+                        onChange={event => {
+                          const value = Number(event.target.value);
+                          if (value > 0) {
+                            clarifyInvestigation.mutate({ id: item.investigation_id, instance: value });
+                          }
+                        }}
+                        className="w-full border border-amber-300 rounded-md px-2 py-1.5 text-xs bg-white">
+                        <option value="">Instance seçin…</option>
+                        {activeInstances.map(instance => (
+                          <option key={instance.instance_pk} value={instance.instance_pk}>
+                            {instance.display_name}
+                          </option>
+                        ))}
+                      </select>
+                      {clarifyInvestigation.error && (
+                        <p className="mt-1 text-xs text-red-600">{clarifyInvestigation.error.message}</p>
+                      )}
+                    </div>
+                  )}
+                  {['needs_clarification', 'queued', 'planning', 'collecting_evidence', 'interpreting'].includes(item.status) && (
                     <button type="button" disabled={cancelInvestigation.isPending}
                       onClick={() => cancelInvestigation.mutate(item.investigation_id)}
                       className="text-xs text-red-700 mt-2 disabled:opacity-50">

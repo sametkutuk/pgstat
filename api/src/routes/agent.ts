@@ -4,18 +4,34 @@ import { pool } from '../config/database';
 import { GAP_TYPES, TECHNICAL_REASONS, reportTelemetryImprovement } from '../services/telemetryImprovement';
 import { saveNamedSecret } from '../config/secrets';
 import { cancelInvestigation } from '../services/investigationLifecycle';
+import { decideIntake, resolveTarget, resolveWindow } from '../services/investigationIntake';
 import { listImprovements } from '../services/improvementList';
 
 const router = Router();
 
+// Sohbet arayuzu: yalnizca soru zorunludur. Hedef ve zaman araligi
+// verilmezse ya guvenle cozulur ya da kullaniciya sorulur — bkz.
+// services/investigationIntake.ts.
 const createInvestigationSchema = z.object({
   question: z.string().trim().min(1).max(4000),
   investigation_type: z.literal('autovacuum').default('autovacuum'),
-  instance_pk: z.coerce.number().int().positive(),
+  instance_pk: z.coerce.number().int().positive().optional(),
   dbid: z.coerce.number().int().nonnegative().optional(),
-  time_from: z.string().datetime({ offset: true }),
-  time_to: z.string().datetime({ offset: true }),
+  time_from: z.string().datetime({ offset: true }).optional(),
+  time_to: z.string().datetime({ offset: true }).optional(),
 }).strict();
+
+// Eksik kalan hedefi/araligi tamamlamak icin. En az biri verilmelidir.
+const clarifyInvestigationSchema = z.object({
+  instance_pk: z.coerce.number().int().positive().optional(),
+  dbid: z.coerce.number().int().nonnegative().optional(),
+  time_from: z.string().datetime({ offset: true }).optional(),
+  time_to: z.string().datetime({ offset: true }).optional(),
+  message: z.string().trim().min(1).max(4000).optional(),
+}).strict().refine(
+  (value) => value.instance_pk !== undefined || value.time_from !== undefined || value.time_to !== undefined,
+  { message: 'En az bir alan verilmelidir' },
+);
 
 const improvementStatusSchema = z.object({
   status: z.enum(['review_required', 'accepted', 'in_progress', 'resolved', 'rejected']),
@@ -80,8 +96,9 @@ router.post('/investigations', async (req, res, next) => {
     }
 
     const input = parsed.data;
-    const from = new Date(input.time_from);
-    const to = new Date(input.time_to);
+    const window = resolveWindow(input.time_from ?? null, input.time_to ?? null);
+    const from = new Date(window.from);
+    const to = new Date(window.to);
     if (from >= to || to.getTime() - from.getTime() > 31 * 24 * 60 * 60 * 1000) {
       return res.status(400).json({ error: 'Araştırma zaman aralığı 0–31 gün arasında olmalı' });
     }
@@ -89,32 +106,46 @@ router.post('/investigations', async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query('begin');
-      const instance = await client.query(
-        `select instance_pk from control.instance_inventory
-         where instance_pk = $1 and is_active`,
-        [input.instance_pk],
-      );
-      if (instance.rowCount === 0) {
+      const target = await resolveTarget(client, input.instance_pk ?? null);
+      // Acikca verilen ama var olmayan/pasif instance bir girdi hatasidir,
+      // sorulacak bir belirsizlik degil.
+      if (target.kind === 'not_found') {
         await client.query('rollback');
         return res.status(404).json({ error: 'Aktif instance bulunamadı' });
       }
 
+      const outcome = decideIntake(target, window);
       const created = await client.query(
         `insert into agent.investigation
-           (question, investigation_type, instance_pk, dbid, time_from, time_to)
-         values ($1, $2, $3, $4, $5, $6)
+           (question, investigation_type, instance_pk, dbid, time_from, time_to, status)
+         values ($1, $2, $3, $4, $5, $6, $7)
          returning investigation_id, question, investigation_type, instance_pk,
                    dbid, time_from, time_to, status, created_at`,
-        [input.question, input.investigation_type, input.instance_pk,
-         input.dbid ?? null, input.time_from, input.time_to],
+        [input.question, input.investigation_type, outcome.instancePk,
+         input.dbid ?? null, outcome.window.from, outcome.window.to, outcome.status],
       );
+      const investigationId = created.rows[0].investigation_id;
       await client.query(
         `insert into agent.investigation_message (investigation_id, role, content)
          values ($1, 'user', $2)`,
-        [created.rows[0].investigation_id, input.question],
+        [investigationId, input.question],
       );
+      // Otomatik secim ve varsayilan pencere sessizce uygulanmaz; konusmaya yazilir.
+      for (const message of outcome.assistantMessages) {
+        await client.query(
+          `insert into agent.investigation_message (investigation_id, role, content)
+           values ($1, 'assistant', $2)`,
+          [investigationId, message],
+        );
+      }
       await client.query('commit');
-      return res.status(202).json(created.rows[0]);
+      return res.status(202).json({
+        ...created.rows[0],
+        window_defaulted: outcome.window.defaulted,
+        clarification: outcome.status === 'needs_clarification'
+          ? { needs: ['instance_pk'], candidates: outcome.candidates }
+          : null,
+      });
     } catch (error) {
       await client.query('rollback');
       throw error;
@@ -138,6 +169,98 @@ router.post('/investigations/:id/cancel', async (req, res, next) => {
       return res.status(409).json({ error: 'Bitmiş araştırma iptal edilemez', status: result.investigation.status });
     }
     return res.json(result.investigation);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Eksik kalan hedefi/araligi tamamlar ve arastirmayi kuyruga alir.
+ *
+ * Yalnizca 'needs_clarification' durumundaki arastirma tamamlanabilir; zaten
+ * kuyruga girmis ya da bitmis bir isin hedefi degistirilemez, cunku toplanmis
+ * kanit baska bir hedefe ait olurdu.
+ */
+router.post('/investigations/:id/clarify', async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    if (!/^[1-9][0-9]{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) {
+      return res.status(400).json({ error: 'Geçersiz araştırma kimliği' });
+    }
+    const parsed = clarifyInvestigationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Geçersiz tamamlama isteği', details: parsed.error.flatten() });
+    }
+    const input = parsed.data;
+
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const existing = await client.query(
+        `select investigation_id, status, instance_pk, time_from, time_to
+           from agent.investigation where investigation_id = $1 for update`,
+        [id],
+      );
+      const row = existing.rows[0];
+      if (!row) {
+        await client.query('rollback');
+        return res.status(404).json({ error: 'Araştırma bulunamadı' });
+      }
+      if (row.status !== 'needs_clarification') {
+        await client.query('rollback');
+        return res.status(409).json({
+          error: 'Bu araştırma zaten başlatılmış; hedefi değiştirilemez',
+          status: row.status,
+        });
+      }
+
+      let instancePk: number | null = row.instance_pk === null ? null : Number(row.instance_pk);
+      if (input.instance_pk !== undefined) {
+        const target = await resolveTarget(client, input.instance_pk);
+        if (target.kind === 'not_found') {
+          await client.query('rollback');
+          return res.status(404).json({ error: 'Aktif instance bulunamadı' });
+        }
+        instancePk = input.instance_pk;
+      }
+
+      const window = resolveWindow(
+        input.time_from ?? (row.time_from as Date).toISOString(),
+        input.time_to ?? (row.time_to as Date).toISOString(),
+      );
+      const from = new Date(window.from);
+      const to = new Date(window.to);
+      if (from >= to || to.getTime() - from.getTime() > 31 * 24 * 60 * 60 * 1000) {
+        await client.query('rollback');
+        return res.status(400).json({ error: 'Araştırma zaman aralığı 0–31 gün arasında olmalı' });
+      }
+
+      // Hedef hala bilinmiyorsa durum degismez: soru acik kalir.
+      const nextStatus = instancePk === null ? 'needs_clarification' : 'queued';
+      const updated = await client.query(
+        `update agent.investigation
+            set instance_pk = $2, dbid = coalesce($3, dbid),
+                time_from = $4, time_to = $5, status = $6, updated_at = now()
+          where investigation_id = $1
+          returning investigation_id, question, investigation_type, instance_pk,
+                    dbid, time_from, time_to, status, created_at`,
+        [id, instancePk, input.dbid ?? null, window.from, window.to, nextStatus],
+      );
+      if (input.message) {
+        await client.query(
+          `insert into agent.investigation_message (investigation_id, role, content)
+           values ($1, 'user', $2)`,
+          [id, input.message],
+        );
+      }
+      await client.query('commit');
+      return res.json(updated.rows[0]);
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     next(error);
   }
