@@ -276,11 +276,16 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
             Math.min(Date.now() - started, 30000));
           recorded.push({ tool: name, evidence_id: audit.evidence_id, envelope });
         }
+        log('tool.ok', { id: job.investigation_id, tool: name, ms: Date.now() - started });
         return envelope;
       } catch (error) {
         const code = error instanceof ToolFailure ? error.code
           : error instanceof Error && /^[A-Z0-9_]{3,80}$/.test(error.message) ? error.message
           : 'MCP_TOOL_FAILED';
+        log('tool.failed', {
+          id: job.investigation_id, tool: name, code, ms: Date.now() - started,
+          detail: error instanceof ToolFailure ? error.detail : undefined,
+        });
         await service.toolFailure(job.investigation_id, name, code,
           Math.min(Date.now() - started, 30000)).catch(() => undefined);
         throw error;
@@ -398,19 +403,72 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
   }
 }
 
+/** Tek satirlik, zaman damgali gunluk. Konteyner logunda okunabilir olsun. */
+export function log(event: string, fields: Record<string, unknown> = {}) {
+  const parts = Object.entries(fields)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  console.log(`${new Date().toISOString()} ${event}${parts.length ? ' ' + parts.join(' ') : ''}`);
+}
+
 export async function runWorker() {
   const apiUrl = process.env.PGSTAT_AGENT_API_URL;
   const secret = process.env.PGSTAT_AGENT_SERVICE_SECRET;
   if (!apiUrl || !secret) throw new Error('AGENT_WORKER_NOT_CONFIGURED');
-  const service = new AgentServiceClient(apiUrl, secret, `worker-${randomUUID()}`);
+  const workerId = `worker-${randomUUID()}`;
+  const service = new AgentServiceClient(apiUrl, secret, workerId);
+  log('worker.started', { worker: workerId, api: apiUrl });
+
   let lastReclaim = 0;
+  let idleSince: number | null = null;
+  let consecutiveErrors = 0;
+
   while (true) {
-    if (Date.now() - lastReclaim > 60_000) {
-      await service.reclaim(); lastReclaim = Date.now();
+    try {
+      if (Date.now() - lastReclaim > 60_000) {
+        const reclaimed = await service.reclaim();
+        lastReclaim = Date.now();
+        if (reclaimed && typeof reclaimed === 'object') {
+          const { requeued, timedOut } = reclaimed as { requeued?: unknown[]; timedOut?: unknown[] };
+          if ((requeued?.length ?? 0) > 0 || (timedOut?.length ?? 0) > 0) {
+            log('worker.reclaimed', { requeued: requeued?.length ?? 0, timed_out: timedOut?.length ?? 0 });
+          }
+        }
+      }
+
+      const claimed = await service.claim();
+      consecutiveErrors = 0;
+
+      if (!claimed) {
+        // Bos kuyrukta her turda satir basmak logu bogar; ilk kez bos
+        // kalindiginda bir kez bildirilir.
+        if (idleSince === null) { idleSince = Date.now(); log('worker.idle'); }
+        await new Promise(resolveDelay => setTimeout(resolveDelay, 3000));
+        continue;
+      }
+
+      idleSince = null;
+      const job = claimed.investigation;
+      log('investigation.claimed', {
+        id: job.investigation_id, instance: job.instance_pk,
+      });
+      const started = Date.now();
+      const outcome = await runClaimedInvestigation(service, claimed) as { outcome?: string; code?: string } | undefined;
+      log('investigation.finished', {
+        id: job.investigation_id, outcome: outcome?.outcome ?? 'unknown',
+        code: outcome?.code, ms: Date.now() - started,
+      });
+    } catch (error) {
+      // Gecici bir API/ag hatasi sureci oldurmemeli: onceden dongu disina
+      // dusup konteyner restart oluyordu ve neden hicbir yere yazilmiyordu.
+      consecutiveErrors += 1;
+      log('worker.loop_error', {
+        attempt: consecutiveErrors,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      const backoff = Math.min(3000 * consecutiveErrors, 30_000);
+      await new Promise(resolveDelay => setTimeout(resolveDelay, backoff));
     }
-    const claimed = await service.claim();
-    if (claimed) await runClaimedInvestigation(service, claimed);
-    else await new Promise(resolveDelay => setTimeout(resolveDelay, 3000));
   }
 }
 
