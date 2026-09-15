@@ -16,16 +16,160 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 123 |
-| Tables discovered | 100 |
-| Columns discovered | 1254 |
-| Indexes discovered | 139 |
+| Migrations scanned | 125 |
+| Tables discovered | 107 |
+| Columns discovered | 1337 |
+| Indexes discovered | 146 |
 | Collector SQL family files | 5 |
-| API routes discovered | 213 |
+| API routes discovered | 228 |
 | API ColumnRegistry objects discovered | 33 |
-| UI files with endpoint references | 22 |
+| UI files with endpoint references | 23 |
 
 ## Schema Inventory
+
+### Schema agent
+
+| Table | Columns | Partitioned | Partition key | First migration | Last migration |
+| --- | --- | --- | --- | --- | --- |
+| agent.investigation | 17 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.investigation_message | 5 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.investigation_result | 10 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.investigation_tool_call | 13 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.provider_connection | 12 | no |  | V121__ai_provider_connection.sql | V121__ai_provider_connection.sql |
+| agent.telemetry_improvement | 14 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.telemetry_improvement_occurrence | 12 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+
+<details><summary>agent.investigation columns (17)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| investigation_id | bigserial | V120__ai_investigation_and_telemetry_improvement.sql |
+| requested_by | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| question | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| investigation_type | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| instance_pk | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| dbid | oid | V120__ai_investigation_and_telemetry_improvement.sql |
+| time_from | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| time_to | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| status | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| model_provider | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| model_name | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| failure_code | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| failure_detail | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| started_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| completed_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| updated_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
+
+<details><summary>agent.investigation_message columns (5)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| message_id | bigserial | V120__ai_investigation_and_telemetry_improvement.sql |
+| investigation_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| role | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| content | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
+
+<details><summary>agent.investigation_result columns (10)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| investigation_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| schema_version | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| conclusion | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| confidence | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| observed_facts | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| interpretations | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| hypotheses | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| limitations | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| external_knowledge | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
+
+<details><summary>agent.investigation_tool_call columns (13)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| tool_call_id | bigserial | V120__ai_investigation_and_telemetry_improvement.sql |
+| investigation_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| tool_name | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| tool_version | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| request_summary | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| status | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| coverage_state | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| result_item_count | integer | V120__ai_investigation_and_telemetry_improvement.sql |
+| result_bytes | integer | V120__ai_investigation_and_telemetry_improvement.sql |
+| error_code | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| started_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| completed_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| duration_ms | integer | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
+
+<details><summary>agent.provider_connection columns (12)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| connection_id | bigserial | V121__ai_provider_connection.sql |
+| provider | text | V121__ai_provider_connection.sql |
+| model_name | text | V121__ai_provider_connection.sql |
+| base_url | text | V121__ai_provider_connection.sql |
+| secret_ref | text | V121__ai_provider_connection.sql |
+| is_enabled | boolean | V121__ai_provider_connection.sql |
+| data_policy_acknowledged_at | timestamptz | V121__ai_provider_connection.sql |
+| last_tested_at | timestamptz | V121__ai_provider_connection.sql |
+| last_test_status | text | V121__ai_provider_connection.sql |
+| last_test_error_code | text | V121__ai_provider_connection.sql |
+| created_at | timestamptz | V121__ai_provider_connection.sql |
+| updated_at | timestamptz | V121__ai_provider_connection.sql |
+
+</details>
+
+<details><summary>agent.telemetry_improvement columns (14)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| improvement_id | bigserial | V120__ai_investigation_and_telemetry_improvement.sql |
+| dedup_key | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| gap_type | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| technical_reason | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| requested_capability | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| title | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| simple_reason | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| status | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| occurrence_count | integer | V120__ai_investigation_and_telemetry_improvement.sql |
+| first_detected_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| last_detected_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| resolved_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| updated_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
+
+<details><summary>agent.telemetry_improvement_occurrence columns (12)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| occurrence_id | bigserial | V120__ai_investigation_and_telemetry_improvement.sql |
+| improvement_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| investigation_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| instance_pk | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| pg_major | integer | V120__ai_investigation_and_telemetry_improvement.sql |
+| requested_text | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| available_text | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| missing_text | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| reason_text | text | V120__ai_investigation_and_telemetry_improvement.sql |
+| tool_call_id | bigint | V120__ai_investigation_and_telemetry_improvement.sql |
+| coverage_summary | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
+| detected_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+
+</details>
 
 ### Schema agg
 
@@ -2235,6 +2379,21 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | GET | /instance-groups | api/src/routes/adaptiveAlerting.ts |
 | POST | /instance-groups/:group_id/members | api/src/routes/adaptiveAlerting.ts |
 | DELETE | /instance-groups/:group_id/members/:instance_pk | api/src/routes/adaptiveAlerting.ts |
+| GET | /instances | api/src/routes/agent-evidence.ts |
+| GET | /:id/telemetry-coverage | api/src/routes/agent-evidence.ts |
+| GET | /:id/autovacuum-overview | api/src/routes/agent-evidence.ts |
+| GET | /:id/vacuum-candidates | api/src/routes/agent-evidence.ts |
+| GET | /:id/table-vacuum-evidence | api/src/routes/agent-evidence.ts |
+| POST | /investigations | api/src/routes/agent.ts |
+| POST | /investigations/:id/cancel | api/src/routes/agent.ts |
+| GET | /investigations | api/src/routes/agent.ts |
+| GET | /providers | api/src/routes/agent.ts |
+| PUT | /providers/:provider | api/src/routes/agent.ts |
+| GET | /investigations/:id | api/src/routes/agent.ts |
+| GET | /improvements | api/src/routes/agent.ts |
+| POST | /investigations/:id/improvements | api/src/routes/agent.ts |
+| GET | /improvements/:id | api/src/routes/agent.ts |
+| PATCH | /improvements/:id/status | api/src/routes/agent.ts |
 | GET | / | api/src/routes/alertRules.ts |
 | GET | /templates | api/src/routes/alertRules.ts |
 | GET | /message-templates | api/src/routes/alertRules.ts |
@@ -2449,6 +2608,8 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | File | Tables referenced |
 | --- | --- |
 | api/src/routes/adaptiveAlerting.ts | control.alert_code_notification_channel, control.alert_message_template, control.alert_rule, control.alert_snooze, control.baseline_trigger, control.baseline_version, control.database_access_subscription, control.instance_group, control.instance_group_member, control.instance_inventory, control.invalidate_baseline, control.long_query_subscription, control.maintenance_window, control.metric_baseline, control.nightly_snapshot_trigger, control.notification_channel, control.slot_lifecycle_subscription, control.slot_observation_state, control.xid_freeze_subscription, fact.pg_activity_snapshot, fact.pg_database_freeze_snapshot, fact.pg_settings_snapshot, ops.alert |
+| api/src/routes/agent-evidence.ts | control.instance_capability, control.instance_inventory |
+| api/src/routes/agent.ts | control.instance_capability, control.instance_inventory |
 | api/src/routes/alertRules.ts | control.alert_message_template, control.alert_rule, control.alert_rule_last_eval, control.alert_rule_notification_channel, control.instance_inventory, ops.alert |
 | api/src/routes/alerts.ts | control.alert_rule, control.collector_command, control.instance_inventory, ops.alert, ops.alert_episode |
 | api/src/routes/auditLog.ts | ops.audit_log |
@@ -2475,6 +2636,7 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | ui/src/components/forms/InstanceForm.tsx | /retention-policies<br>/schedule-profiles |
 | ui/src/components/layout/Sidebar.tsx | /alerts<br>/insights<br>/instances<br>/reports/history |
 | ui/src/pages/AdaptiveAlerting.tsx | /adaptive-alerting/instances/${pk}/baseline/invalidate<br>/adaptive-alerting/instances/${selectedInstance}/baseline<br>/adaptive-alerting/instances/${selectedInstance}/baseline/${encodeURIComponent(selectedMetric!)}<br>/instances |
+| ui/src/pages/AgentDBA.tsx | /instances |
 | ui/src/pages/AlertRules.tsx | /instances |
 | ui/src/pages/Alerts.tsx | /alerts/${id}/acknowledge<br>/alerts/${id}/resolve<br>/alerts/evaluate-now<br>/alerts?${params.toString()}<br>/instances/cleanup?alert_id=${r.alert_id} |
 | ui/src/pages/AlertsHub.tsx | /alerts<br>/alerts/adaptive<br>/alerts/rules<br>/alerts/system-health<br>/alerts/templates |

@@ -14,8 +14,8 @@ node scripts/generate-project-status.mjs
 | Metric | Value |
 | --- | ---: |
 | Total tasks | 65 |
-| Done tasks | 32 |
-| Remaining tasks | 33 |
+| Done tasks | 33 |
+| Remaining tasks | 32 |
 | Max in progress | 8 |
 
 ## Current Focus
@@ -32,8 +32,8 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 
 | Status | Count |
 | --- | ---: |
-| done | 32 |
-| in_progress | 4 |
+| done | 33 |
+| in_progress | 3 |
 | planned | 29 |
 
 ## Workstream Counts
@@ -121,7 +121,7 @@ Next planned task: **PGSTAT-P0-011 - Define AI/export redaction policy**
 | 62 | PGSTAT-P0-047 | P0 | collector | planned | The central database rewrites 1.76 million dimension rows every five minutes to refresh a timestamp nothing reads | Throttle the last_seen_at writes, ship the migration that drops the two last_seen_at indexes and lowers fillfactor, then measure n_tup_upd and n_tup_hot_upd a day later before deciding on the one-time reclaim. |
 | 63 | PGSTAT-P0-048 | P0 | collector | in_progress | Alerts reach Telegram that name no table, fire on trivial tables, and measure staleness from the wrong instant | SIRA DEGISTI (dis inceleme 2026-09-14): AC7 -> yeniden olcum -> AC6 -> AC8. Gerekce: epizotlarin %87 si semantigi bozuk TEK kuraldan (rule 14, Dead Tuple Orani) geliyor; backoff u bu dagilima gore ayarlamak gurultuye gore ayarlamak olur. Once AC7 ile dead_tuple_ratio semantigi duzelsin, sonra dagilim YENIDEN olculsun. Ayrica ~12:00 kosumundan sonra Adim 2 dogrulanmali: yeni_epizot > 0 ve saati_isleyen > 0. |
 | 64 | PGSTAT-P1-020 | P1 | collector | planned | Collector da gercek veritabanina karsi kosan test altyapisi yok | Testcontainers degerlendir; SQL i olan repository/evaluator mantigi icin gercek PostgreSQL 17 e karsi kosan bir test katmani kur. |
-| 65 | PGSTAT-P1-021 | P1 | collector | in_progress | pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu | Kalan yalniz AC7: gercek PostgreSQL test matrisi (pgss 1.8/1.9/1.10/guncel + yalniz appdb + 42501). AC5 tarama yolu 25/25 saglikli fleet te tetiklenmedigi icin fayda kaniti henuz yok; uygun ilk canli instance ta ayrica dogrulanmali. |
+| 65 | PGSTAT-P1-021 | P1 | collector | done | pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu | M1 ve 14 kabul kriteri tamamlandi. AC5 tarama yolu 25/25 saglikli fleet te tetiklenmedigi icin fayda kaniti henuz yok; uygun ilk canli instance ta ayrica dogrulanmali. Daha genis migration/collector integration altyapisi PGSTAT-P1-020 kapsaminda kalir. |
 
 ## Dependency Map
 

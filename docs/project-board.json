@@ -4545,8 +4545,8 @@
       "order": 65,
       "priority": "P1",
       "workstream": "collector",
-      "status": "in_progress",
-      "next_action": "Kalan yalniz AC7: gercek PostgreSQL test matrisi (pgss 1.8/1.9/1.10/guncel + yalniz appdb + 42501). AC5 tarama yolu 25/25 saglikli fleet te tetiklenmedigi icin fayda kaniti henuz yok; uygun ilk canli instance ta ayrica dogrulanmali.",
+      "status": "done",
+      "next_action": "M1 ve 14 kabul kriteri tamamlandi. AC5 tarama yolu 25/25 saglikli fleet te tetiklenmedigi icin fayda kaniti henuz yok; uygun ilk canli instance ta ayrica dogrulanmali. Daha genis migration/collector integration altyapisi PGSTAT-P1-020 kapsaminda kalir.",
       "title": "pg_stat_statements sorgusu extension surumune degil sunucu surumune gore seciliyordu",
       "problem": "pgss extension surumu PostgreSQL surumunden BAGIMSIZDIR. Collector sorguyu yalnizca pg_major uzerinden seciyordu; PgStatStatementsExtensionResolver extversion i okuyor ama extVersion() cagrisi kod tabaninda sifir eslesme veriyordu. pg_upgrade sonrasi ALTER EXTENSION pg_stat_statements UPDATE calistirilmazsa extension geride kalir ve sunucu surumune gore secilen sorgu var olmayan bir kolona referans verip TAMAMEN basarisiz olur. Ayrica dort ayri elle yazilmis sorgu birbirinden ayrismisti ve guvenli projection teknigi (to_jsonb + j->>) yalnizca bazi kolonlara uygulanmisti.",
       "requirements": [
@@ -4590,7 +4590,7 @@
         {
           "id": "AC7",
           "text": "Test matrisi: pgss 1.8/1.9/1.10/guncel, \"yalniz appdb de kurulu\" ve 42501 senaryolari. CI de otomatik kosum PGSTAT-P1-020 ye bagli.",
-          "status": "pending"
+          "status": "done"
         },
         {
           "id": "AC8",
@@ -4683,8 +4683,10 @@
         "AC12 PG18.6/pgss 1.12 uzerinde EXPLAIN (ANALYZE, BUFFERS, TIMING OFF) ile olculdu. Gercek pgss satir tipini kullanan fixture Function Scan maliyetini esit tutup projection CPU sunu izole etti; her hucre uc tekrar medyani: 1k dogrudan 0.346ms / savunmaci MATERIALIZED 27.911ms, 10k 1.639ms / 275.815ms, 50k 8.600ms / 1333.634ms. Ilk inline savunmaci CTE JSON u her hedef kolonda yeniden hesapliyordu ve tek kosumda 1k 1195ms, 10k 12566ms, 50k 74871ms surdu. Artik bilinen/dogrulanmis surumde to_jsonb hic uretilmiyor; savunmaci yol gerektiginde CTE MATERIALIZED ve JSON satir basina bir kez. Her iki son sorgu gercek pgss 1.12 de hatasiz kostu.",
         "AC12 olcumu kendi tavsiyemi curuttu. to_jsonb maliyetini \"zaten mevcut sorgularda var\" diye gecmistim; varsayimdi ve yanlisti. PG18.6 / pgss 1.12 uzerinde, uc sicak-cache kosumunun medyani: 1.000 satir 0,346ms dogrudan / 27,911ms savunmaci (80,7x); 10.000 satir 1,639ms / 275,815ms (168,3x); 50.000 satir 8,600ms / 1.333,634ms (155,1x).",
         "Olcum sirasinda IKINCI bir kusur bulundu: PostgreSQL tek referansli CTE yi inline ettigi icin to_jsonb(s.*) HER HEDEF KOLON ICIN yeniden hesaplaniyordu. 52 kolon x 50 bin satir = 74,9 saniye. \"as materialized\" tek kelimesiyle 1,33 saniyeye indi - 56 kat. Inline kosum sonuclari: 1k 1,195sn, 10k 12,566sn, 50k 74,871sn.",
-        "Bu kusur benim getirdigim degil, ZATEN VARDI ve olcum ortaya cikardi: eski Pg17_18Queries de \"with src as (\" ile inline CTE kullaniyor ve 10 adet j->> aramasi yapiyordu, yani PG17/PG18 instance lari her satirda to_jsonb(s.*) i on kez hesapliyordu. Simdi bilinen surumde SIFIR kez hesapliyor (uretilen 1.7/1.11/1.12 SQL lerinde to_jsonb hic yok). Yani bu degisiklik uretimi hizlandirdi. Savunmaci yol yalnizca surum bilinmiyorsa veya gelecekte verified:false bir dogrudan source eklenirse devreye giriyor."
-      ]
+        "Bu kusur benim getirdigim degil, ZATEN VARDI ve olcum ortaya cikardi: eski Pg17_18Queries de \"with src as (\" ile inline CTE kullaniyor ve 10 adet j->> aramasi yapiyordu, yani PG17/PG18 instance lari her satirda to_jsonb(s.*) i on kez hesapliyordu. Simdi bilinen surumde SIFIR kez hesapliyor (uretilen 1.7/1.11/1.12 SQL lerinde to_jsonb hic yok). Yani bu degisiklik uretimi hizlandirdi. Savunmaci yol yalnizca surum bilinmiyorsa veya gelecekte verified:false bir dogrudan source eklenirse devreye giriyor.",
+        "AC7 gercek PostgreSQL matrisi tamamlandi. Testcontainers 1.20.6 ayni makinede 6/6 kosuyu Docker yokmus gibi skip etti; 1.21.3 de baglanamadi, 1.21.4 ise Docker Desktop API proxy sini dogru izledi. Bu nedenle 1.21.4 olculmus sinir olarak pinlendi. disabledWithoutDocker kaldirildi: PGSTAT_REQUIRE_DOCKER=true iken Docker hatasi veya tek bir abort build i sert kiriyor, gelistirici kosumunda ise nedenini yazan gorunur skip uretiyor. Failsafe *IT ayrimi ile mvn test 141 birim testte kaldi. Zorunlu mvn verify kosusu postgres:13/14/15/18 uzerinde pgss 1.8/1.9/1.10/1.12 projection larini, yalniz appdb kesfini ve EXECUTE reddinde gercek SQLSTATE 42501 i 6/6 test, 0 failure, 0 error, 0 skip ile dogruladi."
+      ],
+      "completed_at": "2026-09-14"
     }
   ]
 }

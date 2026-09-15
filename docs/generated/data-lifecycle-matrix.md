@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 100 |
-| Tables without detected retention mapping | 48 |
+| Tables analyzed | 107 |
+| Tables without detected retention mapping | 55 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 4 |
@@ -27,6 +27,13 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Table | Semantics | Columns | Timestamp columns | Schema partitioned | Partition policy | Retention / purge policy | Purge owner | Rollup role | First migration | Last migration | Code refs |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| agent.investigation | agent | 17 | completed_at, created_at, started_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.investigation_message | agent | 5 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.investigation_result | agent | 10 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.investigation_tool_call | agent | 13 | completed_at, started_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.provider_connection | agent | 12 | created_at, data_policy_acknowledged_at, last_tested_at, updated_at | no | not detected | not detected | no | not detected | V121__ai_provider_connection.sql | V121__ai_provider_connection.sql |  |
+| agent.telemetry_improvement | agent | 14 | created_at, first_detected_at, last_detected_at, resolved_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.telemetry_improvement_occurrence | agent | 12 | detected_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
 | agg.pg_activity_hourly | aggregate | 10 | hour_ts | no | not detected | control.retention_policy.hourly_snapshot_retention_days | yes | target <- fact.pg_activity_snapshot | V056__snapshot_hourly_rollup_remaining.sql | V056__snapshot_hourly_rollup_remaining.sql | collector/service/PurgeEvaluator.java |
 | agg.pg_archiver_hourly | aggregate | 7 | hour_ts | no | not detected | control.retention_policy.hourly_snapshot_retention_days | yes | target <- fact.pg_archiver_snapshot | V055__snapshot_hourly_rollup.sql | V055__snapshot_hourly_rollup.sql | collector/service/PurgeEvaluator.java |
 | agg.pg_lock_hourly | aggregate | 6 | hour_ts | no | not detected | control.retention_policy.hourly_snapshot_retention_days | yes | target <- fact.pg_lock_snapshot | V056__snapshot_hourly_rollup_remaining.sql | V056__snapshot_hourly_rollup_remaining.sql | collector/service/PurgeEvaluator.java |

@@ -21,7 +21,7 @@ Related documents:
 
 | Layer | Test framework | Current coverage | State |
 | --- | --- | --- | --- |
-| Collector (Java) | JUnit via Maven | 4 test classes: `DiscoveryCollectorTest`, `AdvisoryLockManagerTest`, `Pg13QueriesTest`, `Pg17_18QueriesTest` | minimal |
+| Collector (Java) | JUnit + Testcontainers via Maven | 141 unit tests; pgss icin 6 kosumluk gercek PostgreSQL matrisi | active, dar integration kapsami |
 | API (Node/TS) | none | `npx tsc --noEmit` type check only, no runtime tests | gap |
 | UI (React) | none | `tsc -b` + `eslint` only, no render tests | gap |
 | Migrations | none | manual apply against dev DB | gap |
@@ -50,6 +50,11 @@ not exist.
 ### 3.1 Collector (Java, Maven)
 
 Run: `cd collector && mvn test`
+
+Gercek PostgreSQL matrisi: `cd collector && mvn verify`. Docker'in zorunlu
+oldugu kalite kapisinda `PGSTAT_REQUIRE_DOCKER=true` ayarlanir. Bu degisken
+yokken Docker bulunamazsa integration testi gorunur bicimde atlanir; degisken
+varken Docker'a baglanamama veya tek bir testin atlanmasi build'i kirar.
 
 Required for changes:
 
@@ -118,12 +123,14 @@ Generated-doc drift is rejected by the pre-push hook.
 
 ## 5. Integration Environment
 
-- A disposable PostgreSQL 17 instance via `docker-compose.yml` is the
-  reference integration target for migrations and collector smoke runs.
-- Multi-version collector verification (PG 11-18 query families) is currently
-  covered by unit tests on query selection, not live multi-version instances.
-  Live multi-version smoke testing becomes required when a query family
-  changes for a version we cannot unit-cover.
+- A disposable PostgreSQL 17 instance via `docker-compose.yml` remains the
+  reference integration target for migrations and general collector smoke runs.
+- `PgssRealPostgresIT`, Testcontainers 1.21.4 ile PostgreSQL 13/14/15/18
+  uzerinde pgss 1.8/1.9/1.10/1.12 projection'larini, extension'in yalniz
+  `appdb`'de kurulu oldugu kesfi ve fonksiyon EXECUTE reddinin SQLSTATE 42501
+  siniflandirmasini gercek veritabaninda dogrular.
+- Integration testleri Failsafe `verify` asamasindadir; `mvn test` hizli birim
+  testi kapisi olarak kalir. Zorunlu kosumda beklenen sonuc 6 test ve 0 skip'tir.
 
 ## 6. Quality Gate Summary
 
@@ -131,6 +138,7 @@ Before merge, a change must pass the gates for the layers it touches:
 
 ```text
 collector change  -> mvn test
+pgss DB contract  -> PGSTAT_REQUIRE_DOCKER=true mvn verify
 api change        -> npx tsc --noEmit (+ vitest once introduced)
 ui change         -> npm run lint + tsc -b (+ render tests once introduced)
 migration         -> fresh + upgrade apply check
