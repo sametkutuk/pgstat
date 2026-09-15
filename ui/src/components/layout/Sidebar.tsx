@@ -1,6 +1,6 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { apiGet, apiLogout } from '../../api/client';
 
 const links = [
@@ -23,12 +23,14 @@ const links = [
 export default function Sidebar() {
     const navigate = useNavigate();
     const location = useLocation();
-    const [mobileOpen, setMobileOpen] = useState(false);
-
-    // Route değiştiğinde mobile menüyü kapat
-    useEffect(() => {
-        setMobileOpen(false);
-    }, [location.pathname]);
+    // Menü, açıldığı route'a bağlı tutulur: route değişince açık kaldığı
+    // pathname eşleşmez ve menü kendiliğinden kapanır. Bu, "effect içinde
+    // setState" zincirleme render'ını doğurmadan aynı davranışı verir ve
+    // yalnız link tıklamasını değil her türlü yönlendirmeyi kapsar.
+    const [openedAtPath, setOpenedAtPath] = useState<string | null>(null);
+    const mobileOpen = openedAtPath === location.pathname;
+    const setMobileOpen = (open: boolean) =>
+        setOpenedAtPath(open ? location.pathname : null);
 
     const handleLogout = async () => {
         await apiLogout();
