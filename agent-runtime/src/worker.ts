@@ -13,12 +13,35 @@ const TOTAL_JOB_MS = 180_000;
 // Son cevaba ayrilan cikti butcesi buyudugu icin toplam tavan da yukseltildi;
 // yoksa kirpilma yerine butce asimi hatasi alinirdi.
 const TOTAL_TOKEN_BUDGET = 30_000;
-/** Kota sinirinda kac kez beklenip tekrar denenecegi. */
-const RATE_LIMIT_RETRIES = 2;
+/** Gecici hatada kac kez beklenip tekrar denenecegi. */
+const TRANSIENT_RETRIES = 2;
 /** Saglayici sure soylemezse kullanilan bekleme. */
 const DEFAULT_RATE_LIMIT_WAIT_MS = 30_000;
 /** Tek bir beklemenin ust siniri — is suresini bekleyerek tuketmeyelim. */
 const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+
+/**
+ * Gecici saglayici hatalari — tekrar denemek durumu degistirebilir.
+ *
+ * 503 "model overloaded" olculdu (2026-09-15): arac cagrilari 49 ve 56 ms'de
+ * donmusken is yalnizca bu yuzden dustu. Kimlik hatasi, gecersiz model adi ve
+ * sema uyusmazligi burada YOKTUR; onlari tekrarlamak ayni sonucu verir.
+ */
+const RETRYABLE_HTTP = new Set([500, 502, 503, 504]);
+
+function isTransient(error: ModelRequestError): boolean {
+  return error.code === 'MODEL_RATE_LIMITED'
+    || (error.httpStatus !== null && RETRYABLE_HTTP.has(error.httpStatus));
+}
+
+/**
+ * Bekleme suresi. Kota sinirinda saglayicinin kendi ipucu kullanilir; sunucu
+ * tarafi 5xx'te kisa ustel geri cekilme yeterli ve is suresini tuketmez.
+ */
+function retryWaitMs(error: ModelRequestError, attempt: number): number {
+  if (error.code === 'MODEL_RATE_LIMITED') return retryDelayMs(error.providerDetail);
+  return Math.min(1000 * 2 ** (attempt - 1), 8000);
+}
 
 /**
  * Saglayicinin hata metnindeki "retry in 36.28s" ipucunu saniyeye cevirir.
@@ -239,10 +262,12 @@ export async function runClaimedInvestigation(service: AgentServiceClient,
         response = await requestModel(provider, system, prompt, controller.signal, maxOutputTokens);
         break;
       } catch (error) {
-        const rateLimited = error instanceof ModelRequestError && error.code === 'MODEL_RATE_LIMITED';
-        if (!rateLimited || attempt >= RATE_LIMIT_RETRIES || controller.signal.aborted) throw error;
+        const retryable = error instanceof ModelRequestError && isTransient(error);
+        if (!retryable || attempt >= TRANSIENT_RETRIES || controller.signal.aborted) throw error;
         attempt += 1;
-        await sleepUnlessAborted(retryDelayMs(error.providerDetail), controller.signal);
+        const wait = retryWaitMs(error, attempt);
+        log('model.retry', { id: job.investigation_id, code: error.code, attempt, wait_ms: wait });
+        await sleepUnlessAborted(wait, controller.signal);
       }
     }
 
