@@ -16,8 +16,8 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Metric | Count |
 | --- | --- |
-| Tables analyzed | 107 |
-| Tables without detected retention mapping | 55 |
+| Tables analyzed | 108 |
+| Tables without detected retention mapping | 56 |
 | Partitioned tables without detected PartitionManager ownership | 0 |
 | PartitionManager-owned tables not schema-partitioned in static scan | 0 |
 | Purge-referenced tables requiring policy verification | 4 |
@@ -27,9 +27,10 @@ This matrix answers, mechanically, how each table is stored, whether purge/parti
 
 | Table | Semantics | Columns | Timestamp columns | Schema partitioned | Partition policy | Retention / purge policy | Purge owner | Rollup role | First migration | Last migration | Code refs |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| agent.investigation | agent | 21 | claimed_at, completed_at, created_at, heartbeat_at, started_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V123__investigation_worker_claim.sql |  |
+| agent.investigation | agent | 23 | claimed_at, completed_at, created_at, heartbeat_at, started_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V124__agent_evidence_snapshot_and_result_reason.sql |  |
+| agent.investigation_evidence | agent | 7 | recorded_at | no | not detected | not detected | no | not detected | V124__agent_evidence_snapshot_and_result_reason.sql | V124__agent_evidence_snapshot_and_result_reason.sql |  |
 | agent.investigation_message | agent | 5 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
-| agent.investigation_result | agent | 10 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
+| agent.investigation_result | agent | 11 | created_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V124__agent_evidence_snapshot_and_result_reason.sql |  |
 | agent.investigation_tool_call | agent | 13 | completed_at, started_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |
 | agent.provider_connection | agent | 12 | created_at, data_policy_acknowledged_at, last_tested_at, updated_at | no | not detected | not detected | no | not detected | V121__ai_provider_connection.sql | V121__ai_provider_connection.sql |  |
 | agent.telemetry_improvement | agent | 14 | created_at, first_detected_at, last_detected_at, resolved_at, updated_at | no | not detected | not detected | no | not detected | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |  |

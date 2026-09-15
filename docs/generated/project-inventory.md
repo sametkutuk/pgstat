@@ -16,12 +16,12 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Area | Count |
 | --- | --- |
-| Migrations scanned | 127 |
-| Tables discovered | 107 |
-| Columns discovered | 1341 |
-| Indexes discovered | 149 |
+| Migrations scanned | 128 |
+| Tables discovered | 108 |
+| Columns discovered | 1351 |
+| Indexes discovered | 150 |
 | Collector SQL family files | 5 |
-| API routes discovered | 229 |
+| API routes discovered | 240 |
 | API ColumnRegistry objects discovered | 33 |
 | UI files with endpoint references | 23 |
 
@@ -31,15 +31,16 @@ This generated inventory is the bridge between code and the manual project docum
 
 | Table | Columns | Partitioned | Partition key | First migration | Last migration |
 | --- | --- | --- | --- | --- | --- |
-| agent.investigation | 21 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V123__investigation_worker_claim.sql |
+| agent.investigation | 23 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V124__agent_evidence_snapshot_and_result_reason.sql |
+| agent.investigation_evidence | 7 | no |  | V124__agent_evidence_snapshot_and_result_reason.sql | V124__agent_evidence_snapshot_and_result_reason.sql |
 | agent.investigation_message | 5 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
-| agent.investigation_result | 10 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
+| agent.investigation_result | 11 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V124__agent_evidence_snapshot_and_result_reason.sql |
 | agent.investigation_tool_call | 13 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.provider_connection | 12 | no |  | V121__ai_provider_connection.sql | V121__ai_provider_connection.sql |
 | agent.telemetry_improvement | 14 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 | agent.telemetry_improvement_occurrence | 12 | no |  | V120__ai_investigation_and_telemetry_improvement.sql | V120__ai_investigation_and_telemetry_improvement.sql |
 
-<details><summary>agent.investigation columns (21)</summary>
+<details><summary>agent.investigation columns (23)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -64,6 +65,22 @@ This generated inventory is the bridge between code and the manual project docum
 | claimed_at | timestamptz | V123__investigation_worker_claim.sql |
 | heartbeat_at | timestamptz | V123__investigation_worker_claim.sql |
 | attempt_count | integer | V123__investigation_worker_claim.sql |
+| input_tokens | integer | V124__agent_evidence_snapshot_and_result_reason.sql |
+| output_tokens | integer | V124__agent_evidence_snapshot_and_result_reason.sql |
+
+</details>
+
+<details><summary>agent.investigation_evidence columns (7)</summary>
+
+| Column | Type | First migration |
+| --- | --- | --- |
+| evidence_id | bigserial | V124__agent_evidence_snapshot_and_result_reason.sql |
+| investigation_id | bigint | V124__agent_evidence_snapshot_and_result_reason.sql |
+| tool_call_id | bigint | V124__agent_evidence_snapshot_and_result_reason.sql |
+| envelope | jsonb | V124__agent_evidence_snapshot_and_result_reason.sql |
+| sha256_hex | char(64) | V124__agent_evidence_snapshot_and_result_reason.sql |
+| response_bytes | integer | V124__agent_evidence_snapshot_and_result_reason.sql |
+| recorded_at | timestamptz | V124__agent_evidence_snapshot_and_result_reason.sql |
 
 </details>
 
@@ -79,7 +96,7 @@ This generated inventory is the bridge between code and the manual project docum
 
 </details>
 
-<details><summary>agent.investigation_result columns (10)</summary>
+<details><summary>agent.investigation_result columns (11)</summary>
 
 | Column | Type | First migration |
 | --- | --- | --- |
@@ -93,6 +110,7 @@ This generated inventory is the bridge between code and the manual project docum
 | limitations | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
 | external_knowledge | jsonb | V120__ai_investigation_and_telemetry_improvement.sql |
 | created_at | timestamptz | V120__ai_investigation_and_telemetry_improvement.sql |
+| confidence_reason | text | V124__agent_evidence_snapshot_and_result_reason.sql |
 
 </details>
 
@@ -2388,11 +2406,22 @@ PostgreSQL source tokens: `pg_current_wal_lsn`, `pg_database`, `pg_is_in_recover
 | GET | /:id/autovacuum-overview | api/src/routes/agent-evidence.ts |
 | GET | /:id/vacuum-candidates | api/src/routes/agent-evidence.ts |
 | GET | /:id/table-vacuum-evidence | api/src/routes/agent-evidence.ts |
+| POST | /claim | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/heartbeat | api/src/routes/agent-service.ts |
+| POST | /reclaim-stale | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/advance | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/evidence | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/tool-failure | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/complete | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/fail | api/src/routes/agent-service.ts |
+| POST | /investigations/:id/missing-capabilities | api/src/routes/agent-service.ts |
+| GET | /investigations/:id/provider | api/src/routes/agent-service.ts |
 | POST | /investigations | api/src/routes/agent.ts |
 | POST | /investigations/:id/cancel | api/src/routes/agent.ts |
 | POST | /investigations/:id/clarify | api/src/routes/agent.ts |
 | GET | /investigations | api/src/routes/agent.ts |
 | GET | /providers | api/src/routes/agent.ts |
+| POST | /providers/:provider/test | api/src/routes/agent.ts |
 | PUT | /providers/:provider | api/src/routes/agent.ts |
 | GET | /investigations/:id | api/src/routes/agent.ts |
 | GET | /improvements | api/src/routes/agent.ts |

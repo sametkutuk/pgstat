@@ -13,9 +13,9 @@ node scripts/generate-doc-inventory.mjs
 
 | Queue | Count | Action |
 | --- | --- | --- |
-| Table/data-family contracts needing semantic review | 61 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
-| Field contracts needing exact source/version review | 1096 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
-| Sensitive or conditional AI fields | 650 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
+| Table/data-family contracts needing semantic review | 62 | Add or verify CONTRACT_HINTS entries, then promote stable rows into docs/data-contract-registry.md as needed |
+| Field contracts needing exact source/version review | 1106 | Verify source expression, since_pg, unsupported behavior, and stable consumers |
+| Sensitive or conditional AI fields | 653 | Define redaction, allowlist, or blocked policy before pgdbaagent use |
 | Fact/aggregate families without detected retention mapping | 2 | Wire to PurgeEvaluator/retention policy or document durable retention exception |
 
 ## First Manual Review Targets
@@ -33,9 +33,10 @@ node scripts/generate-doc-inventory.mjs
 
 | Table | Semantics | Columns | Retention | API consumers | UI consumers | Reason |
 | --- | --- | --- | --- | --- | --- | --- |
-| agent.investigation | agent | 21 | not detected | not detected | not detected | generated default; needs review |
+| agent.investigation | agent | 23 | not detected | not detected | not detected | generated default; needs review |
+| agent.investigation_evidence | agent | 7 | not detected | not detected | not detected | generated default; needs review |
 | agent.investigation_message | agent | 5 | not detected | not detected | not detected | generated default; needs review |
-| agent.investigation_result | agent | 10 | not detected | not detected | not detected | generated default; needs review |
+| agent.investigation_result | agent | 11 | not detected | not detected | not detected | generated default; needs review |
 | agent.investigation_tool_call | agent | 13 | not detected | not detected | not detected | generated default; needs review |
 | agent.provider_connection | agent | 12 | not detected | not detected | not detected | generated default; needs review |
 | agent.telemetry_improvement | agent | 14 | not detected | not detected | not detected | generated default; needs review |
@@ -56,10 +57,10 @@ node scripts/generate-doc-inventory.mjs
 | control.database_state | control/config | 10 | not detected | api/src/routes/instances.ts (71 routes)<br>api/src/routes/scheduleProfiles.ts (4 routes) | ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/Settings.tsx | generated default; needs review |
 | control.db_objects_trigger | control/config | 8 | not detected | api/src/routes/insights.ts (21 routes) | ui/src/pages/Insights.tsx | generated default; needs review |
 | control.health_check_state | control/config | 5 | not detected | api/src/routes/systemHealth.ts (1 routes) | ui/src/pages/SystemHealthDashboard.tsx | generated default; needs review |
-| control.instance_capability | control/config | 23 | not detected | api/src/routes/agent-evidence.ts (5 routes)<br>api/src/routes/agent.ts (11 routes)<br>api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
+| control.instance_capability | control/config | 23 | not detected | api/src/routes/agent-evidence.ts (5 routes)<br>api/src/routes/agent.ts (12 routes)<br>api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
 | control.instance_group | control/config | 4 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
 | control.instance_group_member | control/config | 3 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
-| control.instance_inventory | control/config | 23 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/agent-evidence.ts (5 routes)<br>api/src/routes/agent.ts (11 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes)<br>api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/databaseCleanup.ts (4 routes)<br>api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/jobRuns.ts (4 routes)<br>api/src/routes/retentionPolicies.ts (4 routes)<br>api/src/routes/scheduleProfiles.ts (4 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx<br>ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/JobRuns.tsx<br>ui/src/pages/Settings.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
+| control.instance_inventory | control/config | 23 | referenced by PurgeEvaluator; verify policy mapping | api/src/routes/adaptiveAlerting.ts (43 routes)<br>api/src/routes/agent-evidence.ts (5 routes)<br>api/src/routes/agent.ts (12 routes)<br>api/src/routes/alertRules.ts (11 routes)<br>api/src/routes/alerts.ts (5 routes)<br>api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/databaseCleanup.ts (4 routes)<br>api/src/routes/insights.ts (21 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/jobRuns.ts (4 routes)<br>api/src/routes/retentionPolicies.ts (4 routes)<br>api/src/routes/scheduleProfiles.ts (4 routes)<br>api/src/routes/statements.ts (9 routes) | ui/src/pages/AlertRules.tsx<br>ui/src/pages/Alerts.tsx<br>ui/src/pages/AlertsHub.tsx<br>ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/Insights.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/JobRuns.tsx<br>ui/src/pages/Settings.tsx<br>ui/src/pages/StatementDetail.tsx<br>ui/src/pages/Statements.tsx | generated default; needs review |
 | control.instance_settings | control/config | 9 | not detected | not detected | not detected | generated default; needs review |
 | control.instance_state | control/config | 14 | not detected | api/src/routes/clusters.ts (2 routes)<br>api/src/routes/dashboard.ts (10 routes)<br>api/src/routes/instances.ts (71 routes)<br>api/src/routes/scheduleProfiles.ts (4 routes) | ui/src/pages/ClusterDetail.tsx<br>ui/src/pages/Clusters.tsx<br>ui/src/pages/Dashboard.tsx<br>ui/src/pages/InstanceDetail.tsx<br>ui/src/pages/Instances.tsx<br>ui/src/pages/Settings.tsx | generated default; needs review |
 | control.long_query_subscription | control/config | 10 | not detected | api/src/routes/adaptiveAlerting.ts (43 routes) | not detected | generated default; needs review |
@@ -99,6 +100,9 @@ node scripts/generate-doc-inventory.mjs
 
 | Field ID | Sensitivity | AI context | pgdbaagent usage | Status |
 | --- | --- | --- | --- | --- |
+| agent.investigation.input_tokens | secret/config sensitive | blocked | verify | needs field-level review |
+| agent.investigation.output_tokens | secret/config sensitive | blocked | verify | needs field-level review |
+| agent.investigation_evidence.envelope | configuration or structured metadata; review before export | conditional; redact or allowlist | verify | needs field-level review |
 | agent.investigation_message.role | identity/network metadata | conditional; redact or allowlist | verify | needs field-level review |
 | agent.investigation_result.external_knowledge | configuration or structured metadata; review before export | conditional; redact or allowlist | verify | needs field-level review |
 | agent.investigation_result.hypotheses | configuration or structured metadata; review before export | conditional; redact or allowlist | verify | needs field-level review |

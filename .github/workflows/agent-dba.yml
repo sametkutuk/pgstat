@@ -1,0 +1,104 @@
+name: AI DBA pilot
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  node-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci && npm run build
+        working-directory: api
+      - run: npm ci && npm run build
+        working-directory: ui
+      - run: npm ci && npm run build && npm test
+        working-directory: agent-runtime
+
+  postgres-contracts:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - test: agentServiceAccess.spec.ts
+            variable: PGSTAT_AGENT_SERVICE_TEST_URL
+          - test: agentWorkerPersistence.spec.ts
+            variable: PGSTAT_WORKER_PERSISTENCE_TEST_URL
+          - test: verifiedCapabilityGap.spec.ts
+            variable: PGSTAT_VERIFIED_GAP_TEST_URL
+          - test: providerConnectionTest.spec.ts
+            variable: PGSTAT_PROVIDER_TEST_URL
+          - test: investigationIntake.spec.ts
+            variable: PGSTAT_INTAKE_TEST_URL
+          - test: fullHttpPostgres.spec.ts
+            variable: PGSTAT_FULL_AI_TEST_URL
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: disposable-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci
+        working-directory: api
+      - run: npm ci
+        if: matrix.test == 'fullHttpPostgres.spec.ts'
+        working-directory: agent-runtime
+      - name: Real PostgreSQL contract test (no silent skip)
+        working-directory: api
+        env:
+          PGSTAT_CONTRACT_TEST_URL: postgresql://postgres:disposable-only@127.0.0.1:5432/postgres
+        run: |
+          export "${{ matrix.variable }}=$PGSTAT_CONTRACT_TEST_URL"
+          node --import tsx --test "tests/${{ matrix.test }}"
+
+  real-evidence-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm ci
+        working-directory: api
+      - run: npm ci
+        working-directory: agent-runtime
+      - name: Bootstrap disposable full pgstat schema
+        run: |
+          docker build -t pgstat-ai-db-full:ci db
+          docker run -d --name pgstat-ai-ci-real-db -e POSTGRES_PASSWORD=disposable-only \
+            -p 127.0.0.1:55432:5432 pgstat-ai-db-full:ci
+          for attempt in $(seq 1 60); do
+            if docker logs pgstat-ai-ci-real-db 2>&1 | grep -q 'PostgreSQL init process complete'; then break; fi
+            sleep 2
+          done
+          docker logs pgstat-ai-ci-real-db 2>&1 | grep -q 'PostgreSQL init process complete'
+          docker exec pgstat-ai-ci-real-db pg_isready -U postgres -d postgres
+      - name: Real autovacuum SQL contracts then HTTP to worker
+        working-directory: api
+        env:
+          PGSTAT_EVIDENCE_TEST_URL: postgresql://postgres:disposable-only@127.0.0.1:55432/postgres
+          PGSTAT_FULL_AI_TEST_URL: postgresql://postgres:disposable-only@127.0.0.1:55432/postgres
+          PGSTAT_FULL_AI_REAL_EVIDENCE: 'true'
+        run: |
+          node --import tsx --test tests/agentEvidence.spec.ts
+          node --import tsx --test tests/fullHttpPostgres.spec.ts

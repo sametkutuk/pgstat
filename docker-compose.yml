@@ -65,9 +65,22 @@ services:
       PGSTAT_DB_USER: samet
       PGSTAT_DB_PASSWORD: samet
       PGSTAT_SECRETS_DIR: /app/data/secrets
+      PGSTAT_AGENT_SERVICE_SECRET: ${PGSTAT_AGENT_SERVICE_SECRET:-}
       PORT: 3001
     volumes:
       - pgstat-secrets:/app/data/secrets
+    restart: unless-stopped
+
+  # AI worker only talks to the pgstat API. No DB credentials or secret volume.
+  agent-worker:
+    profiles: ["ai"]
+    build: ./agent-runtime
+    depends_on:
+      - api
+    environment:
+      PGSTAT_AGENT_API_URL: http://api:3001
+      PGSTAT_AGENT_SERVICE_SECRET: ${PGSTAT_AGENT_SERVICE_SECRET:-}
+      PGSTAT_AI_LOCAL_HOSTS: ollama,host.docker.internal
     restart: unless-stopped
 
   # =========================================================================
