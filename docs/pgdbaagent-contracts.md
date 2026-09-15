@@ -248,3 +248,90 @@ A pgdbaagent-facing feature is done only when:
 - missing context behavior is explicit
 - validation requirement is defined
 - UI/report/API consumers are documented
+
+## 11. Autovacuum Evidence API Contract (agent-evidence, v1.0.0)
+
+Implemented in `api/src/services/agent-evidence/` and exposed by
+`api/src/routes/agent-evidence.ts`. Read-only. The router is not mounted yet;
+mounting requires `app.use('/api/agent-evidence', requireAuth, ...)`.
+
+### 11.1 Shared envelope
+
+Every read returns the same envelope so the model never has to guess what a
+number means:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1.0.0`. Removing a field or changing its meaning is a major bump. |
+| `capability` | Semantic capability name, e.g. `autovacuum_overview`. |
+| `status` | `ok`, `partial`, `no_data`, `not_collected`, `unsupported_version`, `unknown_capability`, `stale`, `insufficient_samples`, `failed`. |
+| `target` | Instance identity plus `pg_major` / `server_version_num`; `null` means unknown, not old. |
+| `requested_range` / `effective_range` | Half-open `[from, to)`. The effective range carries `resolution` (`raw`/`hourly`/`daily`) and why it differs. |
+| `data` | Capability payload. |
+| `metric_catalog` | Per metric: unit, kind (snapshot/delta_sum/average/ratio), source column, whether it is an estimate, and what `NULL` means. |
+| `coverage` | One entry **per source**. There is no single "complete" flag. |
+| `limitations` | What the answer cannot support. |
+| `gap_candidates` | Verified product gaps only. This API never opens a record. |
+| `sources` | Physical tables read. |
+
+### 11.2 Coverage entry
+
+`sample_count` counts collection rounds (`distinct` timestamp), never rows: one
+round writes a row per table, and one activity snapshot writes a row per PID.
+
+`expected_sample_count` and `missing_sample_pct` are always `null`. Schedule
+history is not stored — `control.schedule_profile` holds only today's
+intervals — so the expected number of rounds in a past window is unknown, and
+applying today's interval backwards would be invention.
+
+`max_observed_gap_seconds` is an observation. It is not a count of missed
+collection rounds; collection may never have been scheduled in that gap.
+
+### 11.3 Endpoints
+
+| Endpoint | Capability | Required parameters |
+| --- | --- | --- |
+| `GET /instances` | `find_instance` | optional `search`, `limit` (max 200) |
+| `GET /:id/telemetry-coverage` | `telemetry_coverage` | `from`, `to` |
+| `GET /:id/autovacuum-overview` | `autovacuum_overview` | `from`, `to` |
+| `GET /:id/vacuum-candidates` | `vacuum_candidates` | `from`, `to`; optional `ordering`, `dbid`, `limit` (max 200) |
+| `GET /:id/table-vacuum-evidence` | `table_vacuum_evidence` | `from`, `to`, `dbid`, `relid`; optional `max_points` (max 500) |
+
+Not implemented: `get_query_performance_evidence` and `compare_periods`.
+
+### 11.4 Rules this contract enforces
+
+- **Zero rows is not "not collected."** Empty results report
+  `no_data` / `zero_rows_in_window`. The cause is narrowed only when
+  `ops.job_run_instance` proves a failed or skipped collection in that window.
+- **Staleness is measured against the end of the requested window,** not
+  `now()`. A deliberately historical question is never labelled stale.
+- **Table identity is `instance_pk` + `dbid` + `relid`.** Same-named tables in
+  different databases never merge. OID reuse after drop/recreate and rename
+  history are reported as identity limitations, because the stored data cannot
+  distinguish them.
+- **Ranking is not diagnosis.** Candidate ordering always ships its criterion.
+  The default reuses PostgreSQL's own threshold
+  (`autovacuum_vacuum_threshold + scale_factor * reltuples`), matching
+  `AlertRuleEvaluator`. Where `reltuples` is unknown (PG14+ `-1` sentinel) no
+  threshold is produced. The existing alert rule is unchanged.
+- **Version limits are distinct from missing data.** Autovacuum duration needs
+  PG18; below that the coverage entry is `unsupported_version`, and when
+  `pg_major` is unknown it is `unknown_capability`.
+- **NULL is never coerced to zero,** and zero denominators are distinguished
+  from missing denominators.
+- **bigint leaves as a string.** node-postgres returns `int8` as text and
+  `Number()` would silently corrupt values above 2^53.
+- **Client input never reaches SQL as identifiers.** Ordering comes from a
+  server-side dictionary; time range, ids and limits are validated and bounded.
+- **Every query runs read-only under `SET LOCAL statement_timeout`,** which is
+  reverted with the transaction and does not leak to the next request sharing
+  that pooled connection.
+- **Invalid input is a 400, not a product gap.** It produces no gap candidate.
+
+### 11.5 Verification state
+
+`api/tests/agentEvidence.spec.ts` runs the real queries against a disposable
+PostgreSQL 17 with all migrations applied: 13 tests, 13 passed, 0 skipped,
+stable across two consecutive runs. The HTTP layer, `EXPLAIN (ANALYZE,
+BUFFERS)` measurement and any fleet-scale claim remain unverified.
