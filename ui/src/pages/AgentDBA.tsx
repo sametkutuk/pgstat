@@ -367,8 +367,18 @@ export default function AgentDBA() {
                     ))}
                   </div>
                   <p className="text-sm text-[#64748B]">Durum: {statusLabel[detail.data.investigation.status] ?? detail.data.investigation.status}</p>
-                  {detail.data.investigation.failure_code &&
-                    <p role="alert" className="text-sm text-red-700">Araştırma tamamlanamadı: {detail.data.investigation.failure_code}</p>}
+                  {/* Kod tek basina tanı koydurmuyor: sağlayıcının ya da şema
+                      doğrulayıcısının kendi açıklaması da gösterilir. */}
+                  {detail.data.investigation.failure_code && (
+                    <div role="alert" className="text-sm text-red-700">
+                      <p>Araştırma tamamlanamadı: {detail.data.investigation.failure_code}</p>
+                      {detail.data.investigation.failure_detail && (
+                        <p className="mt-1 text-xs text-red-600 whitespace-pre-wrap break-words">
+                          {detail.data.investigation.failure_detail}
+                        </p>
+                      )}
+                    </div>
+                  )}
                   {detail.data.result && (
                     <div className="grid md:grid-cols-2 gap-4">
                       <article className="border border-[#E2E8F0] rounded-md p-4">
