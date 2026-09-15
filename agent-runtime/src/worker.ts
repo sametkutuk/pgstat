@@ -37,12 +37,36 @@ const answerSchema = z.object({
   limitations: z.array(z.string().trim().min(1).max(500)).max(20),
 }).strict();
 
+/** Sema hatasinda kullaniciya gosterilecek model ciktisinin ust siniri. */
+const MAX_MODEL_OUTPUT_SNIPPET = 300;
+
+/**
+ * Model ciktisini semaya gore cozer.
+ *
+ * Hata durumunda modelin GERCEKTE ne dondurdugu de tasinir: yalnizca
+ * "MODEL_FOLLOWUP_INVALID" yazmak, sorunun bos cevap mi, fazladan alan mi,
+ * yoksa kirpilmis JSON mu oldugunu ayirt etmeyi imkansiz kiliyordu.
+ * Cikti bizim kendi kanitimizdan turedigi icin gizli bilgi icermez, yine de
+ * kirpilir.
+ */
 function parseModelJson<T>(text: string, schema: z.ZodType<T>, code: string): T {
+  const snippet = (reason: string) => {
+    const shown = text.trim() === ''
+      ? '(model bos cevap dondurdu)'
+      : text.trim().slice(0, MAX_MODEL_OUTPUT_SNIPPET).replace(/\s+/g, ' ');
+    return `${reason}. Model ciktisi: ${shown}${text.length > MAX_MODEL_OUTPUT_SNIPPET ? '…' : ''}`;
+  };
+
   let parsed: unknown;
   try { parsed = JSON.parse(text); }
-  catch { throw new Error(code); }
+  catch { throw new ModelRequestError(code, null, snippet('Gecerli JSON degil')); }
+
   const result = schema.safeParse(parsed);
-  if (!result.success) throw new Error(code);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const where = issue?.path.length ? issue.path.join('.') : '(kok)';
+    throw new ModelRequestError(code, null, snippet(`Sema uyusmadi (${where}: ${issue?.message ?? 'bilinmiyor'})`));
+  }
   return result.data;
 }
 

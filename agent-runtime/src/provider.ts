@@ -108,7 +108,16 @@ export async function requestModel(config: ProviderConfig, system: string, promp
     headers['x-goog-api-key'] = config.apiKey!;
     body = { systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS } };
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS,
+        // Gemini 2.5'te dusunme varsayilan olarak aciktir ve maxOutputTokens
+        // butcesinden harcanir (olculdu: 2 tokenlik "Pong" cevabinda
+        // thoughtsTokenCount 32). Buyuk kanit promptunda butce dusunmeye
+        // gidip cevap bos ya da kirpik donebilir. Semaya bagli JSON
+        // uretiminde dusunmeye ihtiyac yok; butce cevaba ayriliyor.
+        thinkingConfig: { thinkingBudget: 0 },
+      } };
   } else if (config.provider === 'anthropic') {
     url.pathname = '/v1/messages';
     headers['x-api-key'] = config.apiKey!;
